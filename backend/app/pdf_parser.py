@@ -39,29 +39,13 @@ def extract_text_with_coordinates(data: bytes):
         header_height = page_height * 0.05
         footer_y = page_height * 0.95
         
-        # 4. Get Text with rawdict (provides individual characters)
+    # 4. Get Text with rawdict (provides individual characters)
         # flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE
         text_page = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
         blocks = text_page.get("blocks", [])
         text_blocks = [b for b in blocks if b.get("type") == 0]
         
-        # 5. Analyze Font Sizes to find Body Text Median
-        font_sizes = []
-        for block in text_blocks:
-            for line in block.get("lines", []):
-                for span in line.get("spans", []):
-                    if span.get("size"):
-                        font_sizes.append(span["size"])
-        
-        median_size = 0
-        if font_sizes:
-            font_sizes.sort()
-            median_size = font_sizes[len(font_sizes)//2]
-        
-        # Threshold for headings (e.g., 1.1x median size)
-        heading_threshold = median_size * 1.1 if median_size > 0 else 100
-        
-        # 6. Sort Blocks (Top-to-bottom, Left-to-right)
+        # 5. Sort Blocks (Top-to-bottom, Left-to-right)
         # We use a smaller vertical tolerance (10px) to group lines better
         sorted_blocks = sorted(text_blocks, key=lambda b: (b["bbox"][1] // 10, b["bbox"][0]))
         
@@ -81,9 +65,6 @@ def extract_text_with_coordinates(data: bytes):
             block_text = ""
             block_chars = []
             
-            # Check if this block looks like a heading
-            is_heading = False
-            
             for line in block.get("lines", []):
                 line_text = ""
                 line_chars = []
@@ -92,10 +73,6 @@ def extract_text_with_coordinates(data: bytes):
                 spans = sorted(line.get("spans", []), key=lambda s: s["bbox"][0])
                 
                 for span in spans:
-                    # Check font size for heading detection
-                    if span.get("size", 0) > heading_threshold:
-                        is_heading = True
-                    
                     # rawdict 'chars' list contains individual characters
                     chars = span.get("chars", [])
                     
@@ -154,11 +131,8 @@ def extract_text_with_coordinates(data: bytes):
                 full_text += block_text
                 char_map.extend(block_chars)
                 
-                # Determine separation:
-                # If it's a heading, force DOUBLE NEWLINE
-                # If it's a normal block, use single or double depending on context
-                # For safety, we'll use double newline for all blocks to ensure separation,
-                # but especially for headings.
+                # Always use double newline separator for blocks
+                # This ensures nlp.py treats them as separate sentences
                 separator = "\n\n"
                 
                 full_text += separator

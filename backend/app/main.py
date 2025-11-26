@@ -95,15 +95,9 @@ async def upload_pdf(file: UploadFile = File(...)):
             s["bboxes"] = bboxes
             current_idx = match_end
         else:
-            # Fallback: if strict match fails, try simple find (legacy behavior)
-            # This might happen if punctuation differs slightly
-            start = text.find(s_text, current_idx)
-            if start != -1:
-                end = start + len(s_text)
-                s["bboxes"] = char_map[start:end]
-                current_idx = end
-            else:
-                s["bboxes"] = []
+            # If strict match fails, we skip this sentence (or could log a warning)
+            # We no longer fallback to simple find() as it's unreliable with layout changes
+            s["bboxes"] = []
             
         enriched_sentences.append(s)
 
