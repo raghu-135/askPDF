@@ -1,0 +1,9 @@
+node_modules
+.git
+.DS_Store
+backend/__pycache__
+backend/.venv
+backend/venv
+frontend/node_modules
+frontend/.next
+frontend/out

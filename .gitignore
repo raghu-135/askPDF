@@ -11,6 +11,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!frontend/src/lib/
 lib64/
 parts/
 sdist/
@@ -84,7 +85,9 @@ Thumbs.db
 *~
 
 # Docker
-.dockerignore
+# Docker
+!.dockerignore
+
 
 # Models and Data (large files)
 /models/

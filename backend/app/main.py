@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .pdf_parser import extract_text_with_coordinates
 from .nlp import split_into_sentences
-from .tts import tts_sentence_to_wav
+from .tts import tts_sentence_to_wav, list_voice_styles
 
 API_PREFIX = "/api"
 AUDIO_DIR = "/data/audio"
@@ -103,12 +103,21 @@ async def upload_pdf(file: UploadFile = File(...)):
 
     return {"sentences": enriched_sentences, "pdfUrl": "/uploaded.pdf"}
 
+@app.get(f"{API_PREFIX}/voices")
+async def get_voices():
+    voices = list_voice_styles()
+    return {"voices": voices}
+
 @app.post(f"{API_PREFIX}/tts")
 async def synthesize_sentence(payload: dict):
     text = payload.get("text")
+    voice = payload.get("voice", "M1.json")
+    speed = payload.get("speed", 1.0)
+    
     if not text:
         raise HTTPException(status_code=400, detail="Missing 'text' in payload.")
-    path = tts_sentence_to_wav(text, AUDIO_DIR)
+        
+    path = tts_sentence_to_wav(text, AUDIO_DIR, voice_style=voice, speed=speed)
     rel = os.path.relpath(path, "/")
     url = f"/{rel}"
     return {"audioUrl": url}

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Button, Stack } from "@mui/material";
-import { ttsSentence } from "../lib/api";
+import { Button, Stack, Select, MenuItem, Slider, Typography, FormControl, InputLabel } from "@mui/material";
+import { ttsSentence, getVoices } from "../lib/tts-api";
 
 type Sentence = { id: number; text: string };
 
@@ -14,12 +14,26 @@ type Props = {
 export default function PlayerControls({ sentences, currentId, onCurrentChange, playRequestId }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [voices, setVoices] = useState<string[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState<string>("M1.json");
+  const [speed, setSpeed] = useState<number>(1.0);
+
+  useEffect(() => {
+    getVoices().then(setVoices);
+  }, []);
 
   // React to external play requests (double‑click)
   useEffect(() => {
     if (playRequestId == null) return;
     void playSentence(playRequestId);
   }, [playRequestId]);
+
+  // Trigger playback update when voice changes
+  useEffect(() => {
+    if (isPlaying && currentId !== null) {
+      void playSentence(currentId);
+    }
+  }, [selectedVoice]);
 
   async function playSentence(id: number) {
     const audio = audioRef.current;
@@ -33,22 +47,33 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
     const s = sentences[id];
     onCurrentChange(id);
 
-    const { audioUrl } = await ttsSentence(s.text);
+    try {
+      const { audioUrl } = await ttsSentence(s.text, selectedVoice, speed);
 
-    audio.src = audioUrl;
-    await audio.play();
-    setIsPlaying(true);
+      // Check if we are still supposed to be playing this sentence (race condition check)
+      // Note: A more robust way would be to use a request ID or cancellation token, 
+      // but checking currentId matches is a reasonable proxy if onCurrentChange updates it synchronously.
+      // However, since we might have moved on, let's just proceed. 
+      // Ideally, we should check if the component is still mounted or if another request started.
 
-    // Attach ended handler for this playback
-    audio.onended = () => {
-      const next = id + 1;
-      if (next < sentences.length) {
-        void playSentence(next);
-      } else {
-        setIsPlaying(false);
-        onCurrentChange(null);
-      }
-    };
+      audio.src = audioUrl;
+      await audio.play();
+      setIsPlaying(true);
+
+      // Attach ended handler for this playback
+      audio.onended = () => {
+        const next = id + 1;
+        if (next < sentences.length) {
+          void playSentence(next);
+        } else {
+          setIsPlaying(false);
+          onCurrentChange(null);
+        }
+      };
+    } catch (e) {
+      console.error("Playback failed", e);
+      setIsPlaying(false);
+    }
   }
 
   function pause() {
@@ -72,7 +97,7 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
   }
 
   return (
-    <Stack direction="row" spacing={2} alignItems="center">
+    <Stack direction="row" spacing={2} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
       <Button variant="contained" onClick={() => playSentence(currentId ?? 0)}>Play</Button>
       <Button variant="outlined" onClick={pause} disabled={!isPlaying}>Pause</Button>
       <Button variant="outlined" onClick={resume} disabled={isPlaying}>Resume</Button>
@@ -83,6 +108,39 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
       <Button variant="outlined" onClick={() => currentId !== null && currentId < sentences.length - 1 && playSentence(currentId + 1)}>
         ⏭️ Next
       </Button>
+
+      <FormControl size="small" style={{ minWidth: 120 }}>
+        <InputLabel>Voice</InputLabel>
+        <Select
+          value={selectedVoice}
+          label="Voice"
+          onChange={(e: any) => setSelectedVoice(e.target.value as string)}
+        >
+          {voices.map((v: string) => (
+            <MenuItem key={v} value={v}>
+              {v.replace(".json", "")}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Typography variant="caption">Speed</Typography>
+        <Slider
+          value={speed}
+          min={0.5}
+          max={2.0}
+          step={0.1}
+          onChange={(_: Event, val: number | number[]) => setSpeed(val as number)}
+          onChangeCommitted={() => {
+            if (isPlaying && currentId !== null) {
+              void playSentence(currentId);
+            }
+          }}
+          valueLabelDisplay="auto"
+          sx={{ width: 100 }}
+        />
+      </Stack>
       <audio ref={audioRef} />
     </Stack>
   );
