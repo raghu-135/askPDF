@@ -1,7 +1,7 @@
 import { Button } from "@mui/material";
 import React, { useRef } from "react";
 
-type Props = { onUploaded: (sentences: { id: number; text: string }[]) => void };
+type Props = { onUploaded: (data: { sentences: any[]; pdfUrl: string }) => void };
 
 export default function PdfUploader({ onUploaded }: Props) {
   const inputId = "pdf-upload-input";
@@ -13,7 +13,7 @@ export default function PdfUploader({ onUploaded }: Props) {
     form.append("file", file);
     const res = await fetch("/api/upload", { method: "POST", body: form });
     const data = await res.json();
-    onUploaded(data.sentences);
+    onUploaded(data);
     e.target.value = ""; // reset
   };
 

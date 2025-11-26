@@ -1,16 +1,19 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Container, Stack, Typography, Box, Button } from "@mui/material";
 import PdfUploader from "../components/PdfUploader";
-import TextViewer from "../components/TextViewer";
+import PdfViewer from "../components/PdfViewer";
 import PlayerControls from "../components/PlayerControls";
 
-type Sentence = { id: number; text: string };
+type Sentence = { id: number; text: string; bboxes: any[] };
 
 export default function Home() {
   const [sentences, setSentences] = useState<Sentence[]>([]);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [playRequestId, setPlayRequestId] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
+
+  // Clean up object URL if we were using one (not needed here as we use server URL)
 
   return (
     <Box sx={{ height: "100vh", display: "flex", flexDirection: "column" }}>
@@ -19,7 +22,10 @@ export default function Home() {
           PDF to Speech
         </Typography>
         <Stack direction="row" spacing={2} alignItems="center">
-          <PdfUploader onUploaded={setSentences} />
+          <PdfUploader onUploaded={(data) => {
+            setSentences(data.sentences);
+            setPdfUrl(data.pdfUrl);
+          }} />
           <Button
             variant="outlined"
             onClick={() => setAutoScroll(!autoScroll)}
@@ -29,10 +35,11 @@ export default function Home() {
         </Stack>
       </Container>
 
-      {sentences.length > 0 && (
+      {sentences.length > 0 && pdfUrl && (
         <>
-          <Box sx={{ flex: 1, overflow: "hidden", px: 2 }}>
-            <TextViewer
+          <Box sx={{ flex: 1, overflow: "hidden", px: 2, position: 'relative' }}>
+            <PdfViewer
+              pdfUrl={pdfUrl}
               sentences={sentences}
               currentId={currentId}
               onJump={(id) => {
