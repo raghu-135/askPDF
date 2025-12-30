@@ -1,0 +1,11 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+langgraph
+langchain
+langchain-core
+langchain-community
+langchain-openai
+qdrant-client
+httpx
+pydantic
+langchain-text-splitters

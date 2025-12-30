@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_RAG_API_URL=http://localhost:8001
+    depends_on:
+      - backend
+      - rag-service
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - RAG_SERVICE_URL=http://rag-service:8000
+    depends_on:
+      - rag-service
+    volumes:
+      - ./backend:/app/backend
+      - ./backend:/app/backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  rag-service:
+    build:
+      context: .
+      dockerfile: rag_service/Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      # Default DMR URL, can be overridden
+      - DMR_BASE_URL=http://host.docker.internal:12434
+    depends_on:
+      - qdrant
+    volumes:
+      - ./rag_service:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  qdrant_data:

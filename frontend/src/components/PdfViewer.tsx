@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { Box, Typography } from '@mui/material';
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
@@ -29,9 +29,10 @@ type Props = {
     currentId: number | null;
     onJump: (id: number) => void;
     autoScroll: boolean;
+    isResizing?: boolean;
 };
 
-export default function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoScroll }: Props) {
+const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoScroll, isResizing }: Props) {
     const [numPages, setNumPages] = useState<number | null>(null);
     const [pageWidth, setPageWidth] = useState<number>(600); // Default width
     const containerRef = useRef<HTMLDivElement>(null);
@@ -41,19 +42,50 @@ export default function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoSc
         setNumPages(numPages);
     }
 
-    // Handle resizing to fit container
+    // Handle resizing to fit container with ResizeObserver and debouncing
     useEffect(() => {
+        if (!containerRef.current) return;
+
+        let timeoutId: number;
         const updateWidth = () => {
             if (containerRef.current) {
-                setPageWidth(containerRef.current.clientWidth - 40); // padding
+                // Use offsetWidth for actual available space
+                setPageWidth(containerRef.current.offsetWidth - 40);
             }
         };
 
-        window.addEventListener('resize', updateWidth);
+        const observer = new ResizeObserver(() => {
+            // During active resize, we rely on CSS scaling. 
+            // We only trigger high-quality re-render when not resizing or after a delay.
+            clearTimeout(timeoutId);
+            timeoutId = window.setTimeout(updateWidth, isResizing ? 300 : 50);
+        });
+
+        observer.observe(containerRef.current);
         updateWidth();
 
-        return () => window.removeEventListener('resize', updateWidth);
-    }, []);
+        return () => {
+            observer.disconnect();
+            clearTimeout(timeoutId);
+        };
+    }, [isResizing]);
+
+    // Pre-calculate sentences by page for performance
+    const sentencesByPage = useMemo(() => {
+        const map: { [key: number]: (Sentence & { pageBBoxes: BBox[] })[] } = {};
+        sentences.forEach(s => {
+            s.bboxes.forEach(b => {
+                if (!map[b.page]) map[b.page] = [];
+                let entry = map[b.page].find(e => e.id === s.id);
+                if (!entry) {
+                    entry = { ...s, pageBBoxes: [] };
+                    map[b.page].push(entry);
+                }
+                entry.pageBBoxes.push(b);
+            });
+        });
+        return map;
+    }, [sentences]);
 
     // Auto-scroll to active sentence
     useEffect(() => {
@@ -65,63 +97,48 @@ export default function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoSc
         }
     }, [currentId, autoScroll]);
 
-    // Group bboxes by page for rendering overlays
+    // Optimized overlay rendering using pre-calculated map
     const getPageOverlays = (pageNumber: number) => {
-        return sentences.map((sentence) => {
-            // Filter bboxes for this page
-            const pageBBoxes = sentence.bboxes.filter(b => b.page === pageNumber);
-            if (pageBBoxes.length === 0) return null;
-
-            return (
-
-                <div
-                    key={sentence.id}
-                    style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        height: '100%',
-                        pointerEvents: 'none', // Let clicks pass through to the click handler layer
-                    }}
-                >
-                    {pageBBoxes.map((bbox, idx) => (
-                        <div
-                            key={idx}
-                            ref={el => {
-                                // Attach ref to the first bbox of the active sentence on this page
-                                if (sentence.id === currentId && idx === 0) {
-                                    sentenceRefs.current[sentence.id] = el;
-                                }
-                            }}
-                            style={{
-                                position: 'absolute',
-                                left: `${(bbox.x / bbox.page_width) * 100}%`,
-                                // PDF coordinates are usually from bottom-left, but pdfminer might give them differently.
-                                // If y is from bottom: top = 100 - (y + height)/page_height * 100
-                                // If y is from top: top = y/page_height * 100
-                                // pdfminer.six LTChar.y0 is from bottom-left.
-                                // So top = (page_height - (y0 + height)) / page_height * 100
-                                // Wait, bbox.y is y0 (bottom). y1 = y0 + height.
-                                // So top corresponds to y1 (top edge of char).
-                                // top % = (page_height - (bbox.y + bbox.height)) / page_height * 100
-                                top: `${((bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height) * 100}%`,
-                                width: `${(bbox.width / bbox.page_width) * 100}%`,
-                                height: `${(bbox.height / bbox.page_height) * 100}%`,
-                                backgroundColor: sentence.id === currentId ? 'rgba(255, 255, 0, 0.4)' : 'transparent',
-                                cursor: 'pointer',
-                                pointerEvents: 'auto', // Enable clicks on the highlight box
-                            }}
-                            onDoubleClick={(e) => {
-                                e.stopPropagation();
-                                onJump(sentence.id);
-                            }}
-                            title={sentence.text}
-                        />
-                    ))}
-                </div>
-            );
-        });
+        const pageData = sentencesByPage[pageNumber] || [];
+        return pageData.map((sentence) => (
+            <div
+                key={sentence.id}
+                style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    pointerEvents: 'none',
+                }}
+            >
+                {sentence.pageBBoxes.map((bbox, idx) => (
+                    <div
+                        key={idx}
+                        ref={el => {
+                            if (sentence.id === currentId && idx === 0) {
+                                sentenceRefs.current[sentence.id] = el;
+                            }
+                        }}
+                        style={{
+                            position: 'absolute',
+                            left: `${(bbox.x / bbox.page_width) * 100}%`,
+                            top: `${((bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height) * 100}%`,
+                            width: `${(bbox.width / bbox.page_width) * 100}%`,
+                            height: `${(bbox.height / bbox.page_height) * 100}%`,
+                            backgroundColor: sentence.id === currentId ? 'rgba(255, 255, 0, 0.4)' : 'transparent',
+                            cursor: 'pointer',
+                            pointerEvents: 'auto',
+                        }}
+                        onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            onJump(sentence.id);
+                        }}
+                        title={sentence.text}
+                    />
+                ))}
+            </div>
+        ));
     };
 
     return (
@@ -133,8 +150,8 @@ export default function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoSc
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
-                bgcolor: '#f5f5f5',
-                p: 2
+                bgcolor: 'transparent',
+                p: 1
             }}
         >
             <Document
@@ -144,7 +161,20 @@ export default function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoSc
                 error={<Typography color="error">Failed to load PDF.</Typography>}
             >
                 {Array.from(new Array(numPages), (el, index) => (
-                    <Box key={`page_${index + 1}`} sx={{ position: 'relative', mb: 2, boxShadow: 3 }}>
+                    <Box
+                        key={`page_${index + 1}`}
+                        sx={{
+                            position: 'relative',
+                            mb: 1,
+                            width: 'fit-content',
+                            maxWidth: '100%',
+                            // CSS Scaling Hack: Force canvas to scale with container during drag
+                            '& canvas': {
+                                width: '100% !important',
+                                height: 'auto !important',
+                            }
+                        }}
+                    >
                         <Page
                             pageNumber={index + 1}
                             width={pageWidth}
@@ -169,4 +199,6 @@ export default function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoSc
             </Document>
         </Box>
     );
-}
+});
+
+export default PdfViewer;

@@ -61,7 +61,8 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
       // However, since we might have moved on, let's just proceed. 
       // Ideally, we should check if the component is still mounted or if another request started.
 
-      audio.src = audioUrl;
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      audio.src = `${apiBase}${audioUrl}`;
       await audio.play();
       setIsPlaying(true);
 

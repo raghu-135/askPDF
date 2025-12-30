@@ -1,6 +1,7 @@
 import os
+import httpx
 import uuid
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -23,9 +24,12 @@ app.add_middleware(
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
 @app.post(f"{API_PREFIX}/upload")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...), embedding_model: str = Form(...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a PDF file.")
+    
+    if not embedding_model:
+        raise HTTPException(status_code=400, detail="Please provide an embedding_model.")
     
     # Generate unique ID for this upload
     upload_id = str(uuid.uuid4())
@@ -104,6 +108,28 @@ async def upload_pdf(file: UploadFile = File(...)):
             
         enriched_sentences.append(s)
 
+    # Trigger RAG Indexing
+    rag_url = os.getenv("RAG_SERVICE_URL", "http://rag-service:8000")
+    
+    async def call_rag(txt: str, metadata: dict, emb_model: str):
+        async with httpx.AsyncClient() as client:
+            try:
+                await client.post(
+                    f"{rag_url}/index", 
+                    json={
+                        "text": txt,
+                        "embedding_model": emb_model,
+                        "metadata": metadata
+                    },
+                    timeout=300.0  # 5 minutes - indexing with embeddings can take time
+                )
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                print(f"RAG Indexing failed: {repr(e)}", flush=True)
+
+    background_tasks.add_task(call_rag, text, {"filename": file.filename, "upload_id": upload_id}, embedding_model)
+
     return {"sentences": enriched_sentences, "pdfUrl": f"/{pdf_filename}"}
 
 @app.get(f"{API_PREFIX}/voices")
@@ -129,5 +155,6 @@ async def synthesize_sentence(payload: dict):
 app.mount("/data", StaticFiles(directory="/data"), name="data")
 
 # Mount static files last to avoid shadowing API routes
-if os.path.isdir("/static"):
-    app.mount("/", StaticFiles(directory="/static", html=True), name="static")
+# Mount static files last to avoid shadowing API routes
+os.makedirs("/static", exist_ok=True)
+app.mount("/", StaticFiles(directory="/static", html=True), name="static")

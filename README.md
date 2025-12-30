@@ -1,224 +1,377 @@
-# PDF to Speech
+# AskPDF
 
-A full-stack application that converts PDF documents into natural-sounding speech using AI-powered text-to-speech (TTS) technology. Upload a PDF, and listen to it read aloud with professional voice synthesis powered by Supertonic.
+A full-stack PDF reading assistant that combines **Text-to-Speech (TTS)**, **RAG (Retrieval Augmented Generation)**, and **AI chat** capabilities. Upload a PDF, have it read aloud with synchronized text highlighting, and chat with your document using AI.
 
 ## 🌟 Features
 
-- **PDF Upload & Parsing**: Extract text from any PDF document
-- **Intelligent Text Processing**: Automatically split text into sentences using NLP
-- **High-Quality TTS**: Generate natural-sounding speech using Supertonic's AI voice models
-- **Interactive Player**: Play, pause, resume, and navigate through sentences
-- **Visual Feedback**: Highlight the currently playing sentence with auto-scroll
-- **Seamless Experience**: Modern, responsive UI built with Next.js and Material-UI
+### 📄 PDF Reading & TTS
+- **PDF Upload & Parsing**: Extract text with character-level bounding boxes using PyMuPDF
+- **Intelligent Text Processing**: Sentence segmentation using spaCy NLP
+- **High-Quality TTS**: Local speech synthesis using Supertonic ONNX models
+- **Visual Tracking**: Real-time sentence highlighting synchronized with audio playback
+- **Multiple Voice Styles**: Choose from various voice options with adjustable speed (0.5x - 2.0x)
+
+### 💬 RAG-Powered Chat
+- **Semantic Search**: Ask questions about your PDF content
+- **Vector Storage**: Document chunks indexed in Qdrant for fast retrieval
+- **Conversational AI**: Chat with context from your document using local LLMs
+- **Chat History**: Maintains conversation context for follow-up questions
+
+### 🎨 Modern UI
+- **Interactive PDF Viewer**: Double-click on any sentence to jump to it and start playback
+- **Resizable Chat Panel**: Drag to adjust the chat interface width (300-800px)
+- **Auto-Scroll**: Automatically follows along with audio playback
+- **Model Selection**: Dynamic model fetching from your local LLM server
 
 ## 🏗️ Architecture
 
-The application consists of two main components:
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Docker Compose                                  │
+├─────────────────┬─────────────────┬─────────────────┬───────────────────────┤
+│    Frontend     │    Backend      │   RAG Service   │       Qdrant          │
+│   (Next.js)     │    (FastAPI)    │    (FastAPI)    │   (Vector DB)         │
+│   Port: 3000    │   Port: 8000    │   Port: 8001    │   Port: 6333          │
+└─────────────────┴─────────────────┴─────────────────┴───────────────────────┘
+                                          │
+                                          ▼
+                            ┌─────────────────────────┐
+                            │   DMR / Ollama / LLM    │
+                            │   (OpenAI-compatible)   │
+                            │      Port: 12434        │
+                            └─────────────────────────┘
+```
 
-### Backend (Python/FastAPI)
-- **PDF Parsing**: Uses `pdfminer.six` to extract text from PDF files
-- **NLP Processing**: Leverages spaCy (`en_core_web_sm`) to split text into sentences
-- **Text-to-Speech**: Integrates Supertonic's ONNX models for voice synthesis
-- **API Endpoints**:
-  - `POST /api/upload` - Upload PDF and extract sentences
-  - `POST /api/tts` - Synthesize speech for a given sentence
+### Services Overview
 
-### Frontend (Next.js/React)
-- **Modern UI**: Built with Next.js 14, React 18, and Material-UI 6
-- **Component-Based**: Modular architecture with reusable components
-- **Interactive Controls**: Player controls for playback management
-- **Static Export**: Optimized for deployment as static files
+| Service | Port | Description |
+|---------|------|-------------|
+| **Frontend** | 3000 | Next.js React app with PDF viewer and chat UI |
+| **Backend** | 8000 | FastAPI server for PDF processing and TTS |
+| **RAG Service** | 8001 | FastAPI server for document indexing and AI chat |
+| **Qdrant** | 6333 | Vector database for semantic search |
+| **DMR/Ollama** | 12434 | Local LLM server (external, user-provided) |
 
 ## 📋 Prerequisites
 
-- Docker and Docker Compose (recommended)
-- OR:
-  - Python 3.11+
-  - Node.js 20+
-  - Git LFS (for downloading TTS models)
+- **Docker** and **Docker Compose**
+- **Local LLM Server**: The app is configured to use **Docker Model Runner (DMR)** by default on port \`12434\`.
+  - **Option A: DMR (Default)** - Built into Docker Desktop.
+  - **Option B: Ollama** - Requires running on port `12434` or updating configuration.
+
+### Required Models (on your LLM server)
+- **LLM Model**: e.g., `ai/qwen3:latest` (DMR) or `llama3` (Ollama)
+- **Embedding Model**: e.g., `ai/nomic-embed-text-v1.5:latest` (DMR) or `nomic-embed-text` (Ollama)
 
 ## 🚀 Quick Start
 
-### Using Docker (Recommended)
+### 1. Clone the Repository
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd document-reader-supertonic
-   ```
+```bash
+git clone https://github.com/raghu13590/AskPDF.git
+cd AskPDF
+```
 
-2. **Build and run**:
-   ```bash
-   docker build -t pdf-tts .
-   docker run -p 8000:8000 pdf-tts
-   ```
+### 2. Start Your Local LLM Server
 
-3. **Access the application**:
-   Open your browser to `http://localhost:8000`
+The application expects an OpenAI-compatible API at \`http://localhost:12434\`.
 
-### Manual Setup
+**Option A: Using Docker Model Runner (DMR) - Recommended Default**
+DMR is built into Docker Desktop and runs on port \`12434\` by default.
+\`\`\`bash
+# Ensure Docker Desktop is running and DMR is enabled
+\`\`\`
 
-#### Backend Setup
+**Option B: Using Ollama**
+Ollama runs on port `11434` by default. To use it with this app without changing code, start it on port `12434`:
+```bash
+# Start Ollama on the expected port
+OLLAMA_HOST=0.0.0.0:12434 ollama serve
 
-1. **Install Python dependencies**:
-   ```bash
-   cd backend
-   pip install -r requirements.txt
-   ```
+# In a new terminal, pull the models
+ollama pull llama3
+ollama pull nomic-embed-text
+```
 
-2. **Download spaCy model**:
-   ```bash
-   pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
-   ```
+### 3. Start the Application
 
-3. **Download Supertonic models**:
-   ```bash
-   git lfs install
-   git clone https://huggingface.co/Supertone/supertonic /models/supertonic
-   ```
+```bash
+docker-compose up --build
+```
 
-4. **Download helper script**:
-   ```bash
-   curl -o app/helper.py https://raw.githubusercontent.com/supertone-inc/supertonic/main/py/helper.py
-   ```
+### 4. Access the Application
 
-5. **Run the backend**:
-   ```bash
-   uvicorn app.main:app --host 0.0.0.0 --port 8000
-   ```
-
-#### Frontend Setup
-
-1. **Install dependencies**:
-   ```bash
-   cd frontend
-   npm install
-   ```
-
-2. **Run development server**:
-   ```bash
-   npm run dev
-   ```
-
-3. **Or build for production**:
-   ```bash
-   npm run build
-   ```
+- **Main App**: http://localhost:3000
+- **Backend API**: http://localhost:8000
+- **RAG API**: http://localhost:8001
+- **Qdrant Dashboard**: http://localhost:6333/dashboard
 
 ## 📖 Usage
 
-1. **Upload a PDF**: Click the "Upload PDF" button and select a PDF file
-2. **View Sentences**: The extracted text appears in the viewer, split into sentences
-3. **Play Audio**: Click "Play" to start listening from the beginning or current sentence
-4. **Navigate**: Use "Next" and "Prev" buttons to skip between sentences
-5. **Jump to Sentence**: Double-click any sentence to start playing from that point
-6. **Auto-Scroll**: Toggle auto-scroll to automatically follow along with the audio
-7. **Playback Controls**: Use Play, Pause, Resume, and Stop buttons as needed
+### Reading a PDF
+
+1. **Select Embedding Model**: Choose an embedding model from the dropdown
+2. **Upload PDF**: Click "Upload PDF" and select your file
+3. **Wait for Processing**: The PDF is parsed, sentences extracted, and indexed for RAG
+4. **Play Audio**: Click "Play" to start text-to-speech from the beginning
+5. **Navigate**: Use playback controls or double-click any sentence to jump to it
+6. **Adjust Voice**: Select different voice styles and adjust playback speed
+
+### Chatting with Your PDF
+
+1. **Select LLM Model**: Choose an LLM from the chat panel dropdown
+2. **Ask Questions**: Type your question about the PDF content
+3. **Get AI Answers**: The system retrieves relevant chunks and generates answers
+4. **Continue Conversation**: Follow-up questions maintain context
 
 ## 🛠️ Technology Stack
 
-### Backend
-- **FastAPI**: Modern, fast web framework for building APIs
-- **PDFMiner.six**: Robust PDF text extraction
-- **spaCy**: Industrial-strength NLP for sentence segmentation
-- **Supertonic**: State-of-the-art neural TTS with ONNX runtime
-- **ONNX Runtime**: Efficient model inference
-- **Uvicorn**: Lightning-fast ASGI server
+### Backend Service
+| Technology | Purpose |
+|------------|---------|
+| **FastAPI** | Web framework for REST APIs |
+| **PyMuPDF (fitz)** | PDF parsing with character-level coordinates |
+| **spaCy** | NLP for sentence segmentation |
+| **Supertonic** | Neural TTS with ONNX runtime |
+
+### RAG Service
+| Technology | Purpose |
+|------------|---------|
+| **FastAPI** | Web framework |
+| **LangChain** | LLM/Embedding integration |
+| **LangGraph** | Stateful RAG workflow |
+| **Qdrant Client** | Vector database operations |
 
 ### Frontend
-- **Next.js 14**: React framework with static export capabilities
-- **React 18**: Component-based UI library
-- **Material-UI (MUI) 6**: Comprehensive component library
-- **TypeScript**: Type-safe JavaScript development
-- **Emotion**: CSS-in-JS styling solution
+| Technology | Purpose |
+|------------|---------|
+| **Next.js** | React framework |
+| **Material-UI (MUI)** | UI components |
+| **react-pdf** | PDF rendering |
+| **react-markdown** | Chat message rendering |
 
 ## 📁 Project Structure
 
 ```
-document-reader-supertonic/
-├── Dockerfile              # Multi-stage Docker build
+AskPDF/
+├── docker-compose.yml          # Multi-service orchestration
 ├── backend/
-│   ├── requirements.txt    # Python dependencies
+│   ├── Dockerfile
+│   ├── requirements.txt
 │   └── app/
-│       ├── main.py         # FastAPI application & routes
-│       ├── pdf_parser.py   # PDF text extraction
-│       ├── nlp.py          # Sentence segmentation
-│       └── tts.py          # Text-to-speech synthesis
+│       ├── main.py             # FastAPI app, upload & TTS endpoints
+│       ├── pdf_parser.py       # PyMuPDF text extraction with coordinates
+│       ├── nlp.py              # spaCy sentence segmentation
+│       └── tts.py              # Supertonic TTS synthesis (helper.py downloaded at build)
+├── rag_service/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── main.py                 # FastAPI app, index & chat endpoints
+│   ├── rag.py                  # Document chunking & indexing
+│   ├── agent.py                # LangGraph RAG workflow
+│   ├── models.py               # LLM/Embedding model clients
+│   └── vectordb/
+│       ├── base.py             # Abstract vector DB interface
+│       └── qdrant.py           # Qdrant adapter implementation
 └── frontend/
-    ├── package.json        # Node.js dependencies
-    ├── next.config.js      # Next.js configuration
+    ├── Dockerfile
+    ├── package.json
     └── src/
-        ├── components/     # React components
-        │   ├── PdfUploader.tsx     # File upload component
-        │   ├── PlayerControls.tsx  # Audio player controls
-        │   └── TextViewer.tsx      # Sentence display & navigation
-        ├── lib/
-        │   └── api.ts      # API client functions
-        └── pages/
-            └── index.tsx   # Main application page
+        ├── pages/
+        │   └── index.tsx       # Main application page
+        ├── components/
+        │   ├── PdfUploader.tsx     # File upload with model selection
+        │   ├── PdfViewer.tsx       # PDF rendering with overlays
+        │   ├── PlayerControls.tsx  # Audio playback controls
+        │   ├── ChatInterface.tsx   # RAG chat UI
+        │   └── TextViewer.tsx      # Alternative text display
+        └── lib/
+            ├── api.ts          # Backend API client
+            └── tts-api.ts      # TTS API client
 ```
-
-## 🔧 Configuration
-
-### Voice Styles
-
-The default voice style is set to `M1.json` (male voice). You can modify the voice style in `backend/app/tts.py`:
-
-```python
-VOICE_STYLE = ["/models/supertonic/voice_styles/M1.json"]
-```
-
-Available voice styles are located in `/models/supertonic/voice_styles/`.
-
-### TTS Parameters
-
-Adjust synthesis parameters in the `SupertonicTTS.synthesize()` method:
-
-- `total_step`: Number of diffusion steps (default: 5)
-- `speed`: Playback speed multiplier (default: 1.05)
-
-## 🐳 Docker Details
-
-The Dockerfile uses a multi-stage build:
-
-1. **Frontend Stage**: Builds the Next.js application into static files
-2. **Backend Stage**: Sets up Python environment, installs dependencies, downloads models, and serves both API and static frontend
 
 ## 📝 API Reference
 
-### POST /api/upload
+### Backend Service (Port 8000)
 
-Upload a PDF file and extract sentences.
+#### `POST /api/upload`
+Upload a PDF and extract sentences with bounding boxes.
 
-**Request**: `multipart/form-data` with `file` field
+**Request:** `multipart/form-data`
+- `file`: PDF file
+- `embedding_model`: Model name for RAG indexing
 
-**Response**:
+**Response:**
 ```json
 {
   "sentences": [
-    { "id": 0, "text": "First sentence." },
-    { "id": 1, "text": "Second sentence." }
-  ]
+    {
+      "id": 0,
+      "text": "First sentence.",
+      "bboxes": [
+        {"page": 1, "x": 72, "y": 700, "width": 50, "height": 12, "page_height": 792, "page_width": 612}
+      ]
+    }
+  ],
+  "pdfUrl": "/abc123.pdf"
 }
 ```
 
-### POST /api/tts
+#### `GET /api/voices`
+List available TTS voice styles.
 
-Synthesize speech for a given text.
-
-**Request**:
+**Response:**
 ```json
 {
-  "text": "Text to synthesize"
+  "voices": ["M1.json", "F1.json", "M2.json"]
 }
 ```
 
-**Response**:
+#### `POST /api/tts`
+Synthesize speech for text.
+
+**Request:**
+```json
+{
+  "text": "Text to synthesize",
+  "voice": "M1.json",
+  "speed": 1.0
+}
+```
+
+**Response:**
 ```json
 {
   "audioUrl": "/data/audio/tmp_xyz.wav"
 }
 ```
+
+### RAG Service (Port 8001)
+
+#### `POST /index`
+Index document text into vector database.
+
+**Request:**
+```json
+{
+  "text": "Full document text...",
+  "embedding_model": "ai/nomic-embed-text-v1.5:latest",
+  "metadata": {"filename": "document.pdf", "upload_id": "uuid"}
+}
+```
+
+#### `POST /chat`
+Chat with indexed documents.
+
+**Request:**
+```json
+{
+  "question": "What is this document about?",
+  "llm_model": "ai/qwen3:latest",
+  "embedding_model": "ai/nomic-embed-text-v1.5:latest",
+  "history": [
+    {"role": "user", "content": "Previous question"},
+    {"role": "assistant", "content": "Previous answer"}
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "answer": "This document discusses...",
+  "context": "Retrieved chunks used for the answer..."
+}
+```
+
+#### `GET /models`
+Fetch available models from LLM server.
+
+#### `GET /health`
+Health check endpoint.
+
+## 🔧 Configuration
+
+### Environment Variables
+
+| Variable | Service | Default | Description |
+|----------|---------|---------|-------------|
+| `NEXT_PUBLIC_API_URL` | Frontend | `http://localhost:8000` | Backend API URL |
+| `NEXT_PUBLIC_RAG_API_URL` | Frontend | `http://localhost:8001` | RAG API URL |
+| `RAG_SERVICE_URL` | Backend | `http://rag-service:8000` | Internal RAG service URL |
+| `QDRANT_HOST` | RAG Service | `qdrant` | Qdrant hostname |
+| `QDRANT_PORT` | RAG Service | `6333` | Qdrant port |
+| `DMR_BASE_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (Change to `...:11434` for default Ollama) |
+
+### Voice Styles
+
+Voice styles are located in `/models/supertonic/voice_styles/` inside the backend container. Available options are fetched dynamically via the `/api/voices` endpoint.
+
+### TTS Parameters
+
+In `backend/app/tts.py`:
+- `total_step`: Diffusion steps (default: 5) - higher = better quality, slower
+- `speed`: Playback speed (0.5 - 2.0)
+
+## 🔄 Data Flow
+
+### PDF Upload Flow
+```
+User uploads PDF
+  ↓
+Backend: Save PDF → Extract text + coordinates (PyMuPDF)
+  ↓
+Backend: Split into sentences (spaCy)
+  ↓
+Backend: Map sentences to bounding boxes
+  ↓
+Backend: Trigger async RAG indexing
+  ↓
+RAG Service: Chunk text → Generate embeddings → Store in Qdrant
+  ↓
+Frontend: Display PDF with clickable sentence overlays
+```
+
+### Chat Flow
+```
+User asks question
+  ↓
+RAG Service: Embed question
+  ↓
+RAG Service: Search Qdrant for top-5 relevant chunks
+  ↓
+RAG Service: Build prompt (system + context + history + question)
+  ↓
+RAG Service: Call LLM via OpenAI-compatible API
+  ↓
+Frontend: Display markdown-rendered answer
+```
+
+### TTS Playback Flow
+```
+User clicks Play or double-clicks sentence
+  ↓
+Frontend: Request /api/tts with sentence text
+  ↓
+Backend: Supertonic synthesizes audio → WAV file
+  ↓
+Frontend: Play audio, highlight current sentence
+  ↓
+On audio end: Auto-advance to next sentence
+```
+
+## 🐳 Docker Details
+
+The application uses Docker Compose with four services:
+
+1. **frontend**: Next.js dev server with hot reload
+2. **backend**: FastAPI with TTS models mounted (Supertonic cloned from HuggingFace at build)
+3. **rag-service**: FastAPI with LangChain/LangGraph
+4. **qdrant**: Official Qdrant image with persistent storage
+
+### Volumes
+- \`qdrant_data\`: Persistent vector storage
+- Source directories mounted for development hot-reload
 
 ## 🤝 Contributing
 
@@ -227,17 +380,22 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## 📄 License
 
 This project uses the following third-party technologies:
-- [Supertonic](https://github.com/supertone-inc/supertonic) - Text-to-speech model
+- [Supertonic](https://huggingface.co/Supertone/supertonic) - Text-to-speech model
 - [spaCy](https://spacy.io/) - Natural language processing
+- [LangChain](https://langchain.com/) - LLM framework
+- [LangGraph](https://github.com/langchain-ai/langgraph) - Stateful AI workflows
+- [Qdrant](https://qdrant.tech/) - Vector database
 - [FastAPI](https://fastapi.tiangolo.com/) - Web framework
 - [Next.js](https://nextjs.org/) - React framework
 
 ## 🙏 Acknowledgments
 
-- **Supertone** for providing the high-quality TTS models
+- **Supertone** for high-quality TTS models
 - **spaCy** for robust NLP capabilities
-- The open-source community for all the amazing tools and libraries
+- **LangChain** team for the excellent LLM framework
+- **Qdrant** for the powerful vector database
+- The open-source community for all the amazing tools
 
 ## 📧 Contact
 
-For questions, issues, or suggestions, please open an issue on the repository.
+For questions, issues, or suggestions, please open an issue on the [GitHub repository](https://github.com/raghu13590/AskPDF).
