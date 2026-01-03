@@ -83,10 +83,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (activeMessageIndex !== null && messageRefs.current[activeMessageIndex]) {
             messageRefs.current[activeMessageIndex]?.scrollIntoView({
                 behavior: 'smooth',
-                block: 'center',
+                block: 'start',
             });
         }
-    }, [activeMessageIndex]);
+    }, [activeMessageIndex, currentChatId]); // Added currentChatId to trigger on every sentence change/jump
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });

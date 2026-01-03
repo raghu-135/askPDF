@@ -4,12 +4,13 @@ A full-stack PDF reading assistant that combines **Text-to-Speech (TTS)**, **RAG
 
 ## 🌟 Features
 
-### 📄 PDF Reading & TTS
-- **PDF Upload & Parsing**: Extract text with character-level bounding boxes using PyMuPDF
-- **Intelligent Text Processing**: Sentence segmentation using spaCy NLP
-- **High-Quality TTS**: Local speech synthesis using Supertonic ONNX models
-- **Visual Tracking**: Real-time sentence highlighting synchronized with audio playback
-- **Multiple Voice Styles**: Choose from various voice options with adjustable speed (0.5x - 2.0x)
+### 📄 Reading & TTS
+- **Unified Experience**: Seamlessly switch between reading the PDF and listening to chat responses
+- **Intelligent Text Processing**: Robust sentence segmentation with support for Markdown and non-punctuated text
+- **High-Quality TTS**: Local speech synthesis using Supertonic diffusion models
+- **Visual Tracking**: Synchronized sentence highlighting in PDF and message highlighting in Chat
+- **Interactive Navigation**: Double-click any sentence in the PDF or any message in the Chat to start playback
+- **Centralized Controls**: Unified player in the footer manages all audio sources (Speed 0.5x - 2.0x)
 
 ### 💬 RAG-Powered Chat
 - **Semantic Search**: Ask questions about your PDF content
@@ -18,16 +19,17 @@ A full-stack PDF reading assistant that combines **Text-to-Speech (TTS)**, **RAG
 - **Chat History**: Maintains conversation context for follow-up questions
 
 ### 🎨 Modern UI
-- **Interactive PDF Viewer**: Double-click on any sentence to jump to it and start playback
+- **Unified Navigation**: Double-click sentences or chat bubbles to start reading immediately
+- **Dynamic Visual Feedback**: PDF sentence highlighting and Chat bubble illumination during playback
 - **Resizable Chat Panel**: Drag to adjust the chat interface width (300-800px)
-- **Auto-Scroll**: Automatically follows along with audio playback
-- **Model Selection**: Dynamic model fetching from your local LLM server
+- **Auto-Scroll**: Both PDF and Chat automatically keep the active being-read content in view
+- **Model Selection**: Centralized embedding model selection and dynamic LLM discovery
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Docker Compose                                  │
+│                              Docker Compose                                 │
 ├─────────────────┬─────────────────┬─────────────────┬───────────────────────┤
 │    Frontend     │    Backend      │   RAG Service   │       Qdrant          │
 │   (Next.js)     │    (FastAPI)    │    (FastAPI)    │   (Vector DB)         │
@@ -135,7 +137,7 @@ docker-compose up --build
 2. **Upload PDF**: Click "Upload PDF" and select your file
 3. **Wait for Processing**: The PDF is parsed, sentences extracted, and indexed for RAG
 4. **Play Audio**: Click "Play" to start text-to-speech from the beginning
-5. **Navigate**: Use playback controls or double-click any sentence to jump to it
+5. **Navigate**: Use playback controls or double-click any sentence in the PDF or any chat bubble to jump to it
 6. **Adjust Voice**: Select different voice styles and adjust playback speed
 
 ### Chatting with Your PDF
@@ -144,6 +146,7 @@ docker-compose up --build
 2. **Ask Questions**: Type your question about the PDF content
 3. **Get AI Answers**: The system retrieves relevant chunks and generates answers
 4. **Continue Conversation**: Follow-up questions maintain context
+5. **Read Out Loud**: Double-click any chat bubble to have the assistant's response (or your own question) read aloud
 
 ## 🛠️ Technology Stack
 
