@@ -3,9 +3,11 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import os
 import httpx
-from rag import index_text
+import httpx
+from rag import index_document
 from agent import app as agent_app
 from fastapi.middleware.cors import CORSMiddleware
+from vectordb.qdrant import QdrantAdapter
 
 app = FastAPI(title="RAG Service")
 
@@ -26,12 +28,13 @@ class ChatRequest(BaseModel):
     question: str
     llm_model: str
     embedding_model: str
+    collection_name: Optional[str] = None
     history: List[Dict[str, str]] = [] # list of {role: "user"|"assistant", content: "..."}
 
 @app.post("/index")
 async def index_endpoint(req: IndexRequest):
     try:
-        result = await index_text(
+        result = await index_document(
             text=req.text, 
             embedding_model_name=req.embedding_model,
             metadata=req.metadata
@@ -59,6 +62,7 @@ async def chat_endpoint(req: ChatRequest):
             "chat_history": chat_history,
             "llm_model": req.llm_model,
             "embedding_model": req.embedding_model,
+            "collection_name": req.collection_name,
             "context": "",
             "answer": ""
         }
@@ -69,6 +73,16 @@ async def chat_endpoint(req: ChatRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/status")
+async def status_endpoint(collection_name: str):
+    """Check if a collection exists and is ready"""
+    try:
+        db = QdrantAdapter()
+        exists = await db.collection_exists(collection_name)
+        return {"status": "ready" if exists else "not_ready", "collection": collection_name}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.get("/models")
 async def get_models():

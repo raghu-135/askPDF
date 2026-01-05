@@ -29,6 +29,7 @@ interface Message {
 interface ChatInterfaceProps {
     ragApiUrl?: string;
     embedModel: string;
+    fileHash: string | null;
     chatSentences: any[];
     setChatSentences: (sentences: any[]) => void;
     currentChatId: number | null;
@@ -39,6 +40,7 @@ interface ChatInterfaceProps {
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
     ragApiUrl = "http://localhost:8001",
     embedModel,
+    fileHash,
     chatSentences,
     setChatSentences,
     currentChatId,
@@ -48,6 +50,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
+    const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
+    const [collectionName, setCollectionName] = useState<string | null>(null);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -114,6 +118,57 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             });
     }, [ragApiUrl]);
 
+    // Handle Collection Naming and Polling
+    useEffect(() => {
+        if (!embedModel || !fileHash) {
+            setIndexingStatus('ready'); // or checking, but if no model/hash, nothing to index yet
+            setCollectionName(null);
+            return;
+        }
+
+        const baseModelName = embedModel.split(":")[0];
+        const safeModelName = baseModelName.replace(/-/g, "_").replace(/\./g, "_").replace(/\//g, "_");
+        const cName = `rag_${safeModelName}_${fileHash}`;
+        setCollectionName(cName);
+        setIndexingStatus('checking');
+
+        let intervalId: ReturnType<typeof setInterval>;
+
+        const checkStatus = async () => {
+            try {
+                const res = await fetch(`${ragApiUrl}/status?collection_name=${cName}`);
+                const data = await res.json();
+                if (data.status === 'ready') {
+                    setIndexingStatus('ready');
+                    return true; // stop polling
+                } else {
+                    setIndexingStatus('indexing');
+                    return false;
+                }
+            } catch (e) {
+                console.error("Status check failed", e);
+                // Don't set error immediately, maybe retry?
+                return false;
+            }
+        };
+
+        const startPolling = async () => {
+            const ready = await checkStatus();
+            if (!ready) {
+                intervalId = setInterval(async () => {
+                    const isReady = await checkStatus();
+                    if (isReady) clearInterval(intervalId);
+                }, 2000);
+            }
+        };
+
+        startPolling();
+
+        return () => {
+            if (intervalId) clearInterval(intervalId);
+        };
+    }, [embedModel, fileHash, ragApiUrl]);
+
     const handleSend = async () => {
         if (!input.trim() || !llmModel || !embedModel) return;
 
@@ -132,7 +187,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     question: userMsg.content,
                     history: messages,
                     llm_model: llmModel,
-                    embedding_model: embedModel
+                    embedding_model: embedModel,
+                    collection_name: collectionName
                 })
             });
 
@@ -150,7 +206,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     return (
         <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1, bgcolor: 'transparent' }}>
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>Chat with PDF</Typography>
+                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>
+                    Chat with PDF
+                    {indexingStatus === 'indexing' && (
+                        <Typography component="span" variant="caption" sx={{ ml: 1, color: 'warning.main' }}>
+                            (Indexing...)
+                        </Typography>
+                    )}
+                </Typography>
 
                 <Box sx={{ flexGrow: 1, maxWidth: '250px' }}>
                     <FormControl fullWidth size="small">
@@ -231,7 +294,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             handleSend();
                         }
                     }}
-                    disabled={loading || !llmModel || !embedModel}
+                    disabled={loading || !llmModel || !embedModel || indexingStatus !== 'ready'}
                     sx={{
                         '& .MuiOutlinedInput-root': {
                             bgcolor: 'white',
@@ -245,7 +308,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         },
                     }}
                 />
-                <IconButton color="primary" onClick={handleSend} disabled={loading || !llmModel || !embedModel}>
+                <IconButton color="primary" onClick={handleSend} disabled={loading || !llmModel || !embedModel || indexingStatus !== 'ready'}>
                     <SendIcon />
                 </IconButton>
             </Box>

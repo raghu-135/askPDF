@@ -1,6 +1,7 @@
 import os
 import httpx
 import uuid
+import hashlib
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -38,6 +39,10 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
     os.makedirs("/static", exist_ok=True)
     
     content = await file.read()
+    
+    # Calculate file hash
+    file_hash = hashlib.md5(content).hexdigest()
+    
     with open(pdf_path, "wb") as f:
         f.write(content)
         
@@ -128,9 +133,9 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
                 traceback.print_exc()
                 print(f"RAG Indexing failed: {repr(e)}", flush=True)
 
-    background_tasks.add_task(call_rag, text, {"filename": file.filename, "upload_id": upload_id}, embedding_model)
+    background_tasks.add_task(call_rag, text, {"filename": file.filename, "upload_id": upload_id, "file_hash": file_hash}, embedding_model)
 
-    return {"sentences": enriched_sentences, "pdfUrl": f"/{pdf_filename}"}
+    return {"sentences": enriched_sentences, "pdfUrl": f"/{pdf_filename}", "fileHash": file_hash}
 
 @app.get(f"{API_PREFIX}/voices")
 async def get_voices():
@@ -150,6 +155,17 @@ async def synthesize_sentence(payload: dict):
     rel = os.path.relpath(path, "/")
     url = f"/{rel}"
     return {"audioUrl": url}
+
+@app.get(f"{API_PREFIX}/rag_status")
+async def check_rag_status(collection_name: str):
+    rag_url = os.getenv("RAG_SERVICE_URL", "http://rag-service:8000")
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(f"{rag_url}/status", params={"collection_name": collection_name})
+            return resp.json()
+        except Exception as e:
+            # If rag service is down or other error
+            return {"status": "error", "message": str(e)}
 
 # Serve audio files
 app.mount("/data", StaticFiles(directory="/data"), name="data")

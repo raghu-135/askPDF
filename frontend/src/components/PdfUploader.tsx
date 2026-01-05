@@ -3,7 +3,7 @@ import React from "react";
 
 type Props = {
   embedModel: string;
-  onUploaded: (data: { sentences: any[]; pdfUrl: string }) => void;
+  onUploaded: (data: { sentences: any[]; pdfUrl: string; fileHash: string }) => void;
 };
 
 export default function PdfUploader({ embedModel, onUploaded }: Props) {

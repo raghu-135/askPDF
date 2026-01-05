@@ -54,5 +54,8 @@ class QdrantAdapter(VectorDBClient):
             })
         return results
 
+    async def collection_exists(self, collection_name: str) -> bool:
+        return self.client.collection_exists(collection_name)
+
     async def delete_collection(self, collection_name: str):
         self.client.delete_collection(collection_name=collection_name)

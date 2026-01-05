@@ -17,9 +17,12 @@ export default function Home() {
   const [autoScroll, setAutoScroll] = useState(true);
   const [chatSentences, setChatSentences] = useState<any[]>([]);
 
+  const [fileHash, setFileHash] = useState<string | null>(null);
+
   // Shared embedding model for both upload and chat
   const [embedModel, setEmbedModel] = useState("");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+
 
   // Resizable chat panel
   const [chatWidth, setChatWidth] = useState(400);
@@ -124,6 +127,7 @@ export default function Home() {
                   setPdfSentences(data.sentences);
                   const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
                   setPdfUrl(`${apiBase}${data.pdfUrl}?t=${Date.now()}`);
+                  setFileHash(data.fileHash);
                   setCurrentPdfId(null);
                   setCurrentChatId(null);
                   setPlayRequestId(null);
@@ -218,6 +222,7 @@ export default function Home() {
           }}>
             <ChatInterface
               embedModel={embedModel}
+              fileHash={fileHash}
               chatSentences={chatSentences}
               setChatSentences={setChatSentences}
               currentChatId={currentChatId}

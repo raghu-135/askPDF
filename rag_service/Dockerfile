@@ -5,6 +5,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y \
+    poppler-utils \
+    tesseract-ocr \
+    libmagic-dev \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY rag_service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
