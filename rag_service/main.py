@@ -1,13 +1,16 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+
 import os
+from typing import List, Optional, Dict, Any
+
 import httpx
-import httpx
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
 from rag import index_document
 from agent import app as agent_app
-from fastapi.middleware.cors import CORSMiddleware
 from vectordb.qdrant import QdrantAdapter
+
 
 app = FastAPI(title="RAG Service")
 
@@ -29,13 +32,13 @@ class ChatRequest(BaseModel):
     llm_model: str
     embedding_model: str
     collection_name: Optional[str] = None
-    history: List[Dict[str, str]] = [] # list of {role: "user"|"assistant", content: "..."}
+    history: List[Dict[str, str]] = []  # list of {role: "user"|"assistant", content: "..."}
 
 @app.post("/index")
 async def index_endpoint(req: IndexRequest):
     try:
         result = await index_document(
-            text=req.text, 
+            text=req.text,
             embedding_model_name=req.embedding_model,
             metadata=req.metadata
         )
@@ -48,7 +51,6 @@ async def index_endpoint(req: IndexRequest):
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     try:
-        # Convert history
         from langchain_core.messages import HumanMessage, AIMessage
         chat_history = []
         for msg in req.history:
@@ -56,7 +58,7 @@ async def chat_endpoint(req: ChatRequest):
                 chat_history.append(HumanMessage(content=msg["content"]))
             elif msg["role"] == "assistant":
                 chat_history.append(AIMessage(content=msg["content"]))
-        
+
         inputs = {
             "question": req.question,
             "chat_history": chat_history,
@@ -66,7 +68,7 @@ async def chat_endpoint(req: ChatRequest):
             "context": "",
             "answer": ""
         }
-        
+
         result = await agent_app.ainvoke(inputs)
         return {"answer": result["answer"], "context": result["context"]}
     except Exception as e:
@@ -91,7 +93,7 @@ async def get_models():
     try:
         if not dmr_url.endswith("/v1"):
             dmr_url = f"{dmr_url}/v1"
-            
+
         async with httpx.AsyncClient() as client:
             # Assuming standard OpenAI endpoint /v1/models
             resp = await client.get(f"{dmr_url}/models")
