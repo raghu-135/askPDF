@@ -50,13 +50,13 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
 
         if (!isResizing) {
             // On resize end, update pageWidth to match container
-            const width = containerRef.current.offsetWidth - 40;
+            const width = containerRef.current.offsetWidth;
             setPageWidth(width);
             setScale(1);
         } else {
             // During resize, use CSS scale for visual feedback
             if (containerRef.current) {
-                const width = containerRef.current.offsetWidth - 40;
+                const width = containerRef.current.offsetWidth;
                 if (pageWidth > 0) {
                     setScale(width / pageWidth);
                 }
@@ -169,6 +169,7 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                 bgcolor: 'transparent',
                 p: 0,
                 m: 0,
+                boxSizing: 'border-box',
             }}
         >
             <div
@@ -180,6 +181,7 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                     width: '100%',
                     margin: 0,
                     padding: 0,
+                    boxSizing: 'border-box',
                 }}
             >
                 <Document
@@ -192,6 +194,12 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                         <Box
                             key={`page_${index + 1}`}
                             onDoubleClick={(e) => handlePageDoubleClick(e, index + 1)}
+                            onMouseDown={e => {
+                                // Prevent text selection on double click
+                                if (e.detail === 2) {
+                                    e.preventDefault();
+                                }
+                            }}
                             sx={{
                                 position: 'relative',
                                 mb: 0,
@@ -199,11 +207,12 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                                 maxWidth: '100%',
                                 p: 0,
                                 m: 0,
+                                boxSizing: 'border-box',
                                 // react-pdf Page container styles
                                 '& .react-pdf__Page': {
                                     width: '100% !important',
                                     height: 'auto !important',
-                                    margin: '0 auto',
+                                    margin: '0',
                                 },
                                 // Ensure canvas doesn't interfere with selection
                                 '& canvas': {
