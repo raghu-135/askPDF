@@ -128,16 +128,18 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
 
   return (
     <Stack direction="row" spacing={2} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
-      <Button variant="contained" onClick={() => playSentence(currentId ?? 0)}>Play</Button>
-      <Button variant="outlined" onClick={pause} disabled={!isPlaying}>Pause</Button>
-      <Button variant="outlined" onClick={resume} disabled={isPlaying}>Resume</Button>
-      <Button variant="text" onClick={stop}>Stop</Button>
-      <Button variant="outlined" onClick={() => currentId !== null && currentId > 0 && playSentence(currentId - 1)}>
-        ⏮️ Prev
-      </Button>
-      <Button variant="outlined" onClick={() => currentId !== null && currentId < sentences.length - 1 && playSentence(currentId + 1)}>
-        ⏭️ Next
-      </Button>
+      <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
+        <Button variant="contained" onClick={() => playSentence(currentId ?? 0)}>Play</Button>
+        <Button variant="outlined" onClick={pause} disabled={!isPlaying}>Pause</Button>
+        <Button variant="outlined" onClick={resume} disabled={isPlaying}>Resume</Button>
+        <Button variant="text" onClick={stop}>Stop</Button>
+        <Button variant="outlined" onClick={() => currentId !== null && currentId > 0 && playSentence(currentId - 1)}>
+          ⏮️ Prev
+        </Button>
+        <Button variant="outlined" onClick={() => currentId !== null && currentId < sentences.length - 1 && playSentence(currentId + 1)}>
+          ⏭️ Next
+        </Button>
+      </Stack>
 
       <FormControl size="small" style={{ minWidth: 120 }}>
         <InputLabel>Voice</InputLabel>
@@ -154,7 +156,7 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
         </Select>
       </FormControl>
 
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
         <Typography variant="caption">Speed</Typography>
         <Slider
           value={speed}
