@@ -50,9 +50,9 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
 
         if (!isResizing) {
             // On resize end, update pageWidth to match container
-            const width = containerRef.current.offsetWidth;
-            setPageWidth(width);
-            setScale(1);
+                    const width = containerRef.current.offsetWidth;
+                    setPageWidth(width);
+                    setScale(1);
         } else {
             // During resize, use CSS scale for visual feedback
             if (containerRef.current) {
@@ -64,6 +64,20 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isResizing]);
+
+            useEffect(() => {
+                if (!containerRef.current || typeof ResizeObserver === 'undefined') return;
+                const observer = new ResizeObserver((entries) => {
+                    for (const entry of entries) {
+                        if (!isResizing && entry.contentRect) {
+                            setPageWidth(entry.contentRect.width);
+                            setScale(1);
+                        }
+                    }
+                });
+                observer.observe(containerRef.current);
+                return () => observer.disconnect();
+            }, [isResizing]);
 
     // Pre-calculate sentences by page for performance
     const sentencesByPage = useMemo(() => {

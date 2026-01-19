@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline } from "@mui/material";
+
+declare const process: {
+  env: Record<string, string | undefined>;
+};
 import PdfUploader from "../components/PdfUploader";
 import PdfViewer from "../components/PdfViewer";
 import PlayerControls from "../components/PlayerControls";
@@ -26,6 +30,7 @@ export default function Home() {
 
   // Resizable chat panel
   const [chatWidth, setChatWidth] = useState(400);
+  const [isChatOpen, setIsChatOpen] = useState(true);
   const [isResizing, setIsResizing] = useState(false);
   const chatWidthRef = useRef(400); // Track width during drag without re-renders
   const rafIdRef = useRef<number | null>(null);
@@ -96,6 +101,11 @@ export default function Home() {
 
   // Clean up object URL if we were using one (not needed here as we use server URL)
 
+  const canDisplayChat = pdfSentences.length > 0 && !!pdfUrl;
+  const chatPanelWidth = isChatOpen
+    ? (isResizing ? 'var(--chat-width, 400px)' : chatWidth)
+    : 0;
+
   return (
     <>
       <CssBaseline />
@@ -144,6 +154,14 @@ export default function Home() {
               >
                 {autoScroll ? "Disable Auto‑Scroll" : "Enable Auto‑Scroll"}
               </Button>
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={!canDisplayChat}
+                onClick={() => setIsChatOpen(open => !open)}
+              >
+                {isChatOpen ? "Close Chat" : "Open Chat"}
+              </Button>
             </Stack>
           </Box>
 
@@ -188,7 +206,7 @@ export default function Home() {
         </Box>
 
         {/* Resizable Divider */}
-        {pdfSentences.length > 0 && pdfUrl && (
+        {canDisplayChat && isChatOpen && (
           <Box
             onMouseDown={handleMouseDown}
             sx={{
@@ -215,12 +233,16 @@ export default function Home() {
         )}
 
         {/* Right Column: Chat Interface */}
-        {pdfSentences.length > 0 && pdfUrl && (
+        {canDisplayChat && (
           <Box sx={{
-            width: isResizing ? 'var(--chat-width, 400px)' : chatWidth,
+            width: chatPanelWidth,
+            minWidth: 0,
             height: '100%',
-            transition: isResizing ? 'none' : 'width 0.1s ease-out',
-            bgcolor: 'background.paper'
+            transition: isResizing || !isChatOpen ? 'none' : 'width 0.1s ease-out',
+            bgcolor: 'background.paper',
+            visibility: isChatOpen ? 'visible' : 'hidden',
+            pointerEvents: isChatOpen ? 'auto' : 'none',
+            overflow: 'hidden'
           }}>
             <ChatInterface
               embedModel={embedModel}
