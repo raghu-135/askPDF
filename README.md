@@ -102,7 +102,7 @@ The application requires an OpenAI-compatible API for LLM and embeddings. You ca
 1. Ensure Docker Desktop is running and the DMR extension is installed.
 2. Set `LLM_API_URL` in your `.env` file to:
    ```env
-  LLM_API_URL=http://host.docker.internal:12434
+   LLM_API_URL=http://host.docker.internal:12434
    ```
 3. Download the required models:
    - LLM Model (e.g., `ai/qwen3:latest`): [Qwen3 on Hugging Face](https://huggingface.co/Qwen/Qwen1.5-7B-Chat)
