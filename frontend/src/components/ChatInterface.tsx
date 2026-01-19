@@ -274,9 +274,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 bgcolor: msg.role === 'user' ? 'primary.main' : 'grey.100',
                                 color: msg.role === 'user' ? 'white' : 'text.primary',
                                 maxWidth: '90%',
-                                boxShadow: activeMessageIndex === idx ? '0 0 10px rgba(25, 118, 210, 0.5)' : 'none',
-                                border: activeMessageIndex === idx ? '2px solid' : 'none',
-                                borderColor: 'primary.main',
+                                boxShadow: activeMessageIndex === idx ? '0 0 10px rgba(255, 255, 0, 0.4)' : 'none',
+                                border: 'none',
+                                borderColor: 'transparent',
                                 borderRadius: '12px',
                                 transition: 'all 0.2s ease',
                                 cursor: 'pointer'
