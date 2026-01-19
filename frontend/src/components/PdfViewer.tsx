@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { Box, Typography } from '@mui/material';
-import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
-import 'react-pdf/dist/esm/Page/TextLayer.css';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
 
 // Set worker source
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -68,7 +68,9 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
     // Pre-calculate sentences by page for performance
     const sentencesByPage = useMemo(() => {
         const map: { [key: number]: (Sentence & { pageBBoxes: BBox[] })[] } = {};
+        if (!sentences) return map;
         sentences.forEach(s => {
+            if (!s.bboxes) return;
             s.bboxes.forEach(b => {
                 if (!map[b.page]) map[b.page] = [];
                 let entry = map[b.page].find(e => e.id === s.id);
@@ -95,9 +97,12 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
     // Optimized overlay rendering using pre-calculated map
     const getPageOverlays = (pageNumber: number) => {
         const pageData = sentencesByPage[pageNumber] || [];
-        return pageData.map((sentence) => (
+        // ONLY render the highlight for the current active sentence
+        const activeSentence = pageData.find(s => s.id === currentId);
+        if (!activeSentence) return null;
+
+        return (
             <div
-                key={sentence.id}
                 style={{
                     position: 'absolute',
                     top: 0,
@@ -105,14 +110,15 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                     width: '100%',
                     height: '100%',
                     pointerEvents: 'none',
+                    zIndex: 5, // Keep it above canvas but potentially below text layer if needed
                 }}
             >
-                {sentence.pageBBoxes.map((bbox, idx) => (
+                {activeSentence.pageBBoxes.map((bbox, idx) => (
                     <div
                         key={idx}
                         ref={el => {
-                            if (sentence.id === currentId && idx === 0) {
-                                sentenceRefs.current[sentence.id] = el;
+                            if (idx === 0) {
+                                sentenceRefs.current[activeSentence.id] = el;
                             }
                         }}
                         style={{
@@ -121,19 +127,33 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                             top: `${((bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height) * 100}%`,
                             width: `${(bbox.width / bbox.page_width) * 100}%`,
                             height: `${(bbox.height / bbox.page_height) * 100}%`,
-                            backgroundColor: sentence.id === currentId ? 'rgba(255, 255, 0, 0.4)' : 'transparent',
-                            cursor: 'pointer',
-                            pointerEvents: 'auto',
+                            backgroundColor: 'rgba(255, 255, 0, 0.4)',
                         }}
-                        onDoubleClick={(e) => {
-                            e.stopPropagation();
-                            onJump(sentence.id);
-                        }}
-                        title={sentence.text}
                     />
                 ))}
             </div>
-        ));
+        );
+    };
+
+    const handlePageDoubleClick = (e: React.MouseEvent, pageNumber: number) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+
+        const pageData = sentencesByPage[pageNumber] || [];
+        for (const sentence of pageData) {
+            for (const bbox of sentence.pageBBoxes) {
+                const bLeft = bbox.x / bbox.page_width;
+                const bTop = (bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height;
+                const bWidth = bbox.width / bbox.page_width;
+                const bHeight = bbox.height / bbox.page_height;
+
+                if (x >= bLeft && x <= bLeft + bWidth && y >= bTop && y <= bTop + bHeight) {
+                    onJump(sentence.id);
+                    return;
+                }
+            }
+        }
     };
 
     return (
@@ -165,27 +185,36 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                 <Document
                     file={pdfUrl}
                     onLoadSuccess={onDocumentLoadSuccess}
-                    loading={<Typography>Loading PDF...</Typography>}
-                    error={<Typography color="error">Failed to load PDF.</Typography>}
+                    loading={<Typography sx={{ p: 2 }}>Loading PDF...</Typography>}
+                    error={<Typography color="error" sx={{ p: 2 }}>Failed to load PDF.</Typography>}
                 >
                     {Array.from(new Array(numPages), (el, index) => (
                         <Box
                             key={`page_${index + 1}`}
+                            onDoubleClick={(e) => handlePageDoubleClick(e, index + 1)}
                             sx={{
                                 position: 'relative',
                                 mb: 0,
                                 width: '100%',
                                 maxWidth: '100%',
-                                '& canvas': {
-                                    width: '100% !important',
-                                    height: 'auto !important',
-                                    display: 'block',
-                                },
                                 p: 0,
                                 m: 0,
-                                boxShadow: 'none',
-                                border: 'none',
-                                background: 'none',
+                                // react-pdf Page container styles
+                                '& .react-pdf__Page': {
+                                    width: '100% !important',
+                                    height: 'auto !important',
+                                    margin: '0 auto',
+                                },
+                                // Ensure canvas doesn't interfere with selection
+                                '& canvas': {
+                                    display: 'block',
+                                    pointerEvents: 'none',
+                                    userSelect: 'none',
+                                },
+                                // Target the text layer for styling if needed
+                                '& .react-pdf__Page__textLayer': {
+                                    zIndex: 10,
+                                }
                             }}
                         >
                             <Page
@@ -195,18 +224,7 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                                 renderTextLayer={true}
                             />
                             {/* Overlay Layer */}
-                            <div
-                                style={{
-                                    position: 'absolute',
-                                    top: 0,
-                                    left: 0,
-                                    width: '100%',
-                                    height: '100%',
-                                    zIndex: 10
-                                }}
-                            >
-                                {getPageOverlays(index + 1)}
-                            </div>
+                            {getPageOverlays(index + 1)}
                         </Box>
                     ))}
                 </Document>

@@ -124,10 +124,12 @@ export default function Home() {
               <PdfUploader
                 embedModel={embedModel}
                 onUploaded={(data) => {
-                  setPdfSentences(data.sentences);
+                  setPdfSentences(data?.sentences || []);
                   const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-                  setPdfUrl(`${apiBase}${data.pdfUrl}?t=${Date.now()}`);
-                  setFileHash(data.fileHash);
+                  if (data?.pdfUrl) {
+                    setPdfUrl(`${apiBase}${data.pdfUrl}?t=${Date.now()}`);
+                  }
+                  setFileHash(data?.fileHash || null);
                   setCurrentPdfId(null);
                   setCurrentChatId(null);
                   setPlayRequestId(null);
@@ -146,7 +148,7 @@ export default function Home() {
           </Box>
 
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            {pdfSentences.length > 0 && pdfUrl ? (
+            {(pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
               <PdfViewer
                 pdfUrl={pdfUrl}
                 sentences={pdfSentences}
