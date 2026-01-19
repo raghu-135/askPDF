@@ -74,39 +74,68 @@ git clone https://github.com/raghu13590/askpdf.git
 cd askpdf
 ```
 
-### 2. Start Your Local LLM Server
-
-The application expects an OpenAI-compatible API at \`http://localhost:12434\`.
 
 
-**Option A: Using Docker Model Runner (DMR) - Recommended Default**
-DMR is built into Docker Desktop and runs on port `12434` by default.
+### 2. Create Your .env File
 
-```bash
-# Ensure Docker Desktop is running and DMR is enabled
+At the root of the project directory (the same folder as `docker-compose.yml`), create a file named `.env` with the following content:
+
+```env
+DMR_BASE_URL=http://host.docker.internal:12434
 ```
 
-**Installing Models in DMR**
+This variable configures the LLM server endpoint. If you are using Ollama on its default port, set:
 
-DMR requires you to download and import models manually. Follow these steps to install the required models:
+```env
+DMR_BASE_URL=http://host.docker.internal:11434
+```
 
-1. **Download the model files** from Hugging Face or your preferred source:
-  - LLM Model (e.g., `ai/qwen3:latest`): [Qwen3 on Hugging Face](https://huggingface.co/Qwen/Qwen1.5-7B-Chat)
-  - Embedding Model (e.g., `ai/nomic-embed-text-v1.5:latest`): [nomic-embed-text-v1.5 on Hugging Face](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5)
+> **Note:** After editing `.env`, restart your containers for changes to take effect.
 
-2. **Import models into DMR** using the DMR UI or CLI:
-  - Open Docker Desktop, go to the DMR extension, and use the "Import Model" button to add the downloaded models.
-  - Alternatively, use the DMR CLI (if available) to import models:
-    ```bash
-    dmr import <path-to-model-directory>
-    ```
 
-3. **Verify models are available** in the DMR UI under the "Models" tab.
+### 3. Start Your Local LLM Server
 
-> **Note:** Model names in the app (e.g., `ai/qwen3:latest`, `ai/nomic-embed-text-v1.5:latest`) must match the names you assign in DMR.
+The application requires an OpenAI-compatible API for LLM and embeddings. You can use either Docker Model Runner (DMR) or Ollama as your local LLM server.
 
-**Option B: Using Ollama**
-Ollama runs on port `11434` by default. To use it with this app without changing code, start it on port `12434`:
+#### Option A: Docker Model Runner (DMR) (Recommended)
+
+1. Ensure Docker Desktop is running and the DMR extension is installed.
+2. Set `DMR_BASE_URL` in your `.env` file to:
+   ```env
+   DMR_BASE_URL=http://host.docker.internal:12434
+   ```
+3. Download the required models:
+   - LLM Model (e.g., `ai/qwen3:latest`): [Qwen3 on Hugging Face](https://huggingface.co/Qwen/Qwen1.5-7B-Chat)
+   - Embedding Model (e.g., `ai/nomic-embed-text-v1.5:latest`): [nomic-embed-text-v1.5 on Hugging Face](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5)
+4. Import models into DMR:
+   - Open Docker Desktop, go to the DMR extension, and use the "Import Model" button to add the downloaded models.
+   - Or, use the DMR CLI:
+     ```bash
+     dmr import <path-to-model-directory>
+     ```
+5. Verify both models are listed as **Ready** in the DMR UI.
+
+
+#### Option B: Ollama
+
+Ollama runs on port `11434` by default. The easiest way to use Ollama with this app is to update your `.env` file (recommended):
+
+**Option 1 (Recommended): Change the API endpoint in your `.env` file**
+
+Edit your `.env` file at the project root and set:
+
+```env
+DMR_BASE_URL=http://host.docker.internal:11434
+```
+
+This will direct the app to use Ollama's default port. (If running outside Docker, you can use `http://localhost:11434`.)
+
+> **Note:** After changing `.env`, restart your containers for the new value to take effect.
+
+**Option 2: Change Ollama's port to 12434**
+
+If you prefer, you can start Ollama on port 12434 to match the default expected by the app:
+
 ```bash
 # Start Ollama on the expected port
 OLLAMA_HOST=0.0.0.0:12434 ollama serve
@@ -213,7 +242,7 @@ askpdf/
             ├── api.ts          # Backend API client
             └── tts-api.ts      # TTS API client
 ```
-
+The application expects an OpenAI-compatible API at the URL specified by `DMR_BASE_URL` in your `.env` file (default: `http://host.docker.internal:12434`).
 ## 📝 API Reference
 
 ### Backend Service (Port 8000)
@@ -223,6 +252,8 @@ Upload a PDF and extract sentences with bounding boxes.
 
 **Request:** `multipart/form-data`
 - `file`: PDF file
+
+All environment variables, including `DMR_BASE_URL`, are now managed via a `.env` file at the project root. This file is loaded by both Docker Compose and the Python services.
 - `embedding_model`: Model name for RAG indexing
 
 **Response:**
@@ -231,7 +262,7 @@ Upload a PDF and extract sentences with bounding boxes.
   "sentences": [
     {
       "id": 0,
-      "text": "First sentence.",
+| `DMR_BASE_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (set in `.env`; change to `...:11434` for default Ollama) |
       "bboxes": [
         {"page": 1, "x": 72, "y": 700, "width": 50, "height": 12, "page_height": 792, "page_width": 612}
       ]

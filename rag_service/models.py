@@ -3,12 +3,14 @@ Model utilities for DMR/OpenAI-compatible APIs.
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import httpx
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 def _get_base_url() -> str:
     """Get the DMR base URL, ensuring it ends with /v1."""
-    base_url = os.getenv("DMR_BASE_URL", "http://host.docker.internal:12434")
+    base_url = os.getenv("DMR_BASE_URL")
     return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
 
 def get_llm(model_name: str, temperature: float = 0.0):

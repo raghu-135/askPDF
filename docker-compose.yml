@@ -42,8 +42,8 @@ services:
     environment:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
-      # Default DMR URL, can be overridden
-      - DMR_BASE_URL=http://host.docker.internal:12434
+    env_file:
+      - .env
     depends_on:
       - qdrant
     volumes:

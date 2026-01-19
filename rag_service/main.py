@@ -1,5 +1,27 @@
 
+"""
+main.py - FastAPI entrypoint for the RAG Service
+
+This module provides endpoints for document indexing, chat with retrieval-augmented generation, model listing, and health checks.
+
+Endpoints:
+- POST /index: Index a document for retrieval.
+- POST /chat: Chat with RAG using LLM and embedding models.
+- GET /status: Check if a collection exists in the vector DB.
+- GET /models: List available LLM and embedding models from DMR.
+- GET /health/model: Check if a specific model is ready.
+- GET /health: Service health check.
+
+Dependencies:
+- FastAPI
+- httpx
+- dotenv
+- rag, agent, vectordb.qdrant (local modules)
+"""
+
 import os
+from dotenv import load_dotenv
+load_dotenv()
 from typing import List, Optional, Dict, Any
 
 import httpx
@@ -23,11 +45,13 @@ app.add_middleware(
 )
 
 class IndexRequest(BaseModel):
+    """Request body for /index endpoint."""
     text: str
     embedding_model: str
     metadata: Optional[Dict[str, Any]] = None
 
 class ChatRequest(BaseModel):
+    """Request body for /chat endpoint."""
     question: str
     llm_model: str
     embedding_model: str
@@ -36,6 +60,13 @@ class ChatRequest(BaseModel):
 
 @app.post("/index")
 async def index_endpoint(req: IndexRequest):
+    """
+    Index a document for retrieval-augmented generation.
+    Args:
+        req (IndexRequest): Document text, embedding model, and optional metadata.
+    Returns:
+        Result of indexing operation.
+    """
     try:
         result = await index_document(
             text=req.text,
@@ -50,6 +81,13 @@ async def index_endpoint(req: IndexRequest):
 
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
+    """
+    Chat endpoint for retrieval-augmented generation.
+    Args:
+        req (ChatRequest): User question, LLM/embedding models, chat history, collection name.
+    Returns:
+        Answer and context from the agent.
+    """
     try:
         from langchain_core.messages import HumanMessage, AIMessage
         chat_history = []
@@ -78,6 +116,13 @@ async def chat_endpoint(req: ChatRequest):
 
 @app.get("/status")
 async def status_endpoint(collection_name: str):
+    """
+    Check if a collection exists and is ready in the vector database.
+    Args:
+        collection_name (str): Name of the collection to check.
+    Returns:
+        Status and collection name.
+    """
     """Check if a collection exists and is ready"""
     try:
         db = QdrantAdapter()
@@ -88,8 +133,13 @@ async def status_endpoint(collection_name: str):
 
 @app.get("/models")
 async def get_models():
+    """
+    Fetch available LLM and embedding models from DMR (Distributed Model Router).
+    Returns:
+        List of model IDs or fallback defaults if DMR is unavailable.
+    """
     """Fetch available models from DMR"""
-    dmr_url = os.getenv("DMR_BASE_URL", "http://host.docker.internal:12434")
+    dmr_url = os.getenv("DMR_BASE_URL")
     try:
         if not dmr_url.endswith("/v1"):
             dmr_url = f"{dmr_url}/v1"
@@ -102,15 +152,23 @@ async def get_models():
                 print(f"DMR Models Found: {data}", flush=True)
                 return data
             else:
-                print(f"DMR Fetch Failed {resp.status_code}: {resp.text}", flush=True)
-                # Fallback or error
-                return {"data": [{"id": "ai/qwen3:latest"}, {"id": "ai/nomic-embed-text-v1.5:latest"}]}
+                error_msg = f"DMR Fetch Failed {resp.status_code}: {resp.text}"
+                print(error_msg, flush=True)
+                raise HTTPException(status_code=500, detail=error_msg)
     except Exception as e:
-        # Return defaults if connection fails (e.g. while building)
-        return {"data": [{"id": "ai/qwen3:latest"}, {"id": "ai/nomic-embed-text-v1.5:latest"}], "error": str(e)}
+        error_msg = f"Error fetching models from DMR: {str(e)}"
+        print(error_msg, flush=True)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @app.get("/health/model")
 async def model_health_endpoint(model: str):
+    """
+    Check if a specific model is available and ready.
+    Args:
+        model (str): Model ID to check.
+    Returns:
+        Model readiness status.
+    """
     """Specific check for a model's availability"""
     from models import is_model_ready
     ready = await is_model_ready(model)
@@ -118,4 +176,9 @@ async def model_health_endpoint(model: str):
 
 @app.get("/health")
 async def health():
+    """
+    Service health check endpoint.
+    Returns:
+        Status OK if service is running.
+    """
     return {"status": "ok"}
