@@ -64,8 +64,10 @@ export default function Home() {
 
     rafIdRef.current = requestAnimationFrame(() => {
       const newWidth = window.innerWidth - e.clientX;
-      // Constrain width between 300px and 800px
-      const constrainedWidth = Math.max(300, Math.min(800, newWidth));
+      // Use proportions: min 20%, max 80% of window width
+      const minWidth = window.innerWidth * 0.2;
+      const maxWidth = window.innerWidth * 0.8;
+      const constrainedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
       chatWidthRef.current = constrainedWidth;
 
       // Update CSS custom property for smooth visual update without re-render
@@ -113,7 +115,7 @@ export default function Home() {
         {/* Left Column: PDF Content & Controls */}
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, borderRight: 1, borderColor: 'divider' }}>
           <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-            <Stack direction="row" spacing={2} alignItems="center">
+            <Stack direction="row" spacing={2} alignItems="center" flexWrap="wrap" useFlexGap>
               <Typography variant="h6" noWrap sx={{ fontWeight: 'bold' }}>
                 AskPDF
               </Typography>
