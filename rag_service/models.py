@@ -6,6 +6,8 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 import httpx
+import asyncio
+import logging
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 def _get_base_url() -> str:
@@ -35,9 +37,9 @@ def get_embedding_model(model_name: str):
         check_embedding_ctx_length=False
     )
 
-async def is_model_ready(model_name: str) -> bool:
+async def is_chat_model_ready(model_name: str) -> bool:
     """
-    Check if the model is ready in the LLM API/server by probing the API.
+    Check if the supplied model is a chat model and is ready in the LLM API/server.
     Returns True if ready, False if not ready or not found.
     """
     base_url = _get_base_url()
@@ -47,7 +49,8 @@ async def is_model_ready(model_name: str) -> bool:
             resp = await client.get(f"{base_url}/models", timeout=2.0)
             if resp.status_code != 200:
                 return False
-            model_ids = [m['id'] for m in resp.json().get('data', [])]
+            models = resp.json().get('data', [])
+            model_ids = [m['id'] for m in models]
             if model_name not in model_ids:
                 return False
 
@@ -58,29 +61,61 @@ async def is_model_ready(model_name: str) -> bool:
                 "max_tokens": 1
             }
             try:
-                chat_resp = await client.post(f"{base_url}/chat/completions", json=payload, timeout=2.0)
+                chat_resp = await client.post(f"{base_url}/chat/completions", json=payload, timeout=5.0)
                 if chat_resp.status_code == 200:
                     return True
                 if chat_resp.status_code == 503:
                     return False
-            except Exception:
-                pass
-
-            # 3. Probe with Embeddings
-            try:
-                emb_resp = await client.post(
-                    f"{base_url}/embeddings",
-                    json={"model": model_name, "input": "hi"},
-                    timeout=2.0
-                )
-                if emb_resp.status_code == 200:
-                    return True
-                if emb_resp.status_code == 503:
-                    return False
-            except Exception:
-                pass
-
-            # 4. Fallback: If model is listed and not 503, assume reachable
+            except Exception as e:
+                logging.exception("Exception during chat completion probe : %s", e)
+                return False
+            
+            # 3. Fallback: If model is listed and not 503, assume reachable
             return True
+
+    except Exception:
+        logging.exception("Exception during model readiness check")
+        return False
+
+async def is_embed_model_ready(model_name: str) -> bool:
+    """
+    Check if the supplied model is an embedding model and is ready in the LLM API/server.
+    Returns True if ready, False if not ready or not found.
+    """
+    base_url = _get_base_url()
+    try:
+        async with httpx.AsyncClient() as client:
+            # 1. Check if model exists
+            resp = await client.get(f"{base_url}/models", timeout=5.0)
+            if resp.status_code != 200:
+                return False
+            models = resp.json().get('data', [])
+            model_ids = [m['id'] for m in models]
+            if model_name not in model_ids:
+                return False
+
+            # 2. Probe with Embeddings
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    emb_resp = await client.post(
+                        f"{base_url}/embeddings",
+                        json={"model": model_name, "input": "hi"},
+                        timeout=2.0
+                    )
+                    if emb_resp.status_code == 200:
+                        return True
+                    if emb_resp.status_code == 503 and attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)  # exponential backoff
+                        continue
+                    if emb_resp.status_code == 503:
+                        return False
+                    break
+                except Exception as e:
+                    logging.exception("Exception during embedding probe : %s", e)
+                    return False
+
+            # 3. Fallback: If model is listed and not 200 or 503, assume not reachable
+            return False
     except Exception:
         return False

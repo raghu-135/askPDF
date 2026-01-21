@@ -170,9 +170,35 @@ async def model_health_endpoint(model: str):
         Model readiness status.
     """
     """Specific check for a model's availability"""
-    from models import is_model_ready
-    ready = await is_model_ready(model)
+    from models import is_chat_model_ready
+    ready = await is_chat_model_ready(model)
     return {"model": model, "ready": ready}
+
+@app.get("/health/is_chat_model_ready")
+async def is_chat_model_ready(model: str):
+    """
+    Check if a chat/LLM model is ready (probes readiness).
+    Args:
+        model (str): Model ID to check.
+    Returns:
+        Model readiness status.
+    """
+    from models import is_chat_model_ready
+    ready = await is_chat_model_ready(model)
+    return {"model": model, "chat_model_ready": ready}
+
+@app.get("/health/is_embed_model_ready")
+async def is_embed_model_ready(model: str):
+    """
+    Check if an embedding model is ready (probes readiness).
+    Args:
+        model (str): Model ID to check.
+    Returns:
+        Model readiness status.
+    """
+    from models import is_embed_model_ready
+    ready = await is_embed_model_ready(model)
+    return {"model": model, "embed_model_ready": ready}
 
 @app.get("/health")
 async def health():

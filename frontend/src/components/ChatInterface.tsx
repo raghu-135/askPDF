@@ -185,7 +185,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             // First check if models are ready to provide better UI feedback
             const checkModel = async (modelName: string) => {
                 try {
-                    const res = await fetch(`${ragApiUrl}/health/model?model=${encodeURIComponent(modelName)}`);
+                    const res = await fetch(`${ragApiUrl}/health/is_chat_model_ready?model=${encodeURIComponent(modelName)}`);
+                    if (!res.ok) return true; // If endpoint is down or 404, don't show warming message
+                    const data = await res.json();
+                    return data.ready;
+                } catch (e) {
+                    return true; // Default to true if check fails, let backend handle it
+                }
+            };
+
+            const checkEmbedModel = async (modelName: string) => {
+                try {
+                    const res = await fetch(`${ragApiUrl}/health/is_embed_model_ready?model=${encodeURIComponent(modelName)}`);
                     if (!res.ok) return true; // If endpoint is down or 404, don't show warming message
                     const data = await res.json();
                     return data.ready;
@@ -196,7 +207,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
             const [llmReady, embedReady] = await Promise.all([
                 checkModel(llmModel),
-                checkModel(embedModel)
+                checkEmbedModel(embedModel)
             ]);
 
             if (!llmReady || !embedReady) {

@@ -26,6 +26,7 @@ export default function Home() {
   // Shared embedding model for both upload and chat
   const [embedModel, setEmbedModel] = useState("");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
 
 
   // Resizable chat panel
@@ -50,6 +51,21 @@ export default function Home() {
         console.warn("Failed to fetch models", err);
       });
   }, []);
+
+  // Validate embedding model when changed
+  const handleEmbedModelChange = async (embedModel: string) => {
+    setEmbedModel(embedModel);
+    setIsEmbedModelValid(null); // reset
+    if (!embedModel) return;
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
+      const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(embedModel)}`);
+      const data = await res.json();
+      setIsEmbedModelValid(data.embed_model_ready === true);
+    } catch (err) {
+      setIsEmbedModelValid(false);
+    }
+  };
 
   // Handle resize with optimized performance
   const handleMouseDown = useCallback(() => {
@@ -125,7 +141,7 @@ export default function Home() {
                   value={embedModel}
                   label="Embedding Model"
                   displayEmpty
-                  onChange={(e) => setEmbedModel(e.target.value)}
+                  onChange={(e) => handleEmbedModelChange(e.target.value)}
                   renderValue={(selected) => selected ? selected : <span style={{ color: '#888' }}>Embedding Model</span>}
                 >
                   <MenuItem value="" disabled>
@@ -135,6 +151,11 @@ export default function Home() {
                     <MenuItem key={m} value={m}>{m}</MenuItem>
                   ))}
                 </Select>
+                {isEmbedModelValid === false && (
+                  <Typography color="error" variant="caption" sx={{ ml: 2 }}>
+                    Selected model is not a valid embedding model.
+                  </Typography>
+                )}
               </FormControl>
               <PdfUploader
                 embedModel={embedModel}
