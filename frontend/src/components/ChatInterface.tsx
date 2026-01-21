@@ -57,6 +57,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     // Model selection
     const [llmModel, setLlmModel] = useState('');
     const [availableModels, setAvailableModels] = useState<string[]>([]);
+    const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(null);
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
@@ -120,6 +121,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 // Optionally, you could set an error state here to display in the UI
             });
     }, [ragApiUrl]);
+
+    // Validate LLM model when changed
+    const handleLlmModelChange = async (model: string) => {
+        setLlmModel(model);
+        setIsLlmModelValid(null); // reset
+        if (!model) return;
+        try {
+            const res = await fetch(`${ragApiUrl}/health/is_chat_model_ready?model=${encodeURIComponent(model)}`);
+            const data = await res.json();
+            console.log("/health/is_chat_model_ready response:", data);
+            setIsLlmModelValid(data.ready === true || data.chat_model_ready === true);
+        } catch (err) {
+            setIsLlmModelValid(false);
+        }
+    };
 
     // Handle Collection Naming and Polling
     useEffect(() => {
@@ -259,12 +275,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             id="llm-select"
                             value={llmModel}
                             label="Select LLM"
-                            onChange={(e) => setLlmModel(e.target.value)}
+                            onChange={(e) => handleLlmModelChange(e.target.value)}
                         >
                             {availableModels.map(m => (
                                 <MenuItem key={m} value={m}>{m}</MenuItem>
                             ))}
                         </Select>
+                        {isLlmModelValid === false && (
+                            <Typography color="error" variant="caption" sx={{ ml: 2 }}>
+                                Selected model is not a valid chat model.
+                            </Typography>
+                        )}
                     </FormControl>
                 </Box>
             </Box>

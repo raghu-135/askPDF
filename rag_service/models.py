@@ -10,6 +10,9 @@ import asyncio
 import logging
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 def _get_base_url() -> str:
     """Get the LLM API base URL, ensuring it ends with /v1."""
     base_url = os.getenv("LLM_API_URL")
@@ -60,16 +63,25 @@ async def is_chat_model_ready(model_name: str) -> bool:
                 "messages": [{"role": "user", "content": "hi"}],
                 "max_tokens": 1
             }
-            try:
-                chat_resp = await client.post(f"{base_url}/chat/completions", json=payload, timeout=5.0)
-                if chat_resp.status_code == 200:
-                    return True
-                if chat_resp.status_code == 503:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    chat_resp = await client.post(f"{base_url}/chat/completions", json=payload, timeout=5.0)
+                    logger.info(f"Chat completion probe response status: {chat_resp.status_code}")
+                    if chat_resp.status_code == 200:
+                        return True
+                    if chat_resp.status_code == 503 and attempt < max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)  # exponential backoff
+                        continue
+                    if chat_resp.status_code == 503:
+                        return True
+                    if chat_resp.status_code == 500:
+                        return False
+                    break
+                except Exception as e:
+                    logging.exception("Exception during chat completion probe : %s", e)
                     return False
-            except Exception as e:
-                logging.exception("Exception during chat completion probe : %s", e)
-                return False
-            
+                
             # 3. Fallback: If model is listed and not 503, assume reachable
             return True
 
