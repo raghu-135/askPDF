@@ -103,16 +103,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }, [messages]);
 
     useEffect(() => {
-        // Fetch models if possible
+        // Fetch models and order: LLM models first, then the rest (no duplicates)
         fetch(`${ragApiUrl}/models`)
             .then(res => res.json())
             .then(data => {
-                if (data.data && data.data.length > 0) {
-                    // Helper to extract ID
-                    const ids = data.data.map((m: any) => m.id);
+                if (data.llm_models || data.not_llm_models) {
+                    setAvailableModels([...data.llm_models, ...data.not_llm_models]);
+                } else if (data.all_models && data.all_models.length > 0) {
+                    // fallback to all_models
+                    const ids = data.all_models.map((m: any) => m.id);
                     setAvailableModels(ids);
                 } else {
-                    throw new Error("No models found from API");
+                    throw new Error("No models found");
                 }
             })
             .catch(err => {

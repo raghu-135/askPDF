@@ -36,21 +36,24 @@ export default function Home() {
   const chatWidthRef = useRef(400); // Track width during drag without re-renders
   const rafIdRef = useRef<number | null>(null);
 
-  // Fetch available models
+  // Fetch available models and order: embedding models first, then the rest (no duplicates)
   useEffect(() => {
-    const ragApiUrl = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
-    fetch(`${ragApiUrl}/models`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.data) {
-          const ids = data.data.map((m: any) => m.id);
-          setAvailableModels(ids);
-        }
-      })
-      .catch(err => {
-        console.warn("Failed to fetch models", err);
-      });
-  }, []);
+  const ragApiUrl = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
+  fetch(`${ragApiUrl}/models`)
+    .then(res => res.json())
+    .then(data => {
+      if (data.embedding_models || data.not_embedding_models) {
+        // Show embedding models first, then the rest
+        setAvailableModels([...data.embedding_models, ...data.not_embedding_models]);
+      } else if (data.all_models) {
+        // display all models if specific categories not provided
+        setAvailableModels(data.all_models);
+      }
+    })
+    .catch(err => {
+      console.warn("Failed to fetch models", err);
+    });
+}, []);
 
   // Validate embedding model when changed
   const handleEmbedModelChange = async (embedModel: string) => {

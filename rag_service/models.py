@@ -8,6 +8,7 @@ load_dotenv()
 import httpx
 import asyncio
 import logging
+from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +18,67 @@ def _get_base_url() -> str:
     """Get the LLM API base URL, ensuring it ends with /v1."""
     base_url = os.getenv("LLM_API_URL")
     return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
+
+async def fetch_available_models():
+    """
+    Fetch available models from the LLM API/server (OpenAI-compatible) and categorize as embedding, llm, or unknown.
+    Returns:
+        dict: {"embedding_models": [...], "llm_models": [...], "unknown_models": [...], "all_models": [...]}
+    """
+    llm_api_url = os.getenv("LLM_API_URL")
+    try:
+        if not llm_api_url.endswith("/v1"):
+            llm_api_url = f"{llm_api_url}/v1"
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{llm_api_url}/models")
+            if resp.status_code == 200:
+                data = resp.json()
+                # OpenAI-compatible: models are in data['data']
+                models = data.get('data', []) if isinstance(data, dict) else data
+                model_ids = [m['id'] if isinstance(m, dict) and 'id' in m else m for m in models]
+                embedding_models = [m for m in model_ids if is_embedding_model_by_keyword(m)]
+                llm_models = [m for m in model_ids if is_llm_model_by_keyword(m)]
+                not_embedding_models = [m for m in model_ids if m not in embedding_models]
+                not_llm_models = [m for m in model_ids if m not in llm_models]
+                result = {
+                    "embedding_models": embedding_models,
+                    "llm_models": llm_models,
+                    "all_models": model_ids,
+                    "not_embedding_models": not_embedding_models,
+                    "not_llm_models": not_llm_models
+                }
+                logger.info(f"LLM API/server Models Response: {result}")
+                return result
+            else:
+                error_msg = f"LLM API/server Fetch Failed {resp.status_code}: {resp.text}"
+                print(error_msg, flush=True)
+                raise HTTPException(status_code=500, detail=error_msg)
+    except Exception as e:
+        error_msg = f"Error fetching models from LLM API/server: {str(e)}"
+        print(error_msg, flush=True)
+        raise HTTPException(status_code=500, detail=error_msg)
+
+# Identify embedding models by keywords in model id
+def is_embedding_model_by_keyword(model_id: str) -> bool:
+    """
+    Returns True if the model id suggests it is an embedding model (by keyword).
+    """
+    name = model_id.lower()
+    keywords = ["embed", "bge", "gte", "e5", "sts", "query", "passage"]
+    return any(k in name for k in keywords)
+
+# Identify LLM models by keywords in model id
+def is_llm_model_by_keyword(model_id: str) -> bool:
+    """
+    Returns True if the model id suggests it is an LLM/chat/completion model (by keyword).
+    """
+    name = model_id.lower()
+    # Exclude embedding models
+    if is_embedding_model_by_keyword(name):
+        return False
+    keywords = ["chat", "instruct", "completion", "base", "llama", "mistral", "qwen", "deepseek", "vicuna", "falcon", "gpt", "codellama", "phi", "mixtral", "yi", "zephyr", "dbrx", "command", "orca", "hermes", "openchat", "wizard", "llava", "starling", "solar"]
+    return any(k in name for k in keywords)
 
 def get_llm(model_name: str, temperature: float = 0.0):
     """

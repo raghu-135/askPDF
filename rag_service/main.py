@@ -32,7 +32,7 @@ from httpx import AsyncClient
 from agent import app as agent_app
 from rag import index_document
 from vectordb.qdrant import QdrantAdapter
-from models import check_chat_model_ready, check_embed_model_ready
+from models import check_chat_model_ready, check_embed_model_ready, fetch_available_models
 from chat_service import handle_chat
 
 # Load environment variables from .env file
@@ -122,6 +122,7 @@ async def status_endpoint(collection_name: str):
         return {"status": "error", "message": str(e)}
 
 
+
 @app.get("/models")
 async def get_models():
     """
@@ -129,25 +130,7 @@ async def get_models():
     Returns:
         List of model IDs or fallback defaults if the LLM API/server is unavailable.
     """
-    llm_api_url = os.getenv("LLM_API_URL")
-    try:
-        if not llm_api_url.endswith("/v1"):
-            llm_api_url = f"{llm_api_url}/v1"
-
-        async with AsyncClient() as client:
-            resp = await client.get(f"{llm_api_url}/models")
-            if resp.status_code == 200:
-                data = resp.json()
-                print(f"LLM API/server Models Found: {data}", flush=True)
-                return data
-            else:
-                error_msg = f"LLM API/server Fetch Failed {resp.status_code}: {resp.text}"
-                print(error_msg, flush=True)
-                raise HTTPException(status_code=500, detail=error_msg)
-    except Exception as e:
-        error_msg = f"Error fetching models from LLM API/server: {str(e)}"
-        print(error_msg, flush=True)
-        raise HTTPException(status_code=500, detail=error_msg)
+    return await fetch_available_models()
 
 
 @app.get("/health/model")
