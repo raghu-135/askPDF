@@ -28,10 +28,12 @@ from pydantic import BaseModel
 from langchain_core.messages import AIMessage, HumanMessage
 from httpx import AsyncClient
 
+
 from agent import app as agent_app
 from rag import index_document
 from vectordb.qdrant import QdrantAdapter
 from models import check_chat_model_ready, check_embed_model_ready
+from chat_service import handle_chat
 
 # Load environment variables from .env file
 load_dotenv()
@@ -95,25 +97,8 @@ async def chat_endpoint(req: ChatRequest):
         Answer and context from the agent.
     """
     try:
-        chat_history = []
-        for msg in req.history:
-            if msg["role"] == "user":
-                chat_history.append(HumanMessage(content=msg["content"]))
-            elif msg["role"] == "assistant":
-                chat_history.append(AIMessage(content=msg["content"]))
-
-        inputs = {
-            "question": req.question,
-            "chat_history": chat_history,
-            "llm_model": req.llm_model,
-            "embedding_model": req.embedding_model,
-            "collection_name": req.collection_name,
-            "context": "",
-            "answer": "",
-        }
-
-        result = await agent_app.ainvoke(inputs)
-        return {"answer": result["answer"], "context": result["context"]}
+        result = await handle_chat(req)
+        return result
     except Exception as e:
         import traceback
         traceback.print_exc()
