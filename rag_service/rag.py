@@ -29,13 +29,13 @@ def split_text(text: str) -> List[str]:
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     return splitter.split_text(text)
 
-async def download_and_parse_pdf(upload_id: str, backend_url: str) -> Optional[List[str]]:
+async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[List[str]]:
     """
-    Download a PDF from the backend and parse it into text chunks using unstructured.
+    Download a PDF from the backend using file_hash and parse it into text chunks using unstructured.
     Returns a list of chunked strings, or None if download/parsing fails.
     """
-    pdf_url = f"{backend_url}/{upload_id}.pdf"
-    local_path = os.path.join(TEMP_PDF_DIR, f"{upload_id}.pdf")
+    pdf_url = f"{backend_url}/{file_hash}.pdf"
+    local_path = os.path.join(TEMP_PDF_DIR, f"{file_hash}.pdf")
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(pdf_url, timeout=30.0)
@@ -58,13 +58,13 @@ async def download_and_parse_pdf(upload_id: str, backend_url: str) -> Optional[L
         print(f"Error downloading/parsing PDF: {e}", flush=True)
         return None
 
-async def get_chunks(text: str, file_hash: Optional[str], upload_id: Optional[str]) -> List[str]:
+async def get_chunks(text: str, file_hash: Optional[str]) -> List[str]:
     """
-    Get text chunks from either a PDF (if file_hash and upload_id are present) or from plain text.
+    Get text chunks from either a PDF (if file_hash is present) or from plain text.
     """
-    if file_hash and upload_id:
+    if file_hash:
         backend_url = os.getenv("BACKEND_URL", "http://backend:8000")
-        chunks = await download_and_parse_pdf(upload_id, backend_url)
+        chunks = await download_and_parse_pdf(file_hash, backend_url)
         if chunks:
             return chunks
         # fallback to text splitting if PDF fails
@@ -100,7 +100,6 @@ async def index_document(text: str, embedding_model_name: str, metadata: Dict[st
     """
     metadata = metadata or {}
     file_hash = metadata.get("file_hash")
-    upload_id = metadata.get("upload_id")
 
     # 1. Determine Collection Name
     collection_name = get_collection_name(embedding_model_name, file_hash)
@@ -112,7 +111,7 @@ async def index_document(text: str, embedding_model_name: str, metadata: Dict[st
         return {"status": "skipped", "reason": "exists", "collection": collection_name}
 
     # 3. Parsing & Chunking
-    chunks = await get_chunks(text, file_hash, upload_id)
+    chunks = await get_chunks(text, file_hash)
     if not chunks:
         return {"status": "error", "message": "No text extracted"}
 

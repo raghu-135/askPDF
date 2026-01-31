@@ -17,8 +17,7 @@ Dependencies:
 """
 
 import os
-import uuid
-import hashlib
+ import hashlib
 import httpx
 import logging
 from fastapi import HTTPException
@@ -65,15 +64,17 @@ class PDFService:
         if not embedding_model:
             raise HTTPException(status_code=400, detail="Please provide an embedding_model.")
 
-        upload_id = str(uuid.uuid4())
-        pdf_filename = f"{upload_id}.pdf"
-        pdf_path = os.path.join(self.static_dir, pdf_filename)
-
         content = await file.read()
         file_hash = hashlib.md5(content).hexdigest()
 
-        with open(pdf_path, "wb") as f:
-            f.write(content)
+        # Use file_hash as the PDF filename for consistency
+        pdf_filename = f"{file_hash}.pdf"
+        pdf_path = os.path.join(self.static_dir, pdf_filename)
+
+        # Only write the file if it doesn't already exist (deduplication)
+        if not os.path.exists(pdf_path):
+            with open(pdf_path, "wb") as f:
+                f.write(content)
 
         text, char_map = extract_text_with_coordinates(content)
         sentences = split_into_sentences(text)
@@ -84,7 +85,7 @@ class PDFService:
         background_tasks.add_task(
             self._call_rag,
             text,
-            {"filename": file.filename, "upload_id": upload_id, "file_hash": file_hash},
+            {"filename": file.filename, "file_hash": file_hash},
             embedding_model
         )
 

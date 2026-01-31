@@ -330,7 +330,7 @@ Index document text into vector database.
 {
   "text": "Full document text...",
   "embedding_model": "ai/nomic-embed-text-v1.5:latest",
-  "metadata": {"filename": "document.pdf", "upload_id": "uuid"}
+  "metadata": {"filename": "document.pdf", "file_hash": "abc123def456"}
 }
 ```
 

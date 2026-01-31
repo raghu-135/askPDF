@@ -72,20 +72,15 @@ export default function Home() {
       setIsEmbedModelValid(data.embed_model_ready === true);
       // If a PDF is already loaded, re-trigger upload/indexing to create new collection
       if (fileHash && pdfUrl && data.embed_model_ready === true) {
-        // Simulate re-upload by calling the backend index endpoint
-        // You may need to call your backend API here to re-index
-        const backendApi = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-        // Assuming you have an endpoint like /index_document
-        // You may need to pass upload_id, file_hash, and embedModel
+        // Re-index the document with the new embedding model
         try {
-          const uploadId = fileHash; // assuming fileHash is used as upload_id
           const indexRes = await fetch(`${apiBase}/index_document`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               text: "", // backend will parse PDF
               embedding_model_name: embedModel,
-              metadata: { file_hash: fileHash, upload_id: uploadId }
+              metadata: { file_hash: fileHash }
             })
           });
           const indexData = await indexRes.json();
