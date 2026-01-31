@@ -14,4 +14,4 @@ langgraph
 langchain
 langchain-core
 langchain-community
-duckduckgo-search
+ddgs

@@ -12,11 +12,33 @@ A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retriev
 - **Interactive Navigation**: Double-click any sentence in the PDF or any message in the Chat to start playback
 - **Centralized Controls**: Unified player in the footer manages all audio sources (Speed 0.5x - 2.0x)
 
-### 💬 RAG-Powered Chat
+### 💬 RAG-Powered Chat & Internet Search
 - **Semantic Search**: Ask questions about your PDF content
 - **Vector Storage**: Document chunks indexed in Qdrant for fast retrieval
 - **Conversational AI**: Chat with context from your document using local LLMs
+- **Internet Search (DuckDuckGo)**: Optionally augment answers with live web search results for up-to-date or external information
 - **Chat History**: Maintains conversation context for follow-up questions
+### 🌐 Internet Search (DuckDuckGo)
+
+You can enable **Internet Search** in the chat panel to let the AI answer questions using both your PDF and live web results (via DuckDuckGo). This is useful for:
+
+- Getting up-to-date facts, news, or background not present in your PDF
+- Clarifying ambiguous or missing information
+
+**How it works:**
+- When enabled, the app performs a DuckDuckGo search for your question and injects the top results into the LLM's context window, along with PDF content.
+- The LLM then answers using both sources.
+
+**Privacy:**
+- All queries are sent to DuckDuckGo only when Internet Search is enabled.
+- No PDF content is sent to DuckDuckGo—only your question.
+
+**Rate Limits:**
+- DuckDuckGo and other free search APIs may rate limit requests if used too frequently.
+- If rate limited, the app will notify you and fall back to PDF-only answers.
+
+**Model Compatibility:**
+- Any OpenAI-compatible LLM can use this feature. The search results are injected as plain text context, so no special model/tool-calling support is required.
 
 ### 🎨 Modern UI
 - **Unified Navigation**: Double-click sentences or chat bubbles to start reading immediately
@@ -26,7 +48,13 @@ A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retriev
 - **Model Selection**: Centralized embedding model selection and dynamic LLM discovery
 
 ### 🖥️ Private & Local Design
-All features of this app can be run entirely on your own machine or laptop, using only local resources. Document processing, AI chat, and TTS all happen locally—no data is sent to external servers. You can use free, open-source models with Docker Model Runner, Ollama, or LMStudio, so there are no required cloud costs or subscriptions.
+All features of this app are designed to run entirely on your own machine or laptop, using only local resources by default. Document processing, AI chat, and TTS all happen locally—no data is sent to external servers unless you explicitly enable Internet Search.
+
+**Privacy Note:**
+- When Internet Search is enabled, *only your question* (not your PDF content or chat history) is sent to DuckDuckGo for web search. All other processing, including PDF parsing, vector search, and LLM inference, remains local and private.
+- If Internet Search is disabled, no data ever leaves your machine.
+
+You can use free, open-source models with Docker Model Runner, Ollama, or LMStudio, so there are no required cloud costs or subscriptions.
 
 ## 🏗️ Architecture
 
@@ -188,13 +216,14 @@ docker-compose up --build
 5. **Navigate**: Use playback controls or double-click any sentence in the PDF or any chat bubble to jump to it
 6. **Adjust Voice**: Select different voice styles and adjust playback speed
 
-### Chatting with Your PDF
+### Chatting with Your PDF (and the Web)
 
 1. **Select LLM Model**: Choose an LLM from the chat panel dropdown
-2. **Ask Questions**: Type your question about the PDF content
-3. **Get AI Answers**: The system retrieves relevant chunks and generates answers
-4. **Continue Conversation**: Follow-up questions maintain context
-5. **Read Out Loud**: Double-click any chat bubble to have the assistant's response (or your own question) read aloud
+2. **(Optional) Enable Internet Search**: Toggle the "Use Internet Search" switch above the chat input to allow the AI to use live web results
+3. **Ask Questions**: Type your question about the PDF content (or anything else)
+4. **Get AI Answers**: The system retrieves relevant PDF chunks and, if enabled, web search results, then generates an answer
+5. **Continue Conversation**: Follow-up questions maintain context
+6. **Read Out Loud**: Double-click any chat bubble to have the assistant's response (or your own question) read aloud
 
 ## 🛠️ Technology Stack
 
