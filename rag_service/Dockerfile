@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     libmagic-dev \
     libgl1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY rag_service/requirements.txt /app/requirements.txt

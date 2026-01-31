@@ -11,8 +11,10 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
       - NEXT_PUBLIC_RAG_API_URL=http://localhost:8001
     depends_on:
-      - backend
-      - rag-service
+      backend:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -21,6 +23,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
   backend:
     build:
@@ -31,7 +34,8 @@ services:
     environment:
       - RAG_SERVICE_URL=http://rag-service:8000
     depends_on:
-      - rag-service
+      rag-service:
+        condition: service_healthy
     volumes:
       - ./backend:/app/backend
       - ./backend:/app/backend
@@ -41,7 +45,8 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 10
+      start_period: 30s
 
   rag-service:
     build:
@@ -61,22 +66,17 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:8000/health && curl -f http://qdrant:6333/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.16
     ports:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
 volumes:
   qdrant_data:
