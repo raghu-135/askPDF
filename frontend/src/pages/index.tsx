@@ -74,12 +74,12 @@ export default function Home() {
       if (fileHash && pdfUrl && data.embed_model_ready === true) {
         // Re-index the document with the new embedding model
         try {
-          const indexRes = await fetch(`${apiBase}/index_document`, {
+          const indexRes = await fetch(`${apiBase}/index`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               text: "", // backend will parse PDF
-              embedding_model_name: embedModel,
+              embedding_model: embedModel,
               metadata: { file_hash: fileHash }
             })
           });
