@@ -21,8 +21,11 @@ async def handle_chat(req):
         "llm_model": req.llm_model,
         "embedding_model": req.embedding_model,
         "collection_name": req.collection_name,
+        "use_web_search": req.use_web_search,
         "context": "",
+        "web_context": "",
         "answer": "",
     }
     result = await agent_app.ainvoke(inputs)
-    return {"answer": result["answer"], "context": result["context"]}
+    # Return answer and context (could also return web_context if desired)
+    return {"answer": result["answer"], "context": result.get("context", "")}

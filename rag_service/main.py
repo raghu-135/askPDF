@@ -62,6 +62,7 @@ class ChatRequest(BaseModel):
     llm_model: str
     embedding_model: str
     collection_name: Optional[str] = None
+    use_web_search: bool = False
     history: List[Dict[str, str]] = []  # list of {role: "user"|"assistant", content: "..."}
 
 

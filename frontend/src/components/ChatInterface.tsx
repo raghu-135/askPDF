@@ -13,7 +13,10 @@ import {
     InputLabel,
     IconButton,
     Divider,
-    Stack
+    Stack,
+    FormControlLabel,
+    Switch,
+    Tooltip
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -53,6 +56,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [isModelWarming, setIsModelWarming] = useState(false);
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
     const [collectionName, setCollectionName] = useState<string | null>(null);
+    const [useWebSearch, setUseWebSearch] = useState(false);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -242,7 +246,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     history: messages,
                     llm_model: llmModel,
                     embedding_model: embedModel,
-                    collection_name: collectionName
+                    collection_name: collectionName,
+                    use_web_search: useWebSearch
                 })
             });
 
@@ -269,7 +274,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 <Typography variant="subtitle1" sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>
                     ask PDF
                 </Typography>
-                <Box sx={{ flexGrow: 1, maxWidth: '250px' }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '250px', gap: 1 }}>
+                    <Tooltip title="Use Internet Search" placement="top">
+                        <Switch
+                            size="small"
+                            checked={useWebSearch}
+                            onChange={(e) => setUseWebSearch(e.target.checked)}
+                        />
+                    </Tooltip>
                     <FormControl fullWidth size="small">
                         <InputLabel id="llm-label">Select LLM</InputLabel>
                         <Select
@@ -347,7 +359,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         Bringing the AI model online, this may take a moment...
                     </Typography>
                 )}
-                <Box sx={{ display: 'flex', gap: 1 }}>
+
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
                     <TextField
                         fullWidth
                         variant="outlined"
