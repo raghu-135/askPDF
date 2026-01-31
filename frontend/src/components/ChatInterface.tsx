@@ -18,6 +18,8 @@ import {
     Switch,
     Tooltip
 } from '@mui/material';
+import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
+import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
 import SendIcon from '@mui/icons-material/Send';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ReactMarkdown from 'react-markdown';
@@ -275,12 +277,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     ask PDF
                 </Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '250px', gap: 1 }}>
-                    <Tooltip title="Use Internet Search" placement="top">
-                        <Switch
+                    <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
+                        <IconButton
                             size="small"
-                            checked={useWebSearch}
-                            onChange={(e) => setUseWebSearch(e.target.checked)}
-                        />
+                            color={useWebSearch ? "primary" : "default"}
+                            onClick={() => setUseWebSearch(v => !v)}
+                            sx={{ p: 0.5 }}
+                        >
+                            {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
+                        </IconButton>
                     </Tooltip>
                     <FormControl fullWidth size="small">
                         <InputLabel id="llm-label">Select LLM</InputLabel>
