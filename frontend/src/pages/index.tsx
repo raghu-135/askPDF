@@ -177,6 +177,10 @@ export default function Home() {
           data.fileName,
           extractedText
         );
+        
+        // Refresh active thread to trigger UI updates (like indexing status in ChatInterface)
+        const updatedThread = await getThread(activeThread.id);
+        setActiveThread(updatedThread);
       } catch (error) {
         console.error('Failed to add file to thread:', error);
       }

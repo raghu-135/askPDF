@@ -88,7 +88,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setMessages([]);
             setIndexingStatus('ready');
         }
-    }, [activeThread?.id]);
+    }, [activeThread?.id, activeThread?.file_count]);
 
     const loadMessages = async () => {
         if (!activeThread) return;

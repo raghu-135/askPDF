@@ -224,17 +224,4 @@ async def check_file_indexed_in_thread(thread_id: str, file_hash: str) -> bool:
     Check if a file has been indexed in a thread's collection.
     """
     db_client = QdrantAdapter()
-    
-    # Check if collection exists
-    if not await db_client.thread_collection_exists(thread_id):
-        return False
-    
-    # Search for any chunks with this file_hash
-    # We'll use a dummy search to see if any results exist
-    # This is a simple existence check
-    try:
-        stats = await db_client.get_thread_stats(thread_id)
-        return stats.get("pdf_chunks", 0) > 0
-    except Exception as e:
-        print(f"Error checking file index status: {e}", flush=True)
-        return False
+    return await db_client.has_file_indexed(thread_id, file_hash)

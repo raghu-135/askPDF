@@ -169,7 +169,8 @@ async def get_thread_endpoint(thread_id: str):
             "embed_model": thread.embed_model,
             "created_at": thread.created_at.isoformat(),
             "files": [{"file_hash": f.file_hash, "file_name": f.file_name} for f in files],
-            "stats": stats
+            "stats": stats,
+            "file_count": len(files)
         }
     except HTTPException:
         raise
@@ -442,11 +443,30 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
             raise HTTPException(status_code=404, detail="Thread not found")
         
         db = QdrantAdapter()
+        
+        if file_hash:
+            # Check specific file
+            is_indexed = await db.has_file_indexed(thread_id, file_hash)
+            status = "ready" if is_indexed else "not_ready"
+        else:
+            # Check all files in thread
+            files = await get_thread_files(thread_id)
+            if not files:
+                status = "ready"
+            else:
+                all_indexed = True
+                for f in files:
+                    # Check if file chunks exist for this thread
+                    if not await db.has_file_indexed(thread_id, f.file_hash):
+                        all_indexed = False
+                        break
+                status = "ready" if all_indexed else "not_ready"
+        
         stats = await db.get_thread_stats(thread_id)
         
         return {
             "thread_id": thread_id,
-            "status": "ready" if stats.get("exists") and stats.get("pdf_chunks", 0) > 0 else "not_ready",
+            "status": status,
             "stats": stats
         }
     except HTTPException:

@@ -456,3 +456,24 @@ class QdrantAdapter(VectorDBClient):
         except Exception as e:
             print(f"Error counting points: {e}", flush=True)
             return {"exists": True, **stats}
+
+    async def has_file_indexed(self, thread_id: str, file_hash: str) -> bool:
+        """Check if a specific file has been indexed in a thread's collection."""
+        collection_name = self.get_thread_collection_name(thread_id)
+        if not await self.thread_collection_exists(thread_id):
+            return False
+        
+        try:
+            count = self.client.count(
+                collection_name=collection_name,
+                count_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(key="type", match=models.MatchValue(value="pdf_chunk")),
+                        models.FieldCondition(key="file_hash", match=models.MatchValue(value=file_hash))
+                    ]
+                )
+            ).count
+            return count > 0
+        except Exception as e:
+            print(f"Error checking file indexing: {e}", flush=True)
+            return False
