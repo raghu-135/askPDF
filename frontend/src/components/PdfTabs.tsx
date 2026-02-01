@@ -1,4 +1,5 @@
 import React from 'react';
+import { truncateFileName } from '../lib/pdf-utils';
 import { Box, Tabs, Tab, IconButton, Tooltip, Typography } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
@@ -36,22 +37,6 @@ export default function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose }: 
   const handleClose = (e: React.MouseEvent, tabId: string) => {
     e.stopPropagation();
     onTabClose(tabId);
-  };
-
-  // Truncate filename for display
-  const truncateFileName = (name: string, maxLen: number = 20) => {
-    if (name.length <= maxLen) return name;
-    const ext = name.lastIndexOf('.');
-    if (ext > 0 && name.length - ext <= 5) {
-      // Preserve extension
-      const extStr = name.substring(ext);
-      const baseName = name.substring(0, ext);
-      const availableLen = maxLen - extStr.length - 3;
-      if (availableLen > 5) {
-        return baseName.substring(0, availableLen) + '...' + extStr;
-      }
-    }
-    return name.substring(0, maxLen - 3) + '...';
   };
 
   return (

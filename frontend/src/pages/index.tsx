@@ -14,7 +14,9 @@ import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
-import { Thread, addFileToThread, getThread, getPdfByHash } from "../lib/api";
+import { Thread, addFileToThread } from "../lib/api";
+import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
+import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 
 type Sentence = { id: number; text: string; bboxes: any[] };
 
@@ -22,13 +24,10 @@ export default function Home() {
   // Multiple PDF tabs state
   const [pdfTabs, setPdfTabs] = useState<PdfTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  
-  // Get active tab data
-  const activeTab = pdfTabs.find(t => t.id === activeTabId) || null;
-  const pdfSentences = activeTab?.sentences || [];
-  const pdfUrl = activeTab?.pdfUrl || null;
-  const fileHash = activeTab?.fileHash || null;
-  const fileName = activeTab?.fileName || null;
+
+  // Get active tab and its data using utility
+  const activeTab = getActiveTab(pdfTabs, activeTabId);
+  const { pdfSentences, pdfUrl, fileHash, fileName } = getActiveTabData(activeTab);
 
   const [activeSource, setActiveSource] = useState<'pdf' | 'chat'>('pdf');
   const [currentPdfId, setCurrentPdfId] = useState<number | null>(null);
@@ -69,31 +68,12 @@ export default function Home() {
     setPlayRequestId(null);
     setActiveSource('pdf');
     if (thread) {
-      // Load thread's files
       try {
-        const threadData = await getThread(thread.id);
-        if (threadData.files && threadData.files.length > 0) {
-          const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-          const loadedTabs: PdfTab[] = [];
-          for (const file of threadData.files) {
-            try {
-              const pdfData = await getPdfByHash(file.file_hash);
-              loadedTabs.push({
-                id: file.file_hash,
-                fileName: file.file_name,
-                fileHash: file.file_hash,
-                pdfUrl: `${apiBase}${pdfData.pdfUrl}?t=${Date.now()}`,
-                sentences: pdfData.sentences,
-                text: pdfData.sentences.map((s: any) => s.text).join(' '),
-              });
-            } catch (err) {
-              console.error(`Failed to load PDF ${file.file_hash}:`, err);
-            }
-          }
-          if (loadedTabs.length > 0) {
-            setPdfTabs(loadedTabs);
-            setActiveTabId(loadedTabs[0].id);
-          }
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        const loadedTabs = await loadThreadTabs(thread, apiBase);
+        if (loadedTabs.length > 0) {
+          setPdfTabs(loadedTabs);
+          setActiveTabId(loadedTabs[0].id);
         }
       } catch (err) {
         console.error('Failed to load thread files:', err);
@@ -105,20 +85,8 @@ export default function Home() {
   // Handle PDF upload - create new tab
   const handlePdfUploaded = async (data: any) => {
     const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const newPdfUrl = data?.pdfUrl ? `${apiBase}${data.pdfUrl}?t=${Date.now()}` : '';
-    const extractedText = data?.sentences?.map((s: any) => s.text).join(' ') || '';
-    
-    // Create new tab
-    const newTab: PdfTab = {
-      id: data?.fileHash || `tab-${Date.now()}`,
-      fileName: data?.fileName || 'Untitled.pdf',
-      fileHash: data?.fileHash || '',
-      pdfUrl: newPdfUrl,
-      sentences: data?.sentences || [],
-      text: extractedText,
-    };
+    const newTab = createPdfTabFromUpload(data, apiBase);
 
-    // Add tab and make it active
     setPdfTabs(prev => [...prev, newTab]);
     setActiveTabId(newTab.id);
 
@@ -129,11 +97,12 @@ export default function Home() {
           activeThread.id,
           data.fileHash,
           data.fileName,
-          extractedText
+          newTab.text
         );
-        
+
         // Refresh active thread to trigger UI updates (like indexing status in ChatInterface)
-        const updatedThread = await getThread(activeThread.id);
+        // Only need to update thread, not reload tabs
+        const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
         setActiveThread(updatedThread);
       } catch (error) {
         console.error('Failed to add file to thread:', error);
@@ -148,33 +117,20 @@ export default function Home() {
 
   // Handle tab change
   const handleTabChange = (tabId: string) => {
-    setActiveTabId(tabId);
-    setCurrentPdfId(null);
-    setPlayRequestId(null);
-    setActiveSource('pdf');
+    handleTabChangeUtil(tabId, setActiveTabId, setCurrentPdfId, setPlayRequestId, setActiveSource);
   };
 
   // Handle tab close
   const handleTabClose = (tabId: string) => {
-    setPdfTabs(prev => {
-      const newTabs = prev.filter(t => t.id !== tabId);
-      
-      // If closing the active tab, switch to another tab
-      if (activeTabId === tabId) {
-        const closingIndex = prev.findIndex(t => t.id === tabId);
-        if (newTabs.length > 0) {
-          // Try to select the tab to the left, or the first tab
-          const newIndex = Math.max(0, closingIndex - 1);
-          setActiveTabId(newTabs[newIndex]?.id || null);
-        } else {
-          setActiveTabId(null);
-        }
-      }
-      
-      return newTabs;
-    });
-    setCurrentPdfId(null);
-    setPlayRequestId(null);
+    handleTabCloseUtil(
+      tabId,
+      pdfTabs,
+      activeTabId,
+      setPdfTabs,
+      setActiveTabId,
+      setCurrentPdfId,
+      setPlayRequestId
+    );
   };
 
   // Handle resize with optimized performance
