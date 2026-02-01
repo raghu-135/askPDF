@@ -87,48 +87,6 @@ export default function PdfUploader({ onUploaded, onIndexingComplete, disabled, 
     }
   };
 
-  const renderIndexingStatus = () => {
-    if (!indexingState) return null;
-
-    const { status, progress, error } = indexingState;
-
-    if (status === 'ready') {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 2 }}>
-          <CheckCircleIcon color="success" fontSize="small" />
-          <Typography variant="body2" color="success.main">
-            Indexed
-          </Typography>
-        </Box>
-      );
-    }
-
-    if (status === 'failed') {
-      return (
-        <Tooltip title={error || 'Indexing failed'}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 2 }}>
-            <ErrorIcon color="error" fontSize="small" />
-            <Typography variant="body2" color="error">
-              Failed
-            </Typography>
-          </Box>
-        </Tooltip>
-      );
-    }
-
-    if (status === 'pending' || status === 'indexing') {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 2 }}>
-          <CircularProgress size={16} />
-          <Typography variant="body2" color="text.secondary">
-            Indexing{progress > 0 ? ` (${progress}%)` : '...'}
-          </Typography>
-        </Box>
-      );
-    }
-
-    return null;
-  };
 
   const button = (
     <>
@@ -152,12 +110,7 @@ export default function PdfUploader({ onUploaded, onIndexingComplete, disabled, 
     </>
   );
 
-  const content = (
-    <Box sx={{ display: 'flex', alignItems: 'center' }}>
-      {button}
-      {renderIndexingStatus()}
-    </Box>
-  );
+  const content = button;
 
   if (tooltipText && isDisabled) {
     return <Tooltip title={tooltipText}><span>{content}</span></Tooltip>;

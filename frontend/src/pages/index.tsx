@@ -243,6 +243,8 @@ export default function Home() {
               {/* PDF Uploader */}
               <PdfUploader
                 onUploaded={handlePdfUploaded}
+                disabled={!activeThread}
+                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
               />
 
               {/* Auto-scroll Toggle */}
