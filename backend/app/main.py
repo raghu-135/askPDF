@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 # Local imports
 from .tts import tts_sentence_to_wav, list_voice_styles
-from .pdf_service import PDFService
+from .pdf_service import PDFService, get_indexing_status, IndexingStatus
 
 
 
@@ -70,6 +70,22 @@ async def upload_pdf(
     return await pdf_service.process_upload(file, embedding_model, background_tasks)
 
 
+@app.get(f"{API_PREFIX}/pdf/{{file_hash}}")
+async def get_pdf_data(file_hash: str):
+    """
+    Get PDF data (sentences with bounding boxes) for an existing PDF by file hash.
+    This is used to reload PDFs when switching threads.
+    
+    Args:
+        file_hash (str): The MD5 hash of the PDF file.
+    Returns:
+        dict: Contains sentences with bounding boxes and PDF URL.
+    Raises:
+        HTTPException: If PDF file is not found.
+    """
+    return await pdf_service.get_pdf_by_hash(file_hash)
+
+
 @app.get(f"{API_PREFIX}/voices")
 async def get_voices():
     """
@@ -103,6 +119,30 @@ async def synthesize_sentence(payload: dict):
     rel = os.path.relpath(path, "/")
     url = f"/{rel}"
     return {"audioUrl": url}
+
+
+@app.get(f"{API_PREFIX}/index-status/{{file_hash}}")
+async def get_file_index_status(file_hash: str):
+    """
+    Check the indexing status for a specific file.
+    
+    Args:
+        file_hash (str): The MD5 hash of the file to check status for.
+    Returns:
+        dict: Status information including status, progress, and any errors.
+    """
+    status = get_indexing_status(file_hash)
+    if status is None:
+        # Unknown file - could be already indexed or never uploaded
+        return {
+            "file_hash": file_hash,
+            "status": "unknown",
+            "message": "File not found in indexing queue. It may already be indexed or was never uploaded."
+        }
+    return {
+        "file_hash": file_hash,
+        **status.to_dict()
+    }
 
 
 @app.get(f"{API_PREFIX}/rag_status")

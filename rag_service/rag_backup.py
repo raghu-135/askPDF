@@ -1,12 +1,3 @@
-"""
-rag.py - Document indexing for RAG Service
-
-This module handles:
-- Text chunking and embedding generation
-- Legacy collection-based indexing
-- Per-thread collection indexing
-- PDF download and parsing
-"""
 
 import os
 from typing import Dict, Any, List, Optional
@@ -20,17 +11,15 @@ from vectordb.qdrant import QdrantAdapter
 TEMP_PDF_DIR = "/tmp/pdfs"
 os.makedirs(TEMP_PDF_DIR, exist_ok=True)
 
-
 def get_collection_name(embedding_model_name: str, file_hash: Optional[str] = None) -> str:
     """
-    Generate a safe collection name for legacy vector database indexing.
+    Generate a safe collection name for the vector database based on the embedding model and file hash.
     """
     base_model_name = embedding_model_name.split(":")[0]
     safe_model_name = base_model_name.replace("-", "_").replace(".", "_").replace("/", "_")
     if file_hash:
         return f"rag_{safe_model_name}_{file_hash}"
     return f"rag_{safe_model_name}"
-
 
 def split_text(text: str) -> List[str]:
     """
@@ -39,7 +28,6 @@ def split_text(text: str) -> List[str]:
     from langchain_text_splitters import RecursiveCharacterTextSplitter
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     return splitter.split_text(text)
-
 
 async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[List[str]]:
     """
@@ -70,7 +58,6 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[L
         print(f"Error downloading/parsing PDF: {e}", flush=True)
         return None
 
-
 async def get_chunks(text: str, file_hash: Optional[str]) -> List[str]:
     """
     Get text chunks from either a PDF (if file_hash is present) or from plain text.
@@ -84,7 +71,6 @@ async def get_chunks(text: str, file_hash: Optional[str]) -> List[str]:
         return split_text(text)
     else:
         return split_text(text)
-
 
 async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> List[List[float]]:
     """
@@ -100,24 +86,17 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
         vectors.extend(batch_vectors)
     return vectors
 
-
-async def index_chunks_to_db(
-    collection_name: str, 
-    chunks: List[str], 
-    metadatas_list: List[Dict[str, Any]], 
-    vectors: List[List[float]], 
-    db_client: QdrantAdapter
-) -> None:
+async def index_chunks_to_db(collection_name: str, chunks: List[str], metadatas_list: List[Dict[str, Any]], vectors: List[List[float]], db_client: QdrantAdapter) -> None:
     """
     Index the chunks and their embeddings into the vector database.
     """
     await db_client.index_documents(collection_name, chunks, metadatas_list, vectors)
 
-
 async def index_document(text: str, embedding_model_name: str, metadata: Dict[str, Any] = None):
     """
-    Legacy: Indexes a document into the vector database.
-    Creates a collection based on embedding model and file hash.
+    Indexes a document into the vector database.
+    If file_hash is present in metadata, it creates a unique collection and uses unstructured for parsing.
+    Otherwise falls back to simple text indexing (legacy).
     """
     metadata = metadata or {}
     file_hash = metadata.get("file_hash")
@@ -146,95 +125,3 @@ async def index_document(text: str, embedding_model_name: str, metadata: Dict[st
     except Exception as e:
         print(f"Error indexing: {e}", flush=True)
         return {"status": "error", "message": str(e)}
-
-
-async def index_document_for_thread(
-    thread_id: str,
-    file_hash: str,
-    text: str,
-    embedding_model_name: str,
-    metadata: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """
-    Index a document into a thread's Qdrant collection.
-    This is used for per-thread indexing with semantic memory support.
-    
-    Args:
-        thread_id: The thread ID to index into
-        file_hash: Unique hash of the file
-        text: Document text (fallback if PDF parsing fails)
-        embedding_model_name: The embedding model to use
-        metadata: Additional metadata to store with chunks
-    
-    Returns:
-        Status dict with indexing results
-    """
-    db_client = QdrantAdapter()
-    metadata = metadata or {}
-    
-    try:
-        # 1. Get chunks
-        chunks = await get_chunks(text, file_hash)
-        if not chunks:
-            print(f"No chunks extracted for thread {thread_id}, file {file_hash}", flush=True)
-            return {"status": "error", "message": "No text extracted"}
-        
-        print(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}", flush=True)
-        
-        # 2. Generate embeddings
-        vectors = await generate_embeddings(chunks, embedding_model_name)
-        
-        # 3. Prepare metadata for each chunk
-        chunk_metadatas = []
-        for i, chunk in enumerate(chunks):
-            chunk_metadata = {
-                **metadata,
-                "file_hash": file_hash,
-                "chunk_index": i,
-            }
-            chunk_metadatas.append(chunk_metadata)
-        
-        # 4. Index into thread collection
-        indexed_count = await db_client.index_pdf_chunks(
-            thread_id=thread_id,
-            file_hash=file_hash,
-            texts=chunks,
-            embeddings=vectors,
-            metadatas=chunk_metadatas
-        )
-        
-        print(f"Successfully indexed {indexed_count} chunks for thread {thread_id}", flush=True)
-        
-        return {
-            "status": "success",
-            "thread_id": thread_id,
-            "file_hash": file_hash,
-            "chunks_count": indexed_count
-        }
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error indexing document for thread {thread_id}: {e}", flush=True)
-        return {"status": "error", "message": str(e)}
-
-
-async def check_file_indexed_in_thread(thread_id: str, file_hash: str) -> bool:
-    """
-    Check if a file has been indexed in a thread's collection.
-    """
-    db_client = QdrantAdapter()
-    
-    # Check if collection exists
-    if not await db_client.thread_collection_exists(thread_id):
-        return False
-    
-    # Search for any chunks with this file_hash
-    # We'll use a dummy search to see if any results exist
-    # This is a simple existence check
-    try:
-        stats = await db_client.get_thread_stats(thread_id)
-        return stats.get("pdf_chunks", 0) > 0
-    except Exception as e:
-        print(f"Error checking file index status: {e}", flush=True)
-        return False

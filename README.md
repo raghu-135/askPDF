@@ -12,12 +12,13 @@ A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retriev
 - **Interactive Navigation**: Double-click any sentence in the PDF or any message in the Chat to start playback
 - **Centralized Controls**: Unified player in the footer manages all audio sources (Speed 0.5x - 2.0x)
 
-### 💬 RAG-Powered Chat & Internet Search
-- **Semantic Search**: Ask questions about your PDF content
-- **Vector Storage**: Document chunks indexed in Qdrant for fast retrieval
-- **Conversational AI**: Chat with context from your document using local LLMs
+### 💬 RAG-Powered Chat, Threads & Semantic Memory
+- **Threaded Chat**: Organize conversations into threads, each with its own context and files
+- **Semantic Memory**: Chat history and previous answers are stored and retrieved for context-aware responses
+- **Vector Storage**: Document chunks and chat memory indexed in Qdrant for fast retrieval
+- **Conversational AI**: Chat with context from your document and previous messages using local LLMs
 - **Internet Search (DuckDuckGo)**: Optionally augment answers with live web search results for up-to-date or external information
-- **Chat History**: Maintains conversation context for follow-up questions
+- **Chat History**: Maintains conversation context for follow-up questions, with per-thread message management
 ### 🌐 Internet Search (DuckDuckGo)
 
 You can enable **Internet Search** in the chat panel to let the AI answer questions using both your PDF and live web results (via DuckDuckGo). This is useful for:
@@ -48,10 +49,10 @@ You can enable **Internet Search** in the chat panel to let the AI answer questi
 - **Model Selection**: Centralized embedding model selection and dynamic LLM discovery
 
 ### 🖥️ Private & Local Design
-All features of this app are designed to run entirely on your own machine or laptop, using only local resources by default. Document processing, AI chat, and TTS all happen locally—no data is sent to external servers unless you explicitly enable Internet Search.
+All features of this app are designed to run entirely on your own machine or laptop, using only local resources by default. Document processing, AI chat, TTS, and chat/thread management all happen locally—no data is sent to external servers unless you explicitly enable Internet Search.
 
 **Privacy Note:**
-- When Internet Search is enabled, *only your question* (not your PDF content or chat history) is sent to DuckDuckGo for web search. All other processing, including PDF parsing, vector search, and LLM inference, remains local and private.
+- When Internet Search is enabled, *only your question* (not your PDF content or chat history) is sent to DuckDuckGo for web search. All other processing, including PDF parsing, vector search, LLM inference, and chat/thread/message storage, remains local and private.
 - If Internet Search is disabled, no data ever leaves your machine.
 
 You can use free, open-source models with Docker Model Runner, Ollama, or LMStudio, so there are no required cloud costs or subscriptions.
@@ -79,10 +80,10 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **Frontend** | 3000 | Next.js React app with PDF viewer and chat UI |
+| **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, and thread management |
 | **Backend** | 8000 | FastAPI server for PDF processing and TTS |
-| **RAG Service** | 8001 | FastAPI server for document indexing and AI chat |
-| **Qdrant** | 6333 | Vector database for semantic search |
+| **RAG Service** | 8001 | FastAPI server for document indexing, AI chat, thread/message/file management |
+| **Qdrant** | 6333 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
 
@@ -267,28 +268,30 @@ askpdf/
 ├── rag_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── main.py                 # FastAPI app, index & chat endpoints
-│   ├── rag.py                  # Document chunking & indexing
+│   ├── main.py                 # FastAPI app, index, chat, thread, file, and message endpoints
+│   ├── rag.py                  # Document chunking & indexing (thread-aware)
 │   ├── agent.py                # LangGraph RAG workflow
 │   ├── models.py               # LLM/Embedding model clients
+│   ├── database.py             # SQLite thread/message/file management
 │   └── vectordb/
 │       ├── base.py             # Abstract vector DB interface
-│       └── qdrant.py           # Qdrant adapter implementation
+│       └── qdrant.py           # Qdrant adapter implementation (threaded collections)
 └── frontend/
-    ├── Dockerfile
-    ├── package.json
-    └── src/
-        ├── pages/
-        │   └── index.tsx       # Main application page
-        ├── components/
-        │   ├── PdfUploader.tsx     # File upload with model selection
-        │   ├── PdfViewer.tsx       # PDF rendering with overlays
-        │   ├── PlayerControls.tsx  # Audio playback controls
-        │   ├── ChatInterface.tsx   # RAG chat UI
-        │   └── TextViewer.tsx      # Alternative text display
-        └── lib/
-            ├── api.ts          # Backend API client
-            └── tts-api.ts      # TTS API client
+  ├── Dockerfile
+  ├── package.json
+  └── src/
+    ├── pages/
+    │   └── index.tsx       # Main application page
+    ├── components/
+    │   ├── PdfUploader.tsx     # File upload with model selection
+    │   ├── PdfViewer.tsx       # PDF rendering with overlays
+    │   ├── PlayerControls.tsx  # Audio playback controls
+    │   ├── ChatInterface.tsx   # RAG chat UI (thread-aware)
+    │   ├── ThreadSidebar.tsx   # Thread management UI
+    │   └── TextViewer.tsx      # Alternative text display
+    └── lib/
+      ├── api.ts          # Backend & RAG API client (thread/message/file)
+      └── tts-api.ts      # TTS API client
 ```
 The application expects an OpenAI-compatible API at the URL specified by `LLM_API_URL` in your `.env` file (default: `http://host.docker.internal:12434`).
 ## 📝 API Reference
@@ -351,31 +354,25 @@ Synthesize speech for text.
 
 ### RAG Service (Port 8001)
 
-#### `POST /index`
-Index document text into vector database.
+#### `POST /index` (Legacy)
+Index document text into vector database (legacy, single collection).
+
+#### `POST /threads` / `GET /threads` / `PUT /threads/{id}` / `DELETE /threads/{id}`
+Create, list, update, and delete chat threads. Each thread has its own context, files, and messages.
+
+#### `POST /threads/{thread_id}/files`
+Add a file to a thread and trigger background indexing. Associates PDFs with threads for context-aware chat.
+
+#### `POST /threads/{thread_id}/chat`
+Chat with a thread using semantic memory (retrieves both PDF chunks and previous chat answers for context).
 
 **Request:**
 ```json
 {
-  "text": "Full document text...",
-  "embedding_model": "ai/nomic-embed-text-v1.5:latest",
-  "metadata": {"filename": "document.pdf", "file_hash": "abc123def456"}
-}
-```
-
-#### `POST /chat`
-Chat with indexed documents.
-
-**Request:**
-```json
-{
+  "thread_id": "abc123",
   "question": "What is this document about?",
   "llm_model": "ai/qwen3:latest",
-  "embedding_model": "ai/nomic-embed-text-v1.5:latest",
-  "history": [
-    {"role": "user", "content": "Previous question"},
-    {"role": "assistant", "content": "Previous answer"}
-  ]
+  "use_web_search": false
 }
 ```
 
@@ -383,9 +380,13 @@ Chat with indexed documents.
 ```json
 {
   "answer": "This document discusses...",
-  "context": "Retrieved chunks used for the answer..."
+  "used_chat_ids": ["msg1", "msg2"],
+  "pdf_sources": [ ... ]
 }
 ```
+
+#### `GET /threads/{thread_id}/messages` / `DELETE /messages/{message_id}`
+List and delete messages in a thread. Supports per-thread chat history management.
 
 #### `GET /models`
 Fetch available models from LLM server.
@@ -428,26 +429,30 @@ Backend: Split into sentences (spaCy)
   ↓
 Backend: Map sentences to bounding boxes
   ↓
-Backend: Trigger async RAG indexing
+Backend: Trigger async RAG indexing (per-thread if using threads)
   ↓
-RAG Service: Chunk text → Generate embeddings → Store in Qdrant
+RAG Service: Chunk text → Generate embeddings → Store in Qdrant (threaded collections)
   ↓
 Frontend: Display PDF with clickable sentence overlays
 ```
 
-### Chat Flow
+### Threaded Chat & Semantic Memory Flow
 ```
-User asks question
+User creates/selects thread
+  ↓
+User asks question in thread
   ↓
 RAG Service: Embed question
   ↓
-RAG Service: Search Qdrant for top-5 relevant chunks
+RAG Service: Search Qdrant for top-5 relevant PDF chunks (thread collection)
   ↓
-RAG Service: Build prompt (system + context + history + question)
+RAG Service: Search Qdrant for relevant previous chat answers (semantic memory)
+  ↓
+RAG Service: Build prompt (system + context + history + question + semantic memory)
   ↓
 RAG Service: Call LLM via OpenAI-compatible API
   ↓
-Frontend: Display markdown-rendered answer
+Frontend: Display markdown-rendered answer in thread
 ```
 
 ### TTS Playback Flow

@@ -9,6 +9,7 @@ This service handles:
 - Splitting text into sentences
 - Mapping sentences to bounding boxes
 - Triggering background RAG indexing
+- Tracking indexing status per file
 
 Dependencies:
 - fastapi.HTTPException for error handling
@@ -20,9 +21,61 @@ import os
 import hashlib
 import httpx
 import logging
+from enum import Enum
+from typing import Dict, Optional
+from datetime import datetime
 from fastapi import HTTPException
 from .pdf_parser import extract_text_with_coordinates
 from .nlp import split_into_sentences
+
+
+class IndexingStatus(str, Enum):
+    PENDING = "pending"
+    INDEXING = "indexing"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class IndexingState:
+    """Track the indexing state for a single file."""
+    def __init__(self):
+        self.status: IndexingStatus = IndexingStatus.PENDING
+        self.error: Optional[str] = None
+        self.started_at: datetime = datetime.now()
+        self.finished_at: Optional[datetime] = None
+        self.progress: int = 0  # Percentage 0-100
+
+    def to_dict(self) -> dict:
+        return {
+            "status": self.status.value,
+            "error": self.error,
+            "started_at": self.started_at.isoformat(),
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            "progress": self.progress
+        }
+
+
+# Global indexing status tracker (in production, use Redis or a database)
+_indexing_status: Dict[str, IndexingState] = {}
+
+
+def get_indexing_status(file_hash: str) -> Optional[IndexingState]:
+    """Get the indexing status for a file."""
+    return _indexing_status.get(file_hash)
+
+
+def set_indexing_status(file_hash: str, status: IndexingStatus, error: Optional[str] = None, progress: int = 0):
+    """Set the indexing status for a file."""
+    if file_hash not in _indexing_status:
+        _indexing_status[file_hash] = IndexingState()
+    
+    state = _indexing_status[file_hash]
+    state.status = status
+    state.progress = progress
+    if error:
+        state.error = error
+    if status in (IndexingStatus.READY, IndexingStatus.FAILED):
+        state.finished_at = datetime.now()
 
 
 class PDFService:
@@ -81,18 +134,23 @@ class PDFService:
 
         enriched_sentences = self._map_sentences_to_bboxes(sentences, text, char_map)
 
+        # Initialize indexing status as pending
+        set_indexing_status(file_hash, IndexingStatus.PENDING)
+
         # Trigger RAG Indexing in background
         background_tasks.add_task(
             self._call_rag,
             text,
             {"filename": file.filename, "file_hash": file_hash},
-            embedding_model
+            embedding_model,
+            file_hash
         )
 
         return {
             "sentences": enriched_sentences,
             "pdfUrl": f"/{pdf_filename}",
-            "fileHash": file_hash
+            "fileHash": file_hash,
+            "indexingStatus": IndexingStatus.PENDING.value
         }
 
     @staticmethod
@@ -147,27 +205,75 @@ class PDFService:
             enriched_sentences.append(s)
         return enriched_sentences
 
-    async def _call_rag(self, txt: str, metadata: dict, emb_model: str):
+    async def _call_rag(self, txt: str, metadata: dict, emb_model: str, file_hash: str):
         """
         Asynchronously call the RAG service to index the extracted text.
+        Tracks indexing status for the file.
 
         Args:
             txt (str): The extracted text to index.
             metadata (dict): Metadata about the PDF/file.
             emb_model (str): The embedding model to use.
+            file_hash (str): The file hash for status tracking.
         """
+        set_indexing_status(file_hash, IndexingStatus.INDEXING, progress=10)
+        
         async with httpx.AsyncClient() as client:
             try:
-                await client.post(
+                response = await client.post(
                     f"{self.rag_service_url}/index",
                     json={
                         "text": txt,
                         "embedding_model": emb_model,
                         "metadata": metadata
                     },
-                    timeout=300.0
+                    timeout=600.0  # 10 minutes for large PDFs
                 )
+                
+                if response.status_code == 200:
+                    set_indexing_status(file_hash, IndexingStatus.READY, progress=100)
+                    print(f"RAG Indexing completed for {file_hash}", flush=True)
+                else:
+                    error_msg = f"RAG service returned status {response.status_code}"
+                    set_indexing_status(file_hash, IndexingStatus.FAILED, error=error_msg)
+                    print(f"RAG Indexing failed: {error_msg}", flush=True)
+                    
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                print(f"RAG Indexing failed: {repr(e)}", flush=True)
+                error_msg = repr(e)
+                set_indexing_status(file_hash, IndexingStatus.FAILED, error=error_msg)
+                print(f"RAG Indexing failed: {error_msg}", flush=True)
+
+    async def get_pdf_by_hash(self, file_hash: str) -> dict:
+        """
+        Get PDF data (sentences with bounding boxes) for an existing PDF by file hash.
+        Re-parses the PDF to extract sentences - used when reloading threads.
+
+        Args:
+            file_hash (str): The MD5 hash of the PDF file.
+        Returns:
+            dict: Contains sentences with bounding boxes and PDF URL.
+        Raises:
+            HTTPException: If PDF file is not found.
+        """
+        pdf_filename = f"{file_hash}.pdf"
+        pdf_path = os.path.join(self.static_dir, pdf_filename)
+
+        if not os.path.exists(pdf_path):
+            raise HTTPException(status_code=404, detail=f"PDF file not found: {file_hash}")
+
+        # Read the PDF content
+        with open(pdf_path, "rb") as f:
+            content = f.read()
+
+        # Extract text and coordinates
+        text, char_map = extract_text_with_coordinates(content)
+        sentences = split_into_sentences(text)
+        enriched_sentences = self._map_sentences_to_bboxes(sentences, text, char_map)
+
+        return {
+            "sentences": enriched_sentences,
+            "pdfUrl": f"/{pdf_filename}",
+            "fileHash": file_hash
+        }
