@@ -233,7 +233,7 @@ export default function Home() {
                 size="small"
                 onClick={() => setIsRightPanelOpen(open => !open)}
               >
-                {isRightPanelOpen ? "Hide Panel" : "Show Panel"}
+                {isRightPanelOpen ? "Hide Threads" : "Show Threads"}
               </Button>
 
               {/* Player Controls */}
@@ -358,14 +358,14 @@ export default function Home() {
                   icon={<ForumIcon fontSize="small" />} 
                   iconPosition="start" 
                   label="Threads" 
-                  sx={{ minHeight: 48, textTransform: 'none' }}
+                  sx={{ minHeight: 56, textTransform: 'none', flex: 2 }}
                 />
                 <Tab 
                   icon={<ChatIcon fontSize="small" />} 
                   iconPosition="start" 
-                  label="Chat" 
+                  label={activeThread ? activeThread.name : "Chat"} 
                   disabled={!activeThread}
-                  sx={{ minHeight: 48, textTransform: 'none' }}
+                  sx={{ minHeight: 56, textTransform: 'none', flex: 8 }}
                 />
               </Tabs>
             </Box>

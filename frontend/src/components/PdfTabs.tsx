@@ -45,7 +45,7 @@ export default function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose }: 
         borderBottom: 1,
         borderColor: 'divider',
         bgcolor: 'background.paper',
-        minHeight: 48,
+        minHeight: 40,
       }}
     >
       <Tabs
@@ -54,9 +54,9 @@ export default function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose }: 
         variant="scrollable"
         scrollButtons="auto"
         sx={{
-          minHeight: 48,
+          minHeight: 40,
           '& .MuiTab-root': {
-            minHeight: 48,
+            minHeight: 40,
             textTransform: 'none',
             fontSize: '0.875rem',
             py: 0,

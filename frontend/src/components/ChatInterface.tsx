@@ -324,9 +324,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             {/* Header */}
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>
-                        {activeThread.name}
-                    </Typography>
                     <Tooltip title={`Embedding model locked: ${activeThread.embed_model}`}>
                         <Chip 
                             icon={<LockIcon fontSize="small" />}

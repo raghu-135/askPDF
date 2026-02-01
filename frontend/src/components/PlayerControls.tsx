@@ -149,14 +149,14 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
   return (
     <Stack direction="row" spacing={2} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
       <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
-        <IconButton color="primary" onClick={handlePlayPause} size="large">
-          {isPlaying ? <Pause fontSize="large" /> : <PlayArrow fontSize="large" />}
+        <IconButton color="primary" onClick={handlePlayPause} size="small">
+          {isPlaying ? <Pause fontSize="small" /> : <PlayArrow fontSize="small" />}
         </IconButton>
-        <IconButton onClick={() => currentId !== null && currentId > 0 && playSentence(currentId - 1)} disabled={currentId === null || currentId <= 0} size="large">
-          <SkipPrevious />
+        <IconButton onClick={() => currentId !== null && currentId > 0 && playSentence(currentId - 1)} disabled={currentId === null || currentId <= 0} size="small">
+          <SkipPrevious fontSize="small" />
         </IconButton>
-        <IconButton onClick={() => currentId !== null && currentId < sentences.length - 1 && playSentence(currentId + 1)} disabled={currentId === null || currentId >= sentences.length - 1} size="large">
-          <SkipNext />
+        <IconButton onClick={() => currentId !== null && currentId < sentences.length - 1 && playSentence(currentId + 1)} disabled={currentId === null || currentId >= sentences.length - 1} size="small">
+          <SkipNext fontSize="small" />
         </IconButton>
       </Stack>
 
