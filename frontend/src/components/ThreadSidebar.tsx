@@ -1,4 +1,8 @@
 import React, { useState, useEffect } from 'react';
+
+declare const process: {
+  env: Record<string, string | undefined>;
+};
 import {
   Box,
   List,
@@ -34,6 +38,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DescriptionIcon from '@mui/icons-material/Description';
 import LockIcon from '@mui/icons-material/Lock';
+
 import {
   Thread,
   createThread,
@@ -41,18 +46,18 @@ import {
   deleteThread,
   updateThread,
 } from '../lib/api';
+import { fetchAvailableEmbedModels, formatDate } from '../lib/chat-utils';
+
 
 interface ThreadSidebarProps {
   activeThreadId: string | null;
   onThreadSelect: (thread: Thread | null) => void;
-  availableEmbedModels: string[];
   onEmbedModelChange?: (model: string) => void;
 }
 
 const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   activeThreadId,
   onThreadSelect,
-  availableEmbedModels,
   onEmbedModelChange,
 }) => {
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -63,6 +68,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     return `Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
   });
   const [newThreadEmbedModel, setNewThreadEmbedModel] = useState('');
+  const [availableEmbedModels, setAvailableEmbedModels] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -70,9 +76,12 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
   const [isCheckingEmbedModel, setIsCheckingEmbedModel] = useState(false);
 
-  // Load threads on mount
+
+  // Load threads and embedding models on mount
   useEffect(() => {
     loadThreads();
+    const ragApiUrl = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
+    fetchAvailableEmbedModels(ragApiUrl).then(setAvailableEmbedModels);
   }, []);
 
   const loadThreads = async () => {
@@ -153,17 +162,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     setEditingName(thread.name);
   };
 
-  const formatDate = (dateStr: string) => {
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    
-    if (days === 0) return 'Today';
-    if (days === 1) return 'Yesterday';
-    if (days < 7) return `${days} days ago`;
-    return date.toLocaleDateString();
-  };
+  // formatDate now imported from chat-utils
 
   // Add validation check when embedding model changes
   useEffect(() => {

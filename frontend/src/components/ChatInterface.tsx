@@ -37,6 +37,7 @@ import {
     deleteMessage,
     getThreadIndexStatus
 } from '../lib/api';
+import { fetchAvailableLlmModels, checkLlmModelReady } from '../lib/chat-utils';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -158,35 +159,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         scrollToBottom();
     }, [messages]);
 
-    // Fetch available LLM models
+    // Fetch available LLM models using chat-utils
     useEffect(() => {
-        fetch(`${ragApiUrl}/models`)
-            .then(res => res.json())
-            .then(data => {
-                if (data.llm_models || data.not_llm_models) {
-                    setAvailableModels([...data.llm_models, ...data.not_llm_models]);
-                } else if (data.all_models && data.all_models.length > 0) {
-                    const ids = data.all_models.map((m: any) => m.id);
-                    setAvailableModels(ids);
-                } else {
-                    throw new Error("No models found");
-                }
-            })
+        fetchAvailableLlmModels(ragApiUrl)
+            .then(setAvailableModels)
             .catch(err => {
                 console.error("Failed to fetch models", err);
                 setAvailableModels([]);
             });
     }, [ragApiUrl]);
 
-    // Validate LLM model when changed
+    // Validate LLM model when changed using chat-utils
     const handleLlmModelChange = async (model: string) => {
         setLlmModel(model);
         setIsLlmModelValid(null);
         if (!model) return;
         try {
-            const res = await fetch(`${ragApiUrl}/health/is_chat_model_ready?model=${encodeURIComponent(model)}`);
-            const data = await res.json();
-            setIsLlmModelValid(data.ready === true || data.chat_model_ready === true);
+            const valid = await checkLlmModelReady(model, ragApiUrl);
+            setIsLlmModelValid(valid);
         } catch (err) {
             setIsLlmModelValid(false);
         }
@@ -231,19 +221,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setMessages(prev => [...prev, tempUserMsg]);
 
         try {
-            // Check model readiness
-            const checkModel = async (modelName: string) => {
-                try {
-                    const res = await fetch(`${ragApiUrl}/health/is_chat_model_ready?model=${encodeURIComponent(modelName)}`);
-                    if (!res.ok) return true;
-                    const data = await res.json();
-                    return data.ready;
-                } catch (e) {
-                    return true;
-                }
-            };
-
-            const llmReady = await checkModel(llmModel);
+            // Check model readiness using chat-utils
+            const llmReady = await checkLlmModelReady(llmModel, ragApiUrl);
             if (!llmReady) {
                 setIsModelWarming(true);
             }
