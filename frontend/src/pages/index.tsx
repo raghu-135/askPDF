@@ -46,10 +46,6 @@ export default function Home() {
   // Right panel tab state (0 = Threads, 1 = Chat)
   const [rightPanelTab, setRightPanelTab] = useState(0);
 
-  // Shared embedding model for both upload and chat
-  const [embedModel, setEmbedModel] = useState("");
-  const [availableEmbedModels, setAvailableEmbedModels] = useState<string[]>([]);
-  const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
 
   // Resizable chat panel
   const [chatWidth, setChatWidth] = useState(450);
@@ -61,27 +57,10 @@ export default function Home() {
   // Thread sidebar width
   const rightPanelMinWidth = 350;
 
-  // Fetch available embedding models
-  useEffect(() => {
-    const ragApiUrl = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
-    fetch(`${ragApiUrl}/models`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.embedding_models || data.not_embedding_models) {
-          setAvailableEmbedModels([...data.embedding_models, ...data.not_embedding_models]);
-        } else if (data.all_models) {
-          setAvailableEmbedModels(data.all_models);
-        }
-      })
-      .catch(err => {
-        console.warn("Failed to fetch models", err);
-      });
-  }, []);
 
   // Handle thread selection
   const handleThreadSelect = async (thread: Thread | null) => {
     setActiveThread(thread);
-    
     // Clear current state
     setPdfTabs([]);
     setActiveTabId(null);
@@ -89,19 +68,13 @@ export default function Home() {
     setCurrentChatId(null);
     setPlayRequestId(null);
     setActiveSource('pdf');
-    
     if (thread) {
-      // Lock embedding model to thread's model
-      setEmbedModel(thread.embed_model);
-      setIsEmbedModelValid(true);
-      
       // Load thread's files
       try {
         const threadData = await getThread(thread.id);
         if (threadData.files && threadData.files.length > 0) {
           const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
           const loadedTabs: PdfTab[] = [];
-          
           for (const file of threadData.files) {
             try {
               const pdfData = await getPdfByHash(file.file_hash);
@@ -117,7 +90,6 @@ export default function Home() {
               console.error(`Failed to load PDF ${file.file_hash}:`, err);
             }
           }
-          
           if (loadedTabs.length > 0) {
             setPdfTabs(loadedTabs);
             setActiveTabId(loadedTabs[0].id);
@@ -129,24 +101,6 @@ export default function Home() {
     }
   };
 
-  // Handle embedding model change (only when no active thread)
-  const handleEmbedModelChange = async (newEmbedModel: string) => {
-    if (activeThread) {
-      // Can't change embed model when thread is active
-      return;
-    }
-    setEmbedModel(newEmbedModel);
-    setIsEmbedModelValid(null);
-    if (!newEmbedModel) return;
-    try {
-      const apiBase = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
-      const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(newEmbedModel)}`);
-      const data = await res.json();
-      setIsEmbedModelValid(data.embed_model_ready === true);
-    } catch (err) {
-      setIsEmbedModelValid(false);
-    }
-  };
 
   // Handle PDF upload - create new tab
   const handlePdfUploaded = async (data: any) => {
@@ -274,8 +228,6 @@ export default function Home() {
     ? (isResizing ? 'var(--chat-width, 450px)' : chatWidth)
     : 0;
 
-  // Embedding model is locked when a thread is active
-  const isEmbedModelLocked = activeThread !== null;
 
   return (
     <>
@@ -288,45 +240,9 @@ export default function Home() {
           <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
             <Stack direction="row" spacing={2} alignItems="center" justifyContent="center" flexWrap="wrap" useFlexGap>
 
-              {/* Embedding Model Selector */}
-              <Tooltip 
-                title={isEmbedModelLocked 
-                  ? `Locked to thread's embedding model: ${activeThread?.embed_model}. Create a new thread to use a different model.` 
-                  : "Select embedding model for new threads"
-                }
-              >
-                <FormControl size="small" sx={{ minWidth: 150 }}>
-                  <InputLabel id="embed-model-label">Embedding Model</InputLabel>
-                  <Select
-                    labelId="embed-model-label"
-                    value={embedModel}
-                    label="Embedding Model"
-                    displayEmpty
-                    disabled={isEmbedModelLocked}
-                    onChange={(e) => handleEmbedModelChange(e.target.value)}
-                    renderValue={(selected) => selected ? selected : <span style={{ color: '#888' }}>Embedding Model</span>}
-                  >
-                    <MenuItem value="" disabled>
-                      <span style={{ color: '#888' }}>Embedding Model</span>
-                    </MenuItem>
-                    {availableEmbedModels.map(m => (
-                      <MenuItem key={m} value={m}>{m}</MenuItem>
-                    ))}
-                  </Select>
-                  {isEmbedModelValid === false && (
-                    <Typography color="error" variant="caption" sx={{ ml: 2 }}>
-                      Invalid embedding model.
-                    </Typography>
-                  )}
-                </FormControl>
-              </Tooltip>
-
               {/* PDF Uploader */}
               <PdfUploader
-                embedModel={embedModel}
                 onUploaded={handlePdfUploaded}
-                disabled={!activeThread}
-                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
               />
 
               {/* Auto-scroll Toggle */}
@@ -513,8 +429,6 @@ export default function Home() {
                       setRightPanelTab(1);
                     }
                   }}
-                  availableEmbedModels={availableEmbedModels}
-                  onEmbedModelChange={setEmbedModel}
                 />
               </Box>
 

@@ -1,3 +1,6 @@
+declare const process: {
+  env: Record<string, string | undefined>;
+};
 import { Button, Tooltip, CircularProgress, Box, Typography } from "@mui/material";
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -5,14 +8,13 @@ import React from "react";
 import { getFileIndexStatus, IndexingStatus as IndexStatus } from "../lib/api";
 
 type Props = {
-  embedModel: string;
   onUploaded: (data: { sentences: any[]; pdfUrl: string; fileHash: string; fileName?: string }) => void;
   onIndexingComplete?: (fileHash: string) => void;
   disabled?: boolean;
   tooltipText?: string;
 };
 
-export default function PdfUploader({ embedModel, onUploaded, onIndexingComplete, disabled, tooltipText }: Props) {
+export default function PdfUploader({ onUploaded, onIndexingComplete, disabled, tooltipText }: Props) {
   const inputId = "pdf-upload-input";
   const [isUploading, setIsUploading] = React.useState(false);
   const [indexingState, setIndexingState] = React.useState<{
@@ -22,7 +24,7 @@ export default function PdfUploader({ embedModel, onUploaded, onIndexingComplete
     error?: string;
   } | null>(null);
 
-  const isDisabled = disabled || !embedModel || isUploading;
+  const isDisabled = disabled || isUploading;
 
   // Poll for indexing status
   React.useEffect(() => {
@@ -64,7 +66,7 @@ export default function PdfUploader({ embedModel, onUploaded, onIndexingComplete
     try {
       const form = new FormData();
       form.append("file", file);
-      form.append("embedding_model", embedModel);
+      form.append("embedding_model", "default_model"); // or handle it accordingly
       const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const res = await fetch(`${apiBase}/api/upload`, { method: "POST", body: form });
       const data = await res.json();
