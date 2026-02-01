@@ -58,12 +58,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(true);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [newThreadName, setNewThreadName] = useState('');
+  const [newThreadName, setNewThreadName] = useState(() => {
+    const now = new Date();
+    return `Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+  });
   const [newThreadEmbedModel, setNewThreadEmbedModel] = useState('');
   const [creating, setCreating] = useState(false);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [expanded, setExpanded] = useState(true);
+  const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
+  const [isCheckingEmbedModel, setIsCheckingEmbedModel] = useState(false);
 
   // Load threads on mount
   useEffect(() => {
@@ -84,8 +89,19 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
   const handleCreateThread = async () => {
     if (!newThreadName.trim() || !newThreadEmbedModel) return;
-    
+
     try {
+      // Check if the embedding model is valid before proceeding
+      const apiBase = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
+      const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(newThreadEmbedModel)}`);
+      const data = await res.json();
+
+      if (!data.embed_model_ready) {
+        setIsEmbedModelValid(false);
+        return;
+      }
+
+      setIsEmbedModelValid(true);
       setCreating(true);
       const thread = await createThread(newThreadName.trim(), newThreadEmbedModel);
       setThreads(prev => [thread, ...prev]);
@@ -148,6 +164,32 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     if (days < 7) return `${days} days ago`;
     return date.toLocaleDateString();
   };
+
+  // Add validation check when embedding model changes
+  useEffect(() => {
+    if (!newThreadEmbedModel) {
+      setIsEmbedModelValid(null);
+      setIsCheckingEmbedModel(false);
+      return;
+    }
+
+    const validateEmbedModel = async () => {
+      setIsCheckingEmbedModel(true);
+      setIsEmbedModelValid(null);
+      const apiBase = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
+      try {
+        const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(newThreadEmbedModel)}`);
+        const data = await res.json();
+        setIsEmbedModelValid(data.embed_model_ready === true);
+      } catch (error) {
+        setIsEmbedModelValid(false);
+      } finally {
+        setIsCheckingEmbedModel(false);
+      }
+    };
+
+    validateEmbedModel();
+  }, [newThreadEmbedModel]);
 
   return (
     <Paper 
@@ -328,10 +370,23 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               onChange={(e) => setNewThreadEmbedModel(e.target.value)}
             >
               {availableEmbedModels.map((model) => (
-                <MenuItem key={model} value={model}>{model}</MenuItem>
+                <MenuItem key={model} value={model}>
+                  {model}
+                </MenuItem>
               ))}
             </Select>
           </FormControl>
+          {isCheckingEmbedModel && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+              <CircularProgress size={20} />
+              <Typography variant="body2">Checking embedding model...</Typography>
+            </Box>
+          )}
+          {isEmbedModelValid === false && !isCheckingEmbedModel && (
+            <Typography color="error" variant="body2" sx={{ mt: 1 }}>
+              The selected model is not an embedding model. Please choose a valid model.
+            </Typography>
+          )}
           <Box sx={{ mt: 2, p: 1.5, bgcolor: 'warning.light', borderRadius: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <LockIcon fontSize="small" />
@@ -344,10 +399,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
-          <Button 
+          <Button
             onClick={handleCreateThread}
             variant="contained"
-            disabled={!newThreadName.trim() || !newThreadEmbedModel || creating}
+            disabled={!newThreadName.trim() || !newThreadEmbedModel || creating || isEmbedModelValid === false || isCheckingEmbedModel}
           >
             {creating ? <CircularProgress size={20} /> : 'Create'}
           </Button>
