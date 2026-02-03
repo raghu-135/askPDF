@@ -13,7 +13,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from agent import app as agent_app, invoke_with_retry
-from models import get_llm, get_embedding_model
+from models import get_llm, get_embedding_model, get_system_prompt
 from vectordb.qdrant import QdrantAdapter
 from database import (
     create_message, get_recent_messages, get_thread,
@@ -239,14 +239,14 @@ async def handle_thread_chat(
         # 8. Generate response
         llm = get_llm(llm_model)
         
+        system_instruction = get_system_prompt(
+            context=full_context,
+            use_history=bool(selected_memories),
+            use_web=use_web_search
+        )
+        
         messages = [
-            SystemMessage(content=(
-                "You are a helpful assistant. Use the provided context to answer the user's question. "
-                "The context includes PDF content and may include relevant past conversations. "
-                "If you reference past conversations, acknowledge it naturally. "
-                "If you cannot answer from the context, say so."
-            )),
-            SystemMessage(content=f"Context:\n{full_context}"),
+            SystemMessage(content=system_instruction),
         ]
         
         # Add recent history

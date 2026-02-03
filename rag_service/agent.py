@@ -5,7 +5,7 @@ from typing import TypedDict, List, Annotated
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_community.tools import DuckDuckGoSearchRun
 from langgraph.graph import StateGraph, END
-from models import get_llm, get_embedding_model
+from models import get_llm, get_embedding_model, get_system_prompt
 from vectordb.qdrant import QdrantAdapter
 
 logger = logging.getLogger(__name__)
@@ -101,9 +101,13 @@ async def generate_node(state: AgentState):
     # Combine contexts
     full_context = f"PDF Context:\n{context}\n\nWeb Search Context:\n{web_context}"
 
+    system_instruction = get_system_prompt(
+        context=full_context,
+        use_web=bool(web_context)
+    )
+
     messages = [
-        SystemMessage(content="You are a helpful assistant. Use the provided PDF context and Web Search results to answer the user's question. If the web search failed, rely on the PDF."),
-        SystemMessage(content=f"Context:\n{full_context}"),
+        SystemMessage(content=system_instruction),
     ]
     messages.extend(state.get("chat_history", []))
     messages.append(HumanMessage(content=question))

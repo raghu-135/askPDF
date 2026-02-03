@@ -102,6 +102,38 @@ def get_embedding_model(model_name: str):
         check_embedding_ctx_length=False
     )
 
+def get_system_prompt(context: str, use_history: bool = False, use_web: bool = False) -> str:
+    """
+    Constructs a consistent system prompt for the AI assistant across different service nodes.
+    """
+    sources = ["PDF context"]
+    if use_web:
+        sources.append("Web Search results")
+    if use_history:
+        sources.append("past conversations")
+    
+    sources_str = " and ".join(sources)
+
+    instructions = [
+        "Answer in natural language. Do NOT output JSON, code blocks for tools, or function calls.",
+    ]
+    
+    if use_history:
+        instructions.append("If the context contains relevant information from past conversations, incorporate it into your answer and acknowledge it naturally (e.g., 'As we discussed before...').")
+    
+    if use_web:
+        instructions.append("If the web search failed, rely on the PDF context.")
+        
+    instructions.append("If the answer is not in the context and you cannot answer it, state that you don't know based on the provided information.")
+    
+    formatted_instructions = "\n".join([f"{i+1}. {instr}" for i, instr in enumerate(instructions)])
+    
+    return (
+        f"You are a helpful AI assistant. Use the provided {sources_str} to answer the user's question accurately.\n\n"
+        f"INSTRUCTIONS:\n{formatted_instructions}\n\n"
+        f"CONTEXT:\n{context}"
+    )
+
 async def check_chat_model_ready(model_name: str) -> bool:
     """
     Check if the supplied model is a chat model and is ready in the LLM API/server.
