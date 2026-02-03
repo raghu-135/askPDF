@@ -14,7 +14,8 @@ from kokoro import KPipeline
 
 
 # Initialize the Kokoro pipeline once at module level
-_pipeline = KPipeline(lang_code='a')
+# Pointing to the local model weight to prevent runtime downloads
+_pipeline = KPipeline(lang_code='a', model='/models/kokoro/kokoro-v0_19.pth')
 VOICES_DIR = "/models/kokoro/voices"
 
 class KokoroTTS:

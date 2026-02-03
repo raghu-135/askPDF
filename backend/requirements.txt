@@ -10,3 +10,4 @@ aiofiles==24.1.0
 pydub==0.25.1
 python-multipart==0.0.9
 httpx
+huggingface_hub
