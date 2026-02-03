@@ -294,8 +294,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!confirm('Delete this message?')) return;
 
         try {
-            await deleteMessage(messageId);
-            setMessages(prev => prev.filter(m => m.id !== messageId));
+            const { deleted_ids } = await deleteMessage(messageId);
+            setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
             if (onThreadUpdate) {
                 onThreadUpdate();
             }

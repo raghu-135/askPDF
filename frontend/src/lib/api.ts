@@ -160,11 +160,12 @@ export async function getThreadMessages(
   return res.json();
 }
 
-export async function deleteMessage(messageId: string): Promise<void> {
+export async function deleteMessage(messageId: string): Promise<{ deleted_ids: string[] }> {
   const res = await fetch(`${RAG_API_BASE}/messages/${messageId}`, {
     method: "DELETE"
   });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function threadChat(

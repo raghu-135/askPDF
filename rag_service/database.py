@@ -394,6 +394,60 @@ async def delete_message(message_id: str) -> bool:
         return cursor.rowcount > 0
 
 
+async def delete_message_pair(message_id: str) -> List[str]:
+    """
+    Delete a message and its paired question/answer.
+    Returns a list of IDs that were deleted.
+    """
+    deleted_ids = []
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # 1. Get the target message
+        cursor = await db.execute("SELECT id, thread_id, role, created_at FROM messages WHERE id = ?", (message_id,))
+        target = await cursor.fetchone()
+        if not target:
+            return []
+        
+        target_role = target["role"]
+        target_thread = target["thread_id"]
+        target_created = target["created_at"]
+        
+        deleted_ids.append(message_id)
+        
+        # 2. Find the candidate pair
+        pair_id = None
+        if target_role == "assistant":
+            # Search for the user message immediately preceding it
+            cursor = await db.execute("""
+                SELECT id FROM messages 
+                WHERE thread_id = ? AND role = 'user' AND created_at <= ? AND id != ?
+                ORDER BY created_at DESC LIMIT 1
+            """, (target_thread, target_created, message_id))
+            pair = await cursor.fetchone()
+            if pair:
+                pair_id = pair["id"]
+        elif target_role == "user":
+            # Search for the assistant message immediately following it
+            cursor = await db.execute("""
+                SELECT id FROM messages 
+                WHERE thread_id = ? AND role = 'assistant' AND created_at >= ? AND id != ?
+                ORDER BY created_at ASC LIMIT 1
+            """, (target_thread, target_created, message_id))
+            pair = await cursor.fetchone()
+            if pair:
+                pair_id = pair["id"]
+        
+        if pair_id:
+            deleted_ids.append(pair_id)
+            
+        # 3. Perform the deletion
+        placeholders = ', '.join(['?'] * len(deleted_ids))
+        await db.execute(f"DELETE FROM messages WHERE id IN ({placeholders})", deleted_ids)
+        await db.commit()
+        
+    return deleted_ids
+
+
 async def get_message_count(thread_id: str) -> int:
     """Get the total number of messages in a thread."""
     async with aiosqlite.connect(DB_PATH) as db:

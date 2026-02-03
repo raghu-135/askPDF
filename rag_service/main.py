@@ -34,7 +34,7 @@ from database import (
     init_db, 
     create_thread, get_thread, list_threads, update_thread, delete_thread,
     create_or_get_file, get_file, add_file_to_thread, get_thread_files, is_file_in_thread,
-    create_message, get_message, get_thread_messages, delete_message, get_recent_messages,
+    create_message, get_message, get_thread_messages, delete_message, delete_message_pair, get_recent_messages,
     MessageRole
 )
 
@@ -346,21 +346,33 @@ async def get_thread_messages_endpoint(
 async def delete_message_endpoint(message_id: str):
     """
     Delete a message and its associated chat memory from Qdrant.
+    If it's part of a QA pair, deletes both.
     """
     try:
-        # Get message to find thread_id
+        # Get message to find thread_id and role
         message = await get_message(message_id)
         if not message:
             raise HTTPException(status_code=404, detail="Message not found")
         
+        # Determine assistant message ID for Qdrant deletion
+        # (Semantic memory in Qdrant is typically keyed by assistant ID)
+        qdrant_msg_id = message_id
+        if message.role == MessageRole.USER:
+            # Try to find the associated assistant message
+            msgs = await get_thread_messages(message.thread_id, limit=100)
+            for i, m in enumerate(msgs):
+                if m.id == message_id and i + 1 < len(msgs) and msgs[i+1].role == MessageRole.ASSISTANT:
+                    qdrant_msg_id = msgs[i+1].id
+                    break
+        
         # Delete from Qdrant
         db = QdrantAdapter()
-        await db.delete_chat_memory_by_message_id(message.thread_id, message_id)
+        await db.delete_chat_memory_by_message_id(message.thread_id, qdrant_msg_id)
         
-        # Delete from SQLite
-        await delete_message(message_id)
+        # Delete from SQLite (using pair-aware deletion)
+        deleted_ids = await delete_message_pair(message_id)
         
-        return {"status": "deleted", "message_id": message_id}
+        return {"status": "deleted", "deleted_ids": deleted_ids}
     except HTTPException:
         raise
     except Exception as e:
