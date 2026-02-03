@@ -190,6 +190,12 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     validateEmbedModel();
   }, [newThreadEmbedModel]);
 
+  const handleOpenCreateDialog = () => {
+    const now = new Date();
+    setNewThreadName(`Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`);
+    setCreateDialogOpen(true);
+  };
+
   return (
     <Paper 
       elevation={0} 
@@ -223,7 +229,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           <IconButton 
             size="small" 
             color="primary" 
-            onClick={() => setCreateDialogOpen(true)}
+            onClick={handleOpenCreateDialog}
           >
             <AddIcon />
           </IconButton>
@@ -243,8 +249,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             </Typography>
             <Button 
               size="small" 
-              startIcon={<AddIcon />}
-              onClick={() => setCreateDialogOpen(true)}
+              startIcon={<AddIcon />} 
+              onClick={handleOpenCreateDialog} 
               sx={{ mt: 1 }}
             >
               Create Thread
