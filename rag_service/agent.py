@@ -91,7 +91,7 @@ async def perform_web_search(query: str) -> str:
         # Run search in a separate thread to not block async loop if sync tool
         results = await asyncio.to_thread(search_tool.invoke, query)
         logger.info(f"Web search completed for '{query}'. Results length: {len(results or '')} chars")
-        logger.info(f"Web search results: {results}")
+        logger.info(f"Web search results (truncated): {(results or '')[:1000]}")
         return results
     except Exception as e:
         error_msg = str(e).lower()
