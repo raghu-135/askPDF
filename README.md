@@ -6,6 +6,7 @@ A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retriev
 
 ### 📄 Reading & TTS
 - **Unified Experience**: Seamlessly switch between reading the PDF and listening to chat responses
+- **Multiple PDF Tabs**: Open and switch between multiple PDFs using a tabbed interface at the top of the viewer
 - **Intelligent Text Processing**: Robust sentence segmentation with support for Markdown and non-punctuated text
 - **High-Quality TTS**: Local speech synthesis using [Kokoro-82M](https://github.com/hexgrad/kokoro)
 - **Visual Tracking**: Synchronized sentence highlighting in PDF and message highlighting in Chat
@@ -13,12 +14,12 @@ A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retriev
 - **Centralized Controls**: Unified player in the footer manages all audio sources (Speed 0.5x - 2.0x)
 
 ### 💬 RAG-Powered Chat, Threads & Semantic Memory
-- **Threaded Chat**: Organize conversations into threads, each with its own context and files
-- **Semantic Memory**: Chat history and previous answers are stored and retrieved for context-aware responses
-- **Vector Storage**: Document chunks and chat memory indexed in Qdrant for fast retrieval
-- **Conversational AI**: Chat with context from your document and previous messages using local LLMs
+- **Threaded Chat**: Organize conversations into threads with persistent SQLite storage for messages and file associations
+- **Per-Thread Collections**: Each thread has its own isolated vector collection in Qdrant, locked to a specific embedding model
+- **Dual-Search Retrieval**: AI searches both document chunks AND past Q&A pairs (semantic memory) simultaneously
+- **Semantic Recollection**: The UI highlights which past chat messages were "recalled" and used by the AI to answer the current question
 - **Internet Search (DuckDuckGo)**: Optionally augment answers with live web search results for up-to-date or external information
-- **Chat History**: Maintains conversation context for follow-up questions, with per-thread message management
+- **Context Management**: Intelligent token budgeting ensures the most relevant PDF chunks, recent history, and semantic memories fit the LLM context window
 ### 🌐 Internet Search (DuckDuckGo)
 
 You can enable **Internet Search** in the chat panel to let the AI answer questions using both your PDF and live web results (via DuckDuckGo). This is useful for:
@@ -208,23 +209,29 @@ docker-compose up --build
 
 ## 📖 Usage
 
-### Reading a PDF
+### Using Threads & PDFs
 
-1. **Select Embedding Model**: Choose an embedding model from the dropdown
-2. **Upload PDF**: Click "Upload PDF" and select your file
-3. **Wait for Processing**: The PDF is parsed, sentences extracted, and indexed for RAG
-4. **Play Audio**: Click "Play" to start text-to-speech from the beginning
-5. **Navigate**: Use playback controls or double-click any sentence in the PDF or any chat bubble to jump to it
-6. **Adjust Voice**: Select different voice styles and adjust playback speed
+1. **Manage Threads**: Use the Sidebar to create new threads or select existing ones.
+2. **Select Embedding Model**: When creating a new thread, choose the embedding model. This model is locked to the thread for consistency.
+3. **Upload PDFs**: Within a thread, click "Upload PDF". You can upload multiple PDFs to the same thread.
+4. **Switch Tabs**: Different PDFs in the same thread appear as tabs at the top of the viewer.
+5. **PDF Processing**: Each uploaded PDF is parsed, sentences extracted, and indexed for RAG within that thread's collection.
 
-### Chatting with Your PDF (and the Web)
+### Reading & TTS
 
-1. **Select LLM Model**: Choose an LLM from the chat panel dropdown
-2. **(Optional) Enable Internet Search**: Toggle the "Use Internet Search" switch above the chat input to allow the AI to use live web results
-3. **Ask Questions**: Type your question about the PDF content (or anything else)
-4. **Get AI Answers**: The system retrieves relevant PDF chunks and, if enabled, web search results, then generates an answer
-5. **Continue Conversation**: Follow-up questions maintain context
-6. **Read Out Loud**: Double-click any chat bubble to have the assistant's response (or your own question) read aloud
+1. **Play Audio**: Click "Play" at the top to start text-to-speech.
+2. **Navigate**: Use playback controls or double-click any sentence in the PDF or any chat bubble to jump audio to that point.
+3. **Adjust Voice**: Select different voice styles and adjust playback speed (0.5x to 2.0x).
+4. **Auto-Scroll**: The app automatically keeps the current sentence in view.
+
+### Chatting & Semantic Memory
+
+1. **Select LLM Model**: Choose an LLM from the chat panel dropdown.
+2. **(Optional) Enable Internet Search**: Toggle the "Use Internet Search" switch above the chat input to allow the AI to use live web results.
+3. **Ask Questions**: Type your question. The AI will search both the current PDFs and past conversations in the current thread.
+4. **Semantic Identification**: If the AI uses past conversations to answer, the relevant messages will glow with a purple border in the chat history.
+5. **Follow-up**: The system maintains context for follow-up questions within the thread.
+6. **Read AI Answers**: Double-click any assistant chat bubble to have the response read aloud.
 
 ## 🛠️ Technology Stack
 
