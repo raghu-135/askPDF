@@ -1,7 +1,9 @@
 import VerticalAlignCenterIcon from '@mui/icons-material/VerticalAlignCenter';
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip } from "@mui/material";
+import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab } from "@mui/material";
 import FluorescentIcon from '@mui/icons-material/Fluorescent';
+import ChatIcon from '@mui/icons-material/Chat';
+import ForumIcon from '@mui/icons-material/Forum';
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -10,12 +12,23 @@ import PdfUploader from "../components/PdfUploader";
 import PdfViewer from "../components/PdfViewer";
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
+import ThreadSidebar from "../components/ThreadSidebar";
+import PdfTabs, { PdfTab } from "../components/PdfTabs";
+import { Thread, addFileToThread } from "../lib/api";
+import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
+import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 
 type Sentence = { id: number; text: string; bboxes: any[] };
 
 export default function Home() {
-  const [pdfSentences, setPdfSentences] = useState<Sentence[]>([]);
-  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  // Multiple PDF tabs state
+  const [pdfTabs, setPdfTabs] = useState<PdfTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
+  // Get active tab and its data using utility
+  const activeTab = getActiveTab(pdfTabs, activeTabId);
+  const { pdfSentences, pdfUrl, fileHash, fileName } = getActiveTabData(activeTab);
+
   const [activeSource, setActiveSource] = useState<'pdf' | 'chat'>('pdf');
   const [currentPdfId, setCurrentPdfId] = useState<number | null>(null);
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
@@ -26,72 +39,98 @@ export default function Home() {
   // Highlight toggle
   const [highlightEnabled, setHighlightEnabled] = useState(true);
 
-  const [fileHash, setFileHash] = useState<string | null>(null);
-
-  // Shared embedding model for both upload and chat
-  const [embedModel, setEmbedModel] = useState("");
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
+  // Thread state
+  const [activeThread, setActiveThread] = useState<Thread | null>(null);
+  
+  // Right panel tab state (0 = Threads, 1 = Chat)
+  const [rightPanelTab, setRightPanelTab] = useState(0);
 
 
   // Resizable chat panel
-  const [chatWidth, setChatWidth] = useState(400);
-  const [isChatOpen, setIsChatOpen] = useState(true);
+  const [chatWidth, setChatWidth] = useState(450);
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
   const [isResizing, setIsResizing] = useState(false);
-  const chatWidthRef = useRef(400); // Track width during drag without re-renders
+  const chatWidthRef = useRef(450);
   const rafIdRef = useRef<number | null>(null);
 
-  // Fetch available models and order: embedding models first, then the rest (no duplicates)
-  useEffect(() => {
-  const ragApiUrl = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
-  fetch(`${ragApiUrl}/models`)
-    .then(res => res.json())
-    .then(data => {
-      if (data.embedding_models || data.not_embedding_models) {
-        // Show embedding models first, then the rest
-        setAvailableModels([...data.embedding_models, ...data.not_embedding_models]);
-      } else if (data.all_models) {
-        // display all models if specific categories not provided
-        setAvailableModels(data.all_models);
-      }
-    })
-    .catch(err => {
-      console.warn("Failed to fetch models", err);
-    });
-}, []);
+  // Thread sidebar width
+  const rightPanelMinWidth = 350;
 
-  // Validate embedding model when changed
-  const handleEmbedModelChange = async (embedModel: string) => {
-    setEmbedModel(embedModel);
-    setIsEmbedModelValid(null); // reset
-    if (!embedModel) return;
-    try {
-      const apiBase = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
-      const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(embedModel)}`);
-      const data = await res.json();
-      setIsEmbedModelValid(data.embed_model_ready === true);
-      // If a PDF is already loaded, re-trigger upload/indexing to create new collection
-      if (fileHash && pdfUrl && data.embed_model_ready === true) {
-        // Re-index the document with the new embedding model
-        try {
-          const indexRes = await fetch(`${apiBase}/index`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text: "", // backend will parse PDF
-              embedding_model: embedModel,
-              metadata: { file_hash: fileHash }
-            })
-          });
-          const indexData = await indexRes.json();
-          // Optionally, handle indexData (status, errors, etc.)
-        } catch (err) {
-          console.warn("Failed to re-index PDF with new embedding model", err);
+
+  // Handle thread selection
+  const handleThreadSelect = async (thread: Thread | null) => {
+    setActiveThread(thread);
+    // Clear current state
+    setPdfTabs([]);
+    setActiveTabId(null);
+    setCurrentPdfId(null);
+    setCurrentChatId(null);
+    setPlayRequestId(null);
+    setActiveSource('pdf');
+    if (thread) {
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        const loadedTabs = await loadThreadTabs(thread, apiBase);
+        if (loadedTabs.length > 0) {
+          setPdfTabs(loadedTabs);
+          setActiveTabId(loadedTabs[0].id);
         }
+      } catch (err) {
+        console.error('Failed to load thread files:', err);
       }
-    } catch (err) {
-      setIsEmbedModelValid(false);
     }
+  };
+
+
+  // Handle PDF upload - create new tab
+  const handlePdfUploaded = async (data: any) => {
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const newTab = createPdfTabFromUpload(data, apiBase);
+
+    setPdfTabs(prev => [...prev, newTab]);
+    setActiveTabId(newTab.id);
+
+    // If we have an active thread, add the file to it
+    if (activeThread && data?.fileHash && data?.fileName) {
+      try {
+        await addFileToThread(
+          activeThread.id,
+          data.fileHash,
+          data.fileName,
+          newTab.text
+        );
+
+        // Refresh active thread to trigger UI updates (like indexing status in ChatInterface)
+        // Only need to update thread, not reload tabs
+        const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
+        setActiveThread(updatedThread);
+      } catch (error) {
+        console.error('Failed to add file to thread:', error);
+      }
+    }
+
+    setCurrentPdfId(null);
+    setCurrentChatId(null);
+    setPlayRequestId(null);
+    setActiveSource('pdf');
+  };
+
+  // Handle tab change
+  const handleTabChange = (tabId: string) => {
+    handleTabChangeUtil(tabId, setActiveTabId, setCurrentPdfId, setPlayRequestId, setActiveSource);
+  };
+
+  // Handle tab close
+  const handleTabClose = (tabId: string) => {
+    handleTabCloseUtil(
+      tabId,
+      pdfTabs,
+      activeTabId,
+      setPdfTabs,
+      setActiveTabId,
+      setCurrentPdfId,
+      setPlayRequestId
+    );
   };
 
   // Handle resize with optimized performance
@@ -107,20 +146,16 @@ export default function Home() {
 
     rafIdRef.current = requestAnimationFrame(() => {
       const newWidth = window.innerWidth - e.clientX;
-      // Use proportions: min 20%, max 80% of window width
       const minWidth = window.innerWidth * 0.2;
       const maxWidth = window.innerWidth * 0.8;
       const constrainedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
       chatWidthRef.current = constrainedWidth;
-
-      // Update CSS custom property for smooth visual update without re-render
       document.documentElement.style.setProperty('--chat-width', `${constrainedWidth}px`);
     });
   }, []);
 
   const handleMouseUp = useCallback(() => {
     setIsResizing(false);
-    // Only update state once when drag ends
     setChatWidth(chatWidthRef.current);
     if (rafIdRef.current) {
       cancelAnimationFrame(rafIdRef.current);
@@ -144,61 +179,31 @@ export default function Home() {
     };
   }, [isResizing, handleMouseMove, handleMouseUp]);
 
-  // Clean up object URL if we were using one (not needed here as we use server URL)
-
-  const canDisplayChat = pdfSentences.length > 0 && !!pdfUrl;
-  const chatPanelWidth = isChatOpen
-    ? (isResizing ? 'var(--chat-width, 400px)' : chatWidth)
+  const canDisplayRightPanel = true; // Always show right panel for threads
+  const rightPanelWidth = isRightPanelOpen
+    ? (isResizing ? 'var(--chat-width, 450px)' : chatWidth)
     : 0;
+
 
   return (
     <>
-
       <CssBaseline />
       <Box sx={{ height: "100vh", display: "flex", flexDirection: "row", overflow: "hidden", bgcolor: 'background.default' }}>
+
         {/* Left Column: PDF Content & Controls */}
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, borderRight: 1, borderColor: 'divider' }}>
-          {/* Top Controls: All in one bar, including PlayerControls */}
+          {/* Top Controls Bar */}
           <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
             <Stack direction="row" spacing={2} alignItems="center" justifyContent="center" flexWrap="wrap" useFlexGap>
-              <FormControl size="small" sx={{ minWidth: 150 }}>
-                <InputLabel id="embed-model-label">Embedding Model</InputLabel>
-                <Select
-                  labelId="embed-model-label"
-                  value={embedModel}
-                  label="Embedding Model"
-                  displayEmpty
-                  onChange={(e) => handleEmbedModelChange(e.target.value)}
-                  renderValue={(selected) => selected ? selected : <span style={{ color: '#888' }}>Embedding Model</span>}
-                >
-                  <MenuItem value="" disabled>
-                    <span style={{ color: '#888' }}>Embedding Model</span>
-                  </MenuItem>
-                  {availableModels.map(m => (
-                    <MenuItem key={m} value={m}>{m}</MenuItem>
-                  ))}
-                </Select>
-                {isEmbedModelValid === false && (
-                  <Typography color="error" variant="caption" sx={{ ml: 2 }}>
-                    Selected model is not a valid embedding model.
-                  </Typography>
-                )}
-              </FormControl>
+
+              {/* PDF Uploader */}
               <PdfUploader
-                embedModel={embedModel}
-                onUploaded={(data) => {
-                  setPdfSentences(data?.sentences || []);
-                  const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-                  if (data?.pdfUrl) {
-                    setPdfUrl(`${apiBase}${data.pdfUrl}?t=${Date.now()}`);
-                  }
-                  setFileHash(data?.fileHash || null);
-                  setCurrentPdfId(null);
-                  setCurrentChatId(null);
-                  setPlayRequestId(null);
-                  setActiveSource('pdf');
-                }}
+                onUploaded={handlePdfUploaded}
+                disabled={!activeThread}
+                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
               />
+
+              {/* Auto-scroll Toggle */}
               <Tooltip title={autoScroll ? "Disable Auto-Scroll" : "Enable Auto-Scroll"}>
                 <IconButton
                   color={autoScroll ? "primary" : "default"}
@@ -209,6 +214,8 @@ export default function Home() {
                   <VerticalAlignCenterIcon />
                 </IconButton>
               </Tooltip>
+
+              {/* Highlight Toggle */}
               <Tooltip title={highlightEnabled ? "Disable Highlighting" : "Enable Highlighting"}>
                 <IconButton
                   color={highlightEnabled ? "primary" : "default"}
@@ -219,14 +226,17 @@ export default function Home() {
                   <FluorescentIcon />
                 </IconButton>
               </Tooltip>
+
+              {/* Right Panel Toggle */}
               <Button
                 variant="outlined"
                 size="small"
-                disabled={!canDisplayChat}
-                onClick={() => setIsChatOpen(open => !open)}
+                onClick={() => setIsRightPanelOpen(open => !open)}
               >
-                {isChatOpen ? "Close Chat" : "Open Chat"}
+                {isRightPanelOpen ? "Hide Threads" : "Show Threads"}
               </Button>
+
+              {/* Player Controls */}
               {pdfSentences.length > 0 && pdfUrl && (
                 <PlayerControls
                   sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
@@ -245,6 +255,17 @@ export default function Home() {
             </Stack>
           </Box>
 
+          {/* PDF Tabs */}
+          {pdfTabs.length > 0 && (
+            <PdfTabs
+              tabs={pdfTabs}
+              activeTabId={activeTabId}
+              onTabChange={handleTabChange}
+              onTabClose={handleTabClose}
+            />
+          )}
+
+          {/* PDF Viewer Area */}
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
             {(pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
               <PdfViewer
@@ -270,15 +291,14 @@ export default function Home() {
                     To get started:
                   </Typography>
                   <ul style={{ color: '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
-                    <li>Choose an <b>Embedding Model</b> from the dropdown above (required for semantic search and chat).</li>
-                    <li>Click <b>Upload PDF</b> and select your document.</li>
-                    <li>Wait a moment while your PDF is processed and its content is displayed here.</li>
-                    <li>Double-click any text in the PDF or any chat bubble to play audio from that point.</li>
-                    <li>Use the <b>Chat</b> panel to ask questions about your PDF using AI.</li>
-                    <li>In the chat window, pick a <b>Chat Model</b> from the dropdown before starting your conversation.</li>
+                    <li>Use the <b>Threads</b> tab on the right to create a new thread with an embedding model.</li>
+                    <li>Click <b>Upload PDF</b> to add documents to your thread.</li>
+                    <li>Switch to the <b>Chat</b> tab to ask questions about your PDFs using AI.</li>
+                    <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
+                    <li>Double-click any text to start audio playback from that point.</li>
                   </ul>
                   <Typography color="textSecondary" sx={{ mt: 2, fontSize: 14 }}>
-                    <b>Tip:</b> You can also use the playback controls at the top to play, pause, or skip sentences.
+                    <b>Note:</b> The embedding model is locked once a thread is created. Create a new thread to use a different model.
                   </Typography>
                 </Box>
               </Box>
@@ -287,7 +307,7 @@ export default function Home() {
         </Box>
 
         {/* Resizable Divider */}
-        {canDisplayChat && isChatOpen && (
+        {canDisplayRightPanel && isRightPanelOpen && (
           <Box
             onMouseDown={handleMouseDown}
             sx={{
@@ -313,31 +333,97 @@ export default function Home() {
           </Box>
         )}
 
-        {/* Right Column: Chat Interface */}
-        {canDisplayChat && (
+        {/* Right Column: Threads & Chat Interface */}
+        {canDisplayRightPanel && (
           <Box sx={{
-            width: chatPanelWidth,
+            width: rightPanelWidth,
             minWidth: 0,
             height: '100%',
-            transition: isResizing || !isChatOpen ? 'none' : 'width 0.1s ease-out',
+            display: 'flex',
+            flexDirection: 'column',
+            transition: isResizing || !isRightPanelOpen ? 'none' : 'width 0.1s ease-out',
             bgcolor: 'background.paper',
-            visibility: isChatOpen ? 'visible' : 'hidden',
-            pointerEvents: isChatOpen ? 'auto' : 'none',
+            visibility: isRightPanelOpen ? 'visible' : 'hidden',
+            pointerEvents: isRightPanelOpen ? 'auto' : 'none',
             overflow: 'hidden'
           }}>
-            <ChatInterface
-              embedModel={embedModel}
-              fileHash={fileHash}
-              chatSentences={chatSentences}
-              setChatSentences={setChatSentences}
-              currentChatId={currentChatId}
-              activeSource={activeSource}
-              onJump={(id) => {
-                setActiveSource('chat');
-                setCurrentChatId(id);
-                setPlayRequestId(id);
-              }}
-            />
+            {/* Tabs Header */}
+            <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+              <Tabs 
+                value={rightPanelTab} 
+                onChange={(_, newValue) => setRightPanelTab(newValue)}
+                variant="fullWidth"
+              >
+                <Tab 
+                  icon={<ForumIcon fontSize="small" />} 
+                  iconPosition="start" 
+                  label="Threads" 
+                  sx={{ minHeight: 56, textTransform: 'none', flex: 2 }}
+                />
+                <Tab 
+                  icon={<ChatIcon fontSize="small" />} 
+                  iconPosition="start" 
+                  label={activeThread ? activeThread.name : "Chat"} 
+                  disabled={!activeThread}
+                  sx={{ minHeight: 56, textTransform: 'none', flex: 8 }}
+                />
+              </Tabs>
+            </Box>
+
+            {/* Tab Content */}
+            <Box sx={{ flex: 1, overflow: 'hidden' }}>
+              {/* Threads Tab */}
+              <Box sx={{ 
+                height: '100%', 
+                display: rightPanelTab === 0 ? 'block' : 'none',
+                overflow: 'auto'
+              }}>
+                <ThreadSidebar
+                  activeThreadId={activeThread?.id || null}
+                  onThreadSelect={(thread) => {
+                    handleThreadSelect(thread);
+                    // Switch to Chat tab when a thread is selected
+                    if (thread) {
+                      setRightPanelTab(1);
+                    }
+                  }}
+                />
+              </Box>
+
+              {/* Chat Tab */}
+              <Box sx={{ 
+                height: '100%', 
+                display: rightPanelTab === 1 ? 'flex' : 'none',
+                flexDirection: 'column'
+              }}>
+                {activeThread ? (
+                  <ChatInterface
+                    activeThread={activeThread}
+                    chatSentences={chatSentences}
+                    setChatSentences={setChatSentences}
+                    currentChatId={currentChatId}
+                    activeSource={activeSource}
+                    onJump={(id) => {
+                      setActiveSource('chat');
+                      setCurrentChatId(id);
+                      setPlayRequestId(id);
+                    }}
+                  />
+                ) : (
+                  <Box sx={{ 
+                    flex: 1, 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    p: 3
+                  }}>
+                    <Typography color="text.secondary" textAlign="center">
+                      Select or create a thread to start chatting
+                    </Typography>
+                  </Box>
+                )}
+              </Box>
+            </Box>
           </Box>
         )}
 

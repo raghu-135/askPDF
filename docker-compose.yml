@@ -57,12 +57,14 @@ services:
     environment:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
+      - DATA_DIR=/data
     env_file:
       - .env
     depends_on:
       - qdrant
     volumes:
       - ./rag_service:/app
+      - rag_data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -80,3 +82,4 @@ services:
 
 volumes:
   qdrant_data:
+  rag_data:

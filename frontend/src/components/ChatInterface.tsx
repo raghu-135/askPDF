@@ -16,49 +16,61 @@ import {
     Stack,
     FormControlLabel,
     Switch,
-    Tooltip
+    Tooltip,
+    Chip,
+    CircularProgress,
 } from '@mui/material';
 import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
 import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
 import SendIcon from '@mui/icons-material/Send';
-import SettingsIcon from '@mui/icons-material/Settings';
+import DeleteIcon from '@mui/icons-material/Delete';
+import MemoryIcon from '@mui/icons-material/Memory';
+import LockIcon from '@mui/icons-material/Lock';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
+import { 
+    Thread, 
+    Message,
+    threadChat, 
+    getThreadMessages, 
+    deleteMessage,
+    getThreadIndexStatus
+} from '../lib/api';
+import { fetchAvailableLlmModels, checkLlmModelReady } from '../lib/chat-utils';
 
-interface Message {
-    role: 'user' | 'assistant';
-    content: string;
+interface ChatMessage extends Message {
+    isRecollected?: boolean;
 }
 
 interface ChatInterfaceProps {
     ragApiUrl?: string;
-    embedModel: string;
-    fileHash: string | null;
+    activeThread: Thread | null;
     chatSentences: any[];
     setChatSentences: (sentences: any[]) => void;
     currentChatId: number | null;
     activeSource: 'pdf' | 'chat';
     onJump: (id: number) => void;
+    onThreadUpdate?: () => void;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
     ragApiUrl = "http://localhost:8001",
-    embedModel,
-    fileHash,
+    activeThread,
     chatSentences,
     setChatSentences,
     currentChatId,
     activeSource,
-    onJump
+    onJump,
+    onThreadUpdate
 }) => {
-    const [messages, setMessages] = useState<Message[]>([]);
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [isModelWarming, setIsModelWarming] = useState(false);
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
-    const [collectionName, setCollectionName] = useState<string | null>(null);
     const [useWebSearch, setUseWebSearch] = useState(false);
+    const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -67,6 +79,45 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
+
+    // Load messages when thread changes
+    useEffect(() => {
+        if (activeThread) {
+            loadMessages();
+            checkIndexStatus();
+        } else {
+            setMessages([]);
+            setIndexingStatus('ready');
+        }
+    }, [activeThread?.id, activeThread?.file_count]);
+
+    const loadMessages = async () => {
+        if (!activeThread) return;
+        try {
+            const response = await getThreadMessages(activeThread.id);
+            setMessages(response.messages.map(m => ({ ...m, isRecollected: false })));
+        } catch (error) {
+            console.error('Failed to load messages:', error);
+        }
+    };
+
+    const checkIndexStatus = async () => {
+        if (!activeThread) return;
+        try {
+            setIndexingStatus('checking');
+            const status = await getThreadIndexStatus(activeThread.id);
+            // Map rag-service status ('ready' | 'not_ready') to UI status
+            if (status.status === 'ready') {
+                setIndexingStatus('ready');
+            } else {
+                // 'not_ready' means still indexing
+                setIndexingStatus('indexing');
+            }
+        } catch (error) {
+            console.error('Failed to check index status:', error);
+            setIndexingStatus('ready'); // Assume ready if check fails
+        }
+    };
 
     // Sync chatSentences with parent whenever messages change
     useEffect(() => {
@@ -98,7 +149,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 block: 'start',
             });
         }
-    }, [activeMessageIndex, currentChatId]); // Added currentChatId to trigger on every sentence change/jump
+    }, [activeMessageIndex, currentChatId]);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -108,174 +159,180 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         scrollToBottom();
     }, [messages]);
 
+    // Fetch available LLM models using chat-utils
     useEffect(() => {
-        // Fetch models and order: LLM models first, then the rest (no duplicates)
-        fetch(`${ragApiUrl}/models`)
-            .then(res => res.json())
-            .then(data => {
-                if (data.llm_models || data.not_llm_models) {
-                    setAvailableModels([...data.llm_models, ...data.not_llm_models]);
-                } else if (data.all_models && data.all_models.length > 0) {
-                    // fallback to all_models
-                    const ids = data.all_models.map((m: any) => m.id);
-                    setAvailableModels(ids);
-                } else {
-                    throw new Error("No models found");
-                }
-            })
+        fetchAvailableLlmModels(ragApiUrl)
+            .then(setAvailableModels)
             .catch(err => {
-                console.error("Failed to fetch models or no models found", err);
+                console.error("Failed to fetch models", err);
                 setAvailableModels([]);
-                // Optionally, you could set an error state here to display in the UI
             });
     }, [ragApiUrl]);
 
-    // Validate LLM model when changed
+    // Validate LLM model when changed using chat-utils
     const handleLlmModelChange = async (model: string) => {
         setLlmModel(model);
-        setIsLlmModelValid(null); // reset
+        setIsLlmModelValid(null);
         if (!model) return;
         try {
-            const res = await fetch(`${ragApiUrl}/health/is_chat_model_ready?model=${encodeURIComponent(model)}`);
-            const data = await res.json();
-            console.log("/health/is_chat_model_ready response:", data);
-            setIsLlmModelValid(data.ready === true || data.chat_model_ready === true);
+            const valid = await checkLlmModelReady(model, ragApiUrl);
+            setIsLlmModelValid(valid);
         } catch (err) {
             setIsLlmModelValid(false);
         }
     };
 
-    // Handle Collection Naming and Polling
+    // Polling for indexing status
     useEffect(() => {
-        if (!embedModel || !fileHash) {
-            setIndexingStatus('ready'); // or checking, but if no model/hash, nothing to index yet
-            setCollectionName(null);
-            return;
-        }
+        if (!activeThread || indexingStatus !== 'indexing') return;
 
-        const baseModelName = embedModel.split(":")[0];
-        const safeModelName = baseModelName.replace(/-/g, "_").replace(/\./g, "_").replace(/\//g, "_");
-        const cName = `rag_${safeModelName}_${fileHash}`;
-        setCollectionName(cName);
-        setIndexingStatus('checking');
-
-        let intervalId: ReturnType<typeof setInterval>;
-
-        const checkStatus = async () => {
+        const intervalId = setInterval(async () => {
             try {
-                const res = await fetch(`${ragApiUrl}/status?collection_name=${cName}`);
-                const data = await res.json();
-                if (data.status === 'ready') {
+                const status = await getThreadIndexStatus(activeThread.id);
+                // Map rag-service status ('ready' | 'not_ready') to UI status
+                if (status.status === 'ready') {
                     setIndexingStatus('ready');
-                    return true; // stop polling
-                } else {
-                    setIndexingStatus('indexing');
-                    return false;
+                    clearInterval(intervalId);
                 }
-            } catch (e) {
-                console.error("Status check failed", e);
-                // Don't set error immediately, maybe retry?
-                return false;
+                // If still 'not_ready', keep polling
+            } catch (error) {
+                console.error('Index status check failed:', error);
             }
-        };
+        }, 2000);
 
-        const startPolling = async () => {
-            const ready = await checkStatus();
-            if (!ready) {
-                intervalId = setInterval(async () => {
-                    const isReady = await checkStatus();
-                    if (isReady) clearInterval(intervalId);
-                }, 2000);
-            }
-        };
-
-        startPolling();
-
-        return () => {
-            if (intervalId) clearInterval(intervalId);
-        };
-    }, [embedModel, fileHash, ragApiUrl]);
+        return () => clearInterval(intervalId);
+    }, [activeThread?.id, indexingStatus]);
 
     const handleSend = async () => {
-        if (!input.trim() || !llmModel || !embedModel) return;
+        if (!input.trim() || !llmModel || !activeThread) return;
 
-        const userMsg: Message = { role: 'user', content: input };
-        setMessages(prev => [...prev, userMsg]);
+        const userContent = input.trim();
         setInput('');
         setLoading(true);
         setIsModelWarming(false);
 
+        // Optimistically add user message
+        const tempUserMsg: ChatMessage = { 
+            id: 'temp-user-' + Date.now(), 
+            role: 'user', 
+            content: userContent,
+            created_at: new Date().toISOString()
+        };
+        setMessages(prev => [...prev, tempUserMsg]);
+
         try {
-            // First check if models are ready to provide better UI feedback
-            const checkModel = async (modelName: string) => {
-                try {
-                    const res = await fetch(`${ragApiUrl}/health/is_chat_model_ready?model=${encodeURIComponent(modelName)}`);
-                    if (!res.ok) return true; // If endpoint is down or 404, don't show warming message
-                    const data = await res.json();
-                    return data.ready;
-                } catch (e) {
-                    return true; // Default to true if check fails, let backend handle it
-                }
-            };
-
-            const checkEmbedModel = async (modelName: string) => {
-                try {
-                    const res = await fetch(`${ragApiUrl}/health/is_embed_model_ready?model=${encodeURIComponent(modelName)}`);
-                    if (!res.ok) return true; // If endpoint is down or 404, don't show warming message
-                    const data = await res.json();
-                    return data.ready;
-                } catch (e) {
-                    return true; // Default to true if check fails, let backend handle it
-                }
-            };
-
-            const [llmReady, embedReady] = await Promise.all([
-                checkModel(llmModel),
-                checkEmbedModel(embedModel)
-            ]);
-
-            if (!llmReady || !embedReady) {
+            // Check model readiness using chat-utils
+            const llmReady = await checkLlmModelReady(llmModel, ragApiUrl);
+            if (!llmReady) {
                 setIsModelWarming(true);
             }
 
-            const resp = await fetch(`${ragApiUrl}/chat`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    question: userMsg.content,
-                    history: messages,
-                    llm_model: llmModel,
-                    embedding_model: embedModel,
-                    collection_name: collectionName,
-                    use_web_search: useWebSearch
-                })
+            // Call thread chat endpoint
+            const response = await threadChat(
+                activeThread.id,
+                userContent,
+                llmModel,
+                useWebSearch
+            );
+
+            // Update messages with real IDs and add assistant response
+            setMessages(prev => {
+                const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                return [
+                    ...updated,
+                    { 
+                        id: response.user_message_id, 
+                        role: 'user', 
+                        content: userContent,
+                        created_at: new Date().toISOString()
+                    },
+                    { 
+                        id: response.assistant_message_id, 
+                        role: 'assistant', 
+                        content: response.answer,
+                        created_at: new Date().toISOString()
+                    }
+                ];
             });
 
-            if (!resp.ok) {
-                const errorData = await resp.json();
-                throw new Error(errorData.detail || "Failed to get response");
+            // Mark recollected messages
+            if (response.used_chat_ids && response.used_chat_ids.length > 0) {
+                setRecollectedIds(new Set(response.used_chat_ids));
+                // Clear recollection highlight after 10 seconds
+                setTimeout(() => setRecollectedIds(new Set()), 10000);
             }
 
-            const data = await resp.json();
-            const botMsg: Message = { role: 'assistant', content: data.answer };
-            setMessages(prev => [...prev, botMsg]);
+            // Notify parent that thread was updated
+            if (onThreadUpdate) {
+                onThreadUpdate();
+            }
+
         } catch (err: any) {
             console.error(err);
-            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err.message || "Failed to get response."}` }]);
+            // Remove optimistic message and show error
+            setMessages(prev => {
+                const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                return [
+                    ...updated,
+                    tempUserMsg,
+                    { 
+                        id: 'error-' + Date.now(), 
+                        role: 'assistant', 
+                        content: `Error: ${err.message || "Failed to get response."}`,
+                        created_at: new Date().toISOString()
+                    }
+                ];
+            });
         } finally {
             setLoading(false);
             setIsModelWarming(false);
         }
     };
 
+    const handleDeleteMessage = async (messageId: string, event: React.MouseEvent) => {
+        event.stopPropagation();
+        if (!confirm('Delete this message?')) return;
+
+        try {
+            const { deleted_ids } = await deleteMessage(messageId);
+            setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
+            if (onThreadUpdate) {
+                onThreadUpdate();
+            }
+        } catch (error) {
+            console.error('Failed to delete message:', error);
+        }
+    };
+
+    if (!activeThread) {
+        return (
+            <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3 }}>
+                <Box textAlign="center">
+                    <Typography variant="h6" color="text.secondary" gutterBottom>
+                        No Thread Selected
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                        Create or select a thread from the sidebar to start chatting
+                    </Typography>
+                </Box>
+            </Paper>
+        );
+    }
+
     return (
         <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1, bgcolor: 'transparent', cursor: 'default' }}>
+            {/* Header */}
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
-                <Typography variant="subtitle1" sx={{ fontWeight: 'bold', whiteSpace: 'nowrap' }}>
-                    ask PDF
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Tooltip title={`Embedding model locked: ${activeThread.embed_model}`}>
+                        <Chip 
+                            icon={<LockIcon fontSize="small" />}
+                            label={activeThread.embed_model.split('/').pop()?.split(':')[0] || activeThread.embed_model}
+                            size="small"
+                            variant="outlined"
+                        />
+                    </Tooltip>
+                </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '250px', gap: 1 }}>
                     <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
                         <IconButton
@@ -309,60 +366,120 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 </Box>
             </Box>
 
+            {/* Messages List */}
             <List sx={{ flexGrow: 1, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}>
-                {messages.map((msg, idx) => (
-                    <ListItem key={idx} ref={el => messageRefs.current[idx] = el} alignItems="flex-start" sx={{
-                        flexDirection: 'column',
-                        alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                        px: 0,
-                        py: 0.5
-                    }}>
-                        <Paper
+                {messages.map((msg, idx) => {
+                    const isRecollected = recollectedIds.has(msg.id);
+                    return (
+                        <ListItem 
+                            key={msg.id} 
+                            ref={el => messageRefs.current[idx] = el} 
+                            alignItems="flex-start" 
                             sx={{
-                                p: 1.5,
-                                bgcolor: msg.role === 'user' ? 'primary.main' : 'grey.100',
-                                color: msg.role === 'user' ? 'white' : 'text.primary',
-                                maxWidth: '90%',
-                                boxShadow: activeMessageIndex === idx ? '0 0 10px rgba(255, 255, 0, 0.4)' : 'none',
-                                border: 'none',
-                                borderColor: 'transparent',
-                                borderRadius: '12px',
-                                transition: 'all 0.2s ease',
-                                cursor: 'default'
-                            }}
-                            onDoubleClick={(e) => {
-                                const firstSentence = chatSentences.find(s => s.messageIndex === idx);
-                                if (firstSentence) onJump(firstSentence.id);
-                                e.stopPropagation();
+                                flexDirection: 'column',
+                                alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                                px: 0,
+                                py: 0.5
                             }}
                         >
-                            <Typography variant="body2" component="div" sx={{
-                                cursor: 'text',
-                                '& p': { m: 0, mb: 1 },
-                                '& p:last-child': { mb: 0 },
-                                '& ul, & ol': { pl: 2, m: 0, mb: 1 },
-                                '& li': { mb: 0.5 },
-                                '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1 },
-                                '& code': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace' },
-                                '& pre': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 }
-                            }}>
-                                <ReactMarkdown
-                                    remarkPlugins={[remarkGfm]}
+                            <Paper
+                                sx={{
+                                    p: 1.5,
+                                    bgcolor: msg.role === 'user' ? 'primary.main' : 'grey.100',
+                                    color: msg.role === 'user' ? 'white' : 'text.primary',
+                                    maxWidth: '90%',
+                                    boxShadow: activeMessageIndex === idx 
+                                        ? '0 0 10px rgba(255, 255, 0, 0.4)' 
+                                        : isRecollected 
+                                            ? '0 0 10px rgba(156, 39, 176, 0.5)' 
+                                            : 'none',
+                                    border: isRecollected ? '2px solid' : 'none',
+                                    borderColor: isRecollected ? 'secondary.main' : 'transparent',
+                                    borderRadius: '12px',
+                                    transition: 'all 0.2s ease',
+                                    cursor: 'default',
+                                    position: 'relative',
+                                    '&:hover .delete-btn': {
+                                        opacity: 1
+                                    }
+                                }}
+                                onDoubleClick={(e) => {
+                                    const firstSentence = chatSentences.find(s => s.messageIndex === idx);
+                                    if (firstSentence) onJump(firstSentence.id);
+                                    e.stopPropagation();
+                                }}
+                            >
+                                {/* Recollection indicator */}
+                                {isRecollected && (
+                                    <Chip
+                                        icon={<MemoryIcon fontSize="small" />}
+                                        label="Used as context"
+                                        size="small"
+                                        color="secondary"
+                                        sx={{ 
+                                            position: 'absolute', 
+                                            top: -10, 
+                                            left: 10,
+                                            height: 20,
+                                            fontSize: '0.65rem'
+                                        }}
+                                    />
+                                )}
+                                
+                                {/* Delete button */}
+                                <IconButton
+                                    className="delete-btn"
+                                    size="small"
+                                    onClick={(e) => handleDeleteMessage(msg.id, e)}
+                                    sx={{
+                                        position: 'absolute',
+                                        top: 4,
+                                        right: 4,
+                                        opacity: 0,
+                                        transition: 'opacity 0.2s',
+                                        bgcolor: 'background.paper',
+                                        '&:hover': { bgcolor: 'error.light', color: 'white' }
+                                    }}
                                 >
-                                    {msg.content}
-                                </ReactMarkdown>
-                            </Typography>
-                        </Paper>
-                    </ListItem>
-                ))}
+                                    <DeleteIcon fontSize="small" />
+                                </IconButton>
+
+                                <Typography variant="body2" component="div" sx={{
+                                    cursor: 'text',
+                                    '& p': { m: 0, mb: 1 },
+                                    '& p:last-child': { mb: 0 },
+                                    '& ul, & ol': { pl: 2, m: 0, mb: 1 },
+                                    '& li': { mb: 0.5 },
+                                    '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1 },
+                                    '& code': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace' },
+                                    '& pre': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 }
+                                }}>
+                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        {msg.content}
+                                    </ReactMarkdown>
+                                </Typography>
+                            </Paper>
+                        </ListItem>
+                    );
+                })}
                 <div ref={messagesEndRef} />
             </List>
 
+            {/* Input Area */}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {isModelWarming && (
                     <Typography variant="caption" sx={{ color: 'info.main', textAlign: 'center', fontStyle: 'italic' }}>
                         Bringing the AI model online, this may take a moment...
                     </Typography>
+                )}
+
+                {indexingStatus !== 'ready' && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
+                        <CircularProgress size={16} />
+                        <Typography variant="caption" color="info.main">
+                            Indexing document...
+                        </Typography>
+                    </Box>
                 )}
 
                 <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
@@ -372,9 +489,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         multiline
                         maxRows={10}
                         placeholder={
-                            indexingStatus === 'indexing'
+                            indexingStatus !== 'ready'
                                 ? "Indexing your document. This may take a moment..."
-                                : (!llmModel || !embedModel)
+                                : !llmModel
                                     ? "Select LLM model..."
                                     : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
                         }
@@ -386,7 +503,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 handleSend();
                             }
                         }}
-                        disabled={loading || !llmModel || !embedModel || indexingStatus !== 'ready'}
+                        disabled={loading || !llmModel || indexingStatus !== 'ready'}
                         sx={{
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: 'white',
@@ -400,8 +517,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             },
                         }}
                     />
-                    <IconButton color="primary" onClick={handleSend} disabled={loading || !llmModel || !embedModel || indexingStatus !== 'ready'}>
-                        <SendIcon />
+                    <IconButton 
+                        color="primary" 
+                        onClick={handleSend} 
+                        disabled={loading || !llmModel || indexingStatus !== 'ready'}
+                    >
+                        {loading ? <CircularProgress size={24} /> : <SendIcon />}
                     </IconButton>
                 </Box>
             </Box>

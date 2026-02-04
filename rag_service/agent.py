@@ -1,11 +1,10 @@
-
 import asyncio
 import logging
 from typing import TypedDict, List, Annotated
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_community.tools import DuckDuckGoSearchRun
 from langgraph.graph import StateGraph, END
-from models import get_llm, get_embedding_model
+from models import get_llm, get_embedding_model, get_system_prompt
 from vectordb.qdrant import QdrantAdapter
 
 logger = logging.getLogger(__name__)
@@ -33,6 +32,73 @@ async def invoke_with_retry(func, *args, **kwargs):
     raise Exception("Max retries reached while waiting for model to load.")
 
 
+async def generate_optimized_search_query(
+    question: str,
+    context: str,
+    history: List[BaseMessage],
+    llm_name: str
+) -> str:
+    """
+    Generate an optimized search query using the LLM, considering context and history.
+    """
+    try:
+        llm = get_llm(llm_name)
+        
+        # Prepare context snippets for search query generation
+        history_snippet = ""
+        if history:
+            history_snippet = "\n".join([f"{getattr(m, 'type', 'user')}: {m.content[:200]}..." for m in history[-3:]])
+        
+        context_snippet = context[:1500] if context else "No context available."
+
+        query_gen_prompt = (
+            "You are a search expert. Generate a simple, plain-text search engine query to find information "
+            "that answers the user's question. Use only keywords relevant to the topic.\n\n"
+            "CRITICAL: Output ONLY the search query text. Do NOT use JSON, do NOT use quotes, "
+            "do NOT explain your reasoning, and do NOT use any specialized search syntax unless "
+            "it is a standard Google-style operator.\n\n"
+            f"User Question: {question}\n\n"
+            f"Recent Conversation:\n{history_snippet}\n\n"
+            f"PDF Content (for reference): {context_snippet}\n\n"
+            "Search Query:"
+        )
+        
+        response = await invoke_with_retry(llm.ainvoke, [HumanMessage(content=query_gen_prompt)])
+        search_query = response.content.strip().strip('"').strip("'")
+        
+        # Simple heuristic to catch LLM outputting JSON anyway
+        if search_query.startswith('{') and '}' in search_query:
+            try:
+                import json
+                data = json.loads(search_query)
+                if isinstance(data, dict):
+                    search_query = data.get('q') or data.get('query') or data.get('parameters', {}).get('q') or search_query
+            except:
+                pass
+
+        logger.info(f"Generated search query: {search_query}")
+        return search_query
+    except Exception as e:
+        logger.warning(f"Failed to generate optimized search query: {e}. Using raw question.")
+        return question
+
+
+async def perform_web_search(query: str) -> str:
+    """
+    Execute a web search and handle common errors/rate limits.
+    """
+    try:
+        # Run search in a separate thread to not block async loop if sync tool
+        results = await asyncio.to_thread(search_tool.invoke, query)
+        logger.info(f"Web search completed for '{query}'. Results length: {len(results or '')} chars")
+        logger.info(f"Web search results (truncated): {(results or '')[:1000]}")
+        return results
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "ratelimit" in error_msg or "429" in error_msg:
+            return "Notice: Web search unavailable due to rate limiting."
+        return f"Web search failed: {str(e)}"
+
 
 class AgentState(TypedDict):
     question: str
@@ -44,6 +110,7 @@ class AgentState(TypedDict):
     context: str
     web_context: str
     answer: str
+    search_query: str
 
 
 # Placeholder for a synchronous retrieve function (not implemented)
@@ -56,15 +123,14 @@ async def web_search_node(state: AgentState):
     Handles rate limiting gracefully.
     """
     question = state["question"]
-    try:
-        # Run search in a separate thread to not block async loop if sync tool
-        results = await asyncio.to_thread(search_tool.invoke, question)
-        return {"web_context": results}
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "ratelimit" in error_msg or "429" in error_msg:
-            return {"web_context": "Notice: Web search unavailable due to rate limiting."}
-        return {"web_context": f"Web search failed: {str(e)}"}
+    context = state.get("context", "")
+    history = state.get("chat_history", [])
+    llm_name = state["llm_model"]
+
+    search_query = await generate_optimized_search_query(question, context, history, llm_name)
+    results = await perform_web_search(search_query)
+    
+    return {"web_context": results, "search_query": search_query}
 
 
 async def retrieve_node(state: AgentState):
@@ -101,9 +167,13 @@ async def generate_node(state: AgentState):
     # Combine contexts
     full_context = f"PDF Context:\n{context}\n\nWeb Search Context:\n{web_context}"
 
+    system_instruction = get_system_prompt(
+        context=full_context,
+        use_web=bool(web_context)
+    )
+
     messages = [
-        SystemMessage(content="You are a helpful assistant. Use the provided PDF context and Web Search results to answer the user's question. If the web search failed, rely on the PDF."),
-        SystemMessage(content=f"Context:\n{full_context}"),
+        SystemMessage(content=system_instruction),
     ]
     messages.extend(state.get("chat_history", []))
     messages.append(HumanMessage(content=question))
