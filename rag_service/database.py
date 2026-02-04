@@ -7,6 +7,7 @@ file associations, and message history for the RAG service.
 
 import os
 import uuid
+import logging
 import aiosqlite
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -25,6 +26,9 @@ os.makedirs(DATA_DIR, exist_ok=True)
 class MessageRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
+
+
+logger = logging.getLogger(__name__)
 
 
 class Thread(BaseModel):
@@ -97,7 +101,7 @@ async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
         await db.commit()
-    print(f"Database initialized at {DB_PATH}", flush=True)
+    logger.info(f"Database initialized at {DB_PATH}")
 
 
 async def get_db():
@@ -252,7 +256,7 @@ async def add_file_to_thread(thread_id: str, file_hash: str) -> bool:
             await db.commit()
             return True
     except Exception as e:
-        print(f"Error adding file to thread: {e}", flush=True)
+        logger.error(f"Error adding file to thread: {e}")
         return False
 
 

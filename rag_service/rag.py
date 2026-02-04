@@ -9,6 +9,7 @@ This module handles:
 """
 
 import os
+import logging
 from typing import Dict, Any, List, Optional
 
 import httpx
@@ -16,6 +17,8 @@ from unstructured.partition.pdf import partition_pdf
 
 from models import get_embedding_model
 from vectordb.qdrant import QdrantAdapter
+
+logger = logging.getLogger(__name__)
 
 TEMP_PDF_DIR = "/tmp/pdfs"
 os.makedirs(TEMP_PDF_DIR, exist_ok=True)
@@ -64,10 +67,10 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[L
                     pass
                 return chunks
             else:
-                print(f"Failed to download PDF from {pdf_url}: {resp.status_code}", flush=True)
+                logger.error(f"Failed to download PDF from {pdf_url}: {resp.status_code}")
                 return None
     except Exception as e:
-        print(f"Error downloading/parsing PDF: {e}", flush=True)
+        logger.error(f"Error downloading/parsing PDF: {e}")
         return None
 
 
@@ -128,7 +131,7 @@ async def index_document(text: str, embedding_model_name: str, metadata: Dict[st
 
     # 2. Check if collection exists
     if await db_client.collection_exists(collection_name):
-        print(f"Collection {collection_name} already exists. Skipping indexing.", flush=True)
+        logger.info(f"Collection {collection_name} already exists. Skipping indexing.")
         return {"status": "skipped", "reason": "exists", "collection": collection_name}
 
     # 3. Parsing & Chunking
@@ -144,7 +147,7 @@ async def index_document(text: str, embedding_model_name: str, metadata: Dict[st
         await index_chunks_to_db(collection_name, chunks, metadatas_list, vectors, db_client)
         return {"status": "success", "chunks_count": len(chunks), "collection": collection_name}
     except Exception as e:
-        print(f"Error indexing: {e}", flush=True)
+        logger.error(f"Error indexing: {e}")
         return {"status": "error", "message": str(e)}
 
 
@@ -176,10 +179,10 @@ async def index_document_for_thread(
         # 1. Get chunks
         chunks = await get_chunks(text, file_hash)
         if not chunks:
-            print(f"No chunks extracted for thread {thread_id}, file {file_hash}", flush=True)
+            logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
             return {"status": "error", "message": "No text extracted"}
         
-        print(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}", flush=True)
+        logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
         
         # 2. Generate embeddings
         vectors = await generate_embeddings(chunks, embedding_model_name)
@@ -203,7 +206,7 @@ async def index_document_for_thread(
             metadatas=chunk_metadatas
         )
         
-        print(f"Successfully indexed {indexed_count} chunks for thread {thread_id}", flush=True)
+        logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
         
         return {
             "status": "success",
@@ -213,9 +216,7 @@ async def index_document_for_thread(
         }
         
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"Error indexing document for thread {thread_id}: {e}", flush=True)
+        logger.error(f"Error indexing document for thread {thread_id}: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 

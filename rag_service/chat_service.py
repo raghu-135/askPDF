@@ -9,16 +9,24 @@ This module provides:
 """
 
 import asyncio
+import logging
 from typing import List, Dict, Any, Optional, Tuple
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from agent import app as agent_app, invoke_with_retry
+from agent import (
+    app as agent_app, 
+    invoke_with_retry, 
+    generate_optimized_search_query, 
+    perform_web_search
+)
 from models import get_llm, get_embedding_model, get_system_prompt
 from vectordb.qdrant import QdrantAdapter
 from database import (
     create_message, get_recent_messages, get_thread,
     MessageRole
 )
+
+logger = logging.getLogger(__name__)
 
 # Token budget configuration
 DEFAULT_TOKEN_BUDGET = 4000  # Conservative estimate for context
@@ -227,14 +235,17 @@ async def handle_thread_chat(
         # 7. Optional web search
         web_context = ""
         if use_web_search:
-            try:
-                from langchain_community.tools import DuckDuckGoSearchRun
-                search_tool = DuckDuckGoSearchRun()
-                web_results = await asyncio.to_thread(search_tool.invoke, question)
-                web_context = f"\n\nWeb Search Results:\n{web_results}"
-                full_context += web_context
-            except Exception as e:
-                print(f"Web search failed: {e}", flush=True)
+            # Generate optimized search query considering PDF context and history
+            search_query = await generate_optimized_search_query(
+                question=question,
+                context=pdf_context,
+                history=chat_history,
+                llm_name=llm_model
+            )
+            
+            web_results = await perform_web_search(search_query)
+            web_context = f"\n\nWeb Search Results:\n{web_results}"
+            full_context += web_context
         
         # 8. Generate response
         llm = get_llm(llm_model)
@@ -305,6 +316,5 @@ async def handle_thread_chat(
         }
         
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.error("Error in handle_thread_chat", exc_info=True)
         raise e

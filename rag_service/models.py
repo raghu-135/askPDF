@@ -52,11 +52,11 @@ async def fetch_available_models():
                 return result
             else:
                 error_msg = f"LLM API/server Fetch Failed {resp.status_code}: {resp.text}"
-                print(error_msg, flush=True)
+                logger.error(error_msg)
                 raise HTTPException(status_code=500, detail=error_msg)
     except Exception as e:
         error_msg = f"Error fetching models from LLM API/server: {str(e)}"
-        print(error_msg, flush=True)
+        logger.error(error_msg)
         raise HTTPException(status_code=500, detail=error_msg)
 
 # Identify embedding models by keywords in model id
