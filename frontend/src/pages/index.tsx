@@ -1,6 +1,6 @@
 import VerticalAlignCenterIcon from '@mui/icons-material/VerticalAlignCenter';
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab } from "@mui/material";
+import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
 import FluorescentIcon from '@mui/icons-material/Fluorescent';
 import ChatIcon from '@mui/icons-material/Chat';
 import ForumIcon from '@mui/icons-material/Forum';
@@ -24,6 +24,7 @@ export default function Home() {
   // Multiple PDF tabs state
   const [pdfTabs, setPdfTabs] = useState<PdfTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [isPdfLoading, setIsPdfLoading] = useState(false);
 
   // Get active tab and its data using utility
   const activeTab = getActiveTab(pdfTabs, activeTabId);
@@ -45,6 +46,9 @@ export default function Home() {
   // Right panel tab state (0 = Threads, 1 = Chat)
   const [rightPanelTab, setRightPanelTab] = useState(0);
 
+  // Sidebar refresh trigger
+  const [sidebarVersion, setSidebarVersion] = useState(0);
+
 
   // Resizable chat panel
   const [chatWidth, setChatWidth] = useState(450);
@@ -59,7 +63,6 @@ export default function Home() {
 
   // Handle thread selection
   const handleThreadSelect = async (thread: Thread | null) => {
-    setActiveThread(thread);
     // Clear current state
     setPdfTabs([]);
     setActiveTabId(null);
@@ -67,17 +70,27 @@ export default function Home() {
     setCurrentChatId(null);
     setPlayRequestId(null);
     setActiveSource('pdf');
+    
     if (thread) {
       try {
+        setIsPdfLoading(true);
+        // Always fetch the latest thread data to ensure we have current files and stats
         const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-        const loadedTabs = await loadThreadTabs(thread, apiBase);
+        const detailedThread = await import("../lib/api").then(m => m.getThread(thread.id));
+        setActiveThread(detailedThread);
+        
+        const loadedTabs = await loadThreadTabs(detailedThread, apiBase);
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
           setActiveTabId(loadedTabs[0].id);
         }
       } catch (err) {
         console.error('Failed to load thread files:', err);
+      } finally {
+        setIsPdfLoading(false);
       }
+    } else {
+      setActiveThread(null);
     }
   };
 
@@ -101,9 +114,11 @@ export default function Home() {
         );
 
         // Refresh active thread to trigger UI updates (like indexing status in ChatInterface)
-        // Only need to update thread, not reload tabs
+        // Refresh full thread data to ensure we have updated file_count
         const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
         setActiveThread(updatedThread);
+        // Trigger sidebar refresh to update file counts in the list
+        setSidebarVersion(v => v + 1);
       } catch (error) {
         console.error('Failed to add file to thread:', error);
       }
@@ -267,7 +282,12 @@ export default function Home() {
 
           {/* PDF Viewer Area */}
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            {(pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
+            {isPdfLoading ? (
+              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'grey.50' }}>
+                <CircularProgress />
+                <Typography sx={{ ml: 2 }}>Loading PDF documents...</Typography>
+              </Box>
+            ) : (pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
               <PdfViewer
                 pdfUrl={pdfUrl}
                 sentences={pdfSentences}
@@ -379,6 +399,7 @@ export default function Home() {
                 overflow: 'auto'
               }}>
                 <ThreadSidebar
+                  key={sidebarVersion}
                   activeThreadId={activeThread?.id || null}
                   onThreadSelect={(thread) => {
                     handleThreadSelect(thread);

@@ -38,7 +38,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app/backend
-      - ./backend:/app/backend
+      - pdf_data:/static
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -58,6 +58,7 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - DATA_DIR=/data
+      - BACKEND_URL=http://backend:8000
     env_file:
       - .env
     depends_on:
@@ -83,3 +84,4 @@ services:
 volumes:
   qdrant_data:
   rag_data:
+  pdf_data:
