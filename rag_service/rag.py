@@ -10,6 +10,7 @@ This module handles:
 
 import os
 import logging
+import asyncio
 from typing import Dict, Any, List, Optional
 
 import httpx
@@ -57,7 +58,10 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[L
             if resp.status_code == 200:
                 with open(local_path, "wb") as f:
                     f.write(resp.content)
-                elements = partition_pdf(filename=local_path)
+                
+                # Run partitioning in a thread pool as it is CPU-bound
+                elements = await asyncio.to_thread(partition_pdf, filename=local_path)
+                
                 from unstructured.chunking.title import chunk_by_title
                 chunked_elements = chunk_by_title(elements)
                 chunks = [str(c) for c in chunked_elements]
@@ -74,19 +78,18 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[L
         return None
 
 
-async def get_chunks(text: str, file_hash: Optional[str]) -> List[str]:
+async def get_chunks(file_hash: str) -> List[str]:
     """
-    Get text chunks from either a PDF (if file_hash is present) or from plain text.
+    Download a PDF from the backend using file_hash and parse it into text chunks using unstructured.
+    Returns a list of chunked strings.
     """
-    if file_hash:
-        backend_url = os.getenv("BACKEND_URL", "http://backend:8000")
-        chunks = await download_and_parse_pdf(file_hash, backend_url)
-        if chunks:
-            return chunks
-        # fallback to text splitting if PDF fails
-        return split_text(text)
-    else:
-        return split_text(text)
+    backend_url = os.getenv("BACKEND_URL", "http://backend:8000")
+    chunks = await download_and_parse_pdf(file_hash, backend_url)
+    if chunks:
+        return chunks
+    
+    logger.error(f"PDF download/parse failed for {file_hash}")
+    return []
 
 
 async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> List[List[float]]:
@@ -117,13 +120,16 @@ async def index_chunks_to_db(
     await db_client.index_documents(collection_name, chunks, metadatas_list, vectors)
 
 
-async def index_document(text: str, embedding_model_name: str, metadata: Dict[str, Any] = None):
+async def index_document(embedding_model_name: str, metadata: Dict[str, Any] = None):
     """
     Legacy: Indexes a document into the vector database.
     Creates a collection based on embedding model and file hash.
     """
     metadata = metadata or {}
     file_hash = metadata.get("file_hash")
+    
+    if not file_hash:
+        return {"status": "error", "message": "file_hash is required for indexing"}
 
     # 1. Determine Collection Name
     collection_name = get_collection_name(embedding_model_name, file_hash)
@@ -135,9 +141,9 @@ async def index_document(text: str, embedding_model_name: str, metadata: Dict[st
         return {"status": "skipped", "reason": "exists", "collection": collection_name}
 
     # 3. Parsing & Chunking
-    chunks = await get_chunks(text, file_hash)
+    chunks = await get_chunks(file_hash)
     if not chunks:
-        return {"status": "error", "message": "No text extracted"}
+        return {"status": "error", "message": "No text extracted from PDF"}
 
     # 4. Embeddings
     try:
@@ -154,18 +160,16 @@ async def index_document(text: str, embedding_model_name: str, metadata: Dict[st
 async def index_document_for_thread(
     thread_id: str,
     file_hash: str,
-    text: str,
     embedding_model_name: str,
     metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Index a document into a thread's Qdrant collection.
-    This is used for per-thread indexing with semantic memory support.
+    The PDF is fetched from the backend and parsed using Unstructured.
     
     Args:
         thread_id: The thread ID to index into
         file_hash: Unique hash of the file
-        text: Document text (fallback if PDF parsing fails)
         embedding_model_name: The embedding model to use
         metadata: Additional metadata to store with chunks
     
@@ -176,11 +180,11 @@ async def index_document_for_thread(
     metadata = metadata or {}
     
     try:
-        # 1. Get chunks
-        chunks = await get_chunks(text, file_hash)
+        # 1. Get chunks from PDF
+        chunks = await get_chunks(file_hash)
         if not chunks:
             logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
-            return {"status": "error", "message": "No text extracted"}
+            return {"status": "error", "message": "No text extracted from PDF"}
         
         logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
         

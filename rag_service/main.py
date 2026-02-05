@@ -64,7 +64,6 @@ app.add_middleware(
 
 class IndexRequest(BaseModel):
     """Request body for /index endpoint."""
-    text: str
     embedding_model: str
     metadata: Optional[Dict[str, Any]] = None
 
@@ -85,7 +84,6 @@ class ThreadFileRequest(BaseModel):
     file_hash: str
     file_name: str
     file_path: Optional[str] = None
-    text: Optional[str] = None  # For indexing
 
 
 class ChatRequest(BaseModel):
@@ -256,21 +254,19 @@ async def add_file_to_thread_endpoint(
         collection_exists = await db.thread_collection_exists(thread_id)
         
         # Trigger background indexing
-        if req.text:
-            background_tasks.add_task(
-                index_document_for_thread,
-                thread_id=thread_id,
-                file_hash=req.file_hash,
-                text=req.text,
-                embedding_model_name=thread.embed_model
-            )
+        background_tasks.add_task(
+            index_document_for_thread,
+            thread_id=thread_id,
+            file_hash=req.file_hash,
+            embedding_model_name=thread.embed_model
+        )
         
         return {
             "status": "accepted",
             "thread_id": thread_id,
             "file_hash": req.file_hash,
             "file_name": req.file_name,
-            "indexing": "in_progress" if req.text else "no_text_provided"
+            "indexing": "in_progress"
         }
     except HTTPException:
         raise
@@ -433,7 +429,6 @@ async def index_endpoint(req: IndexRequest):
     """
     try:
         result = await index_document(
-            text=req.text,
             embedding_model_name=req.embedding_model,
             metadata=req.metadata,
         )
