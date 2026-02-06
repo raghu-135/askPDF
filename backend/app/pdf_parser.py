@@ -1,5 +1,18 @@
-
+import io
 import fitz  # PyMuPDF
+from docling.document_converter import DocumentConverter, DocumentStream, PdfFormatOption
+from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.document import TextItem
+
+# Initialize Docling converter as a module-level singleton
+_pipeline_options = PdfPipelineOptions()
+_pipeline_options.do_ocr = False  # Faster, matches PyMuPDF baseline
+_docling_converter = DocumentConverter(
+    format_options={
+        InputFormat.PDF: PdfFormatOption(pipeline_options=_pipeline_options)
+    }
+)
 
 def _get_table_bboxes(page):
     """
@@ -151,37 +164,108 @@ def _finalize_block(block_text, block_chars, full_text, char_map):
                 })
     return full_text, char_map
 
-def extract_text_with_coordinates(data: bytes):
+def extract_text_with_coordinates(data: bytes, filename: str = "input.pdf"):
     """
-    Extracts text and character coordinates from PDF bytes using PyMuPDF's rawdict.
+    Extracts text and character coordinates from PDF bytes using a hybrid approach:
+    1. Docling determines the logical structure and reading order (paragraphs, headings).
+    2. PyMuPDF's `rawdict` provides exact character-level bounding boxes.
+    
     Features:
-    - Uses `rawdict` for exact character bounding boxes.
-    - Filters tables, headers/footers, and images.
-    - Enforces double newlines for block separation.
-    Returns:
-        full_text (str): The complete text of the PDF.
-        char_map (list): List of {page, x, y, width, height} for each char.
+    - Superior reading order for multi-column and complex layouts.
+    - Exact character mapping for frontend highlighting.
+    - Filters furniture (headers/footers) and tables/images.
     """
     doc = fitz.open(stream=data, filetype="pdf")
     full_text = ""
     char_map = []
+    
+    # 1. Get Docling conversion for structure and reading order
+    docling_doc = None
+    try:
+        # Wrap bytes in DocumentStream for Docling validation
+        source = DocumentStream(name=filename, stream=io.BytesIO(data))
+        docling_result = _docling_converter.convert(source)
+        docling_doc = docling_result.document
+    except Exception as e:
+        import logging
+        logging.warning(f"Docling conversion failed, falling back to basic PyMuPDF: {e}")
+
     for page_num in range(len(doc)):
         page = doc[page_num]
         page_height = page.rect.height
         page_width = page.rect.width
+        
         table_bboxes = _get_table_bboxes(page)
         image_bboxes = _get_image_bboxes(page)
         header_height = page_height * 0.05
         footer_y = page_height * 0.95
+        
+        # Get all text blocks on this page from PyMuPDF
         text_page = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
-        blocks = text_page.get("blocks", [])
-        text_blocks = [b for b in blocks if b.get("type") == 0]
-        sorted_blocks = sorted(text_blocks, key=lambda b: (b["bbox"][1] // 10, b["bbox"][0]))
-        for block in sorted_blocks:
+        all_blocks = [b for b in text_page.get("blocks", []) if b.get("type") == 0]
+        processed_indices = set()
+
+        # 2. Process blocks in Docling's reading order
+        if docling_doc:
+            # Extract items for this page in reading order
+            page_items = []
+            for item, _level in docling_doc.iterate_items():
+                if isinstance(item, TextItem) and item.prov:
+                    if item.prov[0].page_no == (page_num + 1):
+                        page_items.append(item)
+            
+            for dl_item in page_items:
+                dl_bbox = dl_item.prov[0].bbox
+                # Convert Docling bbox (bottom-left origin) to fitz.Rect (top-left origin)
+                rect = fitz.Rect(
+                    dl_bbox.l,
+                    page_height - dl_bbox.t,
+                    dl_bbox.r,
+                    page_height - dl_bbox.b
+                )
+                
+                # Match PyMuPDF blocks that are substantially inside this Docling item
+                item_blocks = []
+                for i, b in enumerate(all_blocks):
+                    if i in processed_indices:
+                        continue
+                    b_rect = fitz.Rect(b["bbox"])
+                    
+                    # Apply existing filtering logic to maintain same accuracy
+                    if _is_block_filtered(b_rect, header_height, footer_y, table_bboxes, image_bboxes):
+                        processed_indices.add(i)
+                        continue
+                        
+                    intersection = rect.intersect(b_rect)
+                    b_center = fitz.Point((b_rect.x0 + b_rect.x1)/2, (b_rect.y0 + b_rect.y1)/2)
+                    
+                    if intersection.get_area() / b_rect.get_area() > 0.6 or b_center in rect:
+                        item_blocks.append(b)
+                        processed_indices.add(i)
+                
+                # Process all matched blocks for this Docling item together
+                if item_blocks:
+                    # Sort blocks within the item just in case
+                    item_blocks.sort(key=lambda b: (b["bbox"][1], b["bbox"][0]))
+                    combined_text = ""
+                    combined_chars = []
+                    for b in item_blocks:
+                        b_text, b_chars = _process_block(b, page_num, page_height, page_width)
+                        combined_text += b_text
+                        combined_chars.extend(b_chars)
+                    
+                    full_text, char_map = _finalize_block(combined_text, combined_chars, full_text, char_map)
+
+        # 3. Handle any missed blocks or fallback if Docling failed
+        remaining_blocks = [b for i, b in enumerate(all_blocks) if i not in processed_indices]
+        sorted_remaining = sorted(remaining_blocks, key=lambda b: (b["bbox"][1] // 10, b["bbox"][0]))
+        
+        for block in sorted_remaining:
             bbox = fitz.Rect(block["bbox"])
             if _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes):
                 continue
             block_text, block_chars = _process_block(block, page_num, page_height, page_width)
             full_text, char_map = _finalize_block(block_text, block_chars, full_text, char_map)
+            
     doc.close()
     return full_text, char_map

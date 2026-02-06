@@ -132,7 +132,7 @@ class PDFService:
             with open(pdf_path, "wb") as f:
                 f.write(content)
 
-        text, char_map = extract_text_with_coordinates(content)
+        text, char_map = extract_text_with_coordinates(content, filename=file.filename)
         sentences = split_into_sentences(text)
 
         enriched_sentences = self._map_sentences_to_bboxes(sentences, text, char_map)
@@ -290,7 +290,7 @@ class PDFService:
             content = f.read()
 
         # Extract text and coordinates
-        text, char_map = extract_text_with_coordinates(content)
+        text, char_map = extract_text_with_coordinates(content, filename=pdf_filename)
         sentences = split_into_sentences(text)
         enriched_sentences = self._map_sentences_to_bboxes(sentences, text, char_map)
 
