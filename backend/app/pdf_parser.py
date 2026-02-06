@@ -164,7 +164,7 @@ def _finalize_block(block_text, block_chars, full_text, char_map):
                 })
     return full_text, char_map
 
-def extract_text_with_coordinates(data: bytes, filename: str = "input.pdf"):
+def extract_text_with_coordinates(data: bytes, filename: str):
     """
     Extracts text and character coordinates from PDF bytes using a hybrid approach:
     1. Docling determines the logical structure and reading order (paragraphs, headings).
@@ -175,10 +175,13 @@ def extract_text_with_coordinates(data: bytes, filename: str = "input.pdf"):
     - Exact character mapping for frontend highlighting.
     - Filters furniture (headers/footers) and tables/images.
     """
+    import logging
+    if not filename:
+        logging.error("No filename provided to extract_text_with_coordinates.")
+        return None, None
     doc = fitz.open(stream=data, filetype="pdf")
     full_text = ""
     char_map = []
-    
     # 1. Get Docling conversion for structure and reading order
     docling_doc = None
     try:
@@ -187,7 +190,6 @@ def extract_text_with_coordinates(data: bytes, filename: str = "input.pdf"):
         docling_result = _docling_converter.convert(source)
         docling_doc = docling_result.document
     except Exception as e:
-        import logging
         logging.warning(f"Docling conversion failed, falling back to basic PyMuPDF: {e}")
 
     for page_num in range(len(doc)):
