@@ -132,10 +132,8 @@ class PDFService:
             with open(pdf_path, "wb") as f:
                 f.write(content)
 
-        text, char_map = extract_text_with_coordinates(content, filename=file.filename)
-        sentences = split_into_sentences(text)
-
-        enriched_sentences = self._map_sentences_to_bboxes(sentences, text, char_map)
+        items = extract_text_with_coordinates(content, filename=file.filename)
+        enriched_sentences = split_into_sentences(items)
 
         # Save to cache
         cache_path = os.path.join(self.cache_dir, f"{file_hash}.json")
@@ -160,57 +158,6 @@ class PDFService:
             "indexingStatus": IndexingStatus.PENDING.value
         }
 
-    @staticmethod
-    def _map_sentences_to_bboxes(sentences, text, char_map):
-        """
-        Map each sentence to its bounding boxes by matching text in the extracted PDF.
-
-        Args:
-            sentences (list): List of sentence dicts with 'text' key.
-            text (str): The full extracted text from the PDF.
-            char_map (list): List of character coordinate dicts.
-        Returns:
-            list: Sentences with 'bboxes' key added for each.
-        """
-        current_idx = 0
-        enriched_sentences = []
-        for s in sentences:
-            s_text = s["text"]
-            s_text_clean = "".join(s_text.split())
-            if not s_text_clean:
-                s["bboxes"] = []
-                enriched_sentences.append(s)
-                continue
-            match_start = -1
-            match_end = -1
-            s_ptr = 0
-            temp_idx = current_idx
-            while temp_idx < len(text) and s_ptr < len(s_text_clean):
-                char = text[temp_idx]
-                if char.isspace():
-                    temp_idx += 1
-                    continue
-                if char == s_text_clean[s_ptr]:
-                    if match_start == -1:
-                        match_start = temp_idx
-                    s_ptr += 1
-                    temp_idx += 1
-                else:
-                    if match_start != -1:
-                        temp_idx = match_start + 1
-                        match_start = -1
-                        s_ptr = 0
-                    else:
-                        temp_idx += 1
-            if match_start != -1 and s_ptr == len(s_text_clean):
-                match_end = temp_idx
-                bboxes = char_map[match_start:match_end]
-                s["bboxes"] = bboxes
-                current_idx = match_end
-            else:
-                s["bboxes"] = []
-            enriched_sentences.append(s)
-        return enriched_sentences
 
     async def _call_rag(self, metadata: dict, emb_model: str, file_hash: str):
         """
@@ -290,9 +237,8 @@ class PDFService:
             content = f.read()
 
         # Extract text and coordinates
-        text, char_map = extract_text_with_coordinates(content, filename=pdf_filename)
-        sentences = split_into_sentences(text)
-        enriched_sentences = self._map_sentences_to_bboxes(sentences, text, char_map)
+        items = extract_text_with_coordinates(content, filename=pdf_filename)
+        enriched_sentences = split_into_sentences(items)
 
         # Update cache
         try:

@@ -129,40 +129,6 @@ def _process_block(block, page_num, page_height, page_width):
                     })
     return block_text, block_chars
 
-def _finalize_block(block_text, block_chars, full_text, char_map):
-    """
-    Finalize a processed block by trimming whitespace, updating text and char map, and adding newlines.
-    Args:
-        block_text: The text of the block.
-        block_chars: List of character info dicts for the block.
-        full_text: The full text accumulated so far.
-        char_map: The char map accumulated so far.
-    Returns:
-        Updated (full_text, char_map) with the block appended and newlines added.
-    """
-    if block_text.strip():
-        while block_text and block_text[-1].isspace():
-            block_text = block_text[:-1]
-            if block_chars:
-                block_chars.pop()
-        full_text += block_text
-        char_map.extend(block_chars)
-        separator = "\n\n"
-        full_text += separator
-        if block_chars:
-            last = block_chars[-1]
-            for _ in range(2):
-                char_map.append({
-                    "page": last["page"],
-                    "x": last["x"],
-                    "y": last["y"],
-                    "width": 0,
-                    "height": last["height"],
-                    "page_height": last["page_height"],
-                    "page_width": last["page_width"],
-                    "is_newline": True
-                })
-    return full_text, char_map
 
 def extract_text_with_coordinates(data: bytes, filename: str):
     """
@@ -170,25 +136,28 @@ def extract_text_with_coordinates(data: bytes, filename: str):
     1. Docling determines the logical structure and reading order (paragraphs, headings).
     2. PyMuPDF's `rawdict` provides exact character-level bounding boxes.
     
-    Features:
-    - Superior reading order for multi-column and complex layouts.
-    - Exact character mapping for frontend highlighting.
-    - Filters furniture (headers/footers) and tables/images.
+    Returns:
+        List of dicts: [
+            {"text": str, "label": str, "char_map": list},
+            ...
+        ]
     """
     import logging
     if not filename:
         logging.error("No filename provided to extract_text_with_coordinates.")
-        return None, None
+        return []
+
     doc = fitz.open(stream=data, filetype="pdf")
-    full_text = ""
-    char_map = []
+    items = []
+    
     # 1. Get Docling conversion for structure and reading order
     docling_doc = None
     try:
-        # Wrap bytes in DocumentStream for Docling validation
+        logging.info(f"Docling processing file: {filename}")
         source = DocumentStream(name=filename, stream=io.BytesIO(data))
         docling_result = _docling_converter.convert(source)
         docling_doc = docling_result.document
+        logging.info(f"Docling conversion successful: {docling_doc}")
     except Exception as e:
         logging.warning(f"Docling conversion failed, falling back to basic PyMuPDF: {e}")
 
@@ -209,7 +178,6 @@ def extract_text_with_coordinates(data: bytes, filename: str):
 
         # 2. Process blocks in Docling's reading order
         if docling_doc:
-            # Extract items for this page in reading order
             page_items = []
             for item, _level in docling_doc.iterate_items():
                 if isinstance(item, TextItem) and item.prov:
@@ -226,14 +194,12 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                     page_height - dl_bbox.b
                 )
                 
-                # Match PyMuPDF blocks that are substantially inside this Docling item
                 item_blocks = []
                 for i, b in enumerate(all_blocks):
                     if i in processed_indices:
                         continue
                     b_rect = fitz.Rect(b["bbox"])
                     
-                    # Apply existing filtering logic to maintain same accuracy
                     if _is_block_filtered(b_rect, header_height, footer_y, table_bboxes, image_bboxes):
                         processed_indices.add(i)
                         continue
@@ -245,9 +211,7 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                         item_blocks.append(b)
                         processed_indices.add(i)
                 
-                # Process all matched blocks for this Docling item together
                 if item_blocks:
-                    # Sort blocks within the item just in case
                     item_blocks.sort(key=lambda b: (b["bbox"][1], b["bbox"][0]))
                     combined_text = ""
                     combined_chars = []
@@ -256,7 +220,18 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                         combined_text += b_text
                         combined_chars.extend(b_chars)
                     
-                    full_text, char_map = _finalize_block(combined_text, combined_chars, full_text, char_map)
+                    if combined_text.strip():
+                        # Trim trailing whitespace
+                        while combined_text and combined_text[-1].isspace():
+                            combined_text = combined_text[:-1]
+                            if combined_chars:
+                                combined_chars.pop()
+                        
+                        items.append({
+                            "text": combined_text,
+                            "label": dl_item.label.value if hasattr(dl_item, 'label') and hasattr(dl_item.label, 'value') else "text",
+                            "char_map": combined_chars
+                        })
 
         # 3. Handle any missed blocks or fallback if Docling failed
         remaining_blocks = [b for i, b in enumerate(all_blocks) if i not in processed_indices]
@@ -267,7 +242,18 @@ def extract_text_with_coordinates(data: bytes, filename: str):
             if _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes):
                 continue
             block_text, block_chars = _process_block(block, page_num, page_height, page_width)
-            full_text, char_map = _finalize_block(block_text, block_chars, full_text, char_map)
+            if block_text.strip():
+                # Trim trailing whitespace
+                while block_text and block_text[-1].isspace():
+                    block_text = block_text[:-1]
+                    if block_chars:
+                        block_chars.pop()
+                
+                items.append({
+                    "text": block_text,
+                    "label": "text",
+                    "char_map": block_chars
+                })
             
     doc.close()
-    return full_text, char_map
+    return items
