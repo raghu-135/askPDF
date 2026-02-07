@@ -38,9 +38,14 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
       try {
         const voicesData = await getVoices();
         setVoices(voicesData);
-        if (voicesData.length > 0 && !selectedVoice) {
-          setSelectedVoice(voicesData[0]);
-        }
+          if (voicesData.length > 0 && !selectedVoice) {
+            // Prefer 'af_heart' if available, else use first item
+            if (voicesData.includes('af_heart')) {
+              setSelectedVoice('af_heart');
+            } else {
+              setSelectedVoice(voicesData[0]);
+            }
+          }
       } catch (err) {
         console.error("Failed to fetch voices", err);
       }
