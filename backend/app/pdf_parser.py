@@ -251,7 +251,7 @@ def extract_text_with_coordinates(data: bytes, filename: str):
         source = DocumentStream(name=filename, stream=io.BytesIO(data))
         docling_result = _docling_converter.convert(source)
         docling_doc = docling_result.document
-        logger.info(f"Docling conversion successful: {docling_doc}")
+        logger.info(f"Docling conversion successful: {filename}")
     except Exception as e:
         logger.warning(f"Docling conversion failed, falling back to basic PyMuPDF: {e}")
 
