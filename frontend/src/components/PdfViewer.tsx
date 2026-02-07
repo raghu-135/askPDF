@@ -31,6 +31,7 @@ type Props = {
     autoScroll: boolean;
     isResizing?: boolean;
     highlightEnabled?: boolean;
+    darkMode?: boolean;
 };
 
 const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoScroll, isResizing, highlightEnabled = true }: Props) {
@@ -40,6 +41,9 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
     const containerRef = useRef<HTMLDivElement>(null);
     const pdfContentRef = useRef<HTMLDivElement>(null); // For scaling
     const sentenceRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
+
+    // Dark mode prop
+    const { darkMode = false } = arguments[0];
 
     function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
         setNumPages(numPages);
@@ -182,7 +186,7 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'stretch',
-                bgcolor: 'transparent',
+                bgcolor: darkMode ? '#222' : 'transparent',
                 p: 0,
                 m: 0,
                 boxSizing: 'border-box',
@@ -224,21 +228,26 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                                 p: 0,
                                 m: 0,
                                 boxSizing: 'border-box',
-                                // react-pdf Page container styles
                                 '& .react-pdf__Page': {
                                     width: '100% !important',
                                     height: 'auto !important',
                                     margin: '0',
                                 },
-                                // Ensure canvas doesn't interfere with selection
                                 '& canvas': {
                                     display: 'block',
                                     pointerEvents: 'none',
                                     userSelect: 'none',
+                                    // Dark mode filter
+                                    filter: darkMode ? 'invert(0.92) hue-rotate(180deg) brightness(0.85)' : 'none',
                                 },
-                                // Target the text layer for styling if needed
                                 '& .react-pdf__Page__textLayer': {
                                     zIndex: 10,
+                                    color: darkMode ? '#eee' : 'inherit',
+                                    background: 'transparent',
+                                },
+                                // Annotation layer
+                                '& .react-pdf__Page__annotationLayer': {
+                                    background: 'transparent',
                                 }
                             }}
                         >

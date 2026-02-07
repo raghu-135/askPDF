@@ -1,4 +1,5 @@
 import VerticalAlignCenterIcon from '@mui/icons-material/VerticalAlignCenter';
+import DarkModeIcon from '@mui/icons-material/DarkMode';
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
 import FluorescentIcon from '@mui/icons-material/Fluorescent';
@@ -39,6 +40,8 @@ export default function Home() {
 
   // Highlight toggle
   const [highlightEnabled, setHighlightEnabled] = useState(true);
+  // PDF dark mode toggle
+  const [pdfDarkMode, setPdfDarkMode] = useState(false);
 
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
@@ -242,6 +245,18 @@ export default function Home() {
                 </IconButton>
               </Tooltip>
 
+                {/* PDF Dark Mode Toggle */}
+                <Tooltip title={pdfDarkMode ? "Disable PDF Dark Mode" : "Enable PDF Dark Mode"}>
+                  <IconButton
+                    color={pdfDarkMode ? "primary" : "default"}
+                    onClick={() => setPdfDarkMode(d => !d)}
+                    sx={{ border: pdfDarkMode ? 1 : 0, borderColor: pdfDarkMode ? 'primary.main' : 'transparent' }}
+                    size="small"
+                  >
+                    <DarkModeIcon />
+                  </IconButton>
+                </Tooltip>
+
               {/* Right Panel Toggle */}
               <Button
                 variant="outlined"
@@ -300,6 +315,7 @@ export default function Home() {
                 autoScroll={autoScroll}
                 isResizing={isResizing}
                 highlightEnabled={highlightEnabled}
+                darkMode={pdfDarkMode}
               />
             ) : (
               <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'grey.50', p: 4 }}>
