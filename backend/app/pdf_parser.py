@@ -1,18 +1,53 @@
 import io
+import os
+import logging
 import fitz  # PyMuPDF
 from docling.document_converter import DocumentConverter, DocumentStream, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import TextItem
 
+# Configure logging to suppress noisy internal library logs
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("app.pdf_parser")
+
+# Suppress noisy dependencies
+for logger_name in ["docling", "docling_core", "huggingface_hub", "pypdfium2", "urllib3"]:
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
+
 # Initialize Docling converter as a module-level singleton
 _pipeline_options = PdfPipelineOptions()
-_pipeline_options.do_ocr = False  # Faster, matches PyMuPDF baseline
+
+# Tuneable via environment variables for accuracy vs speed
+_pipeline_options.do_ocr = os.environ.get("DOCLING_DO_OCR", "False").lower() == "true"
+_pipeline_options.do_table_structure = os.environ.get("DOCLING_DO_TABLE_STRUCTURE", "True").lower() == "true"
+_pipeline_options.do_formula_enrichment = os.environ.get("DOCLING_DO_FORMULA_ENRICHMENT", "False").lower() == "true"
+
+# Table structure mode (FAST or ACCURATE)
+_table_mode = os.environ.get("DOCLING_TABLE_MODE", "FAST").upper()
+if _table_mode == "ACCURATE":
+    _pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
+else:
+    _pipeline_options.table_structure_options.mode = TableFormerMode.FAST
+
+# OCR options
+if _pipeline_options.do_ocr:
+    _pipeline_options.ocr_options.force_full_page_ocr = os.environ.get("DOCLING_FORCE_FULL_PAGE_OCR", "False").lower() == "true"
+
 _docling_converter = DocumentConverter(
     format_options={
         InputFormat.PDF: PdfFormatOption(pipeline_options=_pipeline_options)
     }
 )
+
+# Log the active configuration once during initialization
+logger.info("Docling Parser initialized with configuration:")
+logger.info(f"  - OCR Enabled: {_pipeline_options.do_ocr}")
+if _pipeline_options.do_ocr:
+    logger.info(f"  - Force Full Page OCR: {_pipeline_options.ocr_options.force_full_page_ocr}")
+logger.info(f"  - Table Structure Extraction: {_pipeline_options.do_table_structure}")
+logger.info(f"  - Table Mode: {_table_mode}")
+logger.info(f"  - Formula Enrichment: {_pipeline_options.do_formula_enrichment}")
 
 def _get_table_bboxes(page):
     """
@@ -142,9 +177,9 @@ def extract_text_with_coordinates(data: bytes, filename: str):
             ...
         ]
     """
-    import logging
+    from docling.datamodel.document import TextItem, TableItem, PictureItem
     if not filename:
-        logging.error("No filename provided to extract_text_with_coordinates.")
+        logger.error("No filename provided to extract_text_with_coordinates.")
         return []
 
     doc = fitz.open(stream=data, filetype="pdf")
@@ -153,13 +188,13 @@ def extract_text_with_coordinates(data: bytes, filename: str):
     # 1. Get Docling conversion for structure and reading order
     docling_doc = None
     try:
-        logging.info(f"Docling processing file: {filename}")
+        logger.info(f"Docling processing file: {filename}")
         source = DocumentStream(name=filename, stream=io.BytesIO(data))
         docling_result = _docling_converter.convert(source)
         docling_doc = docling_result.document
-        logging.info(f"Docling conversion successful: {docling_doc}")
+        logger.info(f"Docling conversion successful: {docling_doc}")
     except Exception as e:
-        logging.warning(f"Docling conversion failed, falling back to basic PyMuPDF: {e}")
+        logger.warning(f"Docling conversion failed, falling back to basic PyMuPDF: {e}")
 
     for page_num in range(len(doc)):
         page = doc[page_num]
@@ -180,11 +215,37 @@ def extract_text_with_coordinates(data: bytes, filename: str):
         if docling_doc:
             page_items = []
             for item, _level in docling_doc.iterate_items():
-                if isinstance(item, TextItem) and item.prov:
+                if (isinstance(item, (TextItem, TableItem, PictureItem))) and item.prov:
                     if item.prov[0].page_no == (page_num + 1):
                         page_items.append(item)
             
             for dl_item in page_items:
+                # Get item's bbox and label
+                item_label = "text"
+                
+                # Check for group-level labels
+                if hasattr(dl_item, 'parent') and dl_item.parent:
+                    # In Docling v2, parent is often a RefItem
+                    parent_ref = dl_item.parent
+                    if hasattr(parent_ref, 'cref') and parent_ref.cref.startswith('#/groups/'):
+                        try:
+                            # Try to find the group object in the document
+                            group_idx = int(parent_ref.cref.split('/')[-1])
+                            if group_idx < len(docling_doc.groups):
+                                group = docling_doc.groups[group_idx]
+                                if hasattr(group, 'label') and hasattr(group.label, 'value'):
+                                    item_label = group.label.value
+                        except Exception:
+                            pass
+
+                # If no group label, use item label
+                if item_label == "text" and hasattr(dl_item, 'label') and hasattr(dl_item.label, 'value'):
+                    item_label = dl_item.label.value
+                elif isinstance(dl_item, TableItem):
+                    item_label = "table"
+                elif isinstance(dl_item, PictureItem):
+                    item_label = "picture"
+
                 dl_bbox = dl_item.prov[0].bbox
                 # Convert Docling bbox (bottom-left origin) to fitz.Rect (top-left origin)
                 rect = fitz.Rect(
@@ -207,7 +268,10 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                     intersection = rect.intersect(b_rect)
                     b_center = fitz.Point((b_rect.x0 + b_rect.x1)/2, (b_rect.y0 + b_rect.y1)/2)
                     
-                    if intersection.get_area() / b_rect.get_area() > 0.6 or b_center in rect:
+                    # Relaxed matching: 40% intersection OR center point inside OR item contains block
+                    if (intersection.get_area() / b_rect.get_area() > 0.4 or 
+                        b_center in rect or 
+                        rect.contains(b_rect)):
                         item_blocks.append(b)
                         processed_indices.add(i)
                 
@@ -229,8 +293,10 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                         
                         items.append({
                             "text": combined_text,
-                            "label": dl_item.label.value if hasattr(dl_item, 'label') and hasattr(dl_item.label, 'value') else "text",
-                            "char_map": combined_chars
+                            "label": item_label,
+                            "char_map": combined_chars,
+                            "page": page_num + 1,
+                            "bbox": [rect.x0, rect.y0, rect.x1, rect.y1]
                         })
 
         # 3. Handle any missed blocks or fallback if Docling failed
@@ -252,7 +318,9 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                 items.append({
                     "text": block_text,
                     "label": "text",
-                    "char_map": block_chars
+                    "char_map": block_chars,
+                    "page": page_num + 1,
+                    "bbox": list(bbox)
                 })
             
     doc.close()
