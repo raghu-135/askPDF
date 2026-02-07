@@ -1,7 +1,12 @@
 
 import spacy
+import re
 
 _nlp = spacy.load("en_core_web_sm")
+
+# URL and Email regex for protection - more tolerant of common PDF artifacts
+# Matches typical URLs/Emails and also fragments that might be separated by single spaces
+URL_PATTERN = re.compile(r'(?:https?://|www\.)\S+|(?:[\w\.-]+)\s*@\s*(?:[\w\.-]+)\.\w+')
 
 def split_into_sentences(items: list[dict]):
     """
@@ -9,7 +14,7 @@ def split_into_sentences(items: list[dict]):
     seem to be part of the same sentence.
     
     Args:
-        items: List of dicts with 'text', 'label', and 'char_map'.
+        items: List of dicts with 'text', 'label', 'char_map', and 'font'.
     
     Returns:
         list[dict]: Sentences with 'id', 'text', and 'bboxes' (char_map).
@@ -17,19 +22,23 @@ def split_into_sentences(items: list[dict]):
     if not items:
         return []
 
-    # 1. Join consecutive paragraphs if they flow together
+    # 1. Join consecutive items if they flow together
     processed_items = []
     # Labels that are eligible for joining if they "flow"
     text_labels = {"paragraph", "text", "list_item", "note", "caption"}
     
-    # Labels that strictly block any joining with neighbors (receipt specific)
-    blocked_labels = {"key_value_area", "key_value", "table", "page_header", "page_footer"}
+    # Labels that strictly block any joining with neighbors
+    blocked_labels = {"key_value_area", "key_value", "table", "page_header", "page_footer", "heading", "title", "section_header"}
     
+    # Characters that suggest a URL or Email - don't add space between items if these are present
+    NO_SPACE_CHARS = ("-", "/", "@", ".", "_", ":", "(", "[")
+
     for item in items:
         label = item.get("label", "text")
         text = item.get("text", "").strip()
         bbox = item.get("bbox") # [x0, y0, x1, y1]
         page = item.get("page", 0)
+        font = item.get("font", {"name": "", "size": 0})
         
         should_join = False
         if (processed_items and 
@@ -42,6 +51,7 @@ def split_into_sentences(items: list[dict]):
             prev_text = prev_item["text"].strip()
             prev_bbox = prev_item.get("bbox")
             prev_page = prev_item.get("page", 0)
+            prev_font = prev_item.get("font", {"name": "", "size": 0})
             
             # SPATIAL HEURISTICS
             spatial_safe = True
@@ -52,51 +62,50 @@ def split_into_sentences(items: list[dict]):
                     # Line height approximation
                     line_height = prev_bbox[3] - prev_bbox[1]
                     
-                    if v_gap < 0:
-                        # Potential column wrap (bottom-left to top-right)
-                        # In reading order, this is usually a continuation
+                    if v_gap < -2: # Small overlap or same line
                         spatial_safe = True
-                    elif v_gap > line_height * 1.5:
-                        # Significant vertical gap. Likely new section.
+                    elif v_gap > line_height * 1.3: # Slightly more relaxed
                         spatial_safe = False
                     else:
-                        # Normal vertical gap: check horizontal alignment
-                        # If overlap is very low, they are side-by-side fields
                         h_overlap = min(bbox[2], prev_bbox[2]) - max(bbox[0], prev_bbox[0])
-                        if h_overlap < (prev_bbox[2] - prev_bbox[0]) * 0.3:
+                        h_width = prev_bbox[2] - prev_bbox[0]
+                        if h_overlap < h_width * 0.35:
                             spatial_safe = False
                 else:
-                    # Different page: Trust Docling's reading order/iterate_items()
-                    # Cross-page joining is usually safe if labels match
+                    # Different page
                     spatial_safe = True
 
-            if spatial_safe:
+            # FONT HEURISTICS
+            font_safe = True
+            if prev_font and font:
+                size_diff = abs(prev_font.get("size", 0) - font.get("size", 0))
+                # Relaxed font size check (some PDFs vary slightly across pages/lines)
+                if size_diff > 2.0:
+                    font_safe = False
+
+            if spatial_safe and font_safe:
                 # TEXTUAL HEURISTICS:
-                # 1. If previous doesn't end in sentence-ending punctuation
-                no_punc = not prev_text.endswith((".", "!", "?", ":", ";"))
-                
-                # 2. If current starts with a lowercase letter (strong signal of continuation)
+                no_punc = not prev_text.endswith((".", "!", "?"))
                 starts_lower = text and text[0].islower()
-                
-                # 3. If previous ends with a hyphen (word break)
                 ends_hyphen = prev_text.endswith("-")
                 
-                # 4. If current starts with a common connective
                 starts_connective = False
                 if text:
                     first_word = text.split()[0].lower()
-                    starts_connective = first_word in {"and", "or", "but", "nor", "yet", "so"}
+                    starts_connective = first_word in {"and", "or", "but", "nor", "yet", "so", "with", "from", "for", "to", "is"}
 
-                # Join if (no punctuation AND (starts lower OR starts connective)) OR ends hyphen
                 if (no_punc and (starts_lower or starts_connective)) or ends_hyphen:
                     should_join = True
 
         if should_join:
             prev = processed_items[-1]
             
-            # Check if we need to add a space between items
-            # If it ends in hyphen, we might NOT want a space (word break)
-            needs_space = not (prev["text"].endswith(("-", " ")) or item["text"].startswith(" "))
+            # Check if we need to add a space
+            prev_trimmed = prev["text"].strip()
+            item_start = item["text"].lstrip()
+            needs_space = not (prev_trimmed.endswith(NO_SPACE_CHARS) or 
+                              item_start.startswith(NO_SPACE_CHARS) or 
+                              item_start.startswith((" ",)))
             
             if needs_space:
                 prev["text"] += " "
@@ -117,10 +126,6 @@ def split_into_sentences(items: list[dict]):
                     max(prev["bbox"][2], bbox[2]),
                     max(prev["bbox"][3], bbox[3])
                 ]
-            
-            # Preserve the most descriptive label
-            if prev["label"] == "text" and label != "text":
-                prev["label"] = label
         else:
             processed_items.append(item.copy())
 
@@ -132,10 +137,20 @@ def split_into_sentences(items: list[dict]):
         text = item["text"]
         char_map = item["char_map"]
         
+        # URL/Email Protection
+        protected_spans = []
+        for match in URL_PATTERN.finditer(text):
+            protected_spans.append((match.start(), match.end()))
+            
         doc = _nlp(text)
         
-        # We need to track the character position in the original text to match with char_map
-        # spaCy tokens have idx (start char offset)
+        # Merge protected spans
+        with doc.retokenize() as retokenizer:
+            for start, end in protected_spans:
+                span = doc.char_span(start, end, alignment_mode="expand")
+                if span:
+                    retokenizer.merge(span)
+        
         for sent in doc.sents:
             sent_text = sent.text.strip()
             if not sent_text:

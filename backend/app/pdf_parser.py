@@ -97,19 +97,25 @@ def _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes
 
 def _process_line(line, page_num, page_height, page_width):
     """
-    Process a line from a text block and extract text and character coordinates.
+    Process a line from a text block and extract text, character coordinates, and font metadata.
     Args:
         line: Line dictionary from PyMuPDF rawdict.
         page_num: Page number (0-based).
         page_height: Height of the page.
         page_width: Width of the page.
     Returns:
-        Tuple of (line_text, line_chars) where line_text is the string and line_chars is a list of character info dicts.
+        Tuple of (line_text, line_chars, font_info)
     """
     line_text = ""
     line_chars = []
+    processed_fonts = []
+    
     spans = sorted(line.get("spans", []), key=lambda s: s["bbox"][0])
     for span in spans:
+        font_name = span.get("font", "")
+        font_size = span.get("size", 0)
+        processed_fonts.append({"name": font_name, "size": font_size})
+        
         chars = span.get("chars", [])
         for char_info in chars:
             c = char_info.get("c", "")
@@ -126,43 +132,96 @@ def _process_line(line, page_num, page_height, page_width):
                 "width": c_bbox[2] - c_bbox[0],
                 "height": c_height,
                 "page_height": page_height,
-                "page_width": page_width
+                "page_width": page_width,
+                "font": font_name,
+                "size": font_size
             })
-    return line_text, line_chars
+    
+    # Return dominant font for the line
+    line_font = processed_fonts[0] if processed_fonts else {"name": "", "size": 0}
+    return line_text, line_chars, line_font
 
 def _process_block(block, page_num, page_height, page_width):
     """
-    Process a text block and extract its text and character coordinates.
+    Process a text block and extract its text, character coordinates, and font metadata.
+    Splits the block into segments if the font changes between lines.
     Args:
         block: Block dictionary from PyMuPDF rawdict.
         page_num: Page number (0-based).
         page_height: Height of the page.
         page_width: Width of the page.
     Returns:
-        Tuple of (block_text, block_chars) where block_text is the string and block_chars is a list of character info dicts.
+        List of dicts, each with (text, chars, font)
     """
-    block_text = ""
-    block_chars = []
+    segments = []
+    current_text = ""
+    current_chars = []
+    current_font = None
+    
+    # Characters that suggest a URL or Email is being broken across lines
+    # If a line ends with these, we don't add a space
+    NO_SPACE_ENDINGS = ("/", "@", "-", ".", "_", ":")
+    
     for line in block.get("lines", []):
-        line_text, line_chars = _process_line(line, page_num, page_height, page_width)
-        if line_text:
-            block_text += line_text
-            block_chars.extend(line_chars)
-            if not line_text.endswith((" ", "\n", "\t")):
-                block_text += " "
-                if line_chars:
-                    last = line_chars[-1]
-                    block_chars.append({
+        line_text, line_chars, line_font = _process_line(line, page_num, page_height, page_width)
+        if not line_text:
+            continue
+            
+        # Check for font change to start a new segment
+        if current_font is not None:
+            font_changed = (line_font["name"] != current_font["name"] or 
+                          abs(line_font["size"] - current_font["size"]) > 0.5)
+            
+            if font_changed:
+                # Save current segment and start new one
+                if current_text.strip():
+                    segments.append({
+                        "text": current_text,
+                        "chars": current_chars,
+                        "font": current_font
+                    })
+                current_text = ""
+                current_chars = []
+                current_font = line_font
+            
+        if current_font is None:
+            current_font = line_font
+            
+        # Join line text
+        if current_text:
+            # Smart joining: avoid space for URLs/Emails
+            prev_trimmed = current_text.strip()
+            needs_space = not (prev_trimmed.endswith(NO_SPACE_ENDINGS) or line_text.startswith(tuple(NO_SPACE_ENDINGS) + (" ",)))
+            
+            if needs_space:
+                current_text += " "
+                if current_chars:
+                    last = current_chars[-1]
+                    current_chars.append({
                         "page": last["page"],
                         "x": last["x"] + last["width"],
                         "y": last["y"],
-                        "width": last["width"],
+                        "width": 0,
                         "height": last["height"],
                         "page_height": last["page_height"],
                         "page_width": last["page_width"],
-                        "is_space": True
+                        "is_space": True,
+                        "font": last.get("font", ""),
+                        "size": last.get("size", 0)
                     })
-    return block_text, block_chars
+        
+        current_text += line_text
+        current_chars.extend(line_chars)
+        
+    # Add final segment
+    if current_text.strip():
+        segments.append({
+            "text": current_text,
+            "chars": current_chars,
+            "font": current_font
+        })
+        
+    return segments
 
 
 def extract_text_with_coordinates(data: bytes, filename: str):
@@ -277,51 +336,59 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                 
                 if item_blocks:
                     item_blocks.sort(key=lambda b: (b["bbox"][1], b["bbox"][0]))
-                    combined_text = ""
-                    combined_chars = []
                     for b in item_blocks:
-                        b_text, b_chars = _process_block(b, page_num, page_height, page_width)
-                        combined_text += b_text
-                        combined_chars.extend(b_chars)
-                    
-                    if combined_text.strip():
-                        # Trim trailing whitespace
-                        while combined_text and combined_text[-1].isspace():
-                            combined_text = combined_text[:-1]
-                            if combined_chars:
-                                combined_chars.pop()
-                        
-                        items.append({
-                            "text": combined_text,
-                            "label": item_label,
-                            "char_map": combined_chars,
-                            "page": page_num + 1,
-                            "bbox": [rect.x0, rect.y0, rect.x1, rect.y1]
-                        })
+                        segments = _process_block(b, page_num, page_height, page_width)
+                        for seg in segments:
+                            seg_text = seg["text"]
+                            seg_chars = seg["chars"]
+                            seg_font = seg["font"]
+                            
+                            # Trim trailing whitespace
+                            while seg_text and seg_text[-1].isspace():
+                                seg_text = seg_text[:-1]
+                                if seg_chars:
+                                    seg_chars.pop()
+                            
+                            if seg_text.strip():
+                                items.append({
+                                    "text": seg_text,
+                                    "label": item_label,
+                                    "char_map": seg_chars,
+                                    "page": page_num + 1,
+                                    "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+                                    "font": seg_font
+                                })
 
         # 3. Handle any missed blocks or fallback if Docling failed
-        remaining_blocks = [b for i, b in enumerate(all_blocks) if i not in processed_indices]
-        sorted_remaining = sorted(remaining_blocks, key=lambda b: (b["bbox"][1] // 10, b["bbox"][0]))
+        remaining_blocks = [all_blocks[i] for i in range(len(all_blocks)) if i not in processed_indices]
+        sorted_remaining = sorted(remaining_blocks, key=lambda b: (b["bbox"][1], b["bbox"][0]))
         
         for block in sorted_remaining:
             bbox = fitz.Rect(block["bbox"])
             if _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes):
                 continue
-            block_text, block_chars = _process_block(block, page_num, page_height, page_width)
-            if block_text.strip():
-                # Trim trailing whitespace
-                while block_text and block_text[-1].isspace():
-                    block_text = block_text[:-1]
-                    if block_chars:
-                        block_chars.pop()
+            
+            segments = _process_block(block, page_num, page_height, page_width)
+            for seg in segments:
+                seg_text = seg["text"]
+                seg_chars = seg["chars"]
+                seg_font = seg["font"]
                 
-                items.append({
-                    "text": block_text,
-                    "label": "text",
-                    "char_map": block_chars,
-                    "page": page_num + 1,
-                    "bbox": list(bbox)
-                })
+                # Trim trailing whitespace
+                while seg_text and seg_text[-1].isspace():
+                    seg_text = seg_text[:-1]
+                    if seg_chars:
+                        seg_chars.pop()
+                
+                if seg_text.strip():
+                    items.append({
+                        "text": seg_text,
+                        "label": "text",
+                        "char_map": seg_chars,
+                        "page": page_num + 1,
+                        "bbox": list(bbox),
+                        "font": seg_font
+                    })
             
     doc.close()
     return items
