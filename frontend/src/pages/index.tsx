@@ -42,13 +42,17 @@ export default function Home() {
 
   // Highlight toggle
   const [highlightEnabled, setHighlightEnabled] = useState(true);
-  // PDF dark mode toggle, autodetect from browser on first load and listen for changes
-  const [pdfDarkMode, setPdfDarkMode] = useState(() => {
+  // PDF dark mode toggle, SSR-safe: initialize as undefined, set after mount
+  const [pdfDarkMode, setPdfDarkMode] = useState<boolean | undefined>(undefined);
+
+  // On mount, set dark mode from browser preference
+  useEffect(() => {
     if (typeof window !== 'undefined' && window.matchMedia) {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+      setPdfDarkMode(window.matchMedia('(prefers-color-scheme: dark)').matches);
+    } else {
+      setPdfDarkMode(false);
     }
-    return false;
-  });
+  }, []);
 
   // Listen for browser color scheme changes
   useEffect(() => {
@@ -220,6 +224,9 @@ export default function Home() {
     ? (isResizing ? 'var(--chat-width, 450px)' : chatWidth)
     : 0;
 
+
+  // Don't render until pdfDarkMode is determined (prevents hydration mismatch)
+  if (pdfDarkMode === undefined) return null;
 
   return (
     <ThemeProvider theme={getTheme(pdfDarkMode)}>
