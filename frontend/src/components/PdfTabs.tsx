@@ -50,69 +50,78 @@ export default function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, da
         color: 'text.primary',
       }}
     >
-      <Tabs
-        value={currentIndex}
-        onChange={handleTabChange}
-        variant="scrollable"
-        scrollButtons="auto"
-        sx={{
-          minHeight: 40,
-          '& .MuiTab-root': {
+      <Box sx={{ position: 'relative' }}>
+        <Tabs
+          value={currentIndex}
+          onChange={handleTabChange}
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{
             minHeight: 40,
-            textTransform: 'none',
-            fontSize: '0.875rem',
-            py: 0,
-            pl: 1.5,
-            pr: 0.5,
-          },
-        }}
-      >
-        {tabs.map((tab) => (
-          <Tab
-            key={tab.id}
-            label={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <PictureAsPdfIcon fontSize="small" sx={{ color: 'error.main', opacity: 0.7 }} />
-                <Tooltip title={tab.fileName} placement="bottom">
-                  <Typography
-                    component="span"
-                    sx={{
-                      maxWidth: 150,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {truncateFileName(tab.fileName)}
-                  </Typography>
-                </Tooltip>
-                <Tooltip title="Close">
-                  <IconButton
-                    size="small"
-                    onClick={(e) => handleClose(e, tab.id)}
-                    sx={{
-                      ml: 0.5,
-                      p: 0.25,
-                      opacity: 0.6,
-                      '&:hover': {
-                        opacity: 1,
-                        bgcolor: 'action.hover',
-                      },
-                    }}
-                  >
-                    <CloseIcon fontSize="small" sx={{ fontSize: 16 }} />
-                  </IconButton>
-                </Tooltip>
-              </Box>
-            }
-            sx={{
-              '&.Mui-selected': {
-                bgcolor: 'action.selected',
-              },
-            }}
-          />
-        ))}
-      </Tabs>
+            '& .MuiTab-root': {
+              minHeight: 40,
+              textTransform: 'none',
+              fontSize: '0.875rem',
+              py: 0,
+              pl: 1.5,
+              pr: 2.5, // extra space for close button
+            },
+          }}
+        >
+          {tabs.map((tab) => (
+            <Tab
+              key={tab.id}
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <PictureAsPdfIcon fontSize="small" sx={{ color: 'error.main', opacity: 0.7 }} />
+                  <Tooltip title={tab.fileName} placement="bottom">
+                    <Typography
+                      component="span"
+                      sx={{
+                        maxWidth: 120,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {truncateFileName(tab.fileName)}
+                    </Typography>
+                  </Tooltip>
+                  <Tooltip title="Close">
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleClose(e, tab.id);
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        marginLeft: 4,
+                        cursor: 'pointer',
+                        opacity: 0.6,
+                        borderRadius: 4,
+                        padding: 2,
+                        transition: 'opacity 0.2s',
+                      }}
+                      onMouseOver={e => (e.currentTarget.style.opacity = '1')}
+                      onMouseOut={e => (e.currentTarget.style.opacity = '0.6')}
+                    >
+                      <CloseIcon fontSize="small" sx={{ fontSize: 16 }} />
+                    </span>
+                  </Tooltip>
+                </Box>
+              }
+              sx={{
+                '&.Mui-selected': {
+                  bgcolor: 'action.selected',
+                },
+                pr: 1.5,
+              }}
+            />
+          ))}
+        </Tabs>
+        {/* Close buttons are now inside the tab label as a styled span */}
+      </Box>
     </Box>
   );
 }
