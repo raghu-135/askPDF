@@ -42,8 +42,24 @@ export default function Home() {
 
   // Highlight toggle
   const [highlightEnabled, setHighlightEnabled] = useState(true);
-  // PDF dark mode toggle
-  const [pdfDarkMode, setPdfDarkMode] = useState(false);
+  // PDF dark mode toggle, autodetect from browser on first load and listen for changes
+  const [pdfDarkMode, setPdfDarkMode] = useState(() => {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
+
+  // Listen for browser color scheme changes
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = (e: MediaQueryListEvent) => {
+      setPdfDarkMode(e.matches);
+    };
+    media.addEventListener('change', handler);
+    return () => media.removeEventListener('change', handler);
+  }, []);
 
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
