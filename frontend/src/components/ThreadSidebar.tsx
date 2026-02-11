@@ -301,6 +301,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                           {thread.name}
                         </Typography>
                       }
+                      secondaryTypographyProps={{ component: 'span' }}
                       secondary={
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
                           <Typography variant="caption" color="text.secondary">
