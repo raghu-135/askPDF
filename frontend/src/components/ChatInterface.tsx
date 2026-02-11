@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useTheme } from '@mui/material/styles';
 import {
     Box,
     TextField,
@@ -52,6 +53,7 @@ interface ChatInterfaceProps {
     activeSource: 'pdf' | 'chat';
     onJump: (id: number) => void;
     onThreadUpdate?: () => void;
+    darkMode?: boolean;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -62,9 +64,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     currentChatId,
     activeSource,
     onJump,
-    onThreadUpdate
+    onThreadUpdate,
+    darkMode = false
 }) => {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const theme = useTheme();
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [isModelWarming, setIsModelWarming] = useState(false);
@@ -306,7 +310,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     if (!activeThread) {
         return (
-            <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3 }}>
+            <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: theme.palette.background.default, color: theme.palette.text.primary }}>
                 <Box textAlign="center">
                     <Typography variant="h6" color="text.secondary" gutterBottom>
                         No Thread Selected
@@ -320,7 +324,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     return (
-        <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1, bgcolor: 'transparent', cursor: 'default' }}>
+        <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
             {/* Header */}
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -370,6 +374,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <List sx={{ flexGrow: 1, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}>
                 {messages.map((msg, idx) => {
                     const isRecollected = recollectedIds.has(msg.id);
+                    const isUser = msg.role === 'user';
                     return (
                         <ListItem 
                             key={msg.id} 
@@ -377,7 +382,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             alignItems="flex-start" 
                             sx={{
                                 flexDirection: 'column',
-                                alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                                alignItems: isUser ? 'flex-end' : 'flex-start',
                                 px: 0,
                                 py: 0.5
                             }}
@@ -385,8 +390,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             <Paper
                                 sx={{
                                     p: 1.5,
-                                    bgcolor: msg.role === 'user' ? 'primary.main' : 'grey.100',
-                                    color: msg.role === 'user' ? 'white' : 'text.primary',
+                                    bgcolor: isUser
+                                        ? theme.palette.mode === 'dark'
+                                            ? theme.palette.primary.dark
+                                            : theme.palette.primary.main
+                                        : theme.palette.mode === 'dark'
+                                            ? theme.palette.background.paper
+                                            : theme.palette.grey[100],
+                                    color: isUser
+                                        ? theme.palette.getContrastText(theme.palette.primary.main)
+                                        : theme.palette.text.primary,
                                     maxWidth: '90%',
                                     boxShadow: activeMessageIndex === idx 
                                         ? '0 0 10px rgba(255, 255, 0, 0.4)' 
@@ -506,7 +519,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         disabled={loading || !llmModel || indexingStatus !== 'ready'}
                         sx={{
                             '& .MuiOutlinedInput-root': {
-                                bgcolor: 'white',
+                                bgcolor: theme.palette.background.paper,
+                                color: theme.palette.text.primary,
                                 '& fieldset': {
                                     borderColor: 'primary.light',
                                     borderWidth: '1px',

@@ -2,6 +2,8 @@ import VerticalAlignCenterIcon from '@mui/icons-material/VerticalAlignCenter';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
+import { ThemeProvider } from '@mui/material/styles';
+import { getTheme } from '../theme';
 import FluorescentIcon from '@mui/icons-material/Fluorescent';
 import ChatIcon from '@mui/icons-material/Chat';
 import ForumIcon from '@mui/icons-material/Forum';
@@ -204,14 +206,14 @@ export default function Home() {
 
 
   return (
-    <>
+    <ThemeProvider theme={getTheme(pdfDarkMode)}>
       <CssBaseline />
       <Box sx={{ height: "100vh", display: "flex", flexDirection: "row", overflow: "hidden", bgcolor: 'background.default' }}>
 
         {/* Left Column: PDF Content & Controls */}
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, borderRight: 1, borderColor: 'divider' }}>
           {/* Top Controls Bar */}
-          <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
+          <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit' }}>
             <Stack direction="row" spacing={2} alignItems="center" justifyContent="center" flexWrap="wrap" useFlexGap>
 
               {/* PDF Uploader */}
@@ -292,14 +294,15 @@ export default function Home() {
               activeTabId={activeTabId}
               onTabChange={handleTabChange}
               onTabClose={handleTabClose}
+              darkMode={pdfDarkMode}
             />
           )}
 
           {/* PDF Viewer Area */}
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
             {isPdfLoading ? (
-              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'grey.50' }}>
-                <CircularProgress />
+              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
+                <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
                 <Typography sx={{ ml: 2 }}>Loading PDF documents...</Typography>
               </Box>
             ) : (pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
@@ -318,22 +321,22 @@ export default function Home() {
                 darkMode={pdfDarkMode}
               />
             ) : (
-              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'grey.50', p: 4 }}>
+              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit', p: 4 }}>
                 <Box>
-                  <Typography variant="h5" color="textSecondary" gutterBottom>
+                  <Typography variant="h5" sx={{ color: pdfDarkMode ? '#eee' : 'textSecondary' }} gutterBottom>
                     Welcome to AskPDF
                   </Typography>
-                  <Typography color="textSecondary" sx={{ mb: 2 }}>
+                  <Typography sx={{ mb: 2, color: pdfDarkMode ? '#ccc' : 'textSecondary' }}>
                     To get started:
                   </Typography>
-                  <ul style={{ color: '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
+                  <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
                     <li>Use the <b>Threads</b> tab on the right to create a new thread with an embedding model.</li>
                     <li>Click <b>Upload PDF</b> to add documents to your thread.</li>
                     <li>Switch to the <b>Chat</b> tab to ask questions about your PDFs using AI.</li>
                     <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
                     <li>Double-click any text to start audio playback from that point.</li>
                   </ul>
-                  <Typography color="textSecondary" sx={{ mt: 2, fontSize: 14 }}>
+                  <Typography sx={{ mt: 2, fontSize: 14, color: pdfDarkMode ? '#aaa' : 'textSecondary' }}>
                     <b>Note:</b> The embedding model is locked once a thread is created. Create a new thread to use a different model.
                   </Typography>
                 </Box>
@@ -424,6 +427,7 @@ export default function Home() {
                       setRightPanelTab(1);
                     }
                   }}
+                  darkMode={pdfDarkMode}
                 />
               </Box>
 
@@ -445,6 +449,7 @@ export default function Home() {
                       setCurrentChatId(id);
                       setPlayRequestId(id);
                     }}
+                    darkMode={pdfDarkMode}
                   />
                 ) : (
                   <Box sx={{ 
@@ -476,6 +481,6 @@ export default function Home() {
           }} />
         )}
       </Box>
-    </>
+    </ThemeProvider>
   );
 }

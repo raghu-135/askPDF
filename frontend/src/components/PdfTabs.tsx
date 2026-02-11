@@ -18,9 +18,10 @@ type Props = {
   activeTabId: string | null;
   onTabChange: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
+  darkMode?: boolean;
 };
 
-export default function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose }: Props) {
+export default function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, darkMode = false }: Props) {
   if (tabs.length === 0) {
     return null;
   }
@@ -46,6 +47,7 @@ export default function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose }: 
         borderColor: 'divider',
         bgcolor: 'background.paper',
         minHeight: 40,
+        color: 'text.primary',
       }}
     >
       <Tabs

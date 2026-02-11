@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { Box, Typography } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -34,20 +35,29 @@ type Props = {
     darkMode?: boolean;
 };
 
-const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoScroll, isResizing, highlightEnabled = true }: Props) {
+const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoScroll, isResizing, highlightEnabled = true, darkMode = false }: Props) {
+    const theme = useTheme();
     const [numPages, setNumPages] = useState<number | null>(null);
     const [pageWidth, setPageWidth] = useState<number>(600); // Actual width for PDF rendering
     const [scale, setScale] = useState<number>(1); // CSS scale for instant feedback
+    const [pdfLoaded, setPdfLoaded] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const pdfContentRef = useRef<HTMLDivElement>(null); // For scaling
     const sentenceRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
 
-    // Dark mode prop
-    const { darkMode = false } = arguments[0];
-
     function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
         setNumPages(numPages);
+        setPdfLoaded(false);
     }
+    // Track when all pages are rendered to enable dark mode filter
+    useEffect(() => {
+        if (numPages && numPages > 0) {
+            // Wait for all pages to render
+            setTimeout(() => {
+                setPdfLoaded(true);
+            }, 100); // Small delay to ensure all canvases are painted
+        }
+    }, [numPages]);
 
     // Only update pageWidth when resizing ends, use CSS scale for visual feedback during resize
     useEffect(() => {
@@ -186,12 +196,31 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'stretch',
-                bgcolor: darkMode ? '#222' : 'transparent',
+                bgcolor: darkMode ? theme.palette.background.default : 'transparent',
                 p: 0,
                 m: 0,
                 boxSizing: 'border-box',
+                transition: 'background-color 0.2s',
+                position: 'relative',
             }}
         >
+            {/* Loading overlay for dark mode until PDF is fully loaded and inverted */}
+            {darkMode && !pdfLoaded && (
+                <Box sx={{
+                    position: 'absolute',
+                    inset: 0,
+                    zIndex: 100,
+                    bgcolor: theme.palette.background.default,
+                    color: theme.palette.text.primary,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexDirection: 'column',
+                }}>
+                    <Typography variant="h6" sx={{ mb: 2 }}>Rendering PDF...</Typography>
+                    <Typography variant="body2" color="text.secondary">Preparing dark mode view</Typography>
+                </Box>
+            )}
             <div
                 ref={pdfContentRef}
                 style={{
@@ -202,6 +231,9 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                     margin: 0,
                     padding: 0,
                     boxSizing: 'border-box',
+                    background: darkMode ? theme.palette.background.default : undefined,
+                    filter: darkMode && pdfLoaded ? 'invert(0.92) hue-rotate(180deg) brightness(0.85)' : undefined,
+                    visibility: darkMode && !pdfLoaded ? 'hidden' : 'visible',
                 }}
             >
                 <Document
@@ -237,8 +269,7 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                                     display: 'block',
                                     pointerEvents: 'none',
                                     userSelect: 'none',
-                                    // Dark mode filter
-                                    filter: darkMode ? 'invert(0.92) hue-rotate(180deg) brightness(0.85)' : 'none',
+                                    // No filter here; filter is applied to container for performance
                                 },
                                 '& .react-pdf__Page__textLayer': {
                                     zIndex: 10,

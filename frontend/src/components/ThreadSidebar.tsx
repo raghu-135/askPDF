@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTheme } from '@mui/material/styles';
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -53,14 +54,17 @@ interface ThreadSidebarProps {
   activeThreadId: string | null;
   onThreadSelect: (thread: Thread | null) => void;
   onEmbedModelChange?: (model: string) => void;
+  darkMode?: boolean;
 }
 
 const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   activeThreadId,
   onThreadSelect,
   onEmbedModelChange,
+  darkMode = false,
 }) => {
   const [threads, setThreads] = useState<Thread[]>([]);
+  const theme = useTheme();
   const [loading, setLoading] = useState(true);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newThreadName, setNewThreadName] = useState(() => {
@@ -203,7 +207,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         height: '100%', 
         display: 'flex', 
         flexDirection: 'column',
-        bgcolor: 'grey.50'
+        bgcolor: theme.palette.background.default,
+        color: theme.palette.text.primary
       }}
     >
       {/* Header */}
@@ -214,7 +219,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         justifyContent: 'space-between',
         borderBottom: 1,
         borderColor: 'divider',
-        bgcolor: 'background.paper'
+        bgcolor: theme.palette.background.paper
       }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <IconButton size="small" onClick={() => setExpanded(!expanded)}>
@@ -263,8 +268,20 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 key={thread.id}
                 disablePadding
                 sx={{
-                  bgcolor: activeThreadId === thread.id ? 'primary.light' : 'transparent',
-                  '&:hover': { bgcolor: activeThreadId === thread.id ? 'primary.light' : 'grey.100' }
+                  bgcolor: activeThreadId === thread.id
+                    ? theme.palette.mode === 'dark'
+                      ? theme.palette.primary.dark
+                      : theme.palette.primary.light
+                    : 'transparent',
+                  '&:hover': {
+                    bgcolor: activeThreadId === thread.id
+                      ? theme.palette.mode === 'dark'
+                        ? theme.palette.primary.dark
+                        : theme.palette.primary.light
+                      : theme.palette.mode === 'dark'
+                        ? theme.palette.background.paper
+                        : theme.palette.grey[100]
+                  }
                 }}
               >
                 <ListItemButton 
