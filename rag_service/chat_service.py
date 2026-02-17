@@ -29,10 +29,13 @@ from database import (
 logger = logging.getLogger(__name__)
 
 # Token budget configuration
-DEFAULT_TOKEN_BUDGET = 4000  # Conservative estimate for context
-PDF_CHUNK_PRIORITY = 3  # Highest priority
-RECENT_HISTORY_PRIORITY = 2  # Second priority
-SEMANTIC_MEMORY_PRIORITY = 1  # Third priority
+DEFAULT_TOKEN_BUDGET = 4096  # Estimate for context window
+
+# Context allocation ratios (must sum to 1.0)
+RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
+RATIO_PDF_CONTEXT = 0.40       # 40% for PDF chunks
+RATIO_RECENT_HISTORY = 0.20    # 20% for recent conversation history
+RATIO_SEMANTIC_MEMORY = 0.15   # 15% for recalled semantic memories
 
 # Approximate tokens per character (rough estimate)
 CHARS_PER_TOKEN = 4
@@ -80,44 +83,47 @@ def budget_context(
     max_tokens: int = DEFAULT_TOKEN_BUDGET
 ) -> Tuple[List[Dict[str, Any]], List[Any], List[Dict[str, Any]]]:
     """
-    Budget the context to fit within token limits.
-    Priority: Question (mandatory) > PDF chunks > Recent history > Recalled memories
+    Budget the context to fit within token limits based on ratios.
+    Priority is handled within each section's own budget.
     
-    Returns filtered lists that fit within budget.
+    Returns filtered lists that fit within their respective budget.
     """
-    used_tokens = estimate_tokens(question)
-    
-    # Reserve some tokens for the answer
-    available_tokens = max_tokens - 500  # Reserve 500 tokens for response
+    # Calculate token caps based on ratios
+    pdf_cap = int(max_tokens * RATIO_PDF_CONTEXT)
+    history_cap = int(max_tokens * RATIO_RECENT_HISTORY)
+    memory_cap = int(max_tokens * RATIO_SEMANTIC_MEMORY)
     
     selected_pdf_chunks = []
     selected_messages = []
     selected_memories = []
     
-    # 1. Add PDF chunks (highest priority)
+    # 1. Fill PDF chunks (up to its allocated ratio)
+    used_pdf_tokens = 0
     for chunk in pdf_chunks:
-        chunk_tokens = estimate_tokens(chunk.get("text", ""))
-        if used_tokens + chunk_tokens < available_tokens:
+        tokens = estimate_tokens(chunk.get("text", ""))
+        if used_pdf_tokens + tokens <= pdf_cap:
             selected_pdf_chunks.append(chunk)
-            used_tokens += chunk_tokens
+            used_pdf_tokens += tokens
         else:
             break
     
-    # 2. Add recent messages (second priority)
+    # 2. Fill recent messages (up to its allocated ratio)
+    used_history_tokens = 0
     for msg in recent_messages:
-        msg_tokens = estimate_tokens(msg.content)
-        if used_tokens + msg_tokens < available_tokens:
+        tokens = estimate_tokens(msg.content)
+        if used_history_tokens + tokens <= history_cap:
             selected_messages.append(msg)
-            used_tokens += msg_tokens
+            used_history_tokens += tokens
         else:
             break
     
-    # 3. Add recalled memories (third priority, trim first if over budget)
+    # 3. Fill recalled memories (up to its allocated ratio)
+    used_memory_tokens = 0
     for memory in recalled_memories:
-        memory_tokens = estimate_tokens(memory.get("text", ""))
-        if used_tokens + memory_tokens < available_tokens:
+        tokens = estimate_tokens(memory.get("text", ""))
+        if used_memory_tokens + tokens <= memory_cap:
             selected_memories.append(memory)
-            used_tokens += memory_tokens
+            used_memory_tokens += tokens
         else:
             break
     
@@ -181,27 +187,33 @@ async def handle_thread_chat(
     question = req.question
     llm_model = req.llm_model
     use_web_search = getattr(req, 'use_web_search', False)
+    context_window = getattr(req, 'context_window', DEFAULT_TOKEN_BUDGET)
     
     try:
         # 1. Embed the question
         embed_model_client = get_embedding_model(embed_model)
         query_vector = await invoke_with_retry(embed_model_client.aembed_query, question)
         
+        # Calculate dynamic search limits (Assuming avg ~150 tokens per item, fetch 2x for safety)
+        pdf_limit = max(50, int((context_window * RATIO_PDF_CONTEXT) / 75))
+        history_limit = max(4, int((context_window * RATIO_RECENT_HISTORY) / 50))
+        memory_limit = max(30, int((context_window * RATIO_SEMANTIC_MEMORY) / 100))
+
         # 2. Search PDF chunks
         pdf_chunks = await db.search_pdf_chunks(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=5
+            limit=pdf_limit
         )
         
         # 3. Search chat memory (excluding current conversation)
-        recent_msgs = await get_recent_messages(thread_id, limit=4)
+        recent_msgs = await get_recent_messages(thread_id, limit=history_limit)
         recent_message_ids = [m.id for m in recent_msgs]
         
         recalled_memories = await db.search_chat_memory(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=3,
+            limit=memory_limit,
             exclude_message_ids=recent_message_ids
         )
         
@@ -218,7 +230,8 @@ async def handle_thread_chat(
             pdf_chunks=pdf_chunks,
             recent_messages=chat_history,
             recalled_memories=recalled_memories,
-            question=question
+            question=question,
+            max_tokens=context_window
         )
         
         # 6. Build context string
@@ -264,6 +277,8 @@ async def handle_thread_chat(
         messages.extend(selected_history)
         messages.append(HumanMessage(content=question))
         
+        logger.info(f"Final message send to LLM: {messages}")
+        logger.info(f"Context breakdown - PDF chunks: {len(selected_chunks)}, Recent messages: {len(selected_history)}, Recalled memories: {len(selected_memories)}, Web search: {'Yes' if use_web_search else 'No'}")
         response = await invoke_with_retry(llm.ainvoke, messages)
         answer = response.content
         

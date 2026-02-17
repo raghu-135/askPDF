@@ -172,7 +172,8 @@ export async function threadChat(
   threadId: string,
   question: string,
   llmModel: string,
-  useWebSearch: boolean = false
+  useWebSearch: boolean = false,
+  contextWindowSize: number = 4096
 ): Promise<{
   answer: string;
   user_message_id: string;
@@ -187,7 +188,8 @@ export async function threadChat(
       thread_id: threadId,
       question,
       llm_model: llmModel,
-      use_web_search: useWebSearch
+      use_web_search: useWebSearch,
+      context_window: contextWindowSize
     })
   });
   if (!res.ok) throw new Error(await res.text());

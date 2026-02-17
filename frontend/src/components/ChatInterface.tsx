@@ -74,6 +74,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [isModelWarming, setIsModelWarming] = useState(false);
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
+    const [contextWindow, setContextWindow] = useState(4096);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
 
     // Model selection
@@ -236,7 +237,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 activeThread.id,
                 userContent,
                 llmModel,
-                useWebSearch
+                useWebSearch,
+                contextWindow
             );
 
             // Update messages with real IDs and add assistant response
@@ -337,7 +339,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         />
                     </Tooltip>
                 </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '250px', gap: 1 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
                     <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
                         <IconButton
                             size="small"
@@ -347,6 +349,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         >
                             {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
                         </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Context window size" placement="top">
+                        <TextField
+                            size="small"
+                            label="Ctx size"
+                            type="number"
+                            value={contextWindow}
+                            onChange={(e) => setContextWindow(parseInt(e.target.value) || 0)}
+                            sx={{ width: 'auto', minWidth: 60, maxWidth: 100 }}
+                            inputProps={{ min: 512, step: 512, style: { textAlign: 'right' } }}
+                        />
                     </Tooltip>
                     <FormControl fullWidth size="small">
                         <InputLabel id="llm-label">Select LLM</InputLabel>

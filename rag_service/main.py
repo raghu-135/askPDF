@@ -102,6 +102,7 @@ class ThreadChatRequest(BaseModel):
     question: str
     llm_model: str
     use_web_search: bool = False
+    context_window: int = 4096  # Added context window size
 
 
 # ============ Thread Endpoints ============
