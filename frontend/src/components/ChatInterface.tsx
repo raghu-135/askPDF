@@ -75,6 +75,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
     const [contextWindow, setContextWindow] = useState(4096);
+    const [showContextHighlight, setShowContextHighlight] = useState(false);
+    const [tooltipOpen, setTooltipOpen] = useState(false);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
 
     // Model selection
@@ -178,6 +180,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleLlmModelChange = async (model: string) => {
         setLlmModel(model);
         setIsLlmModelValid(null);
+        if (model) {
+            setShowContextHighlight(true);
+            setTooltipOpen(true);
+        }
         if (!model) return;
         try {
             const valid = await checkLlmModelReady(model, ragApiUrl);
@@ -350,15 +356,66 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
                         </IconButton>
                     </Tooltip>
-                    <Tooltip title="Context window size" placement="top">
+                    <Tooltip 
+                        title={
+                            <Box sx={{ p: 0.5 }}>
+                                <Typography variant="caption" display="block">
+                                    Set context window size for the LLM. 
+                                </Typography>
+                                <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
+                                    Search for your model here and plug in numbers only from column "Context Len" e.g. 8000 for 8k, 128000 for 128k: <br />
+                                    <a 
+                                        href="https://llm-explorer.com/list/" 
+                                        target="_blank" 
+                                        rel="noopener noreferrer"
+                                        style={{ color: '#90caf9', marginLeft: '4px', textDecoration: 'underline' }}
+                                    >
+                                        llm-explorer.com
+                                    </a>
+                                </Typography>
+                            </Box>
+                        }
+                        placement="top"
+                        interactive
+                        open={tooltipOpen}
+                        onOpen={() => setTooltipOpen(true)}
+                        onClose={() => {
+                            if (!showContextHighlight) {
+                                setTooltipOpen(false);
+                            }
+                        }}
+                    >
                         <TextField
                             size="small"
                             label="Ctx size"
                             type="number"
                             value={contextWindow}
                             onChange={(e) => setContextWindow(parseInt(e.target.value) || 0)}
-                            sx={{ width: 'auto', minWidth: 60, maxWidth: 100 }}
-                            inputProps={{ min: 512, step: 512, style: { textAlign: 'right' } }}
+                            onClick={() => {
+                                setShowContextHighlight(false);
+                                setTooltipOpen(false);
+                            }}
+                            onFocus={() => {
+                                setShowContextHighlight(false);
+                                setTooltipOpen(false);
+                            }}
+                            sx={{ 
+                                width: 'auto', 
+                                minWidth: 60, 
+                                maxWidth: 100,
+                                '& .MuiOutlinedInput-root': {
+                                    transition: 'all 0.3s ease',
+                                    backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
+                                    '& fieldset': {
+                                        borderColor: showContextHighlight ? 'primary.main' : 'rgba(0, 0, 0, 0.23)',
+                                        borderWidth: showContextHighlight ? '2px' : '1px',
+                                    },
+                                    '&:hover fieldset': {
+                                        borderColor: 'primary.main',
+                                    },
+                                },
+                            }}
+                            inputProps={{ min: 4096, step: 4096, style: { textAlign: 'right' } }}
                         />
                     </Tooltip>
                     <FormControl fullWidth size="small">
