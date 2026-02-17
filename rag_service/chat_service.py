@@ -276,8 +276,8 @@ async def handle_thread_chat(
         # Add recent history
         messages.extend(selected_history)
         messages.append(HumanMessage(content=question))
-        
-        logger.info(f"Final message send to LLM: {messages}")
+
+        logger.debug(f"Final message send to LLM: {messages}")
         logger.info(f"Context breakdown - PDF chunks: {len(selected_chunks)}, Recent messages: {len(selected_history)}, Recalled memories: {len(selected_memories)}, Web search: {'Yes' if use_web_search else 'No'}")
         response = await invoke_with_retry(llm.ainvoke, messages)
         answer = response.content
