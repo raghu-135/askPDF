@@ -200,11 +200,38 @@ async def handle_thread_chat(
         memory_limit = max(30, int((context_window * RATIO_SEMANTIC_MEMORY) / 100))
 
         # 2. Search PDF chunks
-        pdf_chunks = await db.search_pdf_chunks(
+        raw_pdf_chunks = await db.search_pdf_chunks(
             thread_id=thread_id,
             query_vector=query_vector,
             limit=pdf_limit
         )
+
+        # 2a. Neighbor Context Expansion
+        # For each chunk hit, fetch its neighboring chunks (chunk_id-1, chunk_id, chunk_id+1)
+        # Group by file_hash to make efficient batch queries
+        file_chunk_map = {}
+        for hit in raw_pdf_chunks:
+            file_hash = hit.get("file_hash")
+            chunk_id = hit.get("chunk_id")
+            if file_hash is not None and chunk_id is not None:
+                if file_hash not in file_chunk_map:
+                    file_chunk_map[file_hash] = set()
+                # Expand neighbor IDs (ensure they are non-negative)
+                for neighbor_id in [chunk_id - 1, chunk_id, chunk_id + 1]:
+                    if neighbor_id >= 0:
+                        file_chunk_map[file_hash].add(neighbor_id)
+        
+        expanded_pdf_chunks = []
+        for file_hash, id_set in file_chunk_map.items():
+            expanded_batch = await db.get_chunks_by_ids(
+                thread_id=thread_id,
+                file_hash=file_hash,
+                chunk_ids=list(id_set)
+            )
+            expanded_pdf_chunks.extend(expanded_batch)
+            
+        # Re-sort expanded chunks by file_hash and chunk_id for logical flow
+        expanded_pdf_chunks.sort(key=lambda x: (x.get("file_hash", ""), x.get("chunk_id", 0)))
         
         # 3. Search chat memory (excluding current conversation)
         recent_msgs = await get_recent_messages(thread_id, limit=history_limit)
@@ -227,7 +254,7 @@ async def handle_thread_chat(
         
         # 5. Budget context
         selected_chunks, selected_history, selected_memories = budget_context(
-            pdf_chunks=pdf_chunks,
+            pdf_chunks=expanded_pdf_chunks,
             recent_messages=chat_history,
             recalled_memories=recalled_memories,
             question=question,
@@ -316,7 +343,7 @@ async def handle_thread_chat(
             {
                 "text": chunk["text"][:200] + "..." if len(chunk.get("text", "")) > 200 else chunk.get("text", ""),
                 "file_hash": chunk.get("file_hash"),
-                "score": chunk.get("score")
+                "score": chunk.get("score", 0.0)  # Default to 0.0 for neighbor context
             }
             for chunk in selected_chunks
         ]

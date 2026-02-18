@@ -196,6 +196,59 @@ class QdrantAdapter(VectorDBClient):
             })
         return results
 
+    async def get_chunks_by_ids(
+        self,
+        thread_id: str,
+        file_hash: str,
+        chunk_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Retrieve specific PDF chunks by their chunk_ids."""
+        collection_name = self.get_thread_collection_name(thread_id)
+        if not self.client.collection_exists(collection_name):
+            return []
+
+        # Filter for the specific chunks
+        must_conditions = [
+            models.FieldCondition(key="type", match=models.MatchValue(value="pdf_chunk")),
+            models.FieldCondition(key="file_hash", match=models.MatchValue(value=file_hash)),
+        ]
+        
+        # Use MatchAny for multiple chunk IDs
+        should_conditions = [
+            models.FieldCondition(
+                key="chunk_id",
+                match=models.MatchAny(any=chunk_ids)
+            )
+        ]
+        
+        search_filter = models.Filter(
+            must=must_conditions,
+            should=should_conditions
+        )
+
+        # Scroll is better than query for fetching known points
+        scroll_result, _ = self.client.scroll(
+            collection_name=collection_name,
+            scroll_filter=search_filter,
+            limit=len(chunk_ids),
+            with_payload=True,
+            with_vectors=False
+        )
+
+        results = []
+        for hit in scroll_result:
+            results.append({
+                "text": hit.payload.get("text", ""),
+                "file_hash": hit.payload.get("file_hash"),
+                "chunk_id": hit.payload.get("chunk_id"),
+                "type": "pdf_chunk",
+                "metadata": {k: v for k, v in hit.payload.items() if k not in ["text", "type"]}
+            })
+        
+        # Sort by chunk_id to maintain sequence
+        results.sort(key=lambda x: x["chunk_id"])
+        return results
+
     # ============ Chat Memory Operations ============
 
     async def upsert_chat_memory(

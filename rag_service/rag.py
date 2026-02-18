@@ -63,7 +63,16 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[L
                 elements = await asyncio.to_thread(partition_pdf, filename=local_path)
                 
                 from unstructured.chunking.title import chunk_by_title
-                chunked_elements = chunk_by_title(elements)
+                # Improved chunking: ensure sentences are not split and use consistent sizing
+                # multipage_sections=True helps keep context across page breaks
+                chunked_elements = chunk_by_title(
+                    elements,
+                    multipage_sections=True,
+                    combine_text_under_n_chars=200,
+                    max_characters=1000,
+                    new_after_n_chars=800,
+                    overlap=0 # Neighbors provide the continuity, so we don't need overlapping text
+                )
                 chunks = [str(c) for c in chunked_elements]
                 try:
                     os.remove(local_path)
@@ -120,7 +129,7 @@ async def index_chunks_to_db(
     await db_client.index_documents(collection_name, chunks, metadatas_list, vectors)
 
 
-async def index_document(embedding_model_name: str, metadata: Dict[str, Any] = None):
+async def index_document(embedding_model_name: str, metadata: Optional[Dict[str, Any]] = None):
     """
     Legacy: Indexes a document into the vector database.
     Creates a collection based on embedding model and file hash.
