@@ -69,8 +69,8 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[L
                     elements,
                     multipage_sections=True,
                     combine_text_under_n_chars=200,
-                    max_characters=1000,
-                    new_after_n_chars=800,
+                    max_characters=500,
+                    new_after_n_chars=400,
                     overlap=0 # Neighbors provide the continuity, so we don't need overlapping text
                 )
                 chunks = [str(c) for c in chunked_elements]

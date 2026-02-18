@@ -194,10 +194,11 @@ async def handle_thread_chat(
         embed_model_client = get_embedding_model(embed_model)
         query_vector = await invoke_with_retry(embed_model_client.aembed_query, question)
         
-        # Calculate dynamic search limits (Assuming avg ~150 tokens per item, fetch 2x for safety)
-        pdf_limit = max(50, int((context_window * RATIO_PDF_CONTEXT) / 75))
+        # Calculate dynamic search limits
+        # We fetch fewer initial hits because we expand each one elastically
+        pdf_limit = max(10, int((context_window * RATIO_PDF_CONTEXT) / 500))
         history_limit = max(4, int((context_window * RATIO_RECENT_HISTORY) / 50))
-        memory_limit = max(30, int((context_window * RATIO_SEMANTIC_MEMORY) / 100))
+        memory_limit = max(20, int((context_window * RATIO_SEMANTIC_MEMORY) / 100))
 
         # 2. Search PDF chunks
         raw_pdf_chunks = await db.search_pdf_chunks(
@@ -206,9 +207,10 @@ async def handle_thread_chat(
             limit=pdf_limit
         )
 
-        # 2a. Neighbor Context Expansion
-        # For each chunk hit, fetch its neighboring chunks (chunk_id-1, chunk_id, chunk_id+1)
-        # Group by file_hash to make efficient batch queries
+        # 2a. Elastic Neighbor Context Expansion
+        # Radius expands based on context window: 4k -> 2, 32k -> 5, 128k -> 10
+        expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
+        
         file_chunk_map = {}
         for hit in raw_pdf_chunks:
             file_hash = hit.get("file_hash")
@@ -216,8 +218,9 @@ async def handle_thread_chat(
             if file_hash is not None and chunk_id is not None:
                 if file_hash not in file_chunk_map:
                     file_chunk_map[file_hash] = set()
-                # Expand neighbor IDs (ensure they are non-negative)
-                for neighbor_id in [chunk_id - 1, chunk_id, chunk_id + 1]:
+                
+                # Dynamic range based on elastic radius
+                for neighbor_id in range(chunk_id - expansion_radius, chunk_id + expansion_radius + 1):
                     if neighbor_id >= 0:
                         file_chunk_map[file_hash].add(neighbor_id)
         
