@@ -13,36 +13,26 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
+from rag import index_chat_memory_for_thread, summarize_qa
 from agent import (
     app as agent_app, 
     invoke_with_retry, 
     generate_optimized_search_query, 
     perform_web_search
 )
-from models import get_llm, get_embedding_model, get_system_prompt
+from models import (
+    get_llm, get_embedding_model, get_system_prompt,
+    DEFAULT_TOKEN_BUDGET, RATIO_LLM_RESPONSE, RATIO_PDF_CONTEXT,
+    RATIO_SEMANTIC_MEMORY, CHARS_PER_TOKEN,
+    RATIO_MEMORY_SUMMARIZATION_THRESHOLD
+)
 from vectordb.qdrant import QdrantAdapter
 from database import (
-    create_message, get_recent_messages, get_thread,
+    create_message, get_thread,
     MessageRole
 )
 
 logger = logging.getLogger(__name__)
-
-# Token budget configuration
-DEFAULT_TOKEN_BUDGET = 4096  # Estimate for context window
-
-# Context allocation ratios (must sum to 1.0)
-RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
-RATIO_PDF_CONTEXT = 0.40       # 40% for PDF chunks
-RATIO_RECENT_HISTORY = 0.20    # 20% for recent conversation history
-RATIO_SEMANTIC_MEMORY = 0.15   # 15% for recalled semantic memories
-
-# Approximate tokens per character (rough estimate)
-CHARS_PER_TOKEN = 4
-
-# Max characters for embedding input (most models support 512-8192 tokens)
-# Using conservative limit: ~400 tokens = ~1600 chars for safety
-MAX_EMBEDDING_CHARS = 1600
 
 
 def estimate_tokens(text: str) -> int:
@@ -50,38 +40,12 @@ def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
 
 
-def truncate_for_embedding(text: str, max_chars: int = MAX_EMBEDDING_CHARS) -> str:
-    """
-    Truncate text to fit within embedding model's input limit.
-    Tries to cut at sentence boundaries when possible.
-    """
-    if len(text) <= max_chars:
-        return text
-    
-    # Try to cut at a sentence boundary
-    truncated = text[:max_chars]
-    
-    # Find last sentence end within the truncated text
-    for sep in ['. ', '? ', '! ', '\n']:
-        last_sep = truncated.rfind(sep)
-        if last_sep > max_chars // 2:  # Only cut if we keep at least half
-            return truncated[:last_sep + 1].strip()
-    
-    # Fallback: cut at word boundary
-    last_space = truncated.rfind(' ')
-    if last_space > max_chars // 2:
-        return truncated[:last_space].strip() + "..."
-    
-    return truncated.strip() + "..."
-
-
 def budget_context(
     pdf_chunks: List[Dict[str, Any]],
-    recent_messages: List[Any],
     recalled_memories: List[Dict[str, Any]],
     question: str,
     max_tokens: int = DEFAULT_TOKEN_BUDGET
-) -> Tuple[List[Dict[str, Any]], List[Any], List[Dict[str, Any]]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Budget the context to fit within token limits based on ratios.
     Priority is handled within each section's own budget.
@@ -90,11 +54,9 @@ def budget_context(
     """
     # Calculate token caps based on ratios
     pdf_cap = int(max_tokens * RATIO_PDF_CONTEXT)
-    history_cap = int(max_tokens * RATIO_RECENT_HISTORY)
     memory_cap = int(max_tokens * RATIO_SEMANTIC_MEMORY)
     
     selected_pdf_chunks = []
-    selected_messages = []
     selected_memories = []
     
     # 1. Fill PDF chunks (up to its allocated ratio)
@@ -107,17 +69,7 @@ def budget_context(
         else:
             break
     
-    # 2. Fill recent messages (up to its allocated ratio)
-    used_history_tokens = 0
-    for msg in recent_messages:
-        tokens = estimate_tokens(msg.content)
-        if used_history_tokens + tokens <= history_cap:
-            selected_messages.append(msg)
-            used_history_tokens += tokens
-        else:
-            break
-    
-    # 3. Fill recalled memories (up to its allocated ratio)
+    # 2. Fill recalled memories (up to its allocated ratio)
     used_memory_tokens = 0
     for memory in recalled_memories:
         tokens = estimate_tokens(memory.get("text", ""))
@@ -127,7 +79,7 @@ def budget_context(
         else:
             break
     
-    return selected_pdf_chunks, selected_messages, selected_memories
+    return selected_pdf_chunks, selected_memories
 
 
 async def handle_chat(req) -> Dict[str, Any]:
@@ -197,7 +149,6 @@ async def handle_thread_chat(
         # Calculate dynamic search limits
         # We fetch fewer initial hits because we expand each one elastically
         pdf_limit = max(10, int((context_window * RATIO_PDF_CONTEXT) / 500))
-        history_limit = max(4, int((context_window * RATIO_RECENT_HISTORY) / 50))
         memory_limit = max(20, int((context_window * RATIO_SEMANTIC_MEMORY) / 100))
 
         # 2. Search PDF chunks
@@ -236,35 +187,38 @@ async def handle_thread_chat(
         # Re-sort expanded chunks by file_hash and chunk_id for logical flow
         expanded_pdf_chunks.sort(key=lambda x: (x.get("file_hash", ""), x.get("chunk_id", 0)))
         
-        # 3. Search chat memory (excluding current conversation)
-        recent_msgs = await get_recent_messages(thread_id, limit=history_limit)
-        recent_message_ids = [m.id for m in recent_msgs]
-        
+        # 3. Search chat memory
+        # We now rely entirely on semantic retrieval for past interactions
         recalled_memories = await db.search_chat_memory(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=memory_limit,
-            exclude_message_ids=recent_message_ids
+            limit=memory_limit
         )
         
-        # 4. Convert recent messages to LangChain format
-        chat_history = []
-        for msg in recent_msgs:
-            if msg.role == MessageRole.USER:
-                chat_history.append(HumanMessage(content=msg.content))
-            else:
-                chat_history.append(AIMessage(content=msg.content))
+        # 3a. Adaptive Memory Summarization
+        # If memories are taking up too much of the context window, summarize them.
+        summarization_threshold_chars = int(context_window * RATIO_MEMORY_SUMMARIZATION_THRESHOLD * CHARS_PER_TOKEN)
         
-        # 5. Budget context
-        selected_chunks, selected_history, selected_memories = budget_context(
+        for i, memory in enumerate(recalled_memories):
+            if len(memory.get("text", "")) > summarization_threshold_chars:
+                logger.debug(f"Memory {memory.get('message_id')} length ({len(memory.get('text', ''))}) > threshold ({summarization_threshold_chars}), summarizing.")
+                summary = await summarize_qa(
+                    question=memory.get("question", ""),
+                    answer=memory.get("answer", ""),
+                    llm_name=llm_model,
+                    context_window=context_window
+                )
+                recalled_memories[i]["text"] = f"Q: {memory.get('question')}\nSummary: {summary}"
+
+        # 4. Budget context
+        selected_chunks, selected_memories = budget_context(
             pdf_chunks=expanded_pdf_chunks,
-            recent_messages=chat_history,
             recalled_memories=recalled_memories,
             question=question,
             max_tokens=context_window
         )
         
-        # 6. Build context string
+        # 5. Build context string
         pdf_context = "\n\n".join([chunk["text"] for chunk in selected_chunks])
         memory_context = ""
         if selected_memories:
@@ -275,14 +229,15 @@ async def handle_thread_chat(
         if memory_context:
             full_context += f"\n\n{memory_context}"
         
-        # 7. Optional web search
+        # 6. Optional web search
         web_context = ""
         if use_web_search:
             # Generate optimized search query considering PDF context and history
+            # we use an empty list for history as we've removed recent_messages
             search_query = await generate_optimized_search_query(
                 question=question,
                 context=pdf_context,
-                history=chat_history,
+                history=[],
                 llm_name=llm_model
             )
             
@@ -290,7 +245,7 @@ async def handle_thread_chat(
             web_context = f"\n\nWeb Search Results:\n{web_results}"
             full_context += web_context
         
-        # 8. Generate response
+        # 7. Generate response
         llm = get_llm(llm_model)
         
         system_instruction = get_system_prompt(
@@ -301,14 +256,11 @@ async def handle_thread_chat(
         
         messages = [
             SystemMessage(content=system_instruction),
+            HumanMessage(content=question)
         ]
-        
-        # Add recent history
-        messages.extend(selected_history)
-        messages.append(HumanMessage(content=question))
 
         logger.debug(f"Final message send to LLM: {messages}")
-        logger.info(f"Context breakdown - PDF chunks: {len(selected_chunks)}, Recent messages: {len(selected_history)}, Recalled memories: {len(selected_memories)}, Web search: {'Yes' if use_web_search else 'No'}")
+        logger.info(f"Context breakdown - PDF chunks: {len(selected_chunks)}, Recalled memories: {len(selected_memories)}, Web search: {'Yes' if use_web_search else 'No'}")
         response = await invoke_with_retry(llm.ainvoke, messages)
         answer = response.content
         
@@ -326,18 +278,15 @@ async def handle_thread_chat(
         )
         
         # 10. Create semantic memory for this QA pair
-        # Embed the combined Q&A for future retrieval
-        # Truncate to fit embedding model's input limit
-        qa_text = f"Q: {question}\nA: {answer}"
-        qa_text_truncated = truncate_for_embedding(qa_text)
-        qa_embedding = await invoke_with_retry(embed_model_client.aembed_query, qa_text_truncated)
-        
-        await db.upsert_chat_memory(
+        # Use LangChain-backed management with optional summarization
+        await index_chat_memory_for_thread(
             thread_id=thread_id,
             message_id=assistant_message.id,
             question=question,
             answer=answer,
-            embedding=qa_embedding
+            embedding_model_name=embed_model,
+            llm_name=llm_model,
+            context_window=context_window
         )
         
         # 11. Prepare response

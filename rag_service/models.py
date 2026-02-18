@@ -14,6 +14,22 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Token budget configuration
+DEFAULT_TOKEN_BUDGET = 4096
+
+# Context allocation ratios (must sum to 1.0)
+RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
+RATIO_PDF_CONTEXT = 0.45       # 45% for PDF chunks
+RATIO_SEMANTIC_MEMORY = 0.30   # 30% for recalled semantic memories
+
+# Individual item limits
+RATIO_MEMORY_SUMMARIZATION_THRESHOLD = 0.05  # Summarize if > 5% of total window
+RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window (fallback)
+
+# Chars per token estimate
+CHARS_PER_TOKEN = 4
+
+
 def _get_base_url() -> str:
     """Get the LLM API base URL, ensuring it ends with /v1."""
     base_url = os.getenv("LLM_API_URL")

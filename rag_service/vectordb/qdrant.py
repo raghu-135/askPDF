@@ -251,6 +251,51 @@ class QdrantAdapter(VectorDBClient):
 
     # ============ Chat Memory Operations ============
 
+    async def index_chat_memory(
+        self,
+        thread_id: str,
+        message_id: str,
+        question: str,
+        answer: str,
+        texts: List[str],
+        embeddings: List[List[float]]
+    ) -> int:
+        """
+        Store a QA pair as chat memory for semantic retrieval.
+        Handles multiple chunks to preserve more context.
+        """
+        collection_name = self.get_thread_collection_name(thread_id)
+        
+        if not self.client.collection_exists(collection_name):
+            await self.create_thread_collection(thread_id, len(embeddings[0]))
+
+        points = []
+        for i, (text, vector) in enumerate(zip(texts, embeddings)):
+            payload = {
+                "text": text,
+                "type": "chat_memory",
+                "message_id": message_id,
+                "thread_id": thread_id,
+                "question": question,
+                "answer": answer,
+                "chunk_id": i
+            }
+            points.append(
+                models.PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vector,
+                    payload=payload
+                )
+            )
+
+        self.client.upsert(
+            collection_name=collection_name,
+            points=points
+        )
+        
+        print(f"Stored {len(points)} chat memory chunks for message {message_id} in thread {thread_id}", flush=True)
+        return len(points)
+
     async def upsert_chat_memory(
         self,
         thread_id: str,
@@ -260,36 +305,17 @@ class QdrantAdapter(VectorDBClient):
         embedding: List[float]
     ) -> bool:
         """
-        Store a QA pair as chat memory for semantic retrieval.
-        The text is stored as "Q: ...\nA: ..." format.
+        Legacy: Deprecated in favor of index_chat_memory.
+        Store a QA pair as a single chat memory point.
         """
-        collection_name = self.get_thread_collection_name(thread_id)
-        
-        if not self.client.collection_exists(collection_name):
-            await self.create_thread_collection(thread_id, len(embedding))
-
-        qa_text = f"Q: {question}\nA: {answer}"
-        
-        point = models.PointStruct(
-            id=str(uuid.uuid4()),
-            vector=embedding,
-            payload={
-                "text": qa_text,
-                "type": "chat_memory",
-                "message_id": message_id,
-                "thread_id": thread_id,
-                "question": question,
-                "answer": answer
-            }
-        )
-
-        self.client.upsert(
-            collection_name=collection_name,
-            points=[point]
-        )
-        
-        print(f"Stored chat memory for message {message_id} in thread {thread_id}", flush=True)
-        return True
+        return await self.index_chat_memory(
+            thread_id=thread_id,
+            message_id=message_id,
+            question=question,
+            answer=answer,
+            texts=[f"Q: {question}\nA: {answer}"],
+            embeddings=[embedding]
+        ) > 0
 
     async def search_chat_memory(
         self,

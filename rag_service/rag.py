@@ -15,8 +15,14 @@ from typing import Dict, Any, List, Optional
 
 import httpx
 from unstructured.partition.pdf import partition_pdf
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from models import get_embedding_model
+from models import (
+    get_embedding_model, get_llm, 
+    DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
+    RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
+)
 from vectordb.qdrant import QdrantAdapter
 
 logger = logging.getLogger(__name__)
@@ -36,13 +42,43 @@ def get_collection_name(embedding_model_name: str, file_hash: Optional[str] = No
     return f"rag_{safe_model_name}"
 
 
-def split_text(text: str) -> List[str]:
+def split_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100) -> List[str]:
     """
     Split text into chunks using RecursiveCharacterTextSplitter.
     """
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     return splitter.split_text(text)
+
+
+async def summarize_qa(
+    question: str, 
+    answer: str, 
+    llm_name: str, 
+    context_window: int = DEFAULT_TOKEN_BUDGET
+) -> str:
+    """
+    Summarize a QA pair using the LLM for concise memory storage or display.
+    Uses dynamic hard limits based on context window percentages.
+    """
+    from langchain_core.messages import HumanMessage
+    try:
+        llm = get_llm(llm_name)
+        prompt = (
+            "Summarize the following Q&A pair accurately and concisely. "
+            "Keep it under 3 sentences and preserve key facts.\n\n"
+            f"Q: {question}\n"
+            f"A: {answer}\n\n"
+            "Summary:"
+        )
+        # Use simple invoke for summarization
+        from agent import invoke_with_retry
+        response = await invoke_with_retry(llm.ainvoke, [HumanMessage(content=prompt)])
+        return response.content.strip()
+    except Exception as e:
+        logger.error(f"Error summarizing QA: {e}")
+        # Fallback to truncated version based on hard limit percentage
+        hard_limit_chars = int(context_window * RATIO_MEMORY_HARD_LIMIT * CHARS_PER_TOKEN)
+        return f"Q: {question}\nA: {answer}"[:hard_limit_chars] + "..."
 
 
 async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[List[str]]:
@@ -99,6 +135,37 @@ async def get_chunks(file_hash: str) -> List[str]:
     
     logger.error(f"PDF download/parse failed for {file_hash}")
     return []
+
+
+async def get_chat_chunks(
+    question: str, 
+    answer: str, 
+    llm_name: Optional[str] = None,
+    context_window: int = DEFAULT_TOKEN_BUDGET
+) -> List[str]:
+    """
+    Format, optionally summarize, and chunk a QA pair into text snippets for memory retrieval.
+    This utilizes LangChain splitters for consistent chunking and dynamic thresholding.
+    """
+    qa_text = f"Q: {question}\nA: {answer}"
+    
+    # Calculate summarization threshold based on percentage of target context window
+    summarization_threshold_chars = int(context_window * RATIO_MEMORY_SUMMARIZATION_THRESHOLD * CHARS_PER_TOKEN)
+
+    # If the QA pair is taking too much budget, we summarize it first
+    if len(qa_text) > summarization_threshold_chars and llm_name:
+        logger.info(f"QA pair length ({len(qa_text)}) > threshold ({summarization_threshold_chars}), summarizing.")
+        summary = await summarize_qa(question, answer, llm_name, context_window)
+        qa_text = f"Q: {question}\nSummary: {summary}"
+    
+    # Create LangChain Document objects for more complex metadata/future usage
+    doc = Document(page_content=qa_text)
+    
+    # Use LangChain's splitter directly on the document
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
+    chunks = splitter.split_documents([doc])
+    
+    return [c.page_content for c in chunks]
 
 
 async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> List[List[float]]:
@@ -230,6 +297,47 @@ async def index_document_for_thread(
         
     except Exception as e:
         logger.error(f"Error indexing document for thread {thread_id}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+async def index_chat_memory_for_thread(
+    thread_id: str,
+    message_id: str,
+    question: str,
+    answer: str,
+    embedding_model_name: str,
+    llm_name: Optional[str] = None,
+    context_window: int = DEFAULT_TOKEN_BUDGET
+) -> Dict[str, Any]:
+    """
+    Process, chunk, and index a chat message as semantic memory.
+    Uses LangChain splitters and optional LLM summarization with dynamic budgets.
+    """
+    db_client = QdrantAdapter()
+    
+    try:
+        # 1. Get chunks for the chat message (with optional summarization)
+        chunks = await get_chat_chunks(question, answer, llm_name, context_window)
+        
+        # 2. Generate embeddings
+        vectors = await generate_embeddings(chunks, embedding_model_name)
+        
+        # 3. Store into vector database
+        indexed_count = await db_client.index_chat_memory(
+            thread_id=thread_id,
+            message_id=message_id,
+            question=question,
+            answer=answer,
+            texts=chunks,
+            embeddings=vectors
+        )
+        
+        return {
+            "status": "success",
+            "chunks_count": indexed_count
+        }
+    except Exception as e:
+        logger.error(f"Error indexing chat memory for thread {thread_id}: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 
