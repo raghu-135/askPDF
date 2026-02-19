@@ -113,10 +113,6 @@ class AgentState(TypedDict):
     search_query: str
 
 
-# Placeholder for a synchronous retrieve function (not implemented)
-def retrieve(state: AgentState):
-    pass
-
 async def web_search_node(state: AgentState):
     """
     Perform a web search to augment the PDF context.

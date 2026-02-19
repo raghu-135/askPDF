@@ -42,14 +42,6 @@ def get_collection_name(embedding_model_name: str, file_hash: Optional[str] = No
     return f"rag_{safe_model_name}"
 
 
-def split_text(text: str, chunk_size: int = 500, chunk_overlap: int = 100) -> List[str]:
-    """
-    Split text into chunks using RecursiveCharacterTextSplitter.
-    """
-    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-    return splitter.split_text(text)
-
-
 async def summarize_qa(
     question: str, 
     answer: str, 
@@ -339,11 +331,3 @@ async def index_chat_memory_for_thread(
     except Exception as e:
         logger.error(f"Error indexing chat memory for thread {thread_id}: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
-
-
-async def check_file_indexed_in_thread(thread_id: str, file_hash: str) -> bool:
-    """
-    Check if a file has been indexed in a thread's collection.
-    """
-    db_client = QdrantAdapter()
-    return await db_client.has_file_indexed(thread_id, file_hash)
