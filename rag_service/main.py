@@ -508,15 +508,6 @@ async def get_models():
     return await fetch_available_models()
 
 
-@app.get("/health/model")
-async def model_health_endpoint(model: str):
-    """
-    Check if a specific model is available and ready.
-    """
-    ready = await check_chat_model_ready(model)
-    return {"model": model, "ready": ready}
-
-
 @app.get("/health/is_chat_model_ready")
 async def is_chat_model_ready_endpoint(model: str):
     """
