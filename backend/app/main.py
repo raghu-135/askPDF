@@ -145,24 +145,6 @@ async def get_file_index_status(file_hash: str):
     }
 
 
-@app.get(f"{API_PREFIX}/rag_status")
-async def check_rag_status(collection_name: str):
-    """
-    Check the status of RAG indexing for a collection.
-    
-    Args:
-        collection_name (str): Name of the collection to check status for.
-    Returns:
-        dict: Status information from the RAG service.
-    """
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(f"{RAG_SERVICE_URL}/status", params={"collection_name": collection_name})
-            return resp.json()
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-
-
 @app.get("/health")
 async def health():
     """
