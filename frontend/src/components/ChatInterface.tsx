@@ -42,6 +42,9 @@ import { fetchAvailableLlmModels, checkLlmModelReady } from '../lib/chat-utils';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
+    reasoning?: string;
+    reasoning_available?: boolean;
+    reasoning_format?: 'structured' | 'tagged_text' | 'none';
 }
 
 interface ChatInterfaceProps {
@@ -262,6 +265,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         id: response.assistant_message_id, 
                         role: 'assistant', 
                         content: response.answer,
+                        reasoning: response.reasoning || '',
+                        reasoning_available: !!response.reasoning_available,
+                        reasoning_format: response.reasoning_format || 'none',
                         created_at: new Date().toISOString()
                     }
                 ];
@@ -541,6 +547,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         {msg.content}
                                     </ReactMarkdown>
                                 </Typography>
+                                {msg.role === 'assistant' && msg.reasoning_available && msg.reasoning && (
+                                    <Box sx={{ mt: 1 }}>
+                                        <details>
+                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                View reasoning trace
+                                            </summary>
+                                            <Typography
+                                                variant="caption"
+                                                component="pre"
+                                                sx={{
+                                                    mt: 1,
+                                                    mb: 0,
+                                                    p: 1,
+                                                    borderRadius: 1,
+                                                    whiteSpace: 'pre-wrap',
+                                                    wordBreak: 'break-word',
+                                                    bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.04)'
+                                                }}
+                                            >
+                                                {msg.reasoning}
+                                            </Typography>
+                                        </details>
+                                    </Box>
+                                )}
                             </Paper>
                         </ListItem>
                     );

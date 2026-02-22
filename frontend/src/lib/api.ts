@@ -84,6 +84,9 @@ export interface Message {
   content: string;
   created_at: string;
   isRecollected?: boolean;
+  reasoning?: string;
+  reasoning_available?: boolean;
+  reasoning_format?: 'structured' | 'tagged_text' | 'none';
 }
 
 export async function createThread(name: string, embedModel: string): Promise<Thread> {
@@ -180,6 +183,9 @@ export async function threadChat(
   assistant_message_id: string;
   used_chat_ids: string[];
   pdf_sources: { text: string; file_hash: string; score: number }[];
+  reasoning?: string;
+  reasoning_available?: boolean;
+  reasoning_format?: 'structured' | 'tagged_text' | 'none';
 }> {
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/chat`, {
     method: "POST",

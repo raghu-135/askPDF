@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from rag import index_chat_memory_for_thread
 from models import DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
 from database import create_message, MessageRole
+from reasoning import normalize_ai_response
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,15 @@ async def handle_chat(req) -> Dict[str, Any]:
     
     result = await agent_app.ainvoke(inputs, config=config)
     messages = result.get("messages", [])
-    answer = messages[-1].content if messages else "Error"
-    return {"answer": answer, "context": "Legacy context retrieval unsupported"}
+    normalized = normalize_ai_response(messages[-1] if messages else None)
+    answer = normalized["answer"] or "Error"
+    return {
+        "answer": answer,
+        "reasoning": normalized["reasoning"],
+        "reasoning_available": normalized["reasoning_available"],
+        "reasoning_format": normalized["reasoning_format"],
+        "context": "Legacy context retrieval unsupported",
+    }
 
 
 async def handle_thread_chat(
@@ -103,13 +111,19 @@ async def handle_thread_chat(
         result = await agent_app.ainvoke(initial_state, config=config)
         
         final_messages = result.get("messages", [])
-        answer = final_messages[-1].content if final_messages else "Error processing request."
+        normalized = normalize_ai_response(final_messages[-1] if final_messages else None)
+        answer = normalized["answer"] or "Error processing request."
         pdf_sources = result.get("pdf_sources", [])
         used_chat_ids = result.get("used_chat_ids", [])
         clarification_options = result.get("clarification_options", None)
         
         if clarification_options:
             answer = f"I need a bit more clarification. Did you mean:\n" + "\n".join([f"- {opt}" for opt in clarification_options])
+            normalized = {
+                "reasoning": "",
+                "reasoning_available": False,
+                "reasoning_format": "none",
+            }
         
         # Store messages in database
         user_message = await create_message(
@@ -143,6 +157,9 @@ async def handle_thread_chat(
             "used_chat_ids": used_chat_ids,
             "pdf_sources": pdf_sources,
             "clarification_options": clarification_options,
+            "reasoning": normalized["reasoning"],
+            "reasoning_available": normalized["reasoning_available"],
+            "reasoning_format": normalized["reasoning_format"],
             "context": "Context retrieved dynamically by LangGraph Orchestrator tool calls."
         }
         
