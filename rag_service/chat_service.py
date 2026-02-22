@@ -135,7 +135,10 @@ async def handle_thread_chat(
         assistant_message = await create_message(
             thread_id=thread_id,
             role=MessageRole.ASSISTANT,
-            content=answer
+            content=answer,
+            reasoning=normalized["reasoning"],
+            reasoning_available=normalized["reasoning_available"],
+            reasoning_format=normalized["reasoning_format"],
         )
         
         # Index in semantic memory if not a clarification
