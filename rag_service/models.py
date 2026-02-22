@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Token budget configuration
 DEFAULT_TOKEN_BUDGET = 4096
+DEFAULT_MAX_ITERATIONS = 10
 
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer

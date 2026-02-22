@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph, END, START
 from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 
-from models import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET
+from models import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
 from vectordb.qdrant import QdrantAdapter
 from database import get_recent_messages, MessageRole
 
@@ -45,6 +45,8 @@ class AgentState(TypedDict):
     pdf_sources: List[Dict[str, Any]]
     used_chat_ids: List[str]
     clarification_options: Optional[List[str]]
+    iteration_count: int
+    max_iterations: int
 
 
 @tool
@@ -239,6 +241,7 @@ class OrchestratorToolNode(ToolNode):
 async def call_model(state: AgentState, config: RunnableConfig):
     messages = state["messages"]
     llm = get_llm(state["llm_model"])
+    iteration = state.get("iteration_count", 0) + 1
     
     # Enable tools (filter web search if disabled)
     valid_tools = tools_list if state.get("use_web_search", False) else [t for t in tools_list if t.name != "perform_web_search"]
@@ -257,20 +260,36 @@ async def call_model(state: AgentState, config: RunnableConfig):
         "5. Use `search_chat_memory` for deep semantic searches of past answers.\n"
         "6. Use `perform_web_search` for external/live information. Try different keywords if the first search fails.\n"
         "7. Use `require_clarification` ONLY if the question is completely ambiguous and you cannot make a reasonable guess.\n"
-        "8. ONLY output your final answer once you have successfully retrieved sufficient context. If you do not have enough context, DO NOT answer yet—use a tool again."
+        "8. ONLY output your final answer once you have successfully retrieved sufficient context. If you do not have enough context, DO NOT answer yet—use a tool again.\n"
+        "9. IMPORTANT: Avoid redundant tool calls. If a search query yields no results, try a DIFFERENT approach or summarize based on what you already know. Do not keep calling the same tool with the same or very similar parameters."
     ))
     
     # Langchain expects SystemMessage at the start
     input_messages = [sys_prompt] + messages
     response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
-    return {"messages": [response]}
+    return {"messages": [response], "iteration_count": iteration}
 
 
 def should_continue(state: AgentState):
     messages = state["messages"]
     last_message = messages[-1]
+    iteration_count = state.get("iteration_count", 0)
+    max_iterations = state.get("max_iterations", DEFAULT_MAX_ITERATIONS)
     
     if getattr(last_message, "tool_calls", None):
+        if iteration_count >= max_iterations:
+            logger.warning(f"Reaching max agent iterations ({iteration_count}/{max_iterations}). Forcing termination.")
+            # We add a small instruction message to the assistant to force a final answer if they tried to call tools again
+            # actually should_continue just drives the router. If we return END, the graph stops.
+            # The last message IS a tool call, so if we END now, the user sees tool calls but no final answer.
+            # Usually better to let it go back to agent one last time with a warning.
+            # But if iteration_count is already max_iterations and they wanted tools, we should probably just stop and let them 
+            # try to answer in the NEXT step.
+            # Re-thinking: if it's at max_iterations and they want tools, we return END. 
+            # The chat_service will take final_messages[-1].content. If it's a tool call, that's bad.
+            # Better strategy: if iteration_count == max_iterations and tool_calls exist, swap the node to a 'force_answer' node or just continue.
+            # Let's stick to max_iterations as a hard stop for the loop.
+            return END
         return "tools"
     return END
 

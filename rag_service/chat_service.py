@@ -13,7 +13,7 @@ from typing import List, Dict, Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 from rag import index_chat_memory_for_thread
-from models import DEFAULT_TOKEN_BUDGET
+from models import DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
 from database import create_message, MessageRole
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,8 @@ async def handle_chat(req) -> Dict[str, Any]:
         "context": "",
         "web_context": "",
         "answer": "",
+        "iteration_count": 0,
+        "max_iterations": getattr(req, 'max_iterations', DEFAULT_MAX_ITERATIONS),
     }
     
     # Provide a dummy config for backward compatibility
@@ -84,7 +86,9 @@ async def handle_thread_chat(
             "use_web_search": use_web_search,
             "pdf_sources": [],
             "used_chat_ids": [],
-            "clarification_options": None
+            "clarification_options": None,
+            "iteration_count": 0,
+            "max_iterations": getattr(req, 'max_iterations', DEFAULT_MAX_ITERATIONS)
         }
         
         config = {

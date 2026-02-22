@@ -28,7 +28,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from agent import app as agent_app
 from rag import index_document, index_document_for_thread
 from vectordb.qdrant import QdrantAdapter
-from models import check_chat_model_ready, check_embed_model_ready, fetch_available_models
+from models import check_chat_model_ready, check_embed_model_ready, fetch_available_models, DEFAULT_MAX_ITERATIONS, DEFAULT_TOKEN_BUDGET 
 from chat_service import handle_chat, handle_thread_chat
 from database import (
     init_db, 
@@ -93,6 +93,7 @@ class ChatRequest(BaseModel):
     embedding_model: str
     collection_name: Optional[str] = None
     use_web_search: bool = False
+    max_iterations: int = DEFAULT_MAX_ITERATIONS
     history: List[Dict[str, str]] = []  # list of {role: "user"|"assistant", content: "..."}
 
 
@@ -102,7 +103,8 @@ class ThreadChatRequest(BaseModel):
     question: str
     llm_model: str
     use_web_search: bool = False
-    context_window: int = 4096  # Added context window size
+    context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size
+    max_iterations: int = DEFAULT_MAX_ITERATIONS
 
 
 # ============ Thread Endpoints ============
