@@ -132,7 +132,7 @@ async def get_recent_qa_summaries(limit: int, config: RunnableConfig = None) -> 
         transcript = []
         for msg in messages:
             role = "User" if msg.role == MessageRole.USER else "Assistant"
-            text = msg.content
+            text = msg.context_compact or msg.content
             if len(text) > 300:
                 text = text[:300] + "... [truncated]"
             transcript.append(f"{role} [{msg.id}]: {text}")
@@ -218,7 +218,7 @@ TOOL_FRIENDLY_CONFIG = {
         "id": "conversation_snapshot",
         "display_name": "Conversation Snapshot",
         "description": "Quickly retrieve the latest Q/A context for follow-ups.",
-        "default_prompt": "Use early for follow-up questions to anchor continuity before deeper retrieval.",
+        "default_prompt": "Use only when injected recent history is insufficient or after long tool chains where continuity may be degraded.",
     },
     "search_chat_memory": {
         "id": "deep_memory",
@@ -302,6 +302,37 @@ async def call_model(state: AgentState, config: RunnableConfig):
     return {"messages": [response], "iteration_count": iteration}
 
 
+async def force_final_answer(state: AgentState, config: RunnableConfig):
+    """
+    Fallback when the tool-iteration budget is exhausted but the model still requests tools.
+    """
+    messages = state["messages"]
+    llm = get_llm(state["llm_model"])
+    iteration = state.get("iteration_count", 0) + 1
+
+    context_window = state.get('context_window', DEFAULT_TOKEN_BUDGET)
+    system_role = sanitize_system_role(state.get("system_role", ""))
+    tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
+    custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
+
+    sys_prompt = SystemMessage(content=build_system_prompt(
+        context_window=context_window,
+        system_role=system_role,
+        tool_instructions=tool_instructions,
+        custom_instructions=custom_instructions
+    ))
+    force_prompt = SystemMessage(
+        content=(
+            "Tool iteration budget reached. Do not call tools. "
+            "Provide the best possible final answer from already retrieved context. "
+            "Clearly label uncertainty if key facts are missing."
+        )
+    )
+
+    response = await invoke_with_retry(llm.ainvoke, [sys_prompt] + messages + [force_prompt])
+    return {"messages": [response], "iteration_count": iteration}
+
+
 def should_continue(state: AgentState):
     messages = state["messages"]
     last_message = messages[-1]
@@ -311,17 +342,7 @@ def should_continue(state: AgentState):
     if getattr(last_message, "tool_calls", None):
         if iteration_count >= max_iterations:
             logger.warning(f"Reaching max agent iterations ({iteration_count}/{max_iterations}). Forcing termination.")
-            # We add a small instruction message to the assistant to force a final answer if they tried to call tools again
-            # actually should_continue just drives the router. If we return END, the graph stops.
-            # The last message IS a tool call, so if we END now, the user sees tool calls but no final answer.
-            # Usually better to let it go back to agent one last time with a warning.
-            # But if iteration_count is already max_iterations and they wanted tools, we should probably just stop and let them 
-            # try to answer in the NEXT step.
-            # Re-thinking: if it's at max_iterations and they want tools, we return END. 
-            # The chat_service will take final_messages[-1].content. If it's a tool call, that's bad.
-            # Better strategy: if iteration_count == max_iterations and tool_calls exist, swap the node to a 'force_answer' node or just continue.
-            # Let's stick to max_iterations as a hard stop for the loop.
-            return END
+            return "force_final_answer"
         return "tools"
     return END
 
@@ -335,11 +356,13 @@ def clarification_router(state: AgentState):
 workflow = StateGraph(AgentState)
 workflow.add_node("agent", call_model)
 workflow.add_node("tools", OrchestratorToolNode(tools_list))
+workflow.add_node("force_final_answer", force_final_answer)
 
 workflow.add_edge(START, "agent")
-workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
+workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", "force_final_answer": "force_final_answer", END: END})
 
 workflow.add_conditional_edges("tools", clarification_router, {END: END, "agent": "agent"})
+workflow.add_edge("force_final_answer", END)
 
 app = workflow.compile()
 

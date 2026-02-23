@@ -13,11 +13,58 @@ from typing import List, Dict, Any
 from langchain_core.messages import AIMessage, HumanMessage
 
 from rag import index_chat_memory_for_thread
-from models import DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
-from database import create_message, MessageRole
+from models import (
+    DEFAULT_TOKEN_BUDGET,
+    DEFAULT_MAX_ITERATIONS,
+    RATIO_SEMANTIC_MEMORY,
+    CHARS_PER_TOKEN,
+)
+from database import create_message, get_recent_messages, update_message_context_compact, MessageRole
 from reasoning import normalize_ai_response
 
 logger = logging.getLogger(__name__)
+
+
+async def _build_recent_history_messages(
+    thread_id: str,
+    context_window: int,
+) -> List[Any]:
+    """
+    Load a compact recent transcript so follow-up questions remain grounded
+    even when the model skips history-related tool calls.
+    """
+    safe_window = max(DEFAULT_TOKEN_BUDGET, int(context_window or DEFAULT_TOKEN_BUDGET))
+    # Reuse the semantic-memory allocation ratio as the direct recent-history budget.
+    history_budget_chars = int(safe_window * RATIO_SEMANTIC_MEMORY * CHARS_PER_TOKEN)
+
+    # Fetch a ratio-scaled candidate pool, then pack newest->oldest within budget.
+    candidate_limit = max(1, int((safe_window * RATIO_SEMANTIC_MEMORY) / max(1, DEFAULT_MAX_ITERATIONS)))
+    recent = await get_recent_messages(thread_id, limit=candidate_limit)
+
+    packed_reversed: List[Any] = []
+    used_chars = 0
+
+    for msg in reversed(recent):
+        if msg.role == MessageRole.USER:
+            text = (msg.content or "").strip()
+            message_obj = HumanMessage
+        elif msg.role == MessageRole.ASSISTANT:
+            text = (msg.context_compact or msg.content or "").strip()
+            message_obj = AIMessage
+        else:
+            continue
+
+        if not text:
+            continue
+
+        text_chars = len(text)
+        if packed_reversed and used_chars + text_chars > history_budget_chars:
+            break
+
+        packed_reversed.append(message_obj(content=text))
+        used_chars += text_chars
+
+    return list(reversed(packed_reversed))
 
 
 async def handle_chat(req) -> Dict[str, Any]:
@@ -92,8 +139,12 @@ async def handle_thread_chat(
     try:
         from agent import app as agent_app, AgentState
         
+        recent_history_messages = await _build_recent_history_messages(
+            thread_id=thread_id,
+            context_window=context_window,
+        )
         initial_state = {
-            "messages": [HumanMessage(content=question)],
+            "messages": recent_history_messages + [HumanMessage(content=question)],
             "thread_id": thread_id,
             "llm_model": llm_model,
             "embedding_model": embed_model,
@@ -153,7 +204,7 @@ async def handle_thread_chat(
         
         # Index in semantic memory if not a clarification
         if not clarification_options:
-            await index_chat_memory_for_thread(
+            indexing_result = await index_chat_memory_for_thread(
                 thread_id=thread_id,
                 message_id=assistant_message.id,
                 question=question,
@@ -162,6 +213,9 @@ async def handle_thread_chat(
                 llm_name=llm_model,
                 context_window=context_window
             )
+            compact_text = indexing_result.get("memory_compact_text") if isinstance(indexing_result, dict) else None
+            if compact_text:
+                await update_message_context_compact(assistant_message.id, compact_text)
         
         return {
             "answer": answer,

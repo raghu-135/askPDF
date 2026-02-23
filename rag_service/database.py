@@ -65,6 +65,7 @@ class Message(BaseModel):
     thread_id: str
     role: MessageRole
     content: str
+    context_compact: Optional[str] = None
     reasoning: Optional[str] = None
     reasoning_available: bool = False
     reasoning_format: str = "none"
@@ -101,6 +102,7 @@ CREATE TABLE IF NOT EXISTS messages (
     thread_id TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
+    context_compact TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
 );
@@ -121,6 +123,7 @@ async def init_db():
             "ALTER TABLE messages ADD COLUMN reasoning TEXT",
             "ALTER TABLE messages ADD COLUMN reasoning_available INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE messages ADD COLUMN reasoning_format TEXT NOT NULL DEFAULT 'none'",
+            "ALTER TABLE messages ADD COLUMN context_compact TEXT",
             "ALTER TABLE threads ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'",
         ]
         for stmt in migrations:
@@ -359,6 +362,7 @@ async def create_message(
     thread_id: str,
     role: MessageRole,
     content: str,
+    context_compact: Optional[str] = None,
     reasoning: Optional[str] = None,
     reasoning_available: bool = False,
     reasoning_format: str = "none",
@@ -371,14 +375,15 @@ async def create_message(
         await db.execute(
             """
             INSERT INTO messages (
-                id, thread_id, role, content, reasoning, reasoning_available, reasoning_format, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                id, thread_id, role, content, context_compact, reasoning, reasoning_available, reasoning_format, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message_id,
                 thread_id,
                 role.value,
                 content,
+                context_compact,
                 reasoning,
                 int(reasoning_available),
                 reasoning_format,
@@ -392,6 +397,7 @@ async def create_message(
         thread_id=thread_id,
         role=role,
         content=content,
+        context_compact=context_compact,
         reasoning=reasoning,
         reasoning_available=reasoning_available,
         reasoning_format=reasoning_format,
@@ -406,6 +412,7 @@ async def get_message(message_id: str) -> Optional[Message]:
         cursor = await db.execute(
             """
             SELECT id, thread_id, role, content, reasoning, reasoning_available, reasoning_format, created_at
+                   , context_compact
             FROM messages
             WHERE id = ?
             """,
@@ -418,6 +425,7 @@ async def get_message(message_id: str) -> Optional[Message]:
                 thread_id=row["thread_id"],
                 role=MessageRole(row["role"]),
                 content=row["content"],
+                context_compact=row["context_compact"],
                 reasoning=row["reasoning"],
                 reasoning_available=bool(row["reasoning_available"]),
                 reasoning_format=row["reasoning_format"] or "none",
@@ -435,7 +443,7 @@ async def get_thread_messages(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
-            SELECT id, thread_id, role, content, reasoning, reasoning_available, reasoning_format, created_at 
+            SELECT id, thread_id, role, content, context_compact, reasoning, reasoning_available, reasoning_format, created_at 
             FROM messages 
             WHERE thread_id = ?
             ORDER BY created_at ASC
@@ -448,6 +456,7 @@ async def get_thread_messages(
                 thread_id=row["thread_id"],
                 role=MessageRole(row["role"]),
                 content=row["content"],
+                context_compact=row["context_compact"],
                 reasoning=row["reasoning"],
                 reasoning_available=bool(row["reasoning_available"]),
                 reasoning_format=row["reasoning_format"] or "none",
@@ -462,7 +471,7 @@ async def get_recent_messages(thread_id: str, limit: int = 10) -> List[Message]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
-            SELECT id, thread_id, role, content, reasoning, reasoning_available, reasoning_format, created_at 
+            SELECT id, thread_id, role, content, context_compact, reasoning, reasoning_available, reasoning_format, created_at 
             FROM messages 
             WHERE thread_id = ?
             ORDER BY created_at DESC
@@ -476,6 +485,7 @@ async def get_recent_messages(thread_id: str, limit: int = 10) -> List[Message]:
                 thread_id=row["thread_id"],
                 role=MessageRole(row["role"]),
                 content=row["content"],
+                context_compact=row["context_compact"],
                 reasoning=row["reasoning"],
                 reasoning_available=bool(row["reasoning_available"]),
                 reasoning_format=row["reasoning_format"] or "none",
@@ -484,6 +494,17 @@ async def get_recent_messages(thread_id: str, limit: int = 10) -> List[Message]:
             for row in rows
         ]
         return list(reversed(messages))
+
+
+async def update_message_context_compact(message_id: str, context_compact: str) -> bool:
+    """Update compact context text for a message."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE messages SET context_compact = ? WHERE id = ?",
+            (context_compact, message_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 async def delete_message(message_id: str) -> bool:

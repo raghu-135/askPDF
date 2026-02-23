@@ -139,24 +139,41 @@ async def get_chat_chunks(
     Format, optionally summarize, and chunk a QA pair into text snippets for memory retrieval.
     This utilizes LangChain splitters for consistent chunking and dynamic thresholding.
     """
+    compact_text, _ = await build_compact_chat_memory_text(
+        question=question,
+        answer=answer,
+        llm_name=llm_name,
+        context_window=context_window,
+    )
+    return split_chat_memory_text(compact_text)
+
+
+async def build_compact_chat_memory_text(
+    question: str,
+    answer: str,
+    llm_name: Optional[str] = None,
+    context_window: int = DEFAULT_TOKEN_BUDGET
+) -> tuple[str, bool]:
+    """
+    Build compact QA text for semantic memory.
+    Returns (text, was_summarized).
+    """
     qa_text = f"Q: {question}\nA: {answer}"
-    
-    # Calculate summarization threshold based on percentage of target context window
     summarization_threshold_chars = int(context_window * RATIO_MEMORY_SUMMARIZATION_THRESHOLD * CHARS_PER_TOKEN)
 
-    # If the QA pair is taking too much budget, we summarize it first
     if len(qa_text) > summarization_threshold_chars and llm_name:
         logger.info(f"QA pair length ({len(qa_text)}) > threshold ({summarization_threshold_chars}), summarizing.")
         summary = await summarize_qa(question, answer, llm_name, context_window)
-        qa_text = f"Q: {question}\nSummary: {summary}"
-    
-    # Create LangChain Document objects for more complex metadata/future usage
-    doc = Document(page_content=qa_text)
-    
-    # Use LangChain's splitter directly on the document
+        return f"Q: {question}\nSummary: {summary}", True
+
+    return qa_text, False
+
+
+def split_chat_memory_text(compact_text: str) -> List[str]:
+    """Chunk compact chat memory text for vector indexing."""
+    doc = Document(page_content=compact_text)
     splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
     chunks = splitter.split_documents([doc])
-    
     return [c.page_content for c in chunks]
 
 
@@ -308,8 +325,14 @@ async def index_chat_memory_for_thread(
     db_client = QdrantAdapter()
     
     try:
-        # 1. Get chunks for the chat message (with optional summarization)
-        chunks = await get_chat_chunks(question, answer, llm_name, context_window)
+        # 1. Build compact memory text and chunk for indexing.
+        compact_text, was_summarized = await build_compact_chat_memory_text(
+            question=question,
+            answer=answer,
+            llm_name=llm_name,
+            context_window=context_window,
+        )
+        chunks = split_chat_memory_text(compact_text)
         
         # 2. Generate embeddings
         vectors = await generate_embeddings(chunks, embedding_model_name)
@@ -326,7 +349,9 @@ async def index_chat_memory_for_thread(
         
         return {
             "status": "success",
-            "chunks_count": indexed_count
+            "chunks_count": indexed_count,
+            "memory_compact_text": compact_text,
+            "memory_was_summarized": was_summarized,
         }
     except Exception as e:
         logger.error(f"Error indexing chat memory for thread {thread_id}: {e}", exc_info=True)
