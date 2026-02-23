@@ -8,10 +8,11 @@ file associations, and message history for the RAG service.
 import os
 import uuid
 import logging
+import json
 import aiosqlite
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 
 
@@ -31,10 +32,20 @@ class MessageRole(str, Enum):
 logger = logging.getLogger(__name__)
 
 
+def _parse_settings(raw: Optional[str]) -> Dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
 class Thread(BaseModel):
     id: str
     name: str
     embed_model: str
+    settings: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
 
 
@@ -66,6 +77,7 @@ CREATE TABLE IF NOT EXISTS threads (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     embed_model TEXT NOT NULL,
+    settings TEXT NOT NULL DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -109,6 +121,7 @@ async def init_db():
             "ALTER TABLE messages ADD COLUMN reasoning TEXT",
             "ALTER TABLE messages ADD COLUMN reasoning_available INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE messages ADD COLUMN reasoning_format TEXT NOT NULL DEFAULT 'none'",
+            "ALTER TABLE threads ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'",
         ]
         for stmt in migrations:
             try:
@@ -137,12 +150,12 @@ async def create_thread(name: str, embed_model: str) -> Thread:
     
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO threads (id, name, embed_model, created_at) VALUES (?, ?, ?, ?)",
-            (thread_id, name, embed_model, created_at)
+            "INSERT INTO threads (id, name, embed_model, settings, created_at) VALUES (?, ?, ?, ?, ?)",
+            (thread_id, name, embed_model, "{}", created_at)
         )
         await db.commit()
     
-    return Thread(id=thread_id, name=name, embed_model=embed_model, created_at=created_at)
+    return Thread(id=thread_id, name=name, embed_model=embed_model, settings={}, created_at=created_at)
 
 
 async def get_thread(thread_id: str) -> Optional[Thread]:
@@ -150,7 +163,7 @@ async def get_thread(thread_id: str) -> Optional[Thread]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT id, name, embed_model, created_at FROM threads WHERE id = ?",
+            "SELECT id, name, embed_model, settings, created_at FROM threads WHERE id = ?",
             (thread_id,)
         )
         row = await cursor.fetchone()
@@ -159,9 +172,38 @@ async def get_thread(thread_id: str) -> Optional[Thread]:
                 id=row["id"],
                 name=row["name"],
                 embed_model=row["embed_model"],
+                settings=_parse_settings(row["settings"]),
                 created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"]
             )
     return None
+
+
+async def get_thread_settings(thread_id: str) -> Dict[str, Any]:
+    """Get persisted settings for a thread."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT settings FROM threads WHERE id = ?",
+            (thread_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {}
+        return _parse_settings(row["settings"])
+
+
+async def update_thread_settings(thread_id: str, settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Replace persisted settings for a thread."""
+    payload = json.dumps(settings or {})
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE threads SET settings = ? WHERE id = ?",
+            (payload, thread_id)
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            return None
+    return await get_thread_settings(thread_id)
 
 
 async def list_threads() -> List[Dict[str, Any]]:
@@ -170,7 +212,7 @@ async def list_threads() -> List[Dict[str, Any]]:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
             SELECT 
-                t.id, t.name, t.embed_model, t.created_at,
+                t.id, t.name, t.embed_model, t.settings, t.created_at,
                 COUNT(DISTINCT m.id) as message_count,
                 COUNT(DISTINCT tf.file_hash) as file_count
             FROM threads t
@@ -185,6 +227,7 @@ async def list_threads() -> List[Dict[str, Any]]:
                 "id": row["id"],
                 "name": row["name"],
                 "embed_model": row["embed_model"],
+                "settings": _parse_settings(row["settings"]),
                 "created_at": row["created_at"],
                 "message_count": row["message_count"],
                 "file_count": row["file_count"]

@@ -67,9 +67,31 @@ export interface Thread {
   id: string;
   name: string;
   embed_model: string;
+  settings?: ThreadSettings;
   created_at: string;
   message_count?: number;
   file_count?: number;
+}
+
+export interface ThreadSettings {
+  max_iterations: number;
+  system_role: string;
+  tool_instructions: Record<string, string>;
+  custom_instructions: string;
+}
+
+export interface PromptToolDefinition {
+  id: string;
+  display_name: string;
+  description: string;
+  default_prompt: string;
+}
+
+export interface PromptDefaults {
+  max_iterations: number;
+  system_role: string;
+  tool_instructions: Record<string, string>;
+  custom_instructions: string;
 }
 
 export interface ThreadFile {
@@ -116,6 +138,46 @@ export async function updateThread(threadId: string, name: string): Promise<Thre
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getThreadSettings(threadId: string): Promise<ThreadSettings> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/settings`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateThreadSettings(
+  threadId: string,
+  settings: Partial<ThreadSettings>
+): Promise<ThreadSettings> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPromptTools(): Promise<{ tools: PromptToolDefinition[]; defaults: PromptDefaults }> {
+  const res = await fetch(`${RAG_API_BASE}/prompt-tools`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPromptPreview(payload: {
+  context_window: number;
+  system_role: string;
+  tool_instructions: Record<string, string>;
+  custom_instructions: string;
+}): Promise<{ prompt: string }> {
+  const res = await fetch(`${RAG_API_BASE}/prompt-preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -176,7 +238,11 @@ export async function threadChat(
   question: string,
   llmModel: string,
   useWebSearch: boolean = false,
-  contextWindowSize: number = 4096
+  contextWindowSize: number = 4096,
+  maxIterations?: number,
+  systemRoleOverride?: string,
+  toolInstructionsOverride?: Record<string, string>,
+  customInstructionsOverride?: string
 ): Promise<{
   answer: string;
   user_message_id: string;
@@ -187,16 +253,30 @@ export async function threadChat(
   reasoning_available?: boolean;
   reasoning_format?: 'structured' | 'tagged_text' | 'none';
 }> {
+  const payload: any = {
+    thread_id: threadId,
+    question,
+    llm_model: llmModel,
+    use_web_search: useWebSearch,
+    context_window: contextWindowSize
+  };
+  if (typeof maxIterations === "number") {
+    payload.max_iterations = maxIterations;
+  }
+  if (typeof systemRoleOverride === "string") {
+    payload.system_role_override = systemRoleOverride;
+  }
+  if (toolInstructionsOverride && typeof toolInstructionsOverride === "object") {
+    payload.tool_instructions_override = toolInstructionsOverride;
+  }
+  if (typeof customInstructionsOverride === "string") {
+    payload.custom_instructions_override = customInstructionsOverride;
+  }
+
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      thread_id: threadId,
-      question,
-      llm_model: llmModel,
-      use_web_search: useWebSearch,
-      context_window: contextWindowSize
-    })
+    body: JSON.stringify(payload)
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 # Token budget configuration
 DEFAULT_TOKEN_BUDGET = 4096
 DEFAULT_MAX_ITERATIONS = 10
+MIN_MAX_ITERATIONS = 1
+MAX_MAX_ITERATIONS = 30
+MAX_CUSTOM_INSTRUCTIONS_CHARS = 2000
+MAX_SYSTEM_ROLE_CHARS = 500
+MAX_TOOL_INSTRUCTION_CHARS = 500
 
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
@@ -29,6 +34,24 @@ RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window
 
 # Chars per token estimate
 CHARS_PER_TOKEN = 4
+
+
+def default_thread_settings():
+    """Default persisted settings for a thread."""
+    return {
+        "max_iterations": DEFAULT_MAX_ITERATIONS,
+        "system_role": "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers.",
+        "tool_instructions": {},
+        "custom_instructions": "",
+    }
+
+
+def merge_thread_settings(overrides=None):
+    """Merge arbitrary overrides onto defaults while preserving known keys."""
+    merged = default_thread_settings()
+    if isinstance(overrides, dict):
+        merged.update({k: overrides.get(k) for k in merged.keys() if k in overrides})
+    return merged
 
 
 def _get_base_url() -> str:

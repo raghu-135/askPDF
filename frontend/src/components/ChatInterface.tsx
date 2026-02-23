@@ -20,6 +20,10 @@ import {
     Tooltip,
     Chip,
     CircularProgress,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogActions,
 } from '@mui/material';
 import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
 import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
@@ -27,16 +31,23 @@ import SendIcon from '@mui/icons-material/Send';
 import DeleteIcon from '@mui/icons-material/Delete';
 import MemoryIcon from '@mui/icons-material/Memory';
 import LockIcon from '@mui/icons-material/Lock';
+import SettingsIcon from '@mui/icons-material/Settings';
+import ReplayIcon from '@mui/icons-material/Replay';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
 import { 
     Thread, 
     Message,
+    PromptToolDefinition,
     threadChat, 
     getThreadMessages, 
     deleteMessage,
-    getThreadIndexStatus
+    getThreadIndexStatus,
+    getThreadSettings,
+    updateThreadSettings,
+    getPromptTools,
+    getPromptPreview
 } from '../lib/api';
 import { fetchAvailableLlmModels, checkLlmModelReady } from '../lib/chat-utils';
 
@@ -78,6 +89,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
     const [contextWindow, setContextWindow] = useState(4096);
+    const [maxIterations, setMaxIterations] = useState(10);
+    const [defaultMaxIterations, setDefaultMaxIterations] = useState(10);
+    const [defaultSystemRole, setDefaultSystemRole] = useState('');
+    const [defaultCustomInstructions, setDefaultCustomInstructions] = useState('');
+    const [systemRole, setSystemRole] = useState('');
+    const [toolCatalog, setToolCatalog] = useState<PromptToolDefinition[]>([]);
+    const [toolInstructions, setToolInstructions] = useState<Record<string, string>>({});
+    const [customInstructions, setCustomInstructions] = useState('');
+    const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+    const [savingSettings, setSavingSettings] = useState(false);
+    const [promptPreview, setPromptPreview] = useState('');
     const [showContextHighlight, setShowContextHighlight] = useState(false);
     const [tooltipOpen, setTooltipOpen] = useState(false);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
@@ -95,11 +117,56 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (activeThread) {
             loadMessages();
             checkIndexStatus();
+            loadThreadSettings();
         } else {
             setMessages([]);
             setIndexingStatus('ready');
+            setMaxIterations(defaultMaxIterations);
+            setSystemRole(defaultSystemRole);
+            setToolInstructions({});
+            setCustomInstructions(defaultCustomInstructions);
         }
-    }, [activeThread?.id, activeThread?.file_count]);
+    }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions]);
+
+    useEffect(() => {
+        const loadTools = async () => {
+            try {
+                const res = await getPromptTools();
+                setToolCatalog(res.tools || []);
+                if (res.defaults) {
+                    setDefaultMaxIterations(res.defaults.max_iterations ?? 10);
+                    setDefaultSystemRole(res.defaults.system_role ?? '');
+                    setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
+                    if (!activeThread) {
+                        setMaxIterations(res.defaults.max_iterations ?? 10);
+                        setSystemRole(res.defaults.system_role ?? '');
+                        setCustomInstructions(res.defaults.custom_instructions ?? '');
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load prompt tools:', error);
+                setToolCatalog([]);
+            }
+        };
+        loadTools();
+    }, [activeThread]);
+
+    const loadThreadSettings = async () => {
+        if (!activeThread) return;
+        try {
+            const settings = await getThreadSettings(activeThread.id);
+            setMaxIterations(settings.max_iterations ?? 10);
+            setSystemRole(settings.system_role ?? defaultSystemRole);
+            setToolInstructions(settings.tool_instructions ?? {});
+            setCustomInstructions(settings.custom_instructions ?? defaultCustomInstructions);
+        } catch (error) {
+            console.error('Failed to load thread settings:', error);
+            setMaxIterations(defaultMaxIterations);
+            setSystemRole(defaultSystemRole);
+            setToolInstructions({});
+            setCustomInstructions(defaultCustomInstructions);
+        }
+    };
 
     const loadMessages = async () => {
         if (!activeThread) return;
@@ -151,6 +218,68 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (activeSource !== 'chat' || currentChatId === null) return null;
         return chatSentences[currentChatId]?.messageIndex;
     }, [currentChatId, chatSentences, activeSource]);
+
+    const effectiveToolInstructions = useMemo(() => {
+        const merged: Record<string, string> = {};
+        toolCatalog.forEach((toolDef) => {
+            merged[toolDef.id] = toolInstructions[toolDef.id] || toolDef.default_prompt;
+        });
+        return merged;
+    }, [toolCatalog, toolInstructions]);
+
+    useEffect(() => {
+        if (!settingsDialogOpen) return;
+        let cancelled = false;
+        const timeoutId = setTimeout(async () => {
+            try {
+                const res = await getPromptPreview({
+                    context_window: contextWindow,
+                    system_role: systemRole,
+                    tool_instructions: effectiveToolInstructions,
+                    custom_instructions: customInstructions,
+                });
+                if (!cancelled) {
+                    setPromptPreview(res.prompt || '');
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setPromptPreview('Unable to load prompt preview.');
+                }
+            }
+        }, 200);
+        return () => {
+            cancelled = true;
+            clearTimeout(timeoutId);
+        };
+    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions]);
+
+    const resetAllSettingsToDefault = () => {
+        const defaults: Record<string, string> = {};
+        toolCatalog.forEach((toolDef) => {
+            defaults[toolDef.id] = toolDef.default_prompt;
+        });
+        setMaxIterations(defaultMaxIterations);
+        setSystemRole(defaultSystemRole);
+        setToolInstructions(defaults);
+        setCustomInstructions(defaultCustomInstructions);
+    };
+
+    const resetToolInstructionToDefault = (toolId: string) => {
+        const toolDef = toolCatalog.find((t) => t.id === toolId);
+        if (!toolDef) return;
+        setToolInstructions((prev) => ({
+            ...prev,
+            [toolId]: toolDef.default_prompt,
+        }));
+    };
+
+    const resetSystemRoleToDefault = () => {
+        setSystemRole(defaultSystemRole);
+    };
+
+    const resetCustomInstructionsToDefault = () => {
+        setCustomInstructions('');
+    };
 
     useEffect(() => {
         if (activeMessageIndex !== null && messageRefs.current[activeMessageIndex]) {
@@ -247,7 +376,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 userContent,
                 llmModel,
                 useWebSearch,
-                contextWindow
+                contextWindow,
+                maxIterations,
+                systemRole,
+                effectiveToolInstructions,
+                customInstructions
             );
 
             // Update messages with real IDs and add assistant response
@@ -322,6 +455,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
+    const handleSaveThreadSettings = async () => {
+        if (!activeThread) return;
+        try {
+            setSavingSettings(true);
+            const saved = await updateThreadSettings(activeThread.id, {
+                max_iterations: Math.max(1, Math.min(30, maxIterations)),
+                system_role: systemRole,
+                tool_instructions: effectiveToolInstructions,
+                custom_instructions: customInstructions,
+            });
+            setMaxIterations(saved.max_iterations);
+            setSystemRole(saved.system_role);
+            setToolInstructions(saved.tool_instructions || {});
+            setCustomInstructions(saved.custom_instructions);
+            setSettingsDialogOpen(false);
+        } catch (error) {
+            console.error('Failed to save thread settings:', error);
+        } finally {
+            setSavingSettings(false);
+        }
+    };
+
     if (!activeThread) {
         return (
             <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: theme.palette.background.default, color: theme.palette.text.primary }}>
@@ -352,6 +507,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Tooltip>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
+                    <Tooltip title="AI prompt settings for this thread" placement="top">
+                        <IconButton
+                            size="small"
+                            onClick={() => setSettingsDialogOpen(true)}
+                            sx={{ p: 0.5 }}
+                        >
+                            <SettingsIcon />
+                        </IconButton>
+                    </Tooltip>
                     <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
                         <IconButton
                             size="small"
@@ -640,6 +804,133 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </IconButton>
                 </Box>
             </Box>
+
+            <Dialog
+                open={settingsDialogOpen}
+                onClose={() => !savingSettings && setSettingsDialogOpen(false)}
+                maxWidth="sm"
+                fullWidth
+            >
+                <DialogTitle>AI Prompt Settings</DialogTitle>
+                <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography variant="body2" color="text.secondary">
+                            These settings are saved per thread and used by default for every message.
+                        </Typography>
+                        <Tooltip title="Reset all settings to default">
+                            <IconButton
+                                size="medium"
+                                onClick={resetAllSettingsToDefault}
+                                sx={{
+                                    width: 36,
+                                    height: 36,
+                                    border: 1,
+                                    borderColor: 'divider',
+                                }}
+                            >
+                                <ReplayIcon fontSize="medium" />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                    <TextField
+                        label="Max tool iterations"
+                        type="number"
+                        value={maxIterations}
+                        onChange={(e) => setMaxIterations(Math.max(1, Math.min(30, parseInt(e.target.value) || 1)))}
+                        inputProps={{ min: 1, max: 30 }}
+                        helperText="Lower is faster; higher allows deeper research."
+                    />
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                        <TextField
+                            fullWidth
+                            label="System role"
+                            value={systemRole}
+                            onChange={(e) => setSystemRole(e.target.value)}
+                            multiline
+                            minRows={2}
+                            maxRows={4}
+                            helperText="Defines the assistant's role for this thread."
+                        />
+                        <Tooltip title="Reset System role to default">
+                            <IconButton
+                                size="small"
+                                sx={{ mt: 1 }}
+                                onClick={resetSystemRoleToDefault}
+                            >
+                                <ReplayIcon fontSize="small" />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                    <Typography variant="body2" color="text.secondary">
+                        These are the tools available in the app. You can configure how the assistant should use each one.
+                    </Typography>
+                    {toolCatalog.map((toolDef) => (
+                        <Box key={toolDef.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                            <TextField
+                                fullWidth
+                                label={toolDef.display_name}
+                                value={effectiveToolInstructions[toolDef.id] || ''}
+                                onChange={(e) =>
+                                    setToolInstructions((prev) => ({
+                                        ...prev,
+                                        [toolDef.id]: e.target.value,
+                                    }))
+                                }
+                                multiline
+                                minRows={2}
+                                maxRows={6}
+                                helperText={toolDef.description}
+                            />
+                            <Tooltip title={`Reset ${toolDef.display_name} to default`}>
+                                <IconButton
+                                    size="small"
+                                    sx={{ mt: 1 }}
+                                    onClick={() => resetToolInstructionToDefault(toolDef.id)}
+                                >
+                                    <ReplayIcon fontSize="small" />
+                                </IconButton>
+                            </Tooltip>
+                        </Box>
+                    ))}
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                        <TextField
+                            fullWidth
+                            label="Custom instructions"
+                            value={customInstructions}
+                            onChange={(e) => setCustomInstructions(e.target.value)}
+                            multiline
+                            minRows={4}
+                            maxRows={10}
+                            helperText="Locked tool and context constraints still apply."
+                        />
+                        <Tooltip title="Reset Custom instructions to default">
+                            <IconButton
+                                size="small"
+                                sx={{ mt: 1 }}
+                                onClick={resetCustomInstructionsToDefault}
+                            >
+                                <ReplayIcon fontSize="small" />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                    <TextField
+                        label="Full Prompt Preview"
+                        value={promptPreview}
+                        multiline
+                        minRows={14}
+                        maxRows={24}
+                        InputProps={{ readOnly: true }}
+                    />
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setSettingsDialogOpen(false)} disabled={savingSettings}>
+                        Cancel
+                    </Button>
+                    <Button onClick={handleSaveThreadSettings} variant="contained" disabled={savingSettings}>
+                        {savingSettings ? 'Saving...' : 'Save'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Paper>
     );
 };

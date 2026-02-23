@@ -45,6 +45,9 @@ async def handle_chat(req) -> Dict[str, Any]:
         "answer": "",
         "iteration_count": 0,
         "max_iterations": getattr(req, 'max_iterations', DEFAULT_MAX_ITERATIONS),
+        "system_role": "",
+        "tool_instructions": {},
+        "custom_instructions": "",
     }
     
     # Provide a dummy config for backward compatibility
@@ -81,6 +84,10 @@ async def handle_thread_chat(
     llm_model = req.llm_model
     use_web_search = getattr(req, 'use_web_search', False)
     context_window = getattr(req, 'context_window', DEFAULT_TOKEN_BUDGET)
+    max_iterations = getattr(req, 'max_iterations', None) or DEFAULT_MAX_ITERATIONS
+    system_role = getattr(req, 'system_role_override', "") or ""
+    tool_instructions = getattr(req, 'tool_instructions_override', None) or {}
+    custom_instructions = getattr(req, 'custom_instructions_override', "") or ""
     
     try:
         from agent import app as agent_app, AgentState
@@ -96,7 +103,10 @@ async def handle_thread_chat(
             "used_chat_ids": [],
             "clarification_options": None,
             "iteration_count": 0,
-            "max_iterations": getattr(req, 'max_iterations', DEFAULT_MAX_ITERATIONS)
+            "max_iterations": max_iterations,
+            "system_role": system_role,
+            "tool_instructions": tool_instructions,
+            "custom_instructions": custom_instructions,
         }
         
         config = {
