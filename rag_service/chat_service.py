@@ -8,12 +8,14 @@ This module provides:
 
 import asyncio
 import logging
+import json
 from typing import List, Dict, Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, BaseMessage
 
 from rag import index_chat_memory_for_thread
 from models import (
+    get_llm,
     DEFAULT_TOKEN_BUDGET,
     DEFAULT_MAX_ITERATIONS,
     RATIO_SEMANTIC_MEMORY,
@@ -23,6 +25,67 @@ from database import create_message, get_recent_messages, update_message_context
 from reasoning import normalize_ai_response
 
 logger = logging.getLogger(__name__)
+
+
+async def analyze_user_intent(
+    question: str,
+    recent_history: List[BaseMessage],
+    llm_model: str
+) -> Dict[str, Any]:
+    """
+    Analyzes the user's intent to determine if it's a follow-up, 
+    a new standalone question, or needs clarification.
+    """
+    if not recent_history:
+        return {"status": "CLEAR_STANDALONE", "rewritten_query": question, "clarification_options": None}
+
+    llm = get_llm(llm_model, temperature=0.0)
+    
+    history_text = ""
+    for msg in recent_history:
+        role = "User" if isinstance(msg, HumanMessage) else "Assistant"
+        history_text += f"{role}: {msg.content}\n"
+
+    system_prompt = """You are an expert at analyzing user intent and decontextualizing follow-up questions.
+Given a conversation history and a new user message:
+1. Determine if the message is a CLEAR_STANDALONE question, a CLEAR_FOLLOWUP that needs context, or is AMBIGUOUS.
+2. If it's CLEAR_FOLLOWUP, rewrite it into a single, standalone question that incorporates all necessary context from history.
+3. If it's AMBIGUOUS, provide 2-3 specific, distinct ways the question could be interpreted based on recent context.
+4. If it's CLEAR_STANDALONE, you can optionally refine it for better retrieval but keep its core meaning.
+
+IMPORTANT: Your rewritten_query MUST be a single, natural question. Do NOT prefix it with "Q:" or use "Q: ... A: ..." format.
+
+Respond ONLY with a JSON object:
+{
+  "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
+  "rewritten_query": "The standalone version of the question",
+  "clarification_options": ["Option A", "Option B"] | null
+}"""
+
+    user_input = f"HISTORY:\n{history_text}\n\nNEW MESSAGE: {question}"
+    
+    try:
+        response = await llm.ainvoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_input)
+        ])
+        
+        # Parse JSON from response
+        content = response.content.strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+            
+        result = json.loads(content)
+        return {
+            "status": result.get("status", "CLEAR_STANDALONE"),
+            "rewritten_query": result.get("rewritten_query", question),
+            "clarification_options": result.get("clarification_options")
+        }
+    except Exception as e:
+        logger.error(f"Error in analyze_user_intent: {e}")
+        return {"status": "CLEAR_STANDALONE", "rewritten_query": question, "clarification_options": None}
 
 
 async def _build_recent_history_messages(
@@ -139,10 +202,35 @@ async def handle_thread_chat(
     try:
         from agent import app as agent_app, AgentState
         
+        # 1. Load context history for rewriting
         recent_history_messages = await _build_recent_history_messages(
             thread_id=thread_id,
             context_window=context_window,
         )
+        
+        # 2. Analyze intent and rewrite if necessary
+        intent = await analyze_user_intent(question, recent_history_messages, llm_model)
+        
+        # If ambiguous, return early with clarification options
+        if intent["status"] == "AMBIGUOUS" and intent.get("clarification_options"):
+            return {
+                "answer": "I'm not sure I understand. Could you clarify which of these you meant?",
+                "clarification_options": intent["clarification_options"],
+                "rewritten_query": intent.get("rewritten_query") or question,
+                "user_message_id": None,
+                "assistant_message_id": None,
+                "used_chat_ids": [],
+                "pdf_sources": [],
+                "reasoning": "",
+                "reasoning_available": False,
+                "reasoning_format": "none",
+                "context": "Needs human-in-the-loop clarification."
+            }
+            
+        # Use rewritten query for the rest of path
+        if intent.get("rewritten_query"):
+            question = intent["rewritten_query"]
+
         initial_state = {
             "messages": recent_history_messages + [HumanMessage(content=question)],
             "thread_id": thread_id,
@@ -219,6 +307,7 @@ async def handle_thread_chat(
         
         return {
             "answer": answer,
+            "rewritten_query": question, # Return rewritten version for UI
             "user_message_id": user_message.id,
             "assistant_message_id": assistant_message.id,
             "used_chat_ids": used_chat_ids,

@@ -53,6 +53,71 @@ class AgentState(TypedDict):
 
 
 @tool
+async def get_history_stats(config: RunnableConfig = None) -> str:
+    """
+    Get statistics about the current conversation history, including total message count 
+    and average message size. This helps determine how many historical messages can fit 
+    into the context window.
+    """
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("thread_id")
+        if not thread_id:
+            return "No thread context found."
+        
+        from database import get_thread_messages
+        messages = await get_thread_messages(thread_id, limit=1000)
+        
+        if not messages:
+            return "History is empty."
+            
+        total_count = len(messages)
+        user_msgs = [m for m in messages if m.role == MessageRole.USER]
+        assistant_msgs = [m for m in messages if m.role == MessageRole.ASSISTANT]
+        
+        avg_len = sum(len(m.content) for m in messages) / total_count if total_count > 0 else 0
+        
+        return json.dumps({
+            "total_messages": total_count,
+            "user_messages": len(user_msgs),
+            "assistant_messages": len(assistant_msgs),
+            "average_message_chars": round(avg_len, 2),
+            "estimated_history_tokens": round((avg_len * total_count) / 4, 0)
+        })
+    except Exception as e:
+        return f"Error getting history stats: {e}"
+
+
+@tool
+async def fetch_historical_qa(offset: int, limit: int = 5, config: RunnableConfig = None) -> str:
+    """
+    Fetch a specific slice of the conversation history by offset (0 is most recent).
+    Use this to 'walk back' through the conversation in increments.
+    """
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("thread_id")
+        if not thread_id:
+            return "No thread context found."
+
+        from database import get_thread_messages
+        # get_thread_messages uses offset but it's usually newest first if ordered by created_at DESC
+        messages = await get_thread_messages(thread_id, limit=limit, offset=offset)
+        
+        if not messages:
+            return f"No messages found at offset {offset}."
+            
+        transcript = []
+        for msg in messages:
+            role = "User" if msg.role == MessageRole.USER else "Assistant"
+            transcript.append(f"{role} [{msg.id}]: {msg.content}")
+            
+        return "\n\n".join(transcript)
+    except Exception as e:
+        return f"Error fetching historical QA: {e}"
+
+
+@tool
 async def search_pdf_knowledge(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """Search uploaded PDF documents for specific facts to answer the user's question. Pass max_results to limit the chunks appropriately based on your context window."""
     try:
@@ -60,6 +125,9 @@ async def search_pdf_knowledge(query: str, max_results: int = 10, config: Runnab
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
+
+        if not thread_id or not embedding_model:
+            return "No thread context found."
 
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
@@ -124,6 +192,8 @@ async def get_recent_qa_summaries(limit: int, config: RunnableConfig = None) -> 
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("thread_id")
+        if not thread_id:
+            return "No thread context found."
 
         messages = await get_recent_messages(thread_id, limit=limit)
         if not messages:
@@ -150,6 +220,9 @@ async def search_chat_memory(query: str, max_results: int = 10, config: Runnable
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
+
+        if not thread_id or not embedding_model:
+            return "No thread context found."
 
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
@@ -203,7 +276,9 @@ tools_list = [
     get_recent_qa_summaries,
     search_chat_memory,
     perform_web_search,
-    require_clarification
+    require_clarification,
+    get_history_stats,
+    fetch_historical_qa
 ]
 
 
@@ -237,6 +312,18 @@ TOOL_FRIENDLY_CONFIG = {
         "display_name": "Clarify Intent",
         "description": "Ask the user to disambiguate only when needed.",
         "default_prompt": "Use only when the question is truly ambiguous and a reasonable assumption is unsafe.",
+    },
+    "get_history_stats": {
+        "id": "history_stats",
+        "display_name": "History Stats",
+        "description": "Retrieve statistics about the conversation history.",
+        "default_prompt": "Use to understand the shape of the conversation history and adjust retrieval strategies.",
+    },
+    "fetch_historical_qa": {
+        "id": "fetch_qa",
+        "display_name": "Fetch Historical QA",
+        "description": "Fetch specific slices of the conversation history by offset.",
+        "default_prompt": "Use to traverse the conversation history in increments for better context management.",
     },
 }
 
@@ -407,13 +494,13 @@ def get_tool_catalog() -> List[Dict[str, str]]:
     catalog: List[Dict[str, str]] = []
     for tool_item in tools_list:
         cfg = TOOL_FRIENDLY_CONFIG.get(tool_item.name, {})
-        alias_id = cfg.get("id", tool_item.name)
+        alias_id = str(cfg.get("id", tool_item.name))
         catalog.append(
             {
                 "id": alias_id,
-                "display_name": cfg.get("display_name", alias_id.replace("_", " ").title()),
-                "description": cfg.get("description", tool_item.description or ""),
-                "default_prompt": cfg.get("default_prompt", "Use this tool when it is the most relevant retrieval path."),
+                "display_name": str(cfg.get("display_name", alias_id.replace("_", " ").title())),
+                "description": str(cfg.get("description", tool_item.description or "")),
+                "default_prompt": str(cfg.get("default_prompt", "Use this tool when it is the most relevant retrieval path.")),
             }
         )
     return catalog
@@ -482,7 +569,7 @@ def build_system_prompt(
         ),
         (
             "ANSWER POLICY (LOCKED)",
-            "Output a final answer only after retrieving sufficient context. If context is insufficient, call tools again before answering."
+            "1. Output a final answer only after retrieving sufficient context.\n2. Do NOT prefix your response with 'A:' or mimic the 'Q: ... A: ...' pattern. Simply answer the question directly."
         ),
     ]
     if custom_instructions:

@@ -103,6 +103,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [showContextHighlight, setShowContextHighlight] = useState(false);
     const [tooltipOpen, setTooltipOpen] = useState(false);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
+    const [clarificationOptions, setClarificationOptions] = useState<string[] | null>(null);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -346,11 +347,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         return () => clearInterval(intervalId);
     }, [activeThread?.id, indexingStatus]);
 
-    const handleSend = async () => {
-        if (!input.trim() || !llmModel || !activeThread) return;
+    const handleSend = async (overrideInput?: string) => {
+        const textToSend = overrideInput || input.trim();
+        if (!textToSend || !llmModel || !activeThread) return;
 
-        const userContent = input.trim();
         setInput('');
+        setClarificationOptions(null);
         setLoading(true);
         setIsModelWarming(false);
 
@@ -358,7 +360,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const tempUserMsg: ChatMessage = { 
             id: 'temp-user-' + Date.now(), 
             role: 'user', 
-            content: userContent,
+            content: textToSend,
             created_at: new Date().toISOString()
         };
         setMessages(prev => [...prev, tempUserMsg]);
@@ -373,7 +375,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             // Call thread chat endpoint
             const response = await threadChat(
                 activeThread.id,
-                userContent,
+                textToSend,
                 llmModel,
                 useWebSearch,
                 contextWindow,
@@ -383,27 +385,39 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 customInstructions
             );
 
+            // Handle ambiguous query / clarification options
+            if (response.clarification_options) {
+                setClarificationOptions(response.clarification_options);
+            }
+
             // Update messages with real IDs and add assistant response
             setMessages(prev => {
                 const updated = prev.filter(m => m.id !== tempUserMsg.id);
-                return [
-                    ...updated,
-                    { 
-                        id: response.user_message_id, 
-                        role: 'user', 
-                        content: userContent,
-                        created_at: new Date().toISOString()
-                    },
-                    { 
-                        id: response.assistant_message_id, 
+                const finalMessages = [...updated];
+                
+                // If it was ambiguous, maybe we don't save the human message yet?
+                // But the backend returned assistant response saying "I'm not sure"
+                
+                finalMessages.push({ 
+                    id: response.user_message_id || ('final-user-' + Date.now()), 
+                    role: 'user', 
+                    content: response.rewritten_query || textToSend, // Use rewritten version if available
+                    created_at: new Date().toISOString()
+                });
+
+                if (response.assistant_message_id || response.answer) {
+                    finalMessages.push({ 
+                        id: response.assistant_message_id || ('assistant-' + Date.now()), 
                         role: 'assistant', 
                         content: response.answer,
                         reasoning: response.reasoning || '',
                         reasoning_available: !!response.reasoning_available,
                         reasoning_format: response.reasoning_format || 'none',
                         created_at: new Date().toISOString()
-                    }
-                ];
+                    });
+                }
+                
+                return finalMessages;
             });
 
             // Mark recollected messages
@@ -759,6 +773,37 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Box>
                 )}
 
+                {clarificationOptions && (
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, justifyContent: 'center', p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+                        <Typography variant="caption" sx={{ width: '100%', textAlign: 'center', mb: 0.5, color: 'text.secondary', fontWeight: 'bold' }}>
+                            I need a bit more clarification. Did you mean one of these?
+                        </Typography>
+                        {clarificationOptions.map((opt, i) => (
+                            <Chip 
+                                key={i} 
+                                label={opt} 
+                                onClick={() => handleSend(opt)} 
+                                color="primary" 
+                                variant="outlined" 
+                                size="medium"
+                                sx={{ 
+                                    cursor: 'pointer', 
+                                    maxWidth: '300px',
+                                    '&:hover': { bgcolor: 'primary.main', color: 'white' } 
+                                }}
+                            />
+                        ))}
+                        <Button 
+                            size="small" 
+                            variant="text" 
+                            onClick={() => setClarificationOptions(null)}
+                            sx={{ fontSize: '0.7rem' }}
+                        >
+                            None of these
+                        </Button>
+                    </Box>
+                )}
+
                 <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
                     <TextField
                         fullWidth
@@ -928,6 +973,38 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Button>
                     <Button onClick={handleSaveThreadSettings} variant="contained" disabled={savingSettings}>
                         {savingSettings ? 'Saving...' : 'Save'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
+
+            {/* Clarification Options Dialog */}
+            <Dialog
+                open={!!clarificationOptions}
+                onClose={() => setClarificationOptions(null)}
+                maxWidth="sm"
+                fullWidth
+            >
+                <DialogTitle>Clarification Needed</DialogTitle>
+                <DialogContent>
+                    <Typography variant="body2" color="text.secondary" paragraph>
+                        Your question seems ambiguous. Please select one of the following options or rephrase your question:
+                    </Typography>
+                    <Stack spacing={1}>
+                        {clarificationOptions?.map((option, idx) => (
+                            <Button
+                                key={idx}
+                                variant="outlined"
+                                onClick={() => handleSend(option)}
+                                sx={{ justifyContent: 'flex-start' }}
+                            >
+                                {option}
+                            </Button>
+                        ))}
+                    </Stack>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setClarificationOptions(null)} color="primary">
+                        Skip
                     </Button>
                 </DialogActions>
             </Dialog>

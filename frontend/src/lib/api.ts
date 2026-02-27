@@ -245,13 +245,15 @@ export async function threadChat(
   customInstructionsOverride?: string
 ): Promise<{
   answer: string;
-  user_message_id: string;
-  assistant_message_id: string;
+  user_message_id: string | null;
+  assistant_message_id: string | null;
   used_chat_ids: string[];
   pdf_sources: { text: string; file_hash: string; score: number }[];
   reasoning?: string;
   reasoning_available?: boolean;
   reasoning_format?: 'structured' | 'tagged_text' | 'none';
+  rewritten_query?: string;
+  clarification_options?: string[] | null;
 }> {
   const payload: any = {
     thread_id: threadId,

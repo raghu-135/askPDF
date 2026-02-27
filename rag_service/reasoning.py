@@ -155,6 +155,15 @@ def normalize_ai_response(message: Optional[Any]) -> Dict[str, Any]:
         }
 
     tag_reasoning, cleaned_answer = _extract_from_think_tags(raw_answer)
+    
+    # Strip LLM-mimicked "Q: ... A: ..." prefixes if present
+    if cleaned_answer.startswith("Q:") and "\nA:" in cleaned_answer:
+        parts = cleaned_answer.split("\nA:", 1)
+        if len(parts) == 2:
+            cleaned_answer = parts[1].strip()
+    elif cleaned_answer.startswith("A:"):
+        cleaned_answer = cleaned_answer[2:].strip()
+
     if tag_reasoning:
         return {
             "answer": cleaned_answer,
@@ -164,7 +173,7 @@ def normalize_ai_response(message: Optional[Any]) -> Dict[str, Any]:
         }
 
     return {
-        "answer": raw_answer.strip(),
+        "answer": cleaned_answer,
         "reasoning": "",
         "reasoning_available": False,
         "reasoning_format": "none",
