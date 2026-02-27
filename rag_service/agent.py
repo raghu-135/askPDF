@@ -270,6 +270,173 @@ async def require_clarification(options: List[str]) -> str:
     return json.dumps({"__clarification_options__": options})
 
 
+# --- Intent Agent ---
+class IntentAgentState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    thread_id: str
+    llm_model: str
+    iteration_count: int
+    max_iterations: int
+    intent_result: Optional[Dict[str, Any]]
+
+intent_tools_list = [
+    get_history_stats,
+    fetch_historical_qa,
+    get_recent_qa_summaries,
+    search_chat_memory,
+    search_pdf_knowledge,
+    require_clarification
+]
+
+async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
+    messages = state["messages"]
+    llm = get_llm(state["llm_model"], temperature=0.0)
+    iteration = state.get("iteration_count", 0) + 1
+    
+    # Fast path: If this is the very first message in the thread (only 1 HumanMessage),
+    # there is no history to analyze for follow-ups. Just return CLEAR_STANDALONE immediately.
+    if len(messages) == 1 and isinstance(messages[0], HumanMessage):
+        logger.info("First message in thread detected. Skipping intent analysis.")
+        intent_result = {
+            "status": "CLEAR_STANDALONE",
+            "rewritten_query": messages[0].content,
+            "clarification_options": None
+        }
+        return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": iteration, "intent_result": intent_result}
+    
+    llm_with_tools = llm.bind_tools(intent_tools_list)
+    
+    system_prompt = """You are an expert at analyzing user intent and decontextualizing follow-up questions.
+You have access to tools to fetch conversation history and search uploaded PDFs if you need more context to understand the user's message.
+
+CRITICAL INSTRUCTIONS FOR SPEED:
+1. DO NOT use tools unless absolutely necessary. If the user's message is clear enough to understand on its own, DO NOT use tools. Just output the JSON immediately.
+2. If you need context, use `get_recent_qa_summaries` first. It is usually enough.
+3. If the user asks about "the document" or "the PDF" and you need to know what it's about to clarify their intent, use `search_pdf_knowledge`.
+4. If the question is genuinely ambiguous even after checking history or PDFs, use `require_clarification`.
+5. Determine if the message is a CLEAR_STANDALONE question, a CLEAR_FOLLOWUP that needs context, or is AMBIGUOUS.
+6. If it's CLEAR_FOLLOWUP, rewrite it into a single, standalone question that incorporates all necessary context from history.
+7. If it's AMBIGUOUS, provide 2-3 specific, distinct ways the question could be interpreted based on recent context.
+8. If it's CLEAR_STANDALONE, you can optionally refine it for better retrieval but keep its core meaning.
+
+IMPORTANT: Your rewritten_query MUST be a single, natural question. Do NOT prefix it with "Q:" or use "Q: ... A: ..." format.
+
+When you are ready to provide the final analysis, respond ONLY with a JSON object in this format:
+{
+  "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
+  "rewritten_query": "The standalone version of the question",
+  "clarification_options": ["Option A", "Option B"] | null
+}"""
+    
+    # Ensure system prompt is first
+    if not messages or not isinstance(messages[0], SystemMessage):
+        input_messages = [SystemMessage(content=system_prompt)] + messages
+    else:
+        input_messages = messages
+        
+    response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
+    
+    # Try to parse JSON if it's not a tool call
+    intent_result = None
+    if not getattr(response, "tool_calls", None):
+        content = response.content.strip()
+        try:
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            intent_result = json.loads(content)
+        except Exception as e:
+            logger.error(f"Failed to parse intent JSON: {e}")
+            # Fallback
+            original_question = ""
+            for msg in reversed(messages):
+                if isinstance(msg, HumanMessage):
+                    original_question = msg.content
+                    break
+            intent_result = {
+                "status": "CLEAR_STANDALONE",
+                "rewritten_query": original_question,
+                "clarification_options": None
+            }
+            
+    return {"messages": [response], "iteration_count": iteration, "intent_result": intent_result}
+
+def should_continue_intent(state: IntentAgentState):
+    messages = state["messages"]
+    last_message = messages[-1]
+    iteration_count = state.get("iteration_count", 0)
+    max_iterations = state.get("max_iterations", 2) # Reduced max iterations to 2 for speed
+    
+    if getattr(last_message, "tool_calls", None):
+        if iteration_count >= max_iterations:
+            logger.warning(f"Intent Agent reached max iterations ({iteration_count}). Forcing termination.")
+            return "force_intent_answer"
+        return "tools"
+    return END
+
+async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
+    """
+    Fallback when the Intent Agent tool-iteration budget is exhausted.
+    Forces the model to output the final JSON analysis without using tools.
+    """
+    messages = state["messages"]
+    iteration = state.get("iteration_count", 0) + 1
+
+    # Instead of calling the LLM again, just return a default fallback to save time
+    logger.warning("Intent Agent took too long. Falling back to CLEAR_STANDALONE.")
+    
+    # Find the original user question
+    original_question = ""
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            original_question = msg.content
+            break
+            
+    intent_result = {
+        "status": "CLEAR_STANDALONE",
+        "rewritten_query": original_question,
+        "clarification_options": None
+    }
+
+    # Create a dummy AIMessage to satisfy the graph state
+    fallback_msg = AIMessage(content=json.dumps(intent_result))
+
+    return {"messages": [fallback_msg], "iteration_count": iteration, "intent_result": intent_result}
+
+class IntentToolNode(ToolNode):
+    async def ainvoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
+        res = await super().ainvoke(input, config, **kwargs)
+        messages = res.get("messages", [])
+        
+        # Check if require_clarification was called
+        for i, msg in enumerate(messages):
+            if isinstance(msg, ToolMessage) and isinstance(msg.content, str) and msg.content.startswith("{") and "__clarification_options__" in msg.content:
+                try:
+                    data = json.loads(msg.content)
+                    if "__clarification_options__" in data:
+                        # We inject a system message to force the model to output the final JSON
+                        # with the clarification options it just generated.
+                        options = data["__clarification_options__"]
+                        messages[i].content = f"Clarification options generated: {options}. Now output the final JSON with status='AMBIGUOUS' and these clarification_options."
+                except Exception as e:
+                    logger.warning(f"Failed to parse clarification JSON: {e}")
+                    
+        return {"messages": messages}
+
+intent_workflow = StateGraph(IntentAgentState)
+intent_workflow.add_node("agent", call_intent_model)
+intent_workflow.add_node("tools", IntentToolNode(intent_tools_list))
+intent_workflow.add_node("force_intent_answer", force_intent_answer)
+
+intent_workflow.add_edge(START, "agent")
+intent_workflow.add_conditional_edges("agent", should_continue_intent, {"tools": "tools", "force_intent_answer": "force_intent_answer", END: END})
+intent_workflow.add_edge("tools", "agent")
+intent_workflow.add_edge("force_intent_answer", END)
+
+intent_app = intent_workflow.compile()
+# --- End Intent Agent ---
+
 # Orchestrator tools list
 tools_list = [
     search_pdf_knowledge,
@@ -329,7 +496,7 @@ TOOL_FRIENDLY_CONFIG = {
 
 
 class OrchestratorToolNode(ToolNode):
-    async def ainvoke(self, input: dict, config: RunnableConfig, **kwargs: Any) -> Any:
+    async def ainvoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
         # Intercept tool calls to extract special JSON state updates
         res = await super().ainvoke(input, config, **kwargs)
         
@@ -339,7 +506,7 @@ class OrchestratorToolNode(ToolNode):
         
         messages = res.get("messages", [])
         for i, msg in enumerate(messages):
-            if isinstance(msg, ToolMessage) and msg.content.startswith("{") and "__" in msg.content:
+            if isinstance(msg, ToolMessage) and isinstance(msg.content, str) and msg.content.startswith("{") and "__" in msg.content:
                 try:
                     data = json.loads(msg.content)
                     if "__pdf_sources__" in data:
