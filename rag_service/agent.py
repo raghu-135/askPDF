@@ -275,6 +275,7 @@ class IntentAgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     thread_id: str
     llm_model: str
+    context_window: int
     iteration_count: int
     max_iterations: int
     intent_result: Optional[Dict[str, Any]]
@@ -292,6 +293,7 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     messages = state["messages"]
     llm = get_llm(state["llm_model"], temperature=0.0)
     iteration = state.get("iteration_count", 0) + 1
+    context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
 
     # Detect if this is the very first message (only 1 HumanMessage, no history).
     is_first_message = len(messages) == 1 and isinstance(messages[0], HumanMessage)
@@ -302,10 +304,13 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     llm_with_tools = llm.bind_tools(intent_tools_list)
 
     system_prompt = (
-        """You are an expert at analyzing user intent and rewriting questions for optimal retrieval and history clarity.
+        f"""You are an expert at analyzing user intent and rewriting questions for optimal retrieval and history clarity.
 
         CONTEXT: Recent conversation history (if any) is included in the messages above your current question.
         Use that inline history to understand follow-up questions. You do NOT need tools to read it — it's already there.
+
+        RUNTIME CONSTRAINTS:
+        Your maximum context window is {context_window} tokens. You must manage retrieval and final output within this budget.
 
         CRITICAL INSTRUCTIONS:
         1. DO NOT use tools unless you truly cannot understand the question from the inline history alone.
@@ -325,11 +330,11 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         IMPORTANT: Your rewritten_query MUST be a single, natural question. Do NOT prefix it with \"Q:\" or use \"Q: ... A: ...\" format.
 
         When you are ready to provide the final analysis, respond ONLY with a JSON object in this format:
-        {
+        {{
           \"status\": \"CLEAR_STANDALONE\" | \"CLEAR_FOLLOWUP\" | \"AMBIGUOUS\",
           \"rewritten_query\": \"The standalone, retrieval-optimized version of the question\",
           \"clarification_options\": [\"Option A\", \"Option B\"] | null
-        }"""
+        }}"""
     )
 
     # For first messages, reinforce no-tool usage
@@ -407,6 +412,7 @@ async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
     messages = state["messages"]
     llm = get_llm(state["llm_model"], temperature=0.0)
     iteration = state.get("iteration_count", 0) + 1
+    context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
 
     logger.warning("Intent Agent budget exhausted. Forcing rewrite without tools.")
     
@@ -419,7 +425,7 @@ async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
 
     force_prompt = SystemMessage(
         content=(
-            "Tool iteration budget reached. Do NOT call any tools.\n"
+            f"Tool iteration budget reached (Context Window: {context_window} tokens). Do NOT call any tools.\n"
             "Based on the conversation history already in your context, "
             "rewrite the user's question into a standalone, retrieval-optimized form.\n"
             "Respond ONLY with the JSON:\n"

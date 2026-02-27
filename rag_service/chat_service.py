@@ -152,6 +152,7 @@ async def handle_thread_chat(
             "messages": recent_history_messages + [HumanMessage(content=question)],
             "thread_id": thread_id,
             "llm_model": llm_model,
+            "context_window": context_window,
             "iteration_count": 0,
             "max_iterations": 3,
             "intent_result": None
