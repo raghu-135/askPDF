@@ -48,7 +48,7 @@ async def _build_recent_history_messages(
 
     for msg in reversed(recent):
         if msg.role == MessageRole.USER:
-            text = (msg.content or "").strip()
+            text = (msg.context_compact or msg.content or "").strip()
             message_obj = HumanMessage
         elif msg.role == MessageRole.ASSISTANT:
             text = (msg.context_compact or msg.content or "").strip()
@@ -239,7 +239,8 @@ async def handle_thread_chat(
         user_message = await create_message(
             thread_id=thread_id,
             role=MessageRole.USER,
-            content=question
+            content=req.question,
+            context_compact=question if question != req.question else None
         )
         
         assistant_message = await create_message(

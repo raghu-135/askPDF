@@ -109,6 +109,7 @@ export interface Message {
   reasoning?: string;
   reasoning_available?: boolean;
   reasoning_format?: 'structured' | 'tagged_text' | 'none';
+  context_compact?: string;
 }
 
 export async function createThread(name: string, embedModel: string): Promise<Thread> {

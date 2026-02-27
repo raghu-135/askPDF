@@ -56,6 +56,7 @@ interface ChatMessage extends Message {
     reasoning?: string;
     reasoning_available?: boolean;
     reasoning_format?: 'structured' | 'tagged_text' | 'none';
+    rewritten_query?: string;
 }
 
 interface ChatInterfaceProps {
@@ -173,7 +174,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!activeThread) return;
         try {
             const response = await getThreadMessages(activeThread.id);
-            setMessages(response.messages.map(m => ({ ...m, isRecollected: false })));
+            setMessages(response.messages.map(m => ({ 
+                ...m, 
+                isRecollected: false,
+                rewritten_query: m.role === 'user' ? m.context_compact : undefined
+            })));
         } catch (error) {
             console.error('Failed to load messages:', error);
         }
@@ -395,13 +400,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 const updated = prev.filter(m => m.id !== tempUserMsg.id);
                 const finalMessages = [...updated];
                 
-                // If it was ambiguous, maybe we don't save the human message yet?
-                // But the backend returned assistant response saying "I'm not sure"
-                
                 finalMessages.push({ 
                     id: response.user_message_id || ('final-user-' + Date.now()), 
                     role: 'user', 
-                    content: response.rewritten_query || textToSend, // Use rewritten version if available
+                    content: textToSend, // Keep original input
+                    rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
                     created_at: new Date().toISOString()
                 });
 
@@ -725,6 +728,29 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         {msg.content}
                                     </ReactMarkdown>
                                 </Typography>
+                                {msg.role === 'user' && msg.rewritten_query && (
+                                    <Box sx={{ mt: 1 }}>
+                                        <details>
+                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                Rewritten for context
+                                            </summary>
+                                            <Typography
+                                                variant="caption"
+                                                sx={{
+                                                    mt: 1,
+                                                    display: 'block',
+                                                    fontStyle: 'italic',
+                                                    opacity: 0.9,
+                                                    p: 1,
+                                                    borderRadius: 1,
+                                                    bgcolor: 'rgba(255,255,255,0.1)'
+                                                }}
+                                            >
+                                                {msg.rewritten_query}
+                                            </Typography>
+                                        </details>
+                                    </Box>
+                                )}
                                 {msg.role === 'assistant' && msg.reasoning_available && msg.reasoning && (
                                     <Box sx={{ mt: 1 }}>
                                         <details>
