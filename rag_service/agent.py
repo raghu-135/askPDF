@@ -293,48 +293,63 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     llm = get_llm(state["llm_model"], temperature=0.0)
     iteration = state.get("iteration_count", 0) + 1
     
-    # Fast path: If this is the very first message in the thread (only 1 HumanMessage),
-    # there is no history to analyze for follow-ups. Just return CLEAR_STANDALONE immediately.
-    if len(messages) == 1 and isinstance(messages[0], HumanMessage):
-        logger.info("First message in thread detected. Skipping intent analysis.")
-        intent_result = {
-            "status": "CLEAR_STANDALONE",
-            "rewritten_query": messages[0].content,
-            "clarification_options": None
-        }
-        return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": iteration, "intent_result": intent_result}
+    # Detect if this is the very first message (only 1 HumanMessage, no history).
+    is_first_message = len(messages) == 1 and isinstance(messages[0], HumanMessage)
+
+    # Check if this is a retry after tool calls (iteration > 1 means we already looped)
+    is_retry_after_tools = iteration > 1
     
     llm_with_tools = llm.bind_tools(intent_tools_list)
     
-    system_prompt = """You are an expert at analyzing user intent and decontextualizing follow-up questions.
-You have access to tools to fetch conversation history and search uploaded PDFs if you need more context to understand the user's message.
+    system_prompt = """You are an expert at analyzing user intent and rewriting questions for optimal retrieval and history clarity.
 
-CRITICAL INSTRUCTIONS FOR SPEED:
-1. DO NOT use tools unless absolutely necessary. If the user's message is clear enough to understand on its own, DO NOT use tools. Just output the JSON immediately.
-2. If you need context, use `get_recent_qa_summaries` first. It is usually enough.
-3. If the user asks about "the document" or "the PDF" and you need to know what it's about to clarify their intent, use `search_pdf_knowledge`.
-4. If the question is genuinely ambiguous even after checking history or PDFs, use `require_clarification`.
-5. Determine if the message is a CLEAR_STANDALONE question, a CLEAR_FOLLOWUP that needs context, or is AMBIGUOUS.
-6. If it's CLEAR_FOLLOWUP, rewrite it into a single, standalone question that incorporates all necessary context from history.
-7. If it's AMBIGUOUS, provide 2-3 specific, distinct ways the question could be interpreted based on recent context.
-8. If it's CLEAR_STANDALONE, you can optionally refine it for better retrieval but keep its core meaning.
+CONTEXT: Recent conversation history (if any) is included in the messages above your current question.
+Use that inline history to understand follow-up questions. You do NOT need tools to read it — it's already there.
+
+CRITICAL INSTRUCTIONS:
+1. DO NOT use tools unless you truly cannot understand the question from the inline history alone.
+2. Determine if the message is a CLEAR_STANDALONE question, a CLEAR_FOLLOWUP that needs context, or is AMBIGUOUS.
+3. If it's CLEAR_FOLLOWUP, rewrite it into a single, standalone question using the inline conversation history.
+4. If it's AMBIGUOUS and you cannot resolve it from inline history, use `require_clarification`.
+5. Only use `search_pdf_knowledge` if the user refers to "the document" and the inline history gives no hint about which document.
+6. Only use `get_recent_qa_summaries` or `search_chat_memory` if the inline history is clearly insufficient.
+
+ALWAYS REWRITE THE QUERY — for ALL statuses (CLEAR_STANDALONE, CLEAR_FOLLOWUP, AMBIGUOUS). The rewritten_query is stored in conversation history and used for semantic search retrieval. A well-formed, specific, self-contained question dramatically improves future recall. Examples:
+- "What is RAG?" → "What is Retrieval-Augmented Generation (RAG) and how does it work?"
+- "Explain transformers" → "Explain the transformer architecture in deep learning, including self-attention mechanisms"
+- "How does it handle errors?" (follow-up after discussing FastAPI) → "How does the FastAPI backend handle HTTP errors and exceptions?"
+- "Tell me more" (follow-up after discussing attention) → "Explain self-attention mechanisms in transformers in more detail, including multi-head attention"
+Keep the core meaning intact but make the query more specific, complete, and retrieval-friendly.
 
 IMPORTANT: Your rewritten_query MUST be a single, natural question. Do NOT prefix it with "Q:" or use "Q: ... A: ..." format.
 
 When you are ready to provide the final analysis, respond ONLY with a JSON object in this format:
 {
   "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
-  "rewritten_query": "The standalone version of the question",
+  "rewritten_query": "The standalone, retrieval-optimized version of the question",
   "clarification_options": ["Option A", "Option B"] | null
 }"""
+    
+    # For first messages, reinforce no-tool usage
+    if is_first_message:
+        system_prompt += "\n\nNOTE: This is the FIRST message in the conversation. There is no history. Do NOT use any tools. Simply rewrite the query for retrieval clarity and output the JSON immediately with status CLEAR_STANDALONE."
+        logger.info("First message in thread detected. LLM will rewrite without tools.")
     
     # Ensure system prompt is first
     if not messages or not isinstance(messages[0], SystemMessage):
         input_messages = [SystemMessage(content=system_prompt)] + messages
     else:
-        input_messages = messages
-        
-    response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
+        input_messages = [SystemMessage(content=system_prompt)] + messages[1:]
+
+    # Default path: invoke WITHOUT tools. The LLM has inline history and should
+    # be able to rewrite directly. Only give tools on a retry if the first attempt
+    # explicitly requested them (iteration > 1 means we looped back from tool calls).
+    if is_first_message or not is_retry_after_tools:
+        # First pass: no tools — force the LLM to rewrite from inline context
+        response = await invoke_with_retry(llm.ainvoke, input_messages)
+    else:
+        # Retry pass: tools were requested and executed, now LLM should finalize
+        response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
     
     # Try to parse JSON if it's not a tool call
     intent_result = None
@@ -378,13 +393,13 @@ def should_continue_intent(state: IntentAgentState):
 async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
     """
     Fallback when the Intent Agent tool-iteration budget is exhausted.
-    Forces the model to output the final JSON analysis without using tools.
+    Forces the model to output the final JSON with rewriting, without tools.
     """
     messages = state["messages"]
+    llm = get_llm(state["llm_model"], temperature=0.0)
     iteration = state.get("iteration_count", 0) + 1
 
-    # Instead of calling the LLM again, just return a default fallback to save time
-    logger.warning("Intent Agent took too long. Falling back to CLEAR_STANDALONE.")
+    logger.warning("Intent Agent budget exhausted. Forcing rewrite without tools.")
     
     # Find the original user question
     original_question = ""
@@ -392,17 +407,48 @@ async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
         if isinstance(msg, HumanMessage):
             original_question = msg.content
             break
-            
-    intent_result = {
-        "status": "CLEAR_STANDALONE",
-        "rewritten_query": original_question,
-        "clarification_options": None
-    }
 
-    # Create a dummy AIMessage to satisfy the graph state
-    fallback_msg = AIMessage(content=json.dumps(intent_result))
+    force_prompt = SystemMessage(
+        content=(
+            "Tool iteration budget reached. Do NOT call any tools.\n"
+            "Based on the conversation history already in your context, "
+            "rewrite the user's question into a standalone, retrieval-optimized form.\n"
+            "Respond ONLY with the JSON:\n"
+            '{"status": "CLEAR_STANDALONE" or "CLEAR_FOLLOWUP", '
+            '"rewritten_query": "<rewritten question>", '
+            '"clarification_options": null}'
+        )
+    )
 
-    return {"messages": [fallback_msg], "iteration_count": iteration, "intent_result": intent_result}
+    # Build input: system force prompt + all existing messages (includes history + tool results)
+    input_messages = [force_prompt] + [m for m in messages if not isinstance(m, SystemMessage)]
+
+    try:
+        response = await invoke_with_retry(llm.ainvoke, input_messages)
+        content = response.content.strip()
+        try:
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            intent_result = json.loads(content)
+        except Exception:
+            logger.error(f"Failed to parse forced intent JSON, using original question")
+            intent_result = {
+                "status": "CLEAR_STANDALONE",
+                "rewritten_query": original_question,
+                "clarification_options": None
+            }
+        return {"messages": [response], "iteration_count": iteration, "intent_result": intent_result}
+    except Exception as e:
+        logger.error(f"Force intent answer LLM call failed: {e}")
+        intent_result = {
+            "status": "CLEAR_STANDALONE",
+            "rewritten_query": original_question,
+            "clarification_options": None
+        }
+        fallback_msg = AIMessage(content=json.dumps(intent_result))
+        return {"messages": [fallback_msg], "iteration_count": iteration, "intent_result": intent_result}
 
 class IntentToolNode(ToolNode):
     async def ainvoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:

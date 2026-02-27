@@ -14,7 +14,6 @@ import {
     InputLabel,
     IconButton,
     Divider,
-    Stack,
     FormControlLabel,
     Switch,
     Tooltip,
@@ -393,46 +392,48 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             // Handle ambiguous query / clarification options
             if (response.clarification_options) {
                 setClarificationOptions(response.clarification_options);
-            }
-
-            // Update messages with real IDs and add assistant response
-            setMessages(prev => {
-                const updated = prev.filter(m => m.id !== tempUserMsg.id);
-                const finalMessages = [...updated];
-                
-                finalMessages.push({ 
-                    id: response.user_message_id || ('final-user-' + Date.now()), 
-                    role: 'user', 
-                    content: textToSend, // Keep original input
-                    rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
-                    created_at: new Date().toISOString()
-                });
-
-                if (response.assistant_message_id || response.answer) {
+                // Remove the optimistic user message — nothing was persisted
+                setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id));
+            } else {
+                // Normal flow: update messages with real IDs and add assistant response
+                setMessages(prev => {
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    const finalMessages = [...updated];
+                    
                     finalMessages.push({ 
-                        id: response.assistant_message_id || ('assistant-' + Date.now()), 
-                        role: 'assistant', 
-                        content: response.answer,
-                        reasoning: response.reasoning || '',
-                        reasoning_available: !!response.reasoning_available,
-                        reasoning_format: response.reasoning_format || 'none',
+                        id: response.user_message_id || ('final-user-' + Date.now()), 
+                        role: 'user', 
+                        content: textToSend, // Keep original input
+                        rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
                         created_at: new Date().toISOString()
                     });
+
+                    if (response.assistant_message_id || response.answer) {
+                        finalMessages.push({ 
+                            id: response.assistant_message_id || ('assistant-' + Date.now()), 
+                            role: 'assistant', 
+                            content: response.answer,
+                            reasoning: response.reasoning || '',
+                            reasoning_available: !!response.reasoning_available,
+                            reasoning_format: response.reasoning_format || 'none',
+                            created_at: new Date().toISOString()
+                        });
+                    }
+                    
+                    return finalMessages;
+                });
+
+                // Mark recollected messages
+                if (response.used_chat_ids && response.used_chat_ids.length > 0) {
+                    setRecollectedIds(new Set(response.used_chat_ids));
+                    // Clear recollection highlight after 10 seconds
+                    setTimeout(() => setRecollectedIds(new Set()), 10000);
                 }
-                
-                return finalMessages;
-            });
 
-            // Mark recollected messages
-            if (response.used_chat_ids && response.used_chat_ids.length > 0) {
-                setRecollectedIds(new Set(response.used_chat_ids));
-                // Clear recollection highlight after 10 seconds
-                setTimeout(() => setRecollectedIds(new Set()), 10000);
-            }
-
-            // Notify parent that thread was updated
-            if (onThreadUpdate) {
-                onThreadUpdate();
+                // Notify parent that thread was updated
+                if (onThreadUpdate) {
+                    onThreadUpdate();
+                }
             }
 
         } catch (err: any) {
@@ -999,38 +1000,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Button>
                     <Button onClick={handleSaveThreadSettings} variant="contained" disabled={savingSettings}>
                         {savingSettings ? 'Saving...' : 'Save'}
-                    </Button>
-                </DialogActions>
-            </Dialog>
-
-            {/* Clarification Options Dialog */}
-            <Dialog
-                open={!!clarificationOptions}
-                onClose={() => setClarificationOptions(null)}
-                maxWidth="sm"
-                fullWidth
-            >
-                <DialogTitle>Clarification Needed</DialogTitle>
-                <DialogContent>
-                    <Typography variant="body2" color="text.secondary" paragraph>
-                        Your question seems ambiguous. Please select one of the following options or rephrase your question:
-                    </Typography>
-                    <Stack spacing={1}>
-                        {clarificationOptions?.map((option, idx) => (
-                            <Button
-                                key={idx}
-                                variant="outlined"
-                                onClick={() => handleSend(option)}
-                                sx={{ justifyContent: 'flex-start' }}
-                            >
-                                {option}
-                            </Button>
-                        ))}
-                    </Stack>
-                </DialogContent>
-                <DialogActions>
-                    <Button onClick={() => setClarificationOptions(null)} color="primary">
-                        Skip
                     </Button>
                 </DialogActions>
             </Dialog>
