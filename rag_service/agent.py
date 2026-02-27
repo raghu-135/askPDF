@@ -292,49 +292,54 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     messages = state["messages"]
     llm = get_llm(state["llm_model"], temperature=0.0)
     iteration = state.get("iteration_count", 0) + 1
-    
+
     # Detect if this is the very first message (only 1 HumanMessage, no history).
     is_first_message = len(messages) == 1 and isinstance(messages[0], HumanMessage)
 
     # Check if this is a retry after tool calls (iteration > 1 means we already looped)
     is_retry_after_tools = iteration > 1
-    
+
     llm_with_tools = llm.bind_tools(intent_tools_list)
-    
-    system_prompt = """You are an expert at analyzing user intent and rewriting questions for optimal retrieval and history clarity.
 
-CONTEXT: Recent conversation history (if any) is included in the messages above your current question.
-Use that inline history to understand follow-up questions. You do NOT need tools to read it — it's already there.
+    system_prompt = (
+        """You are an expert at analyzing user intent and rewriting questions for optimal retrieval and history clarity.
 
-CRITICAL INSTRUCTIONS:
-1. DO NOT use tools unless you truly cannot understand the question from the inline history alone.
-2. Determine if the message is a CLEAR_STANDALONE question, a CLEAR_FOLLOWUP that needs context, or is AMBIGUOUS.
-3. If it's CLEAR_FOLLOWUP, rewrite it into a single, standalone question using the inline conversation history.
-4. If it's AMBIGUOUS and you cannot resolve it from inline history, use `require_clarification`.
-5. Only use `search_pdf_knowledge` if the user refers to "the document" and the inline history gives no hint about which document.
-6. Only use `get_recent_qa_summaries` or `search_chat_memory` if the inline history is clearly insufficient.
+        CONTEXT: Recent conversation history (if any) is included in the messages above your current question.
+        Use that inline history to understand follow-up questions. You do NOT need tools to read it — it's already there.
 
-ALWAYS REWRITE THE QUERY — for ALL statuses (CLEAR_STANDALONE, CLEAR_FOLLOWUP, AMBIGUOUS). The rewritten_query is stored in conversation history and used for semantic search retrieval. A well-formed, specific, self-contained question dramatically improves future recall. Examples:
-- "What is RAG?" → "What is Retrieval-Augmented Generation (RAG) and how does it work?"
-- "Explain transformers" → "Explain the transformer architecture in deep learning, including self-attention mechanisms"
-- "How does it handle errors?" (follow-up after discussing FastAPI) → "How does the FastAPI backend handle HTTP errors and exceptions?"
-- "Tell me more" (follow-up after discussing attention) → "Explain self-attention mechanisms in transformers in more detail, including multi-head attention"
-Keep the core meaning intact but make the query more specific, complete, and retrieval-friendly.
+        CRITICAL INSTRUCTIONS:
+        1. DO NOT use tools unless you truly cannot understand the question from the inline history alone.
+        2. Determine if the message is a CLEAR_STANDALONE question, a CLEAR_FOLLOWUP that needs context, or is AMBIGUOUS.
+        3. If it's CLEAR_FOLLOWUP, rewrite it into a single, standalone question using the inline conversation history.
+        4. If it's AMBIGUOUS and you cannot resolve it from inline history, use `require_clarification`.
+        5. Only use `search_pdf_knowledge` if the user refers to \"the document\" and the inline history gives no hint about which document.
+        6. Only use `get_recent_qa_summaries` or `search_chat_memory` if the inline history is clearly insufficient.
 
-IMPORTANT: Your rewritten_query MUST be a single, natural question. Do NOT prefix it with "Q:" or use "Q: ... A: ..." format.
+        ALWAYS REWRITE THE QUERY — for ALL statuses (CLEAR_STANDALONE, CLEAR_FOLLOWUP, AMBIGUOUS). The rewritten_query is stored in conversation history and used for semantic search retrieval. A well-formed, specific, self-contained question dramatically improves future recall. Examples:
+        - \"What is RAG?\" → \"What is Retrieval-Augmented Generation (RAG) and how does it work?\"
+        - \"Explain transformers\" → \"Explain the transformer architecture in deep learning, including self-attention mechanisms\"
+        - \"How does it handle errors?\" (follow-up after discussing FastAPI) → \"How does the FastAPI backend handle HTTP errors and exceptions?\"
+        - \"Tell me more\" (follow-up after discussing attention) → \"Explain self-attention mechanisms in transformers in more detail, including multi-head attention\"
+        Keep the core meaning intact but make the query more specific, complete, and retrieval-friendly.
 
-When you are ready to provide the final analysis, respond ONLY with a JSON object in this format:
-{
-  "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
-  "rewritten_query": "The standalone, retrieval-optimized version of the question",
-  "clarification_options": ["Option A", "Option B"] | null
-}"""
-    
+        IMPORTANT: Your rewritten_query MUST be a single, natural question. Do NOT prefix it with \"Q:\" or use \"Q: ... A: ...\" format.
+
+        When you are ready to provide the final analysis, respond ONLY with a JSON object in this format:
+        {
+          \"status\": \"CLEAR_STANDALONE\" | \"CLEAR_FOLLOWUP\" | \"AMBIGUOUS\",
+          \"rewritten_query\": \"The standalone, retrieval-optimized version of the question\",
+          \"clarification_options\": [\"Option A\", \"Option B\"] | null
+        }"""
+    )
+
     # For first messages, reinforce no-tool usage
     if is_first_message:
-        system_prompt += "\n\nNOTE: This is the FIRST message in the conversation. There is no history. Do NOT use any tools. Simply rewrite the query for retrieval clarity and output the JSON immediately with status CLEAR_STANDALONE."
+        system_prompt += (
+            "\n\nNOTE: This is the FIRST message in the conversation. There is no history. Do NOT use any tools. "
+            "Simply rewrite the query for retrieval clarity and output the JSON immediately with status CLEAR_STANDALONE."
+        )
         logger.info("First message in thread detected. LLM will rewrite without tools.")
-    
+
     # Ensure system prompt is first
     if not messages or not isinstance(messages[0], SystemMessage):
         input_messages = [SystemMessage(content=system_prompt)] + messages
@@ -350,7 +355,7 @@ When you are ready to provide the final analysis, respond ONLY with a JSON objec
     else:
         # Retry pass: tools were requested and executed, now LLM should finalize
         response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
-    
+
     # Try to parse JSON if it's not a tool call
     intent_result = None
     if not getattr(response, "tool_calls", None):
@@ -374,8 +379,12 @@ When you are ready to provide the final analysis, respond ONLY with a JSON objec
                 "rewritten_query": original_question,
                 "clarification_options": None
             }
-            
-    return {"messages": [response], "iteration_count": iteration, "intent_result": intent_result}
+
+    return {
+        "messages": [response],
+        "iteration_count": iteration,
+        "intent_result": intent_result
+    }
 
 def should_continue_intent(state: IntentAgentState):
     messages = state["messages"]
