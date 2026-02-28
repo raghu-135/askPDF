@@ -105,6 +105,7 @@ export interface ThreadFile {
   file_hash: string;
   file_name: string;
   file_path?: string;
+  source_type?: 'pdf' | 'web';
 }
 
 export interface WebSource {
@@ -229,6 +230,30 @@ export async function addFileToThread(
 
 export async function getThreadFiles(threadId: string): Promise<{ files: ThreadFile[] }> {
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/files`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function addWebSourceToThread(
+  threadId: string,
+  url: string
+): Promise<{ status: string; file_hash: string; url: string; indexing: string }> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/web-sources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function removeSourceFromThread(
+  threadId: string,
+  fileHash: string
+): Promise<{ status: string; removed_from_db: boolean }> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/files/${fileHash}`, {
+    method: "DELETE"
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

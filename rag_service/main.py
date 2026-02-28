@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import app as agent_app, get_tool_catalog, normalize_tool_instructions, build_system_prompt
-from rag import index_document, index_document_for_thread
+from rag import index_document, index_document_for_thread, index_webpage_for_thread
 from vectordb.qdrant import QdrantAdapter
 from models import (
     check_chat_model_ready,
@@ -47,6 +47,7 @@ from database import (
     create_thread, get_thread, list_threads, update_thread, delete_thread,
     get_thread_settings, update_thread_settings,
     create_or_get_file, get_file, add_file_to_thread, get_thread_files, is_file_in_thread,
+    remove_file_from_thread,
     create_message, get_message, get_thread_messages, delete_message, delete_message_pair, get_recent_messages,
     MessageRole
 )
@@ -97,6 +98,11 @@ class ThreadFileRequest(BaseModel):
     file_hash: str
     file_name: str
     file_path: Optional[str] = None
+
+
+class WebSourceRequest(BaseModel):
+    """Request body for indexing a webpage into a thread."""
+    url: str
 
 
 class ChatRequest(BaseModel):
@@ -264,14 +270,13 @@ async def get_thread_endpoint(thread_id: str):
         files = await get_thread_files(thread_id)
         db = QdrantAdapter()
         stats = await db.get_thread_stats(thread_id)
-        
         return {
             "id": thread.id,
             "name": thread.name,
             "embed_model": thread.embed_model,
             "settings": thread.settings,
             "created_at": thread.created_at.isoformat(),
-            "files": [{"file_hash": f.file_hash, "file_name": f.file_name} for f in files],
+            "files": [{"file_hash": f.file_hash, "file_name": f.file_name, "source_type": f.source_type} for f in files],
             "stats": stats,
             "file_count": len(files)
         }
@@ -439,7 +444,94 @@ async def get_thread_files_endpoint(thread_id: str):
         files = await get_thread_files(thread_id)
         return {
             "thread_id": thread_id,
-            "files": [{"file_hash": f.file_hash, "file_name": f.file_name, "file_path": f.file_path} for f in files]
+            "files": [{"file_hash": f.file_hash, "file_name": f.file_name, "file_path": f.file_path, "source_type": f.source_type} for f in files]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/threads/{thread_id}/web-sources")
+async def add_web_source_to_thread_endpoint(
+    thread_id: str,
+    req: WebSourceRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Add a webpage URL to a thread: record it in the DB and trigger background indexing.
+    """
+    import hashlib
+
+    try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        if not req.url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+
+        # Stable hash for this URL
+        file_hash = hashlib.md5(req.url.encode()).hexdigest()
+
+        # Record in files table with source_type='web'
+        await create_or_get_file(
+            file_hash=file_hash,
+            file_name=req.url,
+            file_path=req.url,
+            source_type="web",
+        )
+        await add_file_to_thread(thread_id, file_hash)
+
+        # Background indexing
+        background_tasks.add_task(
+            index_webpage_for_thread,
+            thread_id=thread_id,
+            url=req.url,
+            file_hash=file_hash,
+            embedding_model_name=thread.embed_model,
+        )
+
+        return {
+            "status": "accepted",
+            "thread_id": thread_id,
+            "file_hash": file_hash,
+            "url": req.url,
+            "indexing": "in_progress",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/threads/{thread_id}/files/{file_hash}")
+async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
+    """
+    Remove a PDF or web source from a thread.
+    Deletes vectors from Qdrant and removes the file-thread association from the DB.
+    """
+    try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Delete vectors from Qdrant
+        qdrant = QdrantAdapter()
+        await qdrant.delete_source_chunks_by_file_hash(thread_id, file_hash)
+
+        # Remove from SQLite
+        removed = await remove_file_from_thread(thread_id, file_hash)
+
+        return {
+            "status": "deleted",
+            "thread_id": thread_id,
+            "file_hash": file_hash,
+            "removed_from_db": removed,
         }
     except HTTPException:
         raise

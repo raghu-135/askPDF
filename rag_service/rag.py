@@ -358,6 +358,95 @@ async def index_chat_memory_for_thread(
         return {"status": "error", "message": str(e)}
 
 
+async def index_webpage_for_thread(
+    thread_id: str,
+    url: str,
+    file_hash: str,
+    embedding_model_name: str,
+) -> Dict[str, Any]:
+    """
+    Fetch a webpage, extract its text, chunk it, generate embeddings,
+    and index into the thread's Qdrant collection as web_source chunks.
+
+    Args:
+        thread_id: The thread to index into.
+        url: The full URL of the page to fetch.
+        file_hash: MD5 hash of the URL (used as the stable identifier).
+        embedding_model_name: Embedding model to use.
+
+    Returns:
+        Status dict with indexed chunk count, page title, and any error.
+    """
+    from bs4 import BeautifulSoup
+
+    db_client = QdrantAdapter()
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AskPDF bot)"})
+            resp.raise_for_status()
+            html = resp.text
+
+        soup = BeautifulSoup(html, "lxml")
+
+        # Remove non-content tags
+        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
+            tag.decompose()
+
+        title = soup.title.get_text(strip=True) if soup.title else url
+
+        # Prefer main/article content, fall back to body
+        content_tag = soup.find("main") or soup.find("article") or soup.body or soup
+        raw_text = content_tag.get_text(separator="\n", strip=True)
+
+        # Collapse excessive blank lines
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        text = "\n".join(lines)
+
+        if not text:
+            return {"status": "error", "message": "No text content found on page"}
+
+        # Chunk the text
+        doc = Document(page_content=text)
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=500,
+            chunk_overlap=50,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+        chunks = [c.page_content for c in splitter.split_documents([doc])]
+
+        if not chunks:
+            return {"status": "error", "message": "No chunks produced from page text"}
+
+        vectors = await generate_embeddings(chunks, embedding_model_name)
+
+        indexed_count = await db_client.index_web_source_chunks(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            url=url,
+            title=title,
+            texts=chunks,
+            embeddings=vectors,
+        )
+
+        logger.info(f"Indexed {indexed_count} web source chunks for thread {thread_id}, url {url}")
+        return {
+            "status": "success",
+            "thread_id": thread_id,
+            "file_hash": file_hash,
+            "url": url,
+            "title": title,
+            "chunks_count": indexed_count,
+        }
+
+    except httpx.HTTPStatusError as e:
+        msg = f"HTTP error fetching {url}: {e.response.status_code}"
+        logger.error(msg)
+        return {"status": "error", "message": msg}
+    except Exception as e:
+        logger.error(f"Error indexing webpage for thread {thread_id}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
 async def index_web_search_for_thread(
     thread_id: str,
     query: str,

@@ -12,13 +12,14 @@ declare const process: {
   env: Record<string, string | undefined>;
 };
 import PdfUploader from "../components/PdfUploader";
+import WebUploader from "../components/WebUploader";
 import PdfViewer from "../components/PdfViewer";
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
-import { Thread, addFileToThread } from "../lib/api";
-import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
+import { Thread, addFileToThread, removeSourceFromThread } from "../lib/api";
+import { loadThreadTabs, createPdfTabFromUpload, createWebTabFromIndexed, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 
 type Sentence = { id: number; text: string; bboxes: any[] };
@@ -155,6 +156,56 @@ export default function Home() {
     setActiveSource('pdf');
   };
 
+  // Handle web source indexed
+  const handleWebIndexed = async (data: { fileHash: string; url: string; status: string; message?: string }) => {
+    if (data.status !== 'accepted' || !activeThread || !data.fileHash) return;
+
+    const newTab = createWebTabFromIndexed(data.fileHash, data.url);
+
+    // Only add if not already present
+    setPdfTabs(prev => {
+      if (prev.some(t => t.id === newTab.id)) return prev;
+      return [...prev, newTab];
+    });
+    setActiveTabId(newTab.id);
+
+    try {
+      const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
+      setActiveThread(updatedThread);
+      setSidebarVersion(v => v + 1);
+    } catch (error) {
+      console.error('Failed to refresh thread after web source:', error);
+    }
+
+    setCurrentPdfId(null);
+    setCurrentChatId(null);
+    setPlayRequestId(null);
+    setActiveSource('pdf');
+  };
+
+  // Handle remove source from thread (deletes from DB + Qdrant, closes tab)
+  const handleTabRemove = async (tabId: string) => {
+    if (!activeThread) return;
+    const tab = pdfTabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    try {
+      await removeSourceFromThread(activeThread.id, tab.fileHash);
+    } catch (error) {
+      console.error('Failed to remove source from thread:', error);
+    }
+
+    // Close the tab and refresh sidebar
+    handleTabClose(tabId);
+    try {
+      const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
+      setActiveThread(updatedThread);
+      setSidebarVersion(v => v + 1);
+    } catch (error) {
+      console.error('Failed to refresh thread after source removal:', error);
+    }
+  };
+
   // Handle tab change
   const handleTabChange = (tabId: string) => {
     handleTabChangeUtil(tabId, setActiveTabId, setCurrentPdfId, setPlayRequestId, setActiveSource);
@@ -246,6 +297,14 @@ export default function Home() {
                 tooltipText={!activeThread ? "Select or create a thread first" : undefined}
               />
 
+              {/* Web Uploader */}
+              <WebUploader
+                threadId={activeThread?.id ?? null}
+                onIndexed={handleWebIndexed}
+                disabled={!activeThread}
+                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
+              />
+
               {/* Auto-scroll Toggle */}
               <Tooltip title={autoScroll ? "Disable Auto-Scroll" : "Enable Auto-Scroll"}>
                 <IconButton
@@ -317,16 +376,41 @@ export default function Home() {
               activeTabId={activeTabId}
               onTabChange={handleTabChange}
               onTabClose={handleTabClose}
+              onTabRemove={activeThread ? handleTabRemove : undefined}
               darkMode={pdfDarkMode}
             />
           )}
 
-          {/* PDF Viewer Area */}
+          {/* PDF / Web Viewer Area */}
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
             {isPdfLoading ? (
               <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
                 <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
-                <Typography sx={{ ml: 2 }}>Loading PDF documents...</Typography>
+                <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
+              </Box>
+            ) : activeTab?.sourceType === 'web' ? (
+              /* Web source view */
+              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit', p: 4 }}>
+                <Box sx={{ textAlign: 'center', maxWidth: 480 }}>
+                  <Typography variant="h6" gutterBottom sx={{ color: pdfDarkMode ? '#eee' : 'text.primary' }}>
+                    🌐 Webpage Indexed
+                  </Typography>
+                  <Typography variant="body2" sx={{ mb: 2, color: pdfDarkMode ? '#ccc' : 'text.secondary', wordBreak: 'break-all' }}>
+                    {activeTab.sourceUrl || activeTab.fileName}
+                  </Typography>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    href={activeTab.sourceUrl || activeTab.fileName}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open in browser ↗
+                  </Button>
+                  <Typography variant="caption" sx={{ display: 'block', mt: 2, color: pdfDarkMode ? '#aaa' : 'text.secondary' }}>
+                    This page has been indexed and is searchable in the Chat tab.
+                  </Typography>
+                </Box>
               </Box>
             ) : (pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
               <PdfViewer
@@ -354,8 +438,9 @@ export default function Home() {
                   </Typography>
                   <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
                     <li>Use the <b>Threads</b> tab on the right to create a new thread with an embedding model.</li>
-                    <li>Click <b>Upload PDF</b> to add documents to your thread.</li>
-                    <li>Switch to the <b>Chat</b> tab to ask questions about your PDFs using AI.</li>
+                    <li>Click <b>Upload PDF</b> to add PDF documents to your thread.</li>
+                    <li>Enter a URL and click <b>Add Webpage</b> to index a website.</li>
+                    <li>Switch to the <b>Chat</b> tab to ask questions about your sources using AI.</li>
                     <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
                     <li>Double-click any text to start audio playback from that point.</li>
                   </ul>

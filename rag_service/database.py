@@ -68,6 +68,7 @@ class File(BaseModel):
     file_hash: str
     file_name: str
     file_path: Optional[str] = None
+    source_type: str = "pdf"  # 'pdf' or 'web'
 
 
 class ThreadFile(BaseModel):
@@ -101,7 +102,8 @@ CREATE TABLE IF NOT EXISTS threads (
 CREATE TABLE IF NOT EXISTS files (
     file_hash TEXT PRIMARY KEY,
     file_name TEXT NOT NULL,
-    file_path TEXT
+    file_path TEXT,
+    source_type TEXT NOT NULL DEFAULT 'pdf'
 );
 
 CREATE TABLE IF NOT EXISTS thread_files (
@@ -142,6 +144,7 @@ async def init_db():
             "ALTER TABLE messages ADD COLUMN context_compact TEXT",
             "ALTER TABLE threads ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'",
             "ALTER TABLE messages ADD COLUMN web_sources TEXT",
+            "ALTER TABLE files ADD COLUMN source_type TEXT NOT NULL DEFAULT 'pdf'",
         ]
         for stmt in migrations:
             try:
@@ -282,26 +285,32 @@ async def delete_thread(thread_id: str) -> bool:
 
 # ============ File Operations ============
 
-async def create_or_get_file(file_hash: str, file_name: str, file_path: Optional[str] = None) -> File:
+async def create_or_get_file(
+    file_hash: str,
+    file_name: str,
+    file_path: Optional[str] = None,
+    source_type: str = "pdf",
+) -> File:
     """Create a new file record or return existing one."""
     async with aiosqlite.connect(DB_PATH) as db:
         # Try to insert, ignore if exists
         await db.execute(
-            "INSERT OR IGNORE INTO files (file_hash, file_name, file_path) VALUES (?, ?, ?)",
-            (file_hash, file_name, file_path)
+            "INSERT OR IGNORE INTO files (file_hash, file_name, file_path, source_type) VALUES (?, ?, ?, ?)",
+            (file_hash, file_name, file_path, source_type)
         )
         await db.commit()
         
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT file_hash, file_name, file_path FROM files WHERE file_hash = ?",
+            "SELECT file_hash, file_name, file_path, source_type FROM files WHERE file_hash = ?",
             (file_hash,)
         )
         row = await cursor.fetchone()
         return File(
             file_hash=row["file_hash"],
             file_name=row["file_name"],
-            file_path=row["file_path"]
+            file_path=row["file_path"],
+            source_type=row["source_type"] or "pdf",
         )
 
 
@@ -310,7 +319,7 @@ async def get_file(file_hash: str) -> Optional[File]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT file_hash, file_name, file_path FROM files WHERE file_hash = ?",
+            "SELECT file_hash, file_name, file_path, source_type FROM files WHERE file_hash = ?",
             (file_hash,)
         )
         row = await cursor.fetchone()
@@ -318,7 +327,8 @@ async def get_file(file_hash: str) -> Optional[File]:
             return File(
                 file_hash=row["file_hash"],
                 file_name=row["file_name"],
-                file_path=row["file_path"]
+                file_path=row["file_path"],
+                source_type=row["source_type"] or "pdf",
             )
     return None
 
@@ -345,7 +355,7 @@ async def get_thread_files(thread_id: str) -> List[File]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
-            SELECT f.file_hash, f.file_name, f.file_path
+            SELECT f.file_hash, f.file_name, f.file_path, f.source_type
             FROM files f
             JOIN thread_files tf ON f.file_hash = tf.file_hash
             WHERE tf.thread_id = ?
@@ -356,10 +366,26 @@ async def get_thread_files(thread_id: str) -> List[File]:
             File(
                 file_hash=row["file_hash"],
                 file_name=row["file_name"],
-                file_path=row["file_path"]
+                file_path=row["file_path"],
+                source_type=row["source_type"] or "pdf",
             )
             for row in rows
         ]
+
+
+async def remove_file_from_thread(thread_id: str, file_hash: str) -> bool:
+    """Remove a file association from a thread (does not delete the file record itself)."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                "DELETE FROM thread_files WHERE thread_id = ? AND file_hash = ?",
+                (thread_id, file_hash)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error removing file from thread: {e}")
+        return False
 
 
 async def is_file_in_thread(thread_id: str, file_hash: str) -> bool:
