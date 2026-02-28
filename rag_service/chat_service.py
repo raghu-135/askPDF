@@ -414,6 +414,8 @@ async def handle_thread_chat(
             "tool_instructions": tool_instructions,
             "custom_instructions": custom_instructions,
             "pre_fetch_bundle": prefetch_bundle,
+            # Signal whether the Intent Agent ran; Orchestrator adapts its prompting strategy
+            "intent_agent_ran": use_intent_agent,
         }
         
         config = {
