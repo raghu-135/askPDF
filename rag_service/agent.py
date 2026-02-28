@@ -53,11 +53,14 @@ class AgentState(TypedDict):
 
 
 @tool
-async def get_history_stats(config: RunnableConfig = None) -> str:
+async def get_conversation_stats(config: RunnableConfig = None) -> str:
     """
-    Get statistics about the current conversation history, including total message count 
-    and average message size. This helps determine how many historical messages can fit 
-    into the context window.
+    A lightweight meta-tool that returns statistics about the current conversation:
+    message count, user/assistant split, average message length, and estimated token usage.
+
+    Use this as a PLANNING step before calling `page_conversation_history` to decide appropriate
+    offset and limit values. This tool returns no message content — do not use it when
+    `search_conversation_history` (semantic search) can answer the question.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -89,14 +92,21 @@ async def get_history_stats(config: RunnableConfig = None) -> str:
 
 
 @tool
-async def fetch_historical_qa(offset: int, limit: int = 5, config: RunnableConfig = None) -> str:
+async def page_conversation_history(offset: int, limit: int = 5, config: RunnableConfig = None) -> str:
     """
-    Fetch a specific slice of the conversation history by offset (0 is most recent).
-    Use this to 'walk back' through the conversation in increments.
+    Retrieve a time-ordered slice of verbatim conversation messages by position.
+    Messages are ordered newest-first (offset=0 returns the most recent messages).
+    Increment offset by `limit` on each call to page sequentially through the full history.
+
+    Prefer `search_conversation_history` for semantic or thematic recall. Use this tool when you
+    need to read the exact verbatim text of messages at a known chronological position,
+    or when paging through the full conversation in order. Call `get_conversation_stats` first
+    if you need to know the total message count before choosing an offset.
 
     Args:
-        offset: The starting index (0 for newest message, increasing values to go further back in time).
-        limit: The number of historical messages to retrieve in this slice.
+        offset: Starting position in the message list (0 = most recent). Increase by
+                `limit` on each subsequent call to walk further back through history.
+        limit: Number of messages to return in this slice (default: 5).
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -122,12 +132,19 @@ async def fetch_historical_qa(offset: int, limit: int = 5, config: RunnableConfi
 
 
 @tool
-async def search_pdf_knowledge(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
-    """Search uploaded PDF documents for specific facts to answer the user's question. Pass max_results to limit the chunks appropriately based on your context window.
-    
+async def search_documents(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
+    """
+    Perform a semantic vector search over all uploaded PDF documents for this thread.
+    Returns the most relevant chunks along with neighboring context passages for continuity.
+
+    This uses embedding-based similarity — phrase queries as natural questions rather than
+    keyword strings for best results. If the first call returns weak or irrelevant evidence,
+    retry with a rephrased or more specific query before concluding the information is absent.
+
     Args:
-        query: The specific fact, phrase, or semantic topic to search for in the documents.
-        max_results: The maximum number of chunks to return. Adjust this based on context window limits.
+        query: A natural-language question or description of the fact to locate in the PDFs.
+        max_results: Number of seed chunks to retrieve before context expansion. Increase
+                     for broad topics; decrease when the context window is nearly full.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -191,16 +208,22 @@ async def search_pdf_knowledge(query: str, max_results: int = 10, config: Runnab
             "__pdf_sources__": sources
         })
     except Exception as e:
-        logger.error(f"Error in search_pdf_knowledge: {e}", exc_info=True)
+        logger.error(f"Error in search_documents: {e}", exc_info=True)
         return f"Error retrieving PDF knowledge: {e}"
 
 
 @tool
-async def get_recent_qa_summaries(limit: int, config: RunnableConfig = None) -> str:
-    """Retrieve summaries of the most recent messages in this conversation. Use this to quickly understand context.
-    
+async def get_recent_context(limit: int, config: RunnableConfig = None) -> str:
+    """
+    Retrieve the N most recent conversation turns (user + assistant), ordered newest-first.
+    Returns compact summaries when available, otherwise truncated full message content.
+
+    Use this for lightweight recency context — for example, to understand what was just
+    discussed before the current question. For semantic or thematic recall across a longer
+    history, prefer `search_conversation_history` instead.
+
     Args:
-        limit: The number of recent messages to retrieve.
+        limit: Number of recent messages to retrieve.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -226,12 +249,20 @@ async def get_recent_qa_summaries(limit: int, config: RunnableConfig = None) -> 
 
 
 @tool
-async def search_chat_memory(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
-    """Search deeply into past conversation QA pairs for semantic relevance. Returns chunks/summaries. Pass max_results appropriately to fit your context window.
-    
+async def search_conversation_history(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
+    """
+    Perform a semantic vector search across all past conversation QA pairs in this thread.
+    Returns the most relevant past exchanges ranked by embedding similarity, regardless
+    of when they occurred in the conversation.
+
+    Use this for thematic or conceptual recall (e.g., "what did we previously discuss
+    about X?"). Unlike `page_conversation_history`, which returns verbatim messages by time
+    position, this finds semantically related content from anywhere in the history.
+    Retry with a rephrased query if initial results are off-topic.
+
     Args:
-        query: The specific fact, phrase, or semantic topic to search for in past conversations.
-        max_results: The maximum number of past conversations to return. Adjust this based on context window limits.
+        query: A natural-language description of the topic or fact to recall from prior exchanges.
+        max_results: Maximum number of past QA pairs to return.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -270,11 +301,20 @@ async def search_chat_memory(query: str, max_results: int = 10, config: Runnable
 
 
 @tool
-async def perform_web_search(query: str) -> str:
-    """Search the web for up-to-date information.
-    
+async def search_web(query: str) -> str:
+    """
+    Search the web for external, real-time, or post-training knowledge that is not
+    available in the uploaded documents or conversation history.
+
+    Only use this when: (a) the question explicitly requires current events, live data,
+    or broadly external facts, AND (b) `search_documents` and `search_conversation_history`
+    have already been tried or are clearly irrelevant. Do NOT use this for questions
+    that can be answered from the uploaded documents. Web search may be disabled by
+    the user — calling it when disabled will return an error.
+
     Args:
-        query: The specific fact, phrase, or topic to search for on the web.
+        query: A concise, keyword-rich search query. Rephrase and retry with different
+               keywords if initial results are off-topic or insufficient.
     """
     try:
         results = await asyncio.to_thread(search_tool.invoke, query)
@@ -284,13 +324,21 @@ async def perform_web_search(query: str) -> str:
 
 
 @tool
-async def require_clarification(options: List[str]) -> str:
+async def ask_for_clarification(options: List[str]) -> str:
     """
-    If the user's question is ambiguous, call this tool with a list of 2-4 possible options 
-    for what they might have meant. This pauses the agent and asks the user for clarification.
+    Present the user with 2–4 interpretations of their ambiguous question so they can
+    select the one they intended.
+
+    Only call this when the question is genuinely ambiguous AND making a reasonable
+    assumption would risk answering the wrong question entirely. Do NOT use for minor
+    phrasing uncertainty — make a safe assumption and proceed instead.
+
+    Each option must be a complete, self-contained question representing a distinct
+    interpretation of the user's intent, not just a short label or phrase.
 
     Args:
-        options: A list of 2-4 strings representing distinct assumptions of what the user meant.
+        options: A list of 2–4 complete questions, each representing a distinct and
+                 plausible interpretation of what the user might have meant.
     """
     return json.dumps({"__clarification_options__": options})
 
@@ -306,12 +354,12 @@ class IntentAgentState(TypedDict):
     intent_result: Optional[Dict[str, Any]]
 
 intent_tools_list = [
-    get_history_stats,
-    fetch_historical_qa,
-    get_recent_qa_summaries,
-    search_chat_memory,
-    search_pdf_knowledge,
-    require_clarification
+    get_conversation_stats,
+    page_conversation_history,
+    get_recent_context,
+    search_conversation_history,
+    search_documents,
+    ask_for_clarification
 ]
 
 async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
@@ -329,44 +377,52 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     llm_with_tools = llm.bind_tools(intent_tools_list)
 
     system_prompt = (
-        f"""You are an expert at analyzing user intent and rewriting questions for optimal retrieval and history clarity.
+        f"""You are an expert query analyst. Your sole task is to classify the user's message and rewrite it into a self-contained, retrieval-optimized question.
 
-        CONTEXT: Recent conversation history (if any) is included in the messages above your current question.
-        Use that inline history to understand follow-up questions. You do NOT need tools to read it — it's already there.
+        CONTEXT: Recent conversation history (if any) appears in the messages below. Use it directly — you do NOT need tools to read it.
 
         RUNTIME CONSTRAINTS:
-        Your maximum context window is {context_window} tokens. You must manage retrieval and final output within this budget.
+        Your maximum context window is {context_window} tokens. Stay within this budget.
 
-        CRITICAL INSTRUCTIONS:
-        1. DO NOT use tools unless you truly cannot understand the question from the inline history alone.
-        2. Determine if the message is a CLEAR_STANDALONE question, a CLEAR_FOLLOWUP that needs context, or is AMBIGUOUS.
-        3. If it's CLEAR_FOLLOWUP, rewrite it into a single, standalone question using the inline conversation history.
-        4. If it's AMBIGUOUS and you cannot resolve it from inline history, use `require_clarification`.
-        5. Only use `search_pdf_knowledge` if the user refers to \"the document\" and the inline history gives no hint about which document.
-        6. Only use `get_recent_qa_summaries` or `search_chat_memory` if the inline history is clearly insufficient.
-
-        ALWAYS REWRITE THE QUERY — for ALL statuses (CLEAR_STANDALONE, CLEAR_FOLLOWUP, AMBIGUOUS). The rewritten_query is stored in conversation history and used for semantic search retrieval. A well-formed, specific, self-contained question dramatically improves future recall. Examples:
-        - \"What is RAG?\" → \"What is Retrieval-Augmented Generation (RAG) and how does it work?\"
-        - \"Explain transformers\" → \"Explain the transformer architecture in deep learning, including self-attention mechanisms\"
-        - \"How does it handle errors?\" (follow-up after discussing FastAPI) → \"How does the FastAPI backend handle HTTP errors and exceptions?\"
-        - \"Tell me more\" (follow-up after discussing attention) → \"Explain self-attention mechanisms in transformers in more detail, including multi-head attention\"
-        Keep the core meaning intact but make the query more specific, complete, and retrieval-friendly.
-
-        IMPORTANT: Your rewritten_query MUST be a single, natural question. Do NOT prefix it with \"Q:\" or use \"Q: ... A: ...\" format.
-
-        When you are ready to provide the final analysis, respond ONLY with a JSON object in this format:
+        YOUR OUTPUT — respond ONLY with this JSON object, no preamble or explanation:
         {{
-          \"status\": \"CLEAR_STANDALONE\" | \"CLEAR_FOLLOWUP\" | \"AMBIGUOUS\",
-          \"rewritten_query\": \"The standalone, retrieval-optimized version of the question\",
-          \"clarification_options\": [\"Option A\", \"Option B\"] | null
-        }}"""
+          "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
+          "rewritten_query": "A single, complete, natural-language question",
+          "clarification_options": ["Full question for interpretation A", "Full question for interpretation B"] | null
+        }}
+
+        STEP 1 — REWRITE THE QUERY (mandatory for all statuses):
+        Expand the user's message into a fully self-contained question that performs well as a semantic search query.
+        Even clear questions benefit from expansion — add specificity, resolve pronouns, and include relevant domain context.
+        Write a single, natural question. Never prefix with "Q:" or use a "Q: ... A: ..." format.
+
+        Good rewrites:
+        - "What is RAG?" → "What is Retrieval-Augmented Generation (RAG) and how does it work?"
+        - "Explain transformers" → "Explain the transformer architecture in machine learning, including self-attention mechanisms"
+        - "What are the main findings?" → "What are the main findings or conclusions presented in the uploaded document?"
+        - "How does it work?" (after discussing a document's method) → "How does the methodology described in the document work, step by step?"
+        - "Tell me more" (after discussing a specific section) → "Provide a more detailed explanation of [the specific topic just discussed]"
+        - "Summarize it" (after user uploads a PDF) → "Provide a comprehensive summary of the uploaded document"
+
+        STEP 2 — CLASSIFY:
+        - CLEAR_STANDALONE: The question is self-contained and its intent is unambiguous
+        - CLEAR_FOLLOWUP: The question references earlier context but its intent is clear from the inline history
+        - AMBIGUOUS: The question has multiple plausible interpretations that the inline history cannot resolve
+
+        STEP 3 — TOOL USE POLICY:
+        Only call tools if the inline history is genuinely insufficient to complete the rewrite.
+        - Use `search_documents` only if the user references a specific document or section and the inline history gives no hint about which one
+        - Use `get_recent_context` or `search_conversation_history` only if the inline history is clearly too short to resolve a follow-up
+        - Use `ask_for_clarification` only for genuinely ambiguous questions — each option must be a complete, distinct question
+        - Do NOT use `get_conversation_stats` or `page_conversation_history` for this task"""
     )
 
     # For first messages, reinforce no-tool usage
     if is_first_message:
         system_prompt += (
-            "\n\nNOTE: This is the FIRST message in the conversation. There is no history. Do NOT use any tools. "
-            "Simply rewrite the query for retrieval clarity and output the JSON immediately with status CLEAR_STANDALONE."
+            "\n\nFIRST MESSAGE: This is the opening message — there is no prior conversation history. "
+            "Do NOT call any tools. Classify as CLEAR_STANDALONE, rewrite the query for retrieval clarity, "
+            "and output the JSON immediately."
         )
         logger.info("First message in thread detected. LLM will rewrite without tools.")
 
@@ -450,13 +506,13 @@ async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
 
     force_prompt = SystemMessage(
         content=(
-            f"Tool iteration budget reached (Context Window: {context_window} tokens). Do NOT call any tools.\n"
-            "Based on the conversation history already in your context, "
-            "rewrite the user's question into a standalone, retrieval-optimized form.\n"
-            "Respond ONLY with the JSON:\n"
-            '{"status": "CLEAR_STANDALONE" or "CLEAR_FOLLOWUP", '
+            f"Tool iteration budget exhausted (context window: {context_window} tokens). Do NOT call any tools.\n"
+            "Using only the conversation history already in your context, rewrite the user's question "
+            "into a standalone, retrieval-optimized form.\n"
+            "Respond ONLY with valid JSON:\n"
+            '{{"status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP", '
             '"rewritten_query": "<rewritten question>", '
-            '"clarification_options": null}'
+            '"clarification_options": null}}'
         )
     )
 
@@ -495,7 +551,7 @@ class IntentToolNode(ToolNode):
         res = await super().ainvoke(input, config, **kwargs)
         messages = res.get("messages", [])
         
-        # Check if require_clarification was called
+        # Check if ask_for_clarification was called
         for i, msg in enumerate(messages):
             if isinstance(msg, ToolMessage) and isinstance(msg.content, str) and msg.content.startswith("{") and "__clarification_options__" in msg.content:
                 try:
@@ -525,58 +581,58 @@ intent_app = intent_workflow.compile()
 
 # Orchestrator tools list
 tools_list = [
-    search_pdf_knowledge,
-    get_recent_qa_summaries,
-    search_chat_memory,
-    perform_web_search,
-    require_clarification,
-    get_history_stats,
-    fetch_historical_qa
+    search_documents,
+    get_recent_context,
+    search_conversation_history,
+    search_web,
+    ask_for_clarification,
+    get_conversation_stats,
+    page_conversation_history
 ]
 
 
 TOOL_FRIENDLY_CONFIG = {
-    "search_pdf_knowledge": {
+    "search_documents": {
         "id": "document_evidence",
         "display_name": "Document Evidence",
-        "description": "Retrieve precise facts from uploaded documents.",
-        "default_prompt": "Prioritize this for document-grounded questions and increase depth when evidence is sparse.",
+        "description": "Semantic vector search over uploaded PDF documents — returns matching chunks with surrounding context.",
+        "default_prompt": "First choice for any document-grounded question. If results are weak, retry with a rephrased or more specific query. Increase max_results when evidence is sparse or the topic is broad.",
     },
-    "get_recent_qa_summaries": {
+    "get_recent_context": {
         "id": "conversation_snapshot",
         "display_name": "Conversation Snapshot",
-        "description": "Quickly retrieve the latest Q/A context for follow-ups.",
-        "default_prompt": "Use only when injected recent history is insufficient or after long tool chains where continuity may be degraded.",
+        "description": "Retrieve the N most recent conversation turns ordered by recency, as compact summaries.",
+        "default_prompt": "Use for lightweight recency context when injected history is insufficient. For semantic recall across a longer history, prefer Deep Memory instead.",
     },
-    "search_chat_memory": {
+    "search_conversation_history": {
         "id": "deep_memory",
         "display_name": "Deep Memory",
-        "description": "Search semantically across prior answers in this thread.",
-        "default_prompt": "Use when long-range thread context or semantic recall is needed beyond recent messages.",
+        "description": "Semantic vector search across all past conversation QA pairs in this thread.",
+        "default_prompt": "Use for thematic or semantic recall (e.g., 'what did we discuss about X?') across the full thread history. Retry with a rephrased query if initial results are irrelevant.",
     },
-    "perform_web_search": {
+    "search_web": {
         "id": "live_web_recon",
         "display_name": "Internet Search",
-        "description": "Gather external or up-to-date information from the web.",
-        "default_prompt": "Use for external/live information and iterate on keywords if initial results are weak.",
+        "description": "Search the web for external, real-time, or post-training knowledge.",
+        "default_prompt": "Last resort for external or live information. Exhaust Document Evidence and Deep Memory first. Rephrase and retry with different keywords if initial results are off-topic.",
     },
-    "require_clarification": {
+    "ask_for_clarification": {
         "id": "clarify_intent",
         "display_name": "Clarify Intent",
-        "description": "Ask the user to disambiguate only when needed.",
-        "default_prompt": "Use only when the question is truly ambiguous and a reasonable assumption is unsafe.",
+        "description": "Present the user with distinct interpretations of an ambiguous question.",
+        "default_prompt": "Use only when the question has multiple plausible interpretations and making an assumption risks answering the wrong question entirely. Each option must be a complete, self-contained question.",
     },
-    "get_history_stats": {
+    "get_conversation_stats": {
         "id": "history_stats",
         "display_name": "History Stats",
-        "description": "Retrieve statistics about the conversation history.",
-        "default_prompt": "Use to understand the shape of the conversation history and adjust retrieval strategies.",
+        "description": "Returns message count, user/assistant split, and estimated token usage — no message content.",
+        "default_prompt": "Use as a planning step before Fetch Historical QA to calibrate offset and limit. Do not use when semantic search is sufficient — this tool contains no message content.",
     },
-    "fetch_historical_qa": {
+    "page_conversation_history": {
         "id": "fetch_qa",
         "display_name": "Fetch Historical QA",
-        "description": "Fetch specific slices of the conversation history by offset.",
-        "default_prompt": "Use to traverse the conversation history in increments for better context management.",
+        "description": "Retrieve verbatim conversation messages at a specific chronological position by offset.",
+        "default_prompt": "Use to read verbatim message content at a known time position. Call History Stats first if the total count is unknown. Increment offset by limit to page through history sequentially.",
     },
 }
 
@@ -621,7 +677,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
     iteration = state.get("iteration_count", 0) + 1
     
     # Enable tools (filter web search if disabled)
-    valid_tools = tools_list if state.get("use_web_search", False) else [t for t in tools_list if t.name != "perform_web_search"]
+    valid_tools = tools_list if state.get("use_web_search", False) else [t for t in tools_list if t.name != "search_web"]
     llm_with_tools = llm.bind_tools(valid_tools)
     
     context_window = state.get('context_window', DEFAULT_TOKEN_BUDGET)
@@ -808,12 +864,12 @@ def build_system_prompt(
         (
             "TOOL CONTRACT (LOCKED)",
             "\n".join([
-                "1. ALWAYS try to use tools to verify information. Do not rely entirely on internal knowledge.",
-                "2. You can and should make recursive tool calls with better queries when needed.",
-                "3. Start with the most relevant alias strategy for the question; adapt when first retrieval fails.",
-                "4. Internet Search is allowed only when web search is enabled.",
-                "5. Clarify Intent is only for genuinely ambiguous questions.",
-                "6. Avoid redundant tool calls with nearly identical parameters.",
+                "1. For questions requiring specific facts, document content, or prior conversation context, use tools rather than relying on internal knowledge alone.",
+                "2. Use tools in this priority order: Document Evidence → Deep Memory → Conversation Snapshot → Internet Search.",
+                "3. If a tool returns weak or empty results, retry with a rephrased or more specific query before concluding the information is absent.",
+                "4. You may make multiple tool calls across iterations; avoid redundant calls with nearly identical queries.",
+                "5. Internet Search is only available when explicitly enabled by the user — do not call it otherwise.",
+                "6. Clarify Intent is only for genuinely ambiguous questions where a wrong assumption would lead to an entirely wrong answer.",
                 "7. If custom user instructions conflict with this locked contract, follow this locked contract."
             ])
         ),
@@ -823,7 +879,12 @@ def build_system_prompt(
         ),
         (
             "ANSWER POLICY (LOCKED)",
-            "1. Output a final answer only after retrieving sufficient context.\n2. Do NOT prefix your response with 'A:' or mimic the 'Q: ... A: ...' pattern. Simply answer the question directly."
+            "\n".join([
+                "1. Output a final answer only after retrieving sufficient context through tool calls.",
+                "2. Synthesize retrieved content into a coherent, well-structured answer — do not paste raw chunks verbatim.",
+                "3. If retrieved information is partial or uncertain, explicitly state that limitation rather than fabricating details.",
+                "4. Do NOT prefix your response with 'A:' or mimic the 'Q: ... A: ...' pattern. Answer directly.",
+            ])
         ),
     ]
     if custom_instructions:
