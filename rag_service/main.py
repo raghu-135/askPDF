@@ -479,32 +479,66 @@ async def get_thread_messages_endpoint(
 async def delete_message_endpoint(message_id: str):
     """
     Delete a message and its associated chat memory from Qdrant.
-    If it's part of a QA pair, deletes both.
+    If it's part of a QA pair, deletes both messages, their chat-memory vector,
+    and any web search chunks (web_search type) whose URLs are no longer referenced
+    by any other message in the thread.
     """
     try:
         # Get message to find thread_id and role
         message = await get_message(message_id)
         if not message:
             raise HTTPException(status_code=404, detail="Message not found")
-        
-        # Determine assistant message ID for Qdrant deletion
-        # (Semantic memory in Qdrant is typically keyed by assistant ID)
-        qdrant_msg_id = message_id
-        if message.role == MessageRole.USER:
-            # Try to find the associated assistant message
-            msgs = await get_thread_messages(message.thread_id, limit=100)
-            for i, m in enumerate(msgs):
-                if m.id == message_id and i + 1 < len(msgs) and msgs[i+1].role == MessageRole.ASSISTANT:
-                    qdrant_msg_id = msgs[i+1].id
+
+        # ── Identify both sides of the QA pair ──
+        all_msgs = await get_thread_messages(message.thread_id, limit=10000)
+        assistant_msg_id = None
+        if message.role == MessageRole.ASSISTANT:
+            assistant_msg_id = message_id
+        else:
+            # USER → find the immediately following assistant message
+            for i, m in enumerate(all_msgs):
+                if m.id == message_id and i + 1 < len(all_msgs) and all_msgs[i + 1].role == MessageRole.ASSISTANT:
+                    assistant_msg_id = all_msgs[i + 1].id
                     break
-        
-        # Delete from Qdrant
+
+        # IDs that will be removed from SQLite (this + its pair counterpart)
+        ids_to_delete: set = {message_id}
+        if assistant_msg_id and assistant_msg_id != message_id:
+            ids_to_delete.add(assistant_msg_id)
+
+        # ── Collect web_source URLs from the assistant message being deleted ──
+        urls_to_check: set = set()
+        if assistant_msg_id:
+            asst_msg = await get_message(assistant_msg_id)
+            if asst_msg and asst_msg.web_sources:
+                for ws in asst_msg.web_sources:
+                    url = ws.get("url", "").strip()
+                    if url:
+                        urls_to_check.add(url)
+
         db = QdrantAdapter()
+
+        # ── Delete chat-memory vector ──
+        qdrant_msg_id = assistant_msg_id or message_id
         await db.delete_chat_memory_by_message_id(message.thread_id, qdrant_msg_id)
-        
-        # Delete from SQLite (using pair-aware deletion)
+
+        # ── Delete orphaned web_search chunks ──
+        if urls_to_check:
+            # URLs still referenced by other (surviving) messages
+            still_needed: set = set()
+            for m in all_msgs:
+                if m.id not in ids_to_delete and m.web_sources:
+                    for ws in m.web_sources:
+                        url = ws.get("url", "").strip()
+                        if url:
+                            still_needed.add(url)
+            orphaned = urls_to_check - still_needed
+            if orphaned:
+                await db.delete_web_chunks_by_urls(message.thread_id, list(orphaned))
+
+        # ── Delete from SQLite (pair-aware) ──
         deleted_ids = await delete_message_pair(message_id)
-        
+
         return {"status": "deleted", "deleted_ids": deleted_ids}
     except HTTPException:
         raise

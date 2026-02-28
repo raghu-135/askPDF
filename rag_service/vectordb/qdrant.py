@@ -493,6 +493,45 @@ class QdrantAdapter(VectorDBClient):
             })
         return results
 
+    async def delete_web_chunks_by_urls(
+        self,
+        thread_id: str,
+        urls: List[str],
+    ) -> int:
+        """
+        Delete all web_search points whose URL matches any of the given URLs.
+        Returns the number of URLs targeted for deletion.
+        Used when a QA message pair is deleted to clean up orphaned web search chunks.
+        """
+        if not urls:
+            return 0
+        collection_name = self.get_thread_collection_name(thread_id)
+        if not self.client.collection_exists(collection_name):
+            return 0
+        try:
+            self.client.delete(
+                collection_name=collection_name,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="type",
+                                match=models.MatchValue(value="web_search"),
+                            ),
+                            models.FieldCondition(
+                                key="url",
+                                match=models.MatchAny(any=urls),
+                            ),
+                        ]
+                    )
+                ),
+            )
+            print(f"Deleted web_search chunks for {len(urls)} URL(s) in thread {thread_id}", flush=True)
+            return len(urls)
+        except Exception as e:
+            print(f"Error deleting web_search chunks by URL: {e}", flush=True)
+            return 0
+
     # ============ Legacy Operations (Backward Compatibility) ============
 
     async def index_documents(

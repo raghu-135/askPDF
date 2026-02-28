@@ -26,13 +26,25 @@ async def invoke_with_retry(func, *args, **kwargs):
         try:
             return await func(*args, **kwargs)
         except Exception as e:
-            err_str = str(e)
-            if "503" in err_str and ("loading" in err_str.lower() or "unavailable" in err_str.lower()):
-                logger.warning(f"Model is loading (503). Retrying in {delay}s... (Attempt {i+1}/{max_retries})")
+            err_str = str(e).lower()
+            # 503 – model still loading / service unavailable
+            is_503_loading = "503" in err_str and ("loading" in err_str or "unavailable" in err_str)
+            # 400 – LM Studio unloaded the model between requests
+            is_model_unloaded = "400" in err_str and "model unloaded" in err_str
+            # 429 – rate limit / too many requests
+            is_rate_limit = "429" in err_str or "rate limit" in err_str or "too many requests" in err_str
+
+            if is_503_loading or is_model_unloaded or is_rate_limit:
+                reason = (
+                    "Model is loading (503)" if is_503_loading
+                    else "Model was unloaded (400)" if is_model_unloaded
+                    else "Rate limited (429)"
+                )
+                logger.warning(f"{reason}. Retrying in {delay}s... (Attempt {i+1}/{max_retries})")
                 await asyncio.sleep(delay)
                 continue
             raise
-    raise Exception("Max retries reached while waiting for model to load.")
+    raise Exception("Max retries reached while waiting for model to become available.")
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -984,7 +996,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
 async def force_final_answer(state: AgentState, config: RunnableConfig):
     """
-    Fallback when the tool-iteration budget is exhausted but the model still requests tools.
+    Fallback when the tool-iteration budget is exhausted or the model returns empty text.
+    Rebuilds a clean, flat prompt from the retrieved tool content to avoid confusing the
+    model with a broken tool-calling message chain (empty AIMessages, multiple ToolMessages).
     """
     messages = state["messages"]
     llm = get_llm(state["llm_model"])
@@ -995,21 +1009,61 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
     tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
 
+    # ── Extract original user question ──
+    original_question = ""
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            original_question = msg.content if isinstance(msg.content, str) else str(msg.content)
+            break  # take the first human message (the actual user question)
+
+    # ── Collect all tool results and earlier clean AI turns ──
+    tool_context_parts: list[str] = []
+    prior_ai_parts: list[str] = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            content = msg.content or ""
+            # ToolMessages may still be raw JSON if OrchestratorToolNode didn't strip them
+            if isinstance(content, str) and content.startswith("{") and "content" in content:
+                try:
+                    parsed = json.loads(content)
+                    content = parsed.get("content", content)
+                except Exception:
+                    pass
+            if content.strip():
+                tool_context_parts.append(content.strip())
+        elif isinstance(msg, AIMessage):
+            txt = msg.content if isinstance(msg.content, str) else ""
+            if isinstance(msg.content, list):
+                from reasoning import _text_from_content_item
+                txt = "\n".join([_text_from_content_item(i) for i in msg.content if i]).strip()
+            # Only keep non-empty AI turns that are not tool-call-only turns
+            if txt.strip() and not getattr(msg, "tool_calls", None):
+                prior_ai_parts.append(txt.strip())
+
+    # ── Build a direct synthesis prompt ──
     sys_prompt = SystemMessage(content=build_system_prompt(
         context_window=context_window,
         system_role=system_role,
         tool_instructions=tool_instructions,
         custom_instructions=custom_instructions
     ))
-    force_prompt = SystemMessage(
-        content=(
-            "Tool iteration budget reached. Do not call tools. "
-            "Provide the best possible final answer from already retrieved context. "
-            "Clearly label uncertainty if key facts are missing."
-        )
-    )
 
-    response = await invoke_with_retry(llm.ainvoke, [sys_prompt] + messages + [force_prompt])
+    parts = []
+    if tool_context_parts:
+        parts.append("RETRIEVED CONTEXT (from tool searches):\n\n" + "\n\n---\n\n".join(tool_context_parts))
+    if prior_ai_parts:
+        parts.append("EARLIER ANALYSIS:\n\n" + "\n\n".join(prior_ai_parts))
+
+    force_content = (
+        "You MUST now write a final answer. Do NOT call any tools.\n\n"
+        + ("\n\n".join(parts) + "\n\n" if parts else "")
+        + f"USER QUESTION:\n{original_question}\n\n"
+        "Write a complete, helpful answer based on the retrieved context above. "
+        "Cite sources where available. If the context is insufficient, say so honestly."
+    )
+    force_msg = HumanMessage(content=force_content)
+
+    response = await invoke_with_retry(llm.ainvoke, [sys_prompt, force_msg])
     return {"messages": [response], "iteration_count": iteration}
 
 
@@ -1018,12 +1072,34 @@ def should_continue(state: AgentState):
     last_message = messages[-1]
     iteration_count = state.get("iteration_count", 0)
     max_iterations = state.get("max_iterations", DEFAULT_MAX_ITERATIONS)
-    
+
     if getattr(last_message, "tool_calls", None):
         if iteration_count >= max_iterations:
+            # If the only pending call is search_web and no web search has run yet,
+            # grant one extra pass so we don't force-finalize with zero web context.
+            pending_tool_names = {tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "") for tc in last_message.tool_calls}
+            web_sources_so_far = state.get("web_sources", [])
+            if pending_tool_names == {"search_web"} and not web_sources_so_far:
+                logger.info("Granting one extra iteration for search_web (no web results yet).")
+                return "tools"
             logger.warning(f"Reaching max agent iterations ({iteration_count}/{max_iterations}). Forcing termination.")
             return "force_final_answer"
         return "tools"
+
+    # Detect empty-content response after tool execution (e.g. model outputs nothing after
+    # receiving tool results). Force a final answer instead of silently ending with blank text.
+    if iteration_count > 0:
+        content = getattr(last_message, "content", "")
+        if isinstance(content, list):
+            from reasoning import _text_from_content_item
+            text_body = "\n".join([_text_from_content_item(i) for i in content if i]).strip()
+        else:
+            text_body = (content or "").strip()
+
+        if not text_body:
+            logger.warning("LLM returned empty response after tool execution. Triggering force_final_answer.")
+            return "force_final_answer"
+
     return END
 
 def clarification_router(state: AgentState):

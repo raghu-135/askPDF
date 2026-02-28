@@ -368,11 +368,14 @@ async def handle_thread_chat(
         # SUFFICIENT          → 2 rounds max  (pre-fetch + 1 targeted tool if needed)
         # PROBABLY_SUFFICIENT → 4 rounds max
         # INSUFFICIENT        → full budget (default max_iterations)
+        # When web search is enabled, add 2 extra iterations so the agent has room to
+        # call search_web after an initial search_documents call that may return nothing.
         coverage = intent.get("context_coverage", "PROBABLY_SUFFICIENT")
+        web_bonus = 2 if use_web_search else 0
         if coverage == "SUFFICIENT":
-            effective_max_iterations = min(max_iterations, 2)
+            effective_max_iterations = min(max_iterations, 2 + web_bonus)
         elif coverage == "PROBABLY_SUFFICIENT":
-            effective_max_iterations = min(max_iterations, 4)
+            effective_max_iterations = min(max_iterations, 4 + web_bonus)
         else:
             effective_max_iterations = max_iterations
 
@@ -409,7 +412,15 @@ async def handle_thread_chat(
         
         final_messages = result.get("messages", [])
         normalized = normalize_ai_response(final_messages[-1] if final_messages else None)
-        answer = normalized["answer"] or "Error processing request."
+        if not normalized["answer"]:
+            last_msg = final_messages[-1] if final_messages else None
+            logger.warning(
+                f"Empty answer from agent for thread {thread_id}. "
+                f"Last message type={type(last_msg).__name__}, "
+                f"content={repr(getattr(last_msg, 'content', None))!r}, "
+                f"tool_calls={getattr(last_msg, 'tool_calls', None)}"
+            )
+        answer = normalized["answer"] or "I was unable to compose an answer. Please try rephrasing your question."
         pdf_sources = result.get("pdf_sources", [])
         web_sources = result.get("web_sources", [])
         used_chat_ids = result.get("used_chat_ids", [])
