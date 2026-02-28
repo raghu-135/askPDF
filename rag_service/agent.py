@@ -50,6 +50,7 @@ class AgentState(TypedDict):
     system_role: str
     tool_instructions: Dict[str, str]
     custom_instructions: str
+    pre_fetch_bundle: Optional[Dict[str, Any]]
 
 
 @tool
@@ -343,6 +344,236 @@ async def ask_for_clarification(options: List[str]) -> str:
     return json.dumps({"__clarification_options__": options})
 
 
+@tool
+async def list_uploaded_documents(config: RunnableConfig = None) -> str:
+    """
+    Return metadata for all PDF documents indexed in this thread:
+    file name, file hash, and upload order (most recent first).
+
+    Use when the user references "the document", "the PDF", "the first file",
+    "the report", or any document by name or topic — to identify the correct
+    file_hash before calling search_pdf_by_document. Do NOT call this on every
+    request; only invoke it when you genuinely need to resolve a document reference.
+    """
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("thread_id")
+        if not thread_id:
+            return "No thread context found."
+
+        from database import get_thread_files
+        files = await get_thread_files(thread_id)
+
+        if not files:
+            return "No documents are uploaded to this thread."
+
+        doc_list = [
+            {"index": i + 1, "file_name": f.file_name, "file_hash": f.file_hash}
+            for i, f in enumerate(files)
+        ]
+        return json.dumps(doc_list, indent=2)
+    except Exception as e:
+        return f"Error listing documents: {e}"
+
+
+@tool
+async def search_pdf_by_document(
+    query: str,
+    file_hash: str,
+    max_results: int = 8,
+    config: RunnableConfig = None,
+) -> str:
+    """
+    Semantic search scoped to a SINGLE document identified by file_hash.
+
+    Use when the user explicitly refers to a specific document and you have resolved
+    its file_hash via list_uploaded_documents (or from the document list in the
+    pre-fetched context). Prefer this over search_documents when the target document
+    is known — it avoids contaminating results with chunks from unrelated files.
+
+    Args:
+        query: Natural-language question to search for within the document.
+        file_hash: The file_hash of the target document.
+        max_results: Number of seed chunks before neighbor expansion.
+    """
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("thread_id")
+        embedding_model = conf.get("embedding_model")
+        context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
+
+        if not thread_id or not embedding_model:
+            return "No thread context found."
+
+        embed_model = get_embedding_model(embedding_model)
+        query_vector = await invoke_with_retry(embed_model.aembed_query, query)
+
+        db = QdrantAdapter()
+        raw_chunks = await db.search_pdf_chunks(
+            thread_id=thread_id,
+            query_vector=query_vector,
+            limit=max_results,
+            file_hash=file_hash,
+        )
+
+        if not raw_chunks:
+            return f"No relevant content found in document {file_hash}."
+
+        expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
+        chunk_ids_to_fetch: set = set()
+        for hit in raw_chunks:
+            chunk_id = hit.get("chunk_id")
+            if chunk_id is not None:
+                for neighbor_id in range(chunk_id - expansion_radius, chunk_id + expansion_radius + 1):
+                    if neighbor_id >= 0:
+                        chunk_ids_to_fetch.add(neighbor_id)
+
+        expanded_chunks = await db.get_chunks_by_ids(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            chunk_ids=list(chunk_ids_to_fetch),
+        )
+        expanded_chunks.sort(key=lambda x: x.get("chunk_id", 0))
+
+        sources = []
+        context_parts = []
+        for chunk in expanded_chunks:
+            text = chunk.get("text", "")
+            context_parts.append(text)
+            sources.append({
+                "text": text[:200] + "..." if len(text) > 200 else text,
+                "file_hash": file_hash,
+                "score": chunk.get("score", 0.0),
+            })
+
+        return json.dumps({
+            "content": "\n\n".join(context_parts),
+            "__pdf_sources__": sources,
+        })
+    except Exception as e:
+        logger.error(f"Error in search_pdf_by_document: {e}", exc_info=True)
+        return f"Error searching document: {e}"
+
+
+@tool
+async def find_topic_anchor_in_history(
+    topic: str,
+    config: RunnableConfig = None,
+) -> str:
+    """
+    Find the chronological FIRST occurrence of a topic in the conversation history.
+    Returns the approximate turn number, message_id, and a short excerpt.
+
+    Use for temporal references like "what you first said about X",
+    "when we started discussing Y", or "your original answer about Z".
+    This returns a precise chronological anchor so you can rewrite the query
+    with temporal precision (e.g., "In the message at turn 3, what was stated about X?").
+
+    Args:
+        topic: The topic or question to locate in the conversation history.
+    """
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("thread_id")
+        embedding_model = conf.get("embedding_model")
+        if not thread_id or not embedding_model:
+            return "No thread context found."
+
+        embed_model = get_embedding_model(embedding_model)
+        query_vector = await invoke_with_retry(embed_model.aembed_query, topic)
+
+        db = QdrantAdapter()
+        recalled = await db.search_chat_memory(
+            thread_id=thread_id,
+            query_vector=query_vector,
+            limit=5,
+        )
+
+        if not recalled:
+            return "No relevant history found for this topic."
+
+        from database import get_thread_messages
+        all_messages = await get_thread_messages(thread_id, limit=2000)
+        position_map = {msg.id: i + 1 for i, msg in enumerate(all_messages)}
+
+        results = []
+        for mem in recalled:
+            msg_id = mem.get("message_id")
+            turn_number = position_map.get(msg_id, "?")
+            text = mem.get("text", "")
+            excerpt = text[:300] + "..." if len(text) > 300 else text
+            results.append({
+                "message_id": msg_id,
+                "turn_number": turn_number,
+                "score": round(mem.get("score", 0.0), 3),
+                "excerpt": excerpt,
+            })
+
+        # Sort ascending so the earliest occurrence is first
+        results.sort(key=lambda x: x["turn_number"] if isinstance(x["turn_number"], int) else 9999)
+
+        return json.dumps({"topic": topic, "anchors": results[:3]})
+    except Exception as e:
+        return f"Error finding topic anchor: {e}"
+
+
+# ---------------------------------------------------------------------------
+# Pre-fetch bundle formatter
+# ---------------------------------------------------------------------------
+
+def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
+    """
+    Format a pre-fetched context bundle as a labelled block for injection into
+    LLM system prompts.  Returns an empty string when the bundle is None/empty.
+    """
+    if not bundle:
+        return ""
+
+    parts: List[str] = []
+
+    stats = bundle.get("stats", {})
+    if stats and stats.get("total_messages", 0) > 0:
+        parts.append(
+            f"[CONVERSATION STATS]  Total turns: {stats.get('total_messages', 0)} | "
+            f"Estimated tokens in history: {int(stats.get('estimated_history_tokens', 0))}"
+        )
+
+    docs = bundle.get("documents", [])
+    if docs:
+        doc_lines = "\n".join(
+            [f"  {d['index']}. {d['file_name']}  (file_hash: {d['file_hash']})" for d in docs]
+        )
+        parts.append(f"[UPLOADED DOCUMENTS — {len(docs)} file(s)]\n{doc_lines}")
+
+    recent = bundle.get("recent_history_text", "")
+    if recent:
+        parts.append(f"[RECENT CONVERSATION TURNS]\n{recent}")
+
+    semantic = bundle.get("semantic_history_text", "")
+    if semantic:
+        parts.append(f"[SEMANTICALLY RELEVANT PAST QA PAIRS]\n{semantic}")
+
+    pdf = bundle.get("pdf_evidence_text", "")
+    if pdf:
+        parts.append(f"[PDF DOCUMENT EVIDENCE  (queried with raw/un-rewritten question)]\n{pdf}")
+
+    if not parts:
+        return ""
+
+    sep = "═" * 64
+    return (
+        f"\n\n{sep}\n"
+        "PRE-FETCHED CONTEXT  (assembled before this call — no tool calls needed for this data):\n"
+        f"{sep}\n"
+        + "\n\n".join(parts)
+        + f"\n{sep}\n"
+        "NOTE: PDF Evidence and Semantic History were retrieved with the raw question.\n"
+        "A better-rewritten query will improve precision — call tools ONLY when this\n"
+        "pre-fetched context is genuinely insufficient to answer the user's request.\n"
+        f"{sep}"
+    )
+
+
 # --- Intent Agent ---
 class IntentAgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -352,14 +583,20 @@ class IntentAgentState(TypedDict):
     iteration_count: int
     max_iterations: int
     intent_result: Optional[Dict[str, Any]]
+    pre_fetch_bundle: Optional[Dict[str, Any]]
 
+# Intent Agent tools:
+# - Removed: get_conversation_stats, page_conversation_history, search_documents,
+#   get_recent_context  (all covered by the pre-fetched bundle injected in the prompt)
+# - Added:   list_uploaded_documents (resolve doc references),
+#            find_topic_anchor_in_history (temporal anchoring)
+# - Kept:    search_conversation_history (deep semantic recall beyond bundle),
+#            ask_for_clarification (ambiguity resolution)
 intent_tools_list = [
-    get_conversation_stats,
-    page_conversation_history,
-    get_recent_context,
     search_conversation_history,
-    search_documents,
-    ask_for_clarification
+    list_uploaded_documents,
+    find_topic_anchor_in_history,
+    ask_for_clarification,
 ]
 
 async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
@@ -379,7 +616,9 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     system_prompt = (
         f"""You are an expert query analyst. Your sole task is to classify the user's message and rewrite it into a self-contained, retrieval-optimized question.
 
-        CONTEXT: Recent conversation history (if any) appears in the messages below. Use it directly — you do NOT need tools to read it.
+        CONTEXT: Conversation history appears in the messages below AND as pre-fetched data at the end of this
+        system prompt (stats, recent turns, semantic history, PDF evidence, document list). Use all of it
+        directly — you do NOT need tools to retrieve recent history, stats, or PDF evidence that is already there.
 
         RUNTIME CONSTRAINTS:
         Your maximum context window is {context_window} tokens. Stay within this budget.
@@ -388,8 +627,21 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         {{
           "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
           "rewritten_query": "A single, complete, natural-language question",
+          "reference_type": "NONE" | "SEMANTIC" | "TEMPORAL" | "ENTITY",
+          "context_coverage": "SUFFICIENT" | "PROBABLY_SUFFICIENT" | "INSUFFICIENT",
           "clarification_options": ["Full question for interpretation A", "Full question for interpretation B"] | null
         }}
+
+        reference_type meanings:
+          NONE     — standalone question, no prior-context reference
+          SEMANTIC — user refers to a topic/concept discussed before ("what did we say about X")
+          TEMPORAL — user refers to a chronological position ("your first answer", "at the start")
+          ENTITY   — user refers to a specific named thing described earlier ("that figure", "the method")
+
+        context_coverage meanings:
+          SUFFICIENT          — pre-fetched context is almost certainly enough to answer; Orchestrator may skip tool calls
+          PROBABLY_SUFFICIENT — partial match; Orchestrator should verify with one targeted tool call
+          INSUFFICIENT        — clear gap; Orchestrator must retrieve more data
 
         STEP 1 — REWRITE THE QUERY (mandatory for all statuses):
         Expand the user's message into a fully self-contained question that performs well as a semantic search query.
@@ -410,12 +662,26 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         - AMBIGUOUS: The question has multiple plausible interpretations that the inline history cannot resolve
 
         STEP 3 — TOOL USE POLICY:
-        Only call tools if the inline history is genuinely insufficient to complete the rewrite.
-        - Use `search_documents` only if the user references a specific document or section and the inline history gives no hint about which one
-        - Use `get_recent_context` or `search_conversation_history` only if the inline history is clearly too short to resolve a follow-up
-        - Use `ask_for_clarification` only for genuinely ambiguous questions — each option must be a complete, distinct question
-        - Do NOT use `get_conversation_stats` or `page_conversation_history` for this task"""
+        Pre-fetched context (stats, recent turns, semantic history, PDF evidence, document list) is already in
+        the PRE-FETCHED CONTEXT block at the end of this prompt. Use it directly — no tool needed for that data.
+        Only call tools for information that is NOT present or clearly insufficient in the pre-fetched block.
+
+        AVAILABLE TOOLS AND WHEN TO USE:
+        - `search_conversation_history` — ONLY if the pre-fetched semantic history block is absent or misses
+          critical context required to rewrite an ambiguous follow-up.
+        - `list_uploaded_documents` — ONLY when the user references a document by name/topic AND the document
+          list in the pre-fetched block does not identify it.
+        - `find_topic_anchor_in_history` — ONLY for TEMPORAL references ("your first answer about X", "when we
+          started discussing Y") that cannot be resolved from the pre-fetched content.
+        - `ask_for_clarification` — ONLY for genuinely ambiguous questions where a wrong assumption would answer
+          an entirely different question. Each option must be a distinct, complete, self-contained question.
+        - Do NOT call any tool on a clear standalone first message — output the JSON immediately."""
     )
+
+    # Inject pre-fetched context bundle so the LLM has everything in its system prompt
+    bundle = state.get("pre_fetch_bundle")
+    if bundle:
+        system_prompt += _format_prefetch_for_prompt(bundle)
 
     # For first messages, reinforce no-tool usage
     if is_first_message:
@@ -512,6 +778,8 @@ async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
             "Respond ONLY with valid JSON:\n"
             '{{"status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP", '
             '"rewritten_query": "<rewritten question>", '
+            '"reference_type": "NONE" | "SEMANTIC" | "TEMPORAL" | "ENTITY", '
+            '"context_coverage": "PROBABLY_SUFFICIENT", '
             '"clarification_options": null}}'
         )
     )
@@ -533,6 +801,8 @@ async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
             intent_result = {
                 "status": "CLEAR_STANDALONE",
                 "rewritten_query": original_question,
+                "reference_type": "NONE",
+                "context_coverage": "PROBABLY_SUFFICIENT",
                 "clarification_options": None
             }
         return {"messages": [response], "iteration_count": iteration, "intent_result": intent_result}
@@ -541,6 +811,8 @@ async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
         intent_result = {
             "status": "CLEAR_STANDALONE",
             "rewritten_query": original_question,
+            "reference_type": "NONE",
+            "context_coverage": "PROBABLY_SUFFICIENT",
             "clarification_options": None
         }
         fallback_msg = AIMessage(content=json.dumps(intent_result))
@@ -579,15 +851,18 @@ intent_workflow.add_edge("force_intent_answer", END)
 intent_app = intent_workflow.compile()
 # --- End Intent Agent ---
 
-# Orchestrator tools list
+# Orchestrator tools list:
+# - Removed: get_conversation_stats, page_conversation_history, get_recent_context
+#   (all covered by the pre-fetched bundle injected in the system prompt)
+# - Added:   search_pdf_by_document (scoped single-document search)
+# - Kept:    search_documents (re-run with rewritten query for better precision),
+#            search_conversation_history, search_web, ask_for_clarification
 tools_list = [
     search_documents,
-    get_recent_context,
+    search_pdf_by_document,
     search_conversation_history,
     search_web,
     ask_for_clarification,
-    get_conversation_stats,
-    page_conversation_history
 ]
 
 
@@ -595,14 +870,14 @@ TOOL_FRIENDLY_CONFIG = {
     "search_documents": {
         "id": "document_evidence",
         "display_name": "Document Evidence",
-        "description": "Semantic vector search over uploaded PDF documents — returns matching chunks with surrounding context.",
-        "default_prompt": "First choice for any document-grounded question. If results are weak, retry with a rephrased or more specific query. Increase max_results when evidence is sparse or the topic is broad.",
+        "description": "Semantic vector search across ALL uploaded PDF documents — returns matching chunks with surrounding context.",
+        "default_prompt": "Use when the question spans multiple documents or the target document is unknown. If results are weak, retry with a rephrased or more specific query. When the document is known, prefer search_pdf_by_document instead.",
     },
-    "get_recent_context": {
-        "id": "conversation_snapshot",
-        "display_name": "Conversation Snapshot",
-        "description": "Retrieve the N most recent conversation turns ordered by recency, as compact summaries.",
-        "default_prompt": "Use for lightweight recency context when injected history is insufficient. For semantic recall across a longer history, prefer Deep Memory instead.",
+    "search_pdf_by_document": {
+        "id": "focused_document_evidence",
+        "display_name": "Focused Document Evidence",
+        "description": "Semantic search scoped to a SINGLE document by file_hash — avoids contamination from unrelated files.",
+        "default_prompt": "Prefer this over Document Evidence when the user explicitly refers to a specific document. Resolve the file_hash from the document list in the pre-fetched context or via list_uploaded_documents.",
     },
     "search_conversation_history": {
         "id": "deep_memory",
@@ -621,18 +896,6 @@ TOOL_FRIENDLY_CONFIG = {
         "display_name": "Clarify Intent",
         "description": "Present the user with distinct interpretations of an ambiguous question.",
         "default_prompt": "Use only when the question has multiple plausible interpretations and making an assumption risks answering the wrong question entirely. Each option must be a complete, self-contained question.",
-    },
-    "get_conversation_stats": {
-        "id": "history_stats",
-        "display_name": "History Stats",
-        "description": "Returns message count, user/assistant split, and estimated token usage — no message content.",
-        "default_prompt": "Use as a planning step before Fetch Historical QA to calibrate offset and limit. Do not use when semantic search is sufficient — this tool contains no message content.",
-    },
-    "page_conversation_history": {
-        "id": "fetch_qa",
-        "display_name": "Fetch Historical QA",
-        "description": "Retrieve verbatim conversation messages at a specific chronological position by offset.",
-        "default_prompt": "Use to read verbatim message content at a known time position. Call History Stats first if the total count is unknown. Increment offset by limit to page through history sequentially.",
     },
 }
 
@@ -685,13 +948,34 @@ async def call_model(state: AgentState, config: RunnableConfig):
     tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
 
-    sys_prompt = SystemMessage(content=build_system_prompt(
+    prompt_content = build_system_prompt(
         context_window=context_window,
         system_role=system_role,
         tool_instructions=tool_instructions,
         custom_instructions=custom_instructions
-    ))
-    
+    )
+
+    # Inject pre-fetched context bundle + pre-fetch-first retrieval policy
+    bundle = state.get("pre_fetch_bundle")
+    if bundle:
+        bundle_text = _format_prefetch_for_prompt(bundle)
+        if bundle_text:
+            prompt_content += (
+                "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
+                "Pre-fetched context (recent turns, semantic history, PDF evidence, document list) is\n"
+                "already present in the PRE-FETCHED CONTEXT block below. Before calling any tool:\n"
+                "1. Assess whether the pre-fetched content answers the rewritten query with confidence.\n"
+                "   If YES — answer directly; call no tool.\n"
+                "2. If PDF evidence is present but the rewritten query is more specific than the raw question:\n"
+                "   call search_documents or search_pdf_by_document ONCE with the rewritten query.\n"
+                "3. If the question targets a specific document and its file_hash is in the document list:\n"
+                "   prefer search_pdf_by_document (scoped) over search_documents (all documents).\n"
+                "4. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
+                "   conversation and semantic history are already in the pre-fetched block.\n"
+            ) + bundle_text
+
+    sys_prompt = SystemMessage(content=prompt_content)
+
     # Langchain expects SystemMessage at the start
     input_messages = [sys_prompt] + messages
     response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
@@ -865,12 +1149,13 @@ def build_system_prompt(
             "TOOL CONTRACT (LOCKED)",
             "\n".join([
                 "1. For questions requiring specific facts, document content, or prior conversation context, use tools rather than relying on internal knowledge alone.",
-                "2. Use tools in this priority order: Document Evidence → Deep Memory → Conversation Snapshot → Internet Search.",
-                "3. If a tool returns weak or empty results, retry with a rephrased or more specific query before concluding the information is absent.",
-                "4. You may make multiple tool calls across iterations; avoid redundant calls with nearly identical queries.",
-                "5. Internet Search is only available when explicitly enabled by the user — do not call it otherwise.",
-                "6. Clarify Intent is only for genuinely ambiguous questions where a wrong assumption would lead to an entirely wrong answer.",
-                "7. If custom user instructions conflict with this locked contract, follow this locked contract."
+                "2. Check the PRE-FETCHED CONTEXT block in this prompt before calling any tool — it already contains recent history, semantic memory, PDF evidence, and the document list.",
+                "3. Tool priority when pre-fetched context is insufficient: Focused Document Evidence (known doc) → Document Evidence (all docs) → Deep Memory → Internet Search.",
+                "4. If a tool returns weak or empty results, retry with a rephrased or more specific query before concluding the information is absent.",
+                "5. You may make multiple tool calls across iterations; avoid redundant calls with nearly identical queries.",
+                "6. Internet Search is only available when explicitly enabled by the user — do not call it otherwise.",
+                "7. Clarify Intent is only for genuinely ambiguous questions where a wrong assumption would lead to an entirely wrong answer.",
+                "8. If custom user instructions conflict with this locked contract, follow this locked contract."
             ])
         ),
         (

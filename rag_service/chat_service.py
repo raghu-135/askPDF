@@ -16,15 +16,173 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Base
 from rag import index_chat_memory_for_thread
 from models import (
     get_llm,
+    get_embedding_model,
     DEFAULT_TOKEN_BUDGET,
     DEFAULT_MAX_ITERATIONS,
     RATIO_SEMANTIC_MEMORY,
     CHARS_PER_TOKEN,
+    compute_prefetch_budget,
 )
-from database import create_message, get_recent_messages, update_message_context_compact, MessageRole
+from database import (
+    create_message,
+    get_recent_messages,
+    get_thread_files,
+    get_thread_messages,
+    update_message_context_compact,
+    MessageRole,
+)
 from reasoning import normalize_ai_response
 
 logger = logging.getLogger(__name__)
+
+
+async def prefetch_context(
+    thread_id: str,
+    raw_question: str,
+    embed_model_name: str,
+    context_window: int,
+) -> Dict[str, Any]:
+    """
+    Gather all retrieval context in parallel BEFORE any LLM call.
+
+    Runs four async tasks concurrently:
+      1. Recent verbatim conversation turns (DB, position-based)
+      2. Semantic chat-memory recall (vector search, raw question)
+      3. PDF document evidence (vector search, raw question)
+      4. Conversation stats + uploaded document list (DB metadata)
+
+    Returns a bundle dict with text strings ready for injection into LLM
+    system prompts, plus structured metadata (pdf_sources, used_chat_ids,
+    document list) for state initialization.
+
+    Design principles:
+    - Parallelism eliminates the latency penalty vs sequential DB + vector calls.
+    - Budget computation is LLM-agnostic: ratios scale proportionally with any
+      context window (4 K → 1 M tokens).
+    - Both agents receive the same bundle; no re-fetching between Intent and
+      Orchestrator for the same raw question.
+    """
+    from vectordb.qdrant import QdrantAdapter
+    from agent import invoke_with_retry
+
+    budget = compute_prefetch_budget(context_window)
+
+    async def _fetch_recent() -> str:
+        msgs = await get_recent_messages(thread_id, limit=budget["recent_turn_limit"] * 2)
+        lines: List[str] = []
+        used_chars = 0
+        budget_chars = budget["recent_history_chars"]
+        for msg in reversed(msgs):
+            role = "User" if msg.role == MessageRole.USER else "Assistant"
+            text = (msg.context_compact or msg.content or "").strip()
+            if not text:
+                continue
+            entry = f"{role}: {text}"
+            if used_chars + len(entry) > budget_chars:
+                break
+            lines.append(entry)
+            used_chars += len(entry)
+        lines.reverse()
+        return "\n\n".join(lines)
+
+    async def _fetch_stats_and_docs() -> Dict[str, Any]:
+        import asyncio as _asyncio
+        msgs, files = await _asyncio.gather(
+            get_thread_messages(thread_id, limit=2000),
+            get_thread_files(thread_id),
+        )
+        total = len(msgs)
+        avg_len = sum(len(m.content) for m in msgs) / total if total else 0
+        stats = {
+            "total_messages": total,
+            "estimated_history_tokens": round((avg_len * total) / 4, 0),
+        }
+        documents = [
+            {"index": i + 1, "file_name": f.file_name, "file_hash": f.file_hash}
+            for i, f in enumerate(files)
+        ]
+        return {"stats": stats, "documents": documents}
+
+    async def _fetch_semantic() -> tuple:
+        try:
+            embed_model = get_embedding_model(embed_model_name)
+            query_vector = await invoke_with_retry(embed_model.aembed_query, raw_question)
+            db = QdrantAdapter()
+            recalled = await db.search_chat_memory(
+                thread_id=thread_id,
+                query_vector=query_vector,
+                limit=budget["semantic_limit"],
+            )
+            used_ids = [m["message_id"] for m in recalled if m.get("message_id")]
+            parts: List[str] = []
+            used_chars = 0
+            for mem in recalled:
+                text = mem.get("text", "")
+                if used_chars + len(text) > budget["semantic_history_chars"]:
+                    break
+                parts.append(text)
+                used_chars += len(text)
+            return "\n\n---\n\n".join(parts), used_ids
+        except Exception as exc:
+            logger.warning(f"Prefetch semantic history failed: {exc}")
+            return "", []
+
+    async def _fetch_pdf() -> tuple:
+        try:
+            embed_model = get_embedding_model(embed_model_name)
+            query_vector = await invoke_with_retry(embed_model.aembed_query, raw_question)
+            db = QdrantAdapter()
+            raw_chunks = await db.search_pdf_chunks(
+                thread_id=thread_id,
+                query_vector=query_vector,
+                limit=budget["pdf_limit"],
+            )
+            sources: List[Dict[str, Any]] = []
+            parts: List[str] = []
+            used_chars = 0
+            for chunk in raw_chunks:
+                text = chunk.get("text", "")
+                if used_chars + len(text) > budget["pdf_context_chars"]:
+                    break
+                parts.append(text)
+                used_chars += len(text)
+                sources.append({
+                    "text": text[:200] + "..." if len(text) > 200 else text,
+                    "file_hash": chunk.get("file_hash"),
+                    "score": chunk.get("score", 0.0),
+                })
+            return "\n\n".join(parts), sources
+        except Exception as exc:
+            logger.warning(f"Prefetch PDF evidence failed: {exc}")
+            return "", []
+
+    # Run all four fetches in parallel
+    results = await asyncio.gather(
+        _fetch_recent(),
+        _fetch_stats_and_docs(),
+        _fetch_semantic(),
+        _fetch_pdf(),
+        return_exceptions=True,
+    )
+
+    recent_text: str = results[0] if not isinstance(results[0], Exception) else ""
+    meta: Dict[str, Any] = results[1] if not isinstance(results[1], Exception) else {"stats": {}, "documents": []}
+    semantic_result = results[2] if not isinstance(results[2], Exception) else ("", [])
+    pdf_result = results[3] if not isinstance(results[3], Exception) else ("", [])
+
+    semantic_text, used_chat_ids = semantic_result if isinstance(semantic_result, tuple) else ("", [])
+    pdf_text, pdf_sources = pdf_result if isinstance(pdf_result, tuple) else ("", [])
+
+    return {
+        "recent_history_text":   recent_text,
+        "semantic_history_text": semantic_text,
+        "pdf_evidence_text":     pdf_text,
+        "stats":                 meta.get("stats", {}),
+        "documents":             meta.get("documents", []),
+        "pdf_sources":           pdf_sources,
+        "used_chat_ids":         used_chat_ids,
+        "budget":                budget,
+    }
 
 
 async def _build_recent_history_messages(
@@ -141,12 +299,20 @@ async def handle_thread_chat(
     try:
         from agent import app as agent_app, intent_app, AgentState
         
-        # 1. Load context history for rewriting
-        recent_history_messages = await _build_recent_history_messages(
-            thread_id=thread_id,
-            context_window=context_window,
+        # 1. Run recent-history build and context pre-fetch in parallel (no LLM cost)
+        recent_history_messages, prefetch_bundle = await asyncio.gather(
+            _build_recent_history_messages(
+                thread_id=thread_id,
+                context_window=context_window,
+            ),
+            prefetch_context(
+                thread_id=thread_id,
+                raw_question=question,
+                embed_model_name=embed_model,
+                context_window=context_window,
+            ),
         )
-        
+
         # 2. Analyze intent using the Intent Agent
         intent_state = {
             "messages": recent_history_messages + [HumanMessage(content=question)],
@@ -155,7 +321,8 @@ async def handle_thread_chat(
             "context_window": context_window,
             "iteration_count": 0,
             "max_iterations": 3,
-            "intent_result": None
+            "intent_result": None,
+            "pre_fetch_bundle": prefetch_bundle,
         }
         
         intent_config = {
@@ -188,10 +355,27 @@ async def handle_thread_chat(
                 "context": "Needs human-in-the-loop clarification."
             }
          
-        logger.info(f"Intent analysis done for thread {thread_id} rewritten_query: {intent['rewritten_query']}")
-        # Use rewritten query for the rest of path
+        logger.info(
+            f"Intent analysis done for thread {thread_id} | "
+            f"rewritten_query: {intent['rewritten_query']} | "
+            f"reference_type: {intent.get('reference_type', 'NONE')} | "
+            f"context_coverage: {intent.get('context_coverage', 'PROBABLY_SUFFICIENT')}"
+        )
+        # Use rewritten query for the rest of the path
         if intent.get("rewritten_query"):
             question = intent["rewritten_query"]
+
+        # Cap orchestrator iterations based on intent's coverage signal:
+        # SUFFICIENT          → 2 rounds max  (pre-fetch + 1 targeted tool if needed)
+        # PROBABLY_SUFFICIENT → 4 rounds max
+        # INSUFFICIENT        → full budget (default max_iterations)
+        coverage = intent.get("context_coverage", "PROBABLY_SUFFICIENT")
+        if coverage == "SUFFICIENT":
+            effective_max_iterations = min(max_iterations, 2)
+        elif coverage == "PROBABLY_SUFFICIENT":
+            effective_max_iterations = min(max_iterations, 4)
+        else:
+            effective_max_iterations = max_iterations
 
         initial_state = {
             "messages": recent_history_messages + [HumanMessage(content=question)],
@@ -200,14 +384,16 @@ async def handle_thread_chat(
             "embedding_model": embed_model,
             "context_window": context_window,
             "use_web_search": use_web_search,
-            "pdf_sources": [],
-            "used_chat_ids": [],
+            # Pre-seed sources from the prefetch pass; tool calls will extend these lists
+            "pdf_sources": list(prefetch_bundle.get("pdf_sources", [])),
+            "used_chat_ids": list(prefetch_bundle.get("used_chat_ids", [])),
             "clarification_options": None,
             "iteration_count": 0,
-            "max_iterations": max_iterations,
+            "max_iterations": effective_max_iterations,
             "system_role": system_role,
             "tool_instructions": tool_instructions,
             "custom_instructions": custom_instructions,
+            "pre_fetch_bundle": prefetch_bundle,
         }
         
         config = {

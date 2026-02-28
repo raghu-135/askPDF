@@ -35,6 +35,41 @@ RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window
 # Chars per token estimate
 CHARS_PER_TOKEN = 4
 
+# Pre-fetch budget allocation ratios
+# These three sum to 0.68; the remaining 0.32 is reserved for answer generation +
+# system prompt overhead (tool schemas, locked sections, etc.)
+RATIO_PREFETCH_RECENT = 0.22    # Recent verbatim conversation turns injected inline
+RATIO_PREFETCH_SEMANTIC = 0.18  # Semantic chat-memory recall from all past QA pairs
+RATIO_PREFETCH_PDF = 0.28       # PDF document evidence (top-K chunks, raw question query)
+
+# Average char estimates used to derive item-count limits from char budgets
+AVG_CHUNK_CHARS = 500   # Typical PDF or chat-memory chunk
+AVG_TURN_CHARS = 600    # Typical combined user+assistant turn
+
+
+def compute_prefetch_budget(context_window: int) -> dict:
+    """
+    Compute character and item-count budgets for the parallel pre-fetch pass.
+
+    Scales proportionally to any context window (4 K → 1 M tokens).
+    A 20 % overhead buffer is preserved for system prompt text + tool schemas
+    injected by the LangChain / LangGraph framework.
+
+    Returns a dict with both char budgets and derived item-count limits so
+    callers can use whichever unit is most convenient.
+    """
+    usable = int(context_window * 0.80 * CHARS_PER_TOKEN)
+    return {
+        # Character budgets
+        "recent_history_chars":   int(usable * RATIO_PREFETCH_RECENT),
+        "semantic_history_chars": int(usable * RATIO_PREFETCH_SEMANTIC),
+        "pdf_context_chars":      int(usable * RATIO_PREFETCH_PDF),
+        # Derived item-count limits
+        "pdf_limit":              max(3, int(usable * RATIO_PREFETCH_PDF)      // AVG_CHUNK_CHARS),
+        "semantic_limit":         max(3, int(usable * RATIO_PREFETCH_SEMANTIC) // AVG_CHUNK_CHARS),
+        "recent_turn_limit":      max(4, int(usable * RATIO_PREFETCH_RECENT)   // AVG_TURN_CHARS),
+    }
+
 
 def default_thread_settings():
     """Default persisted settings for a thread."""
