@@ -19,6 +19,7 @@ export function splitIntoSentences(text: string): string[] {
  * Handles bold, italics, links, and simple code blocks.
  */
 export function stripMarkdown(text: string): string {
+    if (typeof text !== 'string') return String(text ?? '');
     return text
         // Remove bold/italic
         .replace(/(\*\*|__)(.*?)\1/g, '$2')

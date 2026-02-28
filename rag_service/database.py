@@ -8,15 +8,18 @@ file associations, and message history for the RAG service.
 import os
 import uuid
 import logging
+import json
 import aiosqlite
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 
 
 # Database path - use /data for persistence in Docker
-DATA_DIR = os.getenv("DATA_DIR", "/data")
+DATA_DIR = os.getenv("DATA_DIR")
+if DATA_DIR is None:
+    raise ValueError("DATA_DIR environment variable is not set")
 DB_PATH = os.path.join(DATA_DIR, "rag.db")
 
 # Ensure data directory exists
@@ -31,10 +34,33 @@ class MessageRole(str, Enum):
 logger = logging.getLogger(__name__)
 
 
+def _parse_settings(raw: Optional[str]) -> Dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {}
+
+
+def _parse_json_list(raw: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+    """Deserialize a JSON-encoded list from a SQLite text column."""
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return parsed
+        return None
+    except Exception:
+        return None
+
+
 class Thread(BaseModel):
     id: str
     name: str
     embed_model: str
+    settings: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
 
 
@@ -54,6 +80,11 @@ class Message(BaseModel):
     thread_id: str
     role: MessageRole
     content: str
+    context_compact: Optional[str] = None
+    reasoning: Optional[str] = None
+    reasoning_available: bool = False
+    reasoning_format: str = "none"
+    web_sources: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
 
 
@@ -63,6 +94,7 @@ CREATE TABLE IF NOT EXISTS threads (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     embed_model TEXT NOT NULL,
+    settings TEXT NOT NULL DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -86,6 +118,7 @@ CREATE TABLE IF NOT EXISTS messages (
     thread_id TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
+    context_compact TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
 );
@@ -100,6 +133,23 @@ async def init_db():
     """Initialize the database with the schema."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
+
+        # Lightweight migration for existing installations.
+        migrations = [
+            "ALTER TABLE messages ADD COLUMN reasoning TEXT",
+            "ALTER TABLE messages ADD COLUMN reasoning_available INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE messages ADD COLUMN reasoning_format TEXT NOT NULL DEFAULT 'none'",
+            "ALTER TABLE messages ADD COLUMN context_compact TEXT",
+            "ALTER TABLE threads ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE messages ADD COLUMN web_sources TEXT",
+        ]
+        for stmt in migrations:
+            try:
+                await db.execute(stmt)
+            except aiosqlite.OperationalError as e:
+                # Ignore duplicate-column errors for already-migrated DBs.
+                if "duplicate column name" not in str(e).lower():
+                    raise
         await db.commit()
     logger.info(f"Database initialized at {DB_PATH}")
 
@@ -120,12 +170,12 @@ async def create_thread(name: str, embed_model: str) -> Thread:
     
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO threads (id, name, embed_model, created_at) VALUES (?, ?, ?, ?)",
-            (thread_id, name, embed_model, created_at)
+            "INSERT INTO threads (id, name, embed_model, settings, created_at) VALUES (?, ?, ?, ?, ?)",
+            (thread_id, name, embed_model, "{}", created_at)
         )
         await db.commit()
     
-    return Thread(id=thread_id, name=name, embed_model=embed_model, created_at=created_at)
+    return Thread(id=thread_id, name=name, embed_model=embed_model, settings={}, created_at=created_at)
 
 
 async def get_thread(thread_id: str) -> Optional[Thread]:
@@ -133,7 +183,7 @@ async def get_thread(thread_id: str) -> Optional[Thread]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT id, name, embed_model, created_at FROM threads WHERE id = ?",
+            "SELECT id, name, embed_model, settings, created_at FROM threads WHERE id = ?",
             (thread_id,)
         )
         row = await cursor.fetchone()
@@ -142,9 +192,38 @@ async def get_thread(thread_id: str) -> Optional[Thread]:
                 id=row["id"],
                 name=row["name"],
                 embed_model=row["embed_model"],
+                settings=_parse_settings(row["settings"]),
                 created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"]
             )
     return None
+
+
+async def get_thread_settings(thread_id: str) -> Dict[str, Any]:
+    """Get persisted settings for a thread."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT settings FROM threads WHERE id = ?",
+            (thread_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return {}
+        return _parse_settings(row["settings"])
+
+
+async def update_thread_settings(thread_id: str, settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Replace persisted settings for a thread."""
+    payload = json.dumps(settings or {})
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE threads SET settings = ? WHERE id = ?",
+            (payload, thread_id)
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            return None
+    return await get_thread_settings(thread_id)
 
 
 async def list_threads() -> List[Dict[str, Any]]:
@@ -153,7 +232,7 @@ async def list_threads() -> List[Dict[str, Any]]:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
             SELECT 
-                t.id, t.name, t.embed_model, t.created_at,
+                t.id, t.name, t.embed_model, t.settings, t.created_at,
                 COUNT(DISTINCT m.id) as message_count,
                 COUNT(DISTINCT tf.file_hash) as file_count
             FROM threads t
@@ -168,6 +247,7 @@ async def list_threads() -> List[Dict[str, Any]]:
                 "id": row["id"],
                 "name": row["name"],
                 "embed_model": row["embed_model"],
+                "settings": _parse_settings(row["settings"]),
                 "created_at": row["created_at"],
                 "message_count": row["message_count"],
                 "file_count": row["file_count"]
@@ -295,23 +375,53 @@ async def is_file_in_thread(thread_id: str, file_hash: str) -> bool:
 
 # ============ Message Operations ============
 
-async def create_message(thread_id: str, role: MessageRole, content: str) -> Message:
+async def create_message(
+    thread_id: str,
+    role: MessageRole,
+    content: str,
+    context_compact: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    reasoning_available: bool = False,
+    reasoning_format: str = "none",
+    web_sources: Optional[List[Dict[str, Any]]] = None,
+) -> Message:
     """Create a new message in a thread."""
     message_id = str(uuid.uuid4())
     created_at = datetime.utcnow()
-    
+    web_sources_json = json.dumps(web_sources) if web_sources else None
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            "INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
-            (message_id, thread_id, role.value, content, created_at)
+            """
+            INSERT INTO messages (
+                id, thread_id, role, content, context_compact, reasoning, reasoning_available, reasoning_format, web_sources, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                thread_id,
+                role.value,
+                content,
+                context_compact,
+                reasoning,
+                int(reasoning_available),
+                reasoning_format,
+                web_sources_json,
+                created_at,
+            )
         )
         await db.commit()
-    
+
     return Message(
         id=message_id,
         thread_id=thread_id,
         role=role,
         content=content,
+        context_compact=context_compact,
+        reasoning=reasoning,
+        reasoning_available=reasoning_available,
+        reasoning_format=reasoning_format,
+        web_sources=web_sources,
         created_at=created_at
     )
 
@@ -321,7 +431,12 @@ async def get_message(message_id: str) -> Optional[Message]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
-            "SELECT id, thread_id, role, content, created_at FROM messages WHERE id = ?",
+            """
+            SELECT id, thread_id, role, content, reasoning, reasoning_available, reasoning_format,
+                   context_compact, web_sources, created_at
+            FROM messages
+            WHERE id = ?
+            """,
             (message_id,)
         )
         row = await cursor.fetchone()
@@ -331,22 +446,28 @@ async def get_message(message_id: str) -> Optional[Message]:
                 thread_id=row["thread_id"],
                 role=MessageRole(row["role"]),
                 content=row["content"],
+                context_compact=row["context_compact"],
+                reasoning=row["reasoning"],
+                reasoning_available=bool(row["reasoning_available"]),
+                reasoning_format=row["reasoning_format"] or "none",
+                web_sources=_parse_json_list(row["web_sources"]),
                 created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"]
             )
     return None
 
 
 async def get_thread_messages(
-    thread_id: str, 
-    limit: int = 100, 
+    thread_id: str,
+    limit: int = 100,
     offset: int = 0
 ) -> List[Message]:
     """Get messages for a thread with pagination."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
-            SELECT id, thread_id, role, content, created_at 
-            FROM messages 
+            SELECT id, thread_id, role, content, context_compact, reasoning, reasoning_available,
+                   reasoning_format, web_sources, created_at
+            FROM messages
             WHERE thread_id = ?
             ORDER BY created_at ASC
             LIMIT ? OFFSET ?
@@ -358,6 +479,11 @@ async def get_thread_messages(
                 thread_id=row["thread_id"],
                 role=MessageRole(row["role"]),
                 content=row["content"],
+                context_compact=row["context_compact"],
+                reasoning=row["reasoning"],
+                reasoning_available=bool(row["reasoning_available"]),
+                reasoning_format=row["reasoning_format"] or "none",
+                web_sources=_parse_json_list(row["web_sources"]),
                 created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"]
             )
             for row in rows
@@ -369,8 +495,9 @@ async def get_recent_messages(thread_id: str, limit: int = 10) -> List[Message]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
-            SELECT id, thread_id, role, content, created_at 
-            FROM messages 
+            SELECT id, thread_id, role, content, context_compact, reasoning, reasoning_available,
+                   reasoning_format, web_sources, created_at
+            FROM messages
             WHERE thread_id = ?
             ORDER BY created_at DESC
             LIMIT ?
@@ -383,11 +510,27 @@ async def get_recent_messages(thread_id: str, limit: int = 10) -> List[Message]:
                 thread_id=row["thread_id"],
                 role=MessageRole(row["role"]),
                 content=row["content"],
+                context_compact=row["context_compact"],
+                reasoning=row["reasoning"],
+                reasoning_available=bool(row["reasoning_available"]),
+                reasoning_format=row["reasoning_format"] or "none",
+                web_sources=_parse_json_list(row["web_sources"]),
                 created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"]
             )
             for row in rows
         ]
         return list(reversed(messages))
+
+
+async def update_message_context_compact(message_id: str, context_compact: str) -> bool:
+    """Update compact context text for a message."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "UPDATE messages SET context_compact = ? WHERE id = ?",
+            (context_compact, message_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 async def delete_message(message_id: str) -> bool:

@@ -67,9 +67,38 @@ export interface Thread {
   id: string;
   name: string;
   embed_model: string;
+  settings?: ThreadSettings;
   created_at: string;
   message_count?: number;
   file_count?: number;
+}
+
+export interface ThreadSettings {
+  max_iterations: number;
+  system_role: string;
+  tool_instructions: Record<string, string>;
+  custom_instructions: string;
+  use_intent_agent: boolean;
+  intent_agent_max_iterations: number;
+}
+
+export interface PromptToolDefinition {
+  id: string;
+  display_name: string;
+  description: string;
+  default_prompt: string;
+}
+
+export interface PromptDefaults {
+  max_iterations: number;
+  min_max_iterations: number;
+  max_max_iterations: number;
+  context_window: number;
+  system_role: string;
+  tool_instructions: Record<string, string>;
+  custom_instructions: string;
+  use_intent_agent: boolean;
+  intent_agent_max_iterations: number;
 }
 
 export interface ThreadFile {
@@ -78,12 +107,24 @@ export interface ThreadFile {
   file_path?: string;
 }
 
+export interface WebSource {
+  text: string;
+  url: string;
+  title: string;
+  score?: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   created_at: string;
   isRecollected?: boolean;
+  reasoning?: string;
+  reasoning_available?: boolean;
+  reasoning_format?: 'structured' | 'tagged_text' | 'none';
+  context_compact?: string;
+  web_sources?: WebSource[];
 }
 
 export async function createThread(name: string, embedModel: string): Promise<Thread> {
@@ -113,6 +154,48 @@ export async function updateThread(threadId: string, name: string): Promise<Thre
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getThreadSettings(threadId: string): Promise<ThreadSettings> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/settings`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateThreadSettings(
+  threadId: string,
+  settings: Partial<ThreadSettings>
+): Promise<ThreadSettings> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPromptTools(): Promise<{ tools: PromptToolDefinition[]; defaults: PromptDefaults }> {
+  const res = await fetch(`${RAG_API_BASE}/prompt-tools`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getPromptPreview(payload: {
+  context_window: number;
+  system_role: string;
+  tool_instructions: Record<string, string>;
+  custom_instructions: string;
+  use_web_search?: boolean;
+  intent_agent_ran?: boolean;
+}): Promise<{ prompt: string }> {
+  const res = await fetch(`${RAG_API_BASE}/prompt-preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -173,24 +256,56 @@ export async function threadChat(
   question: string,
   llmModel: string,
   useWebSearch: boolean = false,
-  contextWindowSize: number = 4096
+  contextWindowSize: number = 4096,
+  maxIterations?: number,
+  systemRoleOverride?: string,
+  toolInstructionsOverride?: Record<string, string>,
+  customInstructionsOverride?: string,
+  useIntentAgent?: boolean,
+  intentAgentMaxIterations?: number
 ): Promise<{
   answer: string;
-  user_message_id: string;
-  assistant_message_id: string;
+  user_message_id: string | null;
+  assistant_message_id: string | null;
   used_chat_ids: string[];
   pdf_sources: { text: string; file_hash: string; score: number }[];
+  web_sources?: WebSource[];
+  reasoning?: string;
+  reasoning_available?: boolean;
+  reasoning_format?: 'structured' | 'tagged_text' | 'none';
+  rewritten_query?: string;
+  clarification_options?: string[] | null;
 }> {
+  const payload: any = {
+    thread_id: threadId,
+    question,
+    llm_model: llmModel,
+    use_web_search: useWebSearch,
+    context_window: contextWindowSize
+  };
+  if (typeof maxIterations === "number") {
+    payload.max_iterations = maxIterations;
+  }
+  if (typeof systemRoleOverride === "string") {
+    payload.system_role_override = systemRoleOverride;
+  }
+  if (toolInstructionsOverride && typeof toolInstructionsOverride === "object") {
+    payload.tool_instructions_override = toolInstructionsOverride;
+  }
+  if (typeof customInstructionsOverride === "string") {
+    payload.custom_instructions_override = customInstructionsOverride;
+  }
+  if (typeof useIntentAgent === "boolean") {
+    payload.use_intent_agent = useIntentAgent;
+  }
+  if (typeof intentAgentMaxIterations === "number") {
+    payload.intent_agent_max_iterations = intentAgentMaxIterations;
+  }
+
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      thread_id: threadId,
-      question,
-      llm_model: llmModel,
-      use_web_search: useWebSearch,
-      context_window: contextWindowSize
-    })
+    body: JSON.stringify(payload)
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

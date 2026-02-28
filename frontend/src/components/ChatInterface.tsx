@@ -14,12 +14,15 @@ import {
     InputLabel,
     IconButton,
     Divider,
-    Stack,
     FormControlLabel,
     Switch,
     Tooltip,
     Chip,
     CircularProgress,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogActions,
 } from '@mui/material';
 import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
 import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
@@ -27,21 +30,34 @@ import SendIcon from '@mui/icons-material/Send';
 import DeleteIcon from '@mui/icons-material/Delete';
 import MemoryIcon from '@mui/icons-material/Memory';
 import LockIcon from '@mui/icons-material/Lock';
+import SettingsIcon from '@mui/icons-material/Settings';
+import ReplayIcon from '@mui/icons-material/Replay';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
 import { 
     Thread, 
     Message,
+    WebSource,
+    PromptToolDefinition,
     threadChat, 
     getThreadMessages, 
     deleteMessage,
-    getThreadIndexStatus
+    getThreadIndexStatus,
+    getThreadSettings,
+    updateThreadSettings,
+    getPromptTools,
+    getPromptPreview
 } from '../lib/api';
 import { fetchAvailableLlmModels, checkLlmModelReady } from '../lib/chat-utils';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
+    reasoning?: string;
+    reasoning_available?: boolean;
+    reasoning_format?: 'structured' | 'tagged_text' | 'none';
+    rewritten_query?: string;
+    web_sources?: WebSource[];
 }
 
 interface ChatInterfaceProps {
@@ -52,6 +68,7 @@ interface ChatInterfaceProps {
     currentChatId: number | null;
     activeSource: 'pdf' | 'chat';
     onJump: (id: number) => void;
+    onResetChatId?: () => void;
     onThreadUpdate?: () => void;
     darkMode?: boolean;
 }
@@ -65,6 +82,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     activeSource,
     onJump,
     onThreadUpdate,
+    onResetChatId,
     darkMode = false
 }) => {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -74,10 +92,27 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [isModelWarming, setIsModelWarming] = useState(false);
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
-    const [contextWindow, setContextWindow] = useState(4096);
+    const [contextWindow, setContextWindow] = useState<number>(0);
+    const [maxIterations, setMaxIterations] = useState(0);
+    const [defaultMaxIterations, setDefaultMaxIterations] = useState(0);
+    const [minMaxIterations, setMinMaxIterations] = useState<number | null>(null);
+    const [maxMaxIterations, setMaxMaxIterations] = useState<number | null>(null);
+    const [defaultSystemRole, setDefaultSystemRole] = useState('');
+    const [defaultCustomInstructions, setDefaultCustomInstructions] = useState('');
+    const [systemRole, setSystemRole] = useState('');
+    const [toolCatalog, setToolCatalog] = useState<PromptToolDefinition[]>([]);
+    const [toolInstructions, setToolInstructions] = useState<Record<string, string>>({});
+    const [customInstructions, setCustomInstructions] = useState('');
+    const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+    const [savingSettings, setSavingSettings] = useState(false);
+    const [promptPreview, setPromptPreview] = useState('');
     const [showContextHighlight, setShowContextHighlight] = useState(false);
     const [tooltipOpen, setTooltipOpen] = useState(false);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
+    const [clarificationOptions, setClarificationOptions] = useState<string[] | null>(null);
+    const [useIntentAgent, setUseIntentAgent] = useState(true);
+    const [intentAgentMaxIterations, setIntentAgentMaxIterations] = useState(1);
+    const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -92,17 +127,82 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (activeThread) {
             loadMessages();
             checkIndexStatus();
+            loadThreadSettings();
         } else {
             setMessages([]);
             setIndexingStatus('ready');
+            setMaxIterations(defaultMaxIterations);
+            setSystemRole(defaultSystemRole);
+            setToolInstructions({});
+            setCustomInstructions(defaultCustomInstructions);
+            setUseIntentAgent(true);
+            setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
         }
-    }, [activeThread?.id, activeThread?.file_count]);
+    }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions]);
+
+    useEffect(() => {
+        const loadTools = async () => {
+            try {
+                const res = await getPromptTools();
+                setToolCatalog(res.tools || []);
+                if (res.defaults) {
+                    setDefaultMaxIterations(res.defaults.max_iterations);
+                    setMinMaxIterations(res.defaults.min_max_iterations);
+                    setMaxMaxIterations(res.defaults.max_max_iterations);
+                    setDefaultSystemRole(res.defaults.system_role ?? '');
+                    setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
+                    setDefaultIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
+                    if (res.defaults.context_window) {
+                        setContextWindow(res.defaults.context_window);
+                    }
+                    if (!activeThread) {
+                        setMaxIterations(res.defaults.max_iterations);
+                        setSystemRole(res.defaults.system_role ?? '');
+                        setCustomInstructions(res.defaults.custom_instructions ?? '');
+                        setUseIntentAgent(res.defaults.use_intent_agent ?? true);
+                        setIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load prompt tools:', error);
+                setToolCatalog([]);
+            }
+        };
+        loadTools();
+    }, [activeThread]);
+
+    const loadThreadSettings = async () => {
+        if (!activeThread) return;
+        try {
+            const settings = await getThreadSettings(activeThread.id);
+            setMaxIterations(settings.max_iterations ?? defaultMaxIterations);
+            setSystemRole(settings.system_role ?? defaultSystemRole);
+            setToolInstructions(settings.tool_instructions ?? {});
+            setCustomInstructions(settings.custom_instructions ?? defaultCustomInstructions);
+            setUseIntentAgent(settings.use_intent_agent ?? true);
+            setIntentAgentMaxIterations(settings.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
+        } catch (error) {
+            console.error('Failed to load thread settings:', error);
+            setMaxIterations(defaultMaxIterations);
+            setSystemRole(defaultSystemRole);
+            setToolInstructions({});
+            setCustomInstructions(defaultCustomInstructions);
+            setUseIntentAgent(true);
+            setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
+        }
+    };
 
     const loadMessages = async () => {
         if (!activeThread) return;
         try {
             const response = await getThreadMessages(activeThread.id);
-            setMessages(response.messages.map(m => ({ ...m, isRecollected: false })));
+            setMessages(response.messages.map(m => ({ 
+                ...m,
+                content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+                isRecollected: false,
+                rewritten_query: m.role === 'user' ? m.context_compact : undefined,
+                web_sources: m.role === 'assistant' ? (m.web_sources || []) : undefined,
+            })));
         } catch (error) {
             console.error('Failed to load messages:', error);
         }
@@ -148,6 +248,72 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (activeSource !== 'chat' || currentChatId === null) return null;
         return chatSentences[currentChatId]?.messageIndex;
     }, [currentChatId, chatSentences, activeSource]);
+
+    const effectiveToolInstructions = useMemo(() => {
+        const merged: Record<string, string> = {};
+        toolCatalog.forEach((toolDef) => {
+            merged[toolDef.id] = toolInstructions[toolDef.id] || toolDef.default_prompt;
+        });
+        return merged;
+    }, [toolCatalog, toolInstructions]);
+
+    useEffect(() => {
+        if (!settingsDialogOpen) return;
+        let cancelled = false;
+        const timeoutId = setTimeout(async () => {
+            try {
+                const res = await getPromptPreview({
+                    context_window: contextWindow,
+                    system_role: systemRole,
+                    tool_instructions: effectiveToolInstructions,
+                    custom_instructions: customInstructions,
+                    use_web_search: useWebSearch,
+                    intent_agent_ran: useIntentAgent,
+                });
+                if (!cancelled) {
+                    setPromptPreview(res.prompt || '');
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setPromptPreview('Unable to load prompt preview.');
+                }
+            }
+        }, 200);
+        return () => {
+            cancelled = true;
+            clearTimeout(timeoutId);
+        };
+    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, useIntentAgent]);
+
+    const resetAllSettingsToDefault = () => {
+        const defaults: Record<string, string> = {};
+        toolCatalog.forEach((toolDef) => {
+            defaults[toolDef.id] = toolDef.default_prompt;
+        });
+        setMaxIterations(defaultMaxIterations);
+        setSystemRole(defaultSystemRole);
+        setToolInstructions(defaults);
+        setCustomInstructions(defaultCustomInstructions);
+        setUseIntentAgent(true);
+        setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
+    };
+
+    const resetToolInstructionToDefault = (toolId: string) => {
+        const toolDef = toolCatalog.find((t) => t.id === toolId);
+        if (!toolDef) return;
+        setToolInstructions((prev) => ({
+            ...prev,
+            [toolId]: toolDef.default_prompt,
+        }));
+    };
+
+    const resetSystemRoleToDefault = () => {
+        setSystemRole(defaultSystemRole);
+    };
+
+    const resetCustomInstructionsToDefault = () => {
+        setCustomInstructions('');
+    };
 
     useEffect(() => {
         if (activeMessageIndex !== null && messageRefs.current[activeMessageIndex]) {
@@ -214,11 +380,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         return () => clearInterval(intervalId);
     }, [activeThread?.id, indexingStatus]);
 
-    const handleSend = async () => {
-        if (!input.trim() || !llmModel || !activeThread) return;
+    const handleSend = async (overrideInput?: string) => {
+        const textToSend = overrideInput || input.trim();
+        if (!textToSend || !llmModel || !activeThread) return;
 
-        const userContent = input.trim();
         setInput('');
+        setClarificationOptions(null);
         setLoading(true);
         setIsModelWarming(false);
 
@@ -226,7 +393,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const tempUserMsg: ChatMessage = { 
             id: 'temp-user-' + Date.now(), 
             role: 'user', 
-            content: userContent,
+            content: textToSend,
             created_at: new Date().toISOString()
         };
         setMessages(prev => [...prev, tempUserMsg]);
@@ -241,42 +408,64 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             // Call thread chat endpoint
             const response = await threadChat(
                 activeThread.id,
-                userContent,
+                textToSend,
                 llmModel,
                 useWebSearch,
-                contextWindow
+                contextWindow,
+                maxIterations,
+                systemRole,
+                effectiveToolInstructions,
+                customInstructions,
+                useIntentAgent,
+                useIntentAgent ? intentAgentMaxIterations : undefined
             );
 
-            // Update messages with real IDs and add assistant response
-            setMessages(prev => {
-                const updated = prev.filter(m => m.id !== tempUserMsg.id);
-                return [
-                    ...updated,
-                    { 
-                        id: response.user_message_id, 
+            // Handle ambiguous query / clarification options
+            if (response.clarification_options) {
+                setClarificationOptions(response.clarification_options);
+                // Remove the optimistic user message — nothing was persisted
+                setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id));
+            } else {
+                // Normal flow: update messages with real IDs and add assistant response
+                setMessages(prev => {
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    const finalMessages = [...updated];
+                    
+                    finalMessages.push({ 
+                        id: response.user_message_id || ('final-user-' + Date.now()), 
                         role: 'user', 
-                        content: userContent,
+                        content: textToSend, // Keep original input
+                        rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
                         created_at: new Date().toISOString()
-                    },
-                    { 
-                        id: response.assistant_message_id, 
-                        role: 'assistant', 
-                        content: response.answer,
-                        created_at: new Date().toISOString()
+                    });
+
+                    if (response.assistant_message_id || response.answer) {
+                        finalMessages.push({ 
+                            id: response.assistant_message_id || ('assistant-' + Date.now()), 
+                            role: 'assistant', 
+                            content: typeof response.answer === 'string' ? response.answer : String(response.answer ?? ''),
+                            reasoning: response.reasoning || '',
+                            reasoning_available: !!response.reasoning_available,
+                            reasoning_format: response.reasoning_format || 'none',
+                            web_sources: response.web_sources || [],
+                            created_at: new Date().toISOString()
+                        });
                     }
-                ];
-            });
+                    
+                    return finalMessages;
+                });
 
-            // Mark recollected messages
-            if (response.used_chat_ids && response.used_chat_ids.length > 0) {
-                setRecollectedIds(new Set(response.used_chat_ids));
-                // Clear recollection highlight after 10 seconds
-                setTimeout(() => setRecollectedIds(new Set()), 10000);
-            }
+                // Mark recollected messages
+                if (response.used_chat_ids && response.used_chat_ids.length > 0) {
+                    setRecollectedIds(new Set(response.used_chat_ids));
+                    // Clear recollection highlight after 10 seconds
+                    setTimeout(() => setRecollectedIds(new Set()), 10000);
+                }
 
-            // Notify parent that thread was updated
-            if (onThreadUpdate) {
-                onThreadUpdate();
+                // Notify parent that thread was updated
+                if (onThreadUpdate) {
+                    onThreadUpdate();
+                }
             }
 
         } catch (err: any) {
@@ -305,14 +494,75 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         event.stopPropagation();
         if (!confirm('Delete this message?')) return;
 
+        // Frontend-only messages (error responses and their paired user messages) are never
+        // persisted to the backend, so we remove them directly from local state.
+        const isTempId = messageId.startsWith('error-') || messageId.startsWith('temp-user-');
+        if (isTempId) {
+            setMessages(prev => {
+                const idx = prev.findIndex(m => m.id === messageId);
+                if (idx === -1) return prev;
+                const msg = prev[idx];
+                // Deleting an error assistant message → also remove the preceding temp user message
+                if (msg.role === 'assistant' && idx > 0) {
+                    const prevMsg = prev[idx - 1];
+                    if (prevMsg.id.startsWith('temp-user-')) {
+                        return prev.filter((_, i) => i !== idx && i !== idx - 1);
+                    }
+                }
+                // Deleting a temp user message → also remove the following error assistant message
+                if (msg.role === 'user' && idx < prev.length - 1) {
+                    const nextMsg = prev[idx + 1];
+                    if (nextMsg.id.startsWith('error-')) {
+                        return prev.filter((_, i) => i !== idx && i !== idx + 1);
+                    }
+                }
+                return prev.filter(m => m.id !== messageId);
+            });
+            if (onResetChatId) onResetChatId();
+            return;
+        }
+
         try {
             const { deleted_ids } = await deleteMessage(messageId);
             setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
+            
+            // Critical: If the current active chat sentence belongs to a deleted message, 
+            // reset the chat ID selection to prevent out-of-bounds access.
+            if (onResetChatId) {
+                onResetChatId();
+            }
+
             if (onThreadUpdate) {
                 onThreadUpdate();
             }
         } catch (error) {
             console.error('Failed to delete message:', error);
+        }
+    };
+
+    const handleSaveThreadSettings = async () => {
+        if (!activeThread) return;
+        try {
+            setSavingSettings(true);
+            const saved = await updateThreadSettings(activeThread.id, {
+                max_iterations: Math.max(minMaxIterations ?? 1, Math.min(maxMaxIterations ?? 30, maxIterations)),
+                system_role: systemRole,
+                tool_instructions: effectiveToolInstructions,
+                custom_instructions: customInstructions,
+                use_intent_agent: useIntentAgent,
+                intent_agent_max_iterations: Math.max(1, Math.min(10, intentAgentMaxIterations)),
+            });
+            setMaxIterations(saved.max_iterations);
+            setSystemRole(saved.system_role);
+            setToolInstructions(saved.tool_instructions || {});
+            setCustomInstructions(saved.custom_instructions);
+            setUseIntentAgent(saved.use_intent_agent ?? true);
+            setIntentAgentMaxIterations(saved.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
+            setSettingsDialogOpen(false);
+        } catch (error) {
+            console.error('Failed to save thread settings:', error);
+        } finally {
+            setSavingSettings(false);
         }
     };
 
@@ -346,6 +596,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Tooltip>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
+                    <Tooltip title="AI prompt settings for this thread" placement="top">
+                        <IconButton
+                            size="small"
+                            onClick={() => setSettingsDialogOpen(true)}
+                            sx={{ p: 0.5 }}
+                        >
+                            <SettingsIcon />
+                        </IconButton>
+                    </Tooltip>
                     <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
                         <IconButton
                             size="small"
@@ -415,7 +674,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     },
                                 },
                             }}
-                            inputProps={{ min: 4096, step: 4096, style: { textAlign: 'right' } }}
+                            inputProps={{ min: 1, step: 1, style: { textAlign: 'right' } }}
                         />
                     </Tooltip>
                     <FormControl fullWidth size="small">
@@ -538,9 +797,117 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     '& pre': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 }
                                 }}>
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {msg.content}
+                                        {typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')}
                                     </ReactMarkdown>
                                 </Typography>
+                                {msg.role === 'user' && msg.rewritten_query && (
+                                    <Box sx={{ mt: 1 }}>
+                                        <details>
+                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                Rewritten for context
+                                            </summary>
+                                            <Typography
+                                                variant="caption"
+                                                sx={{
+                                                    mt: 1,
+                                                    display: 'block',
+                                                    fontStyle: 'italic',
+                                                    opacity: 0.9,
+                                                    p: 1,
+                                                    borderRadius: 1,
+                                                    bgcolor: 'rgba(255,255,255,0.1)'
+                                                }}
+                                            >
+                                                {msg.rewritten_query}
+                                            </Typography>
+                                        </details>
+                                    </Box>
+                                )}
+                                {msg.role === 'assistant' && msg.reasoning_available && msg.reasoning && (
+                                    <Box sx={{ mt: 1 }}>
+                                        <details>
+                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                View reasoning trace
+                                            </summary>
+                                            <Typography
+                                                variant="caption"
+                                                component="pre"
+                                                sx={{
+                                                    mt: 1,
+                                                    mb: 0,
+                                                    p: 1,
+                                                    borderRadius: 1,
+                                                    whiteSpace: 'pre-wrap',
+                                                    wordBreak: 'break-word',
+                                                    bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.04)'
+                                                }}
+                                            >
+                                                {msg.reasoning}
+                                            </Typography>
+                                        </details>
+                                    </Box>
+                                )}
+                                {msg.role === 'assistant' && msg.web_sources && msg.web_sources.length > 0 && (
+                                    <Box sx={{ mt: 1 }}>
+                                        <details>
+                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                🌐 Web sources used ({msg.web_sources.length})
+                                            </summary>
+                                            <Box sx={{ mt: 0.75, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                                                {msg.web_sources.map((source, i) => (
+                                                    <Box
+                                                        key={i}
+                                                        sx={{
+                                                            p: 1,
+                                                            borderRadius: 1,
+                                                            bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                                                            borderLeft: '3px solid',
+                                                            borderColor: 'primary.light',
+                                                        }}
+                                                    >
+                                                        {source.url ? (
+                                                            <Typography
+                                                                variant="caption"
+                                                                component="a"
+                                                                href={source.url}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                sx={{
+                                                                    color: 'primary.main',
+                                                                    display: 'block',
+                                                                    fontWeight: 600,
+                                                                    textDecoration: 'none',
+                                                                    mb: 0.25,
+                                                                    '&:hover': { textDecoration: 'underline' },
+                                                                }}
+                                                            >
+                                                                {source.title || source.url}
+                                                            </Typography>
+                                                        ) : (
+                                                            <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.25 }}>
+                                                                {source.title || 'Web result'}
+                                                            </Typography>
+                                                        )}
+                                                        {source.url && (
+                                                            <Typography
+                                                                variant="caption"
+                                                                sx={{ color: 'text.secondary', display: 'block', wordBreak: 'break-all', mb: 0.25 }}
+                                                            >
+                                                                {source.url}
+                                                            </Typography>
+                                                        )}
+                                                        <Typography
+                                                            variant="caption"
+                                                            sx={{ display: 'block', opacity: 0.85, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                                                        >
+                                                            {source.text}
+                                                        </Typography>
+                                                    </Box>
+                                                ))}
+                                            </Box>
+                                        </details>
+                                    </Box>
+                                )}
                             </Paper>
                         </ListItem>
                     );
@@ -562,6 +929,37 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <Typography variant="caption" color="info.main">
                             Indexing document...
                         </Typography>
+                    </Box>
+                )}
+
+                {clarificationOptions && (
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, justifyContent: 'center', p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+                        <Typography variant="caption" sx={{ width: '100%', textAlign: 'center', mb: 0.5, color: 'text.secondary', fontWeight: 'bold' }}>
+                            I need a bit more clarification. Did you mean one of these?
+                        </Typography>
+                        {clarificationOptions.map((opt, i) => (
+                            <Chip 
+                                key={i} 
+                                label={opt} 
+                                onClick={() => handleSend(opt)} 
+                                color="primary" 
+                                variant="outlined" 
+                                size="medium"
+                                sx={{ 
+                                    cursor: 'pointer', 
+                                    maxWidth: '300px',
+                                    '&:hover': { bgcolor: 'primary.main', color: 'white' } 
+                                }}
+                            />
+                        ))}
+                        <Button 
+                            size="small" 
+                            variant="text" 
+                            onClick={() => setClarificationOptions(null)}
+                            sx={{ fontSize: '0.7rem' }}
+                        >
+                            None of these
+                        </Button>
                     </Box>
                 )}
 
@@ -610,6 +1008,171 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </IconButton>
                 </Box>
             </Box>
+
+            <Dialog
+                open={settingsDialogOpen}
+                onClose={() => !savingSettings && setSettingsDialogOpen(false)}
+                maxWidth="sm"
+                fullWidth
+            >
+                <DialogTitle>AI Prompt Settings</DialogTitle>
+                <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                        <Typography variant="body2" color="text.secondary">
+                            These settings are saved per thread and used by default for every message.
+                        </Typography>
+                        <Tooltip title="Reset all settings to default">
+                            <IconButton
+                                size="medium"
+                                onClick={resetAllSettingsToDefault}
+                                sx={{
+                                    width: 36,
+                                    height: 36,
+                                    border: 1,
+                                    borderColor: 'divider',
+                                }}
+                            >
+                                <ReplayIcon fontSize="medium" />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                    {minMaxIterations !== null && maxMaxIterations !== null ? (
+                    <TextField
+                        label="Max tool iterations"
+                        type="number"
+                        value={maxIterations}
+                        onChange={(e) => setMaxIterations(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
+                        inputProps={{ min: minMaxIterations, max: maxMaxIterations }}
+                        helperText="Lower is faster; higher allows deeper research."
+                    />
+                    ) : (
+                        <Typography variant="caption" color="error">Iteration limits not loaded from server.</Typography>
+                    )}
+                    <Divider />
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={useIntentAgent}
+                                    onChange={(e) => setUseIntentAgent(e.target.checked)}
+                                />
+                            }
+                            label={
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                    <Typography variant="body2" fontWeight={500}>Intent Agent</Typography>
+                                </Box>
+                            }
+                        />
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
+                            Before answering, runs a lightweight LLM pass to detect ambiguity, rewrite follow-up questions
+                            into standalone queries, and estimate whether the pre-fetched context is sufficient — reducing
+                            unnecessary tool calls. Disable to skip this step and process questions directly, which is faster
+                            but may produce less focused answers for follow-up questions.
+                        </Typography>
+                        {useIntentAgent && (
+                            <TextField
+                                label="Intent agent iterations"
+                                type="number"
+                                value={intentAgentMaxIterations}
+                                onChange={(e) => setIntentAgentMaxIterations(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
+                                inputProps={{ min: 1, max: 10 }}
+                                helperText="Number of reasoning steps allowed for intent classification (1 is usually sufficient)."
+                                size="small"
+                                sx={{ mt: 1.5 }}
+                            />
+                        )}
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                        <TextField
+                            fullWidth
+                            label="System role"
+                            value={systemRole}
+                            onChange={(e) => setSystemRole(e.target.value)}
+                            multiline
+                            minRows={2}
+                            maxRows={4}
+                            helperText="Defines the assistant's role for this thread."
+                        />
+                        <Tooltip title="Reset System role to default">
+                            <IconButton
+                                size="small"
+                                sx={{ mt: 1 }}
+                                onClick={resetSystemRoleToDefault}
+                            >
+                                <ReplayIcon fontSize="small" />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                    <Typography variant="body2" color="text.secondary">
+                        These are the tools available in the app. You can configure how the assistant should use each one.
+                    </Typography>
+                    {toolCatalog.map((toolDef) => (
+                        <Box key={toolDef.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                            <TextField
+                                fullWidth
+                                label={toolDef.display_name}
+                                value={effectiveToolInstructions[toolDef.id] || ''}
+                                onChange={(e) =>
+                                    setToolInstructions((prev) => ({
+                                        ...prev,
+                                        [toolDef.id]: e.target.value,
+                                    }))
+                                }
+                                multiline
+                                minRows={2}
+                                maxRows={6}
+                                helperText={toolDef.description}
+                            />
+                            <Tooltip title={`Reset ${toolDef.display_name} to default`}>
+                                <IconButton
+                                    size="small"
+                                    sx={{ mt: 1 }}
+                                    onClick={() => resetToolInstructionToDefault(toolDef.id)}
+                                >
+                                    <ReplayIcon fontSize="small" />
+                                </IconButton>
+                            </Tooltip>
+                        </Box>
+                    ))}
+                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                        <TextField
+                            fullWidth
+                            label="Custom instructions"
+                            value={customInstructions}
+                            onChange={(e) => setCustomInstructions(e.target.value)}
+                            multiline
+                            minRows={4}
+                            maxRows={10}
+                            helperText="Locked tool and context constraints still apply."
+                        />
+                        <Tooltip title="Reset Custom instructions to default">
+                            <IconButton
+                                size="small"
+                                sx={{ mt: 1 }}
+                                onClick={resetCustomInstructionsToDefault}
+                            >
+                                <ReplayIcon fontSize="small" />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                    <TextField
+                        label="Full Prompt Preview"
+                        value={promptPreview}
+                        multiline
+                        minRows={14}
+                        maxRows={24}
+                        InputProps={{ readOnly: true }}
+                    />
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setSettingsDialogOpen(false)} disabled={savingSettings}>
+                        Cancel
+                    </Button>
+                    <Button onClick={handleSaveThreadSettings} variant="contained" disabled={savingSettings}>
+                        {savingSettings ? 'Saving...' : 'Save'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Paper>
     );
 };
