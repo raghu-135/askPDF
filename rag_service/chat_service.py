@@ -297,6 +297,10 @@ async def handle_thread_chat(
     system_role = getattr(req, 'system_role_override', "") or ""
     tool_instructions = getattr(req, 'tool_instructions_override', None) or {}
     custom_instructions = getattr(req, 'custom_instructions_override', "") or ""
+    use_intent_agent = getattr(req, 'use_intent_agent', True)
+    if use_intent_agent is None:
+        use_intent_agent = True
+    intent_agent_max_iterations = getattr(req, 'intent_agent_max_iterations', None) or INTENT_AGENT_MAX_ITERATIONS
     
     try:
         from agent import app as agent_app, intent_app, AgentState
@@ -315,31 +319,40 @@ async def handle_thread_chat(
             ),
         )
 
-        # 2. Analyze intent using the Intent Agent
-        intent_state = {
-            "messages": recent_history_messages + [HumanMessage(content=question)],
-            "thread_id": thread_id,
-            "llm_model": llm_model,
-            "context_window": context_window,
-            "iteration_count": 0,
-            "max_iterations": INTENT_AGENT_MAX_ITERATIONS,
-            "intent_result": None,
-            "pre_fetch_bundle": prefetch_bundle,
-        }
-        
-        intent_config = {
-            "configurable": {
-                "thread_id": thread_id
+        # 2. Analyze intent using the Intent Agent (optional)
+        if use_intent_agent:
+            intent_state = {
+                "messages": recent_history_messages + [HumanMessage(content=question)],
+                "thread_id": thread_id,
+                "llm_model": llm_model,
+                "context_window": context_window,
+                "iteration_count": 0,
+                "max_iterations": intent_agent_max_iterations,
+                "intent_result": None,
+                "pre_fetch_bundle": prefetch_bundle,
             }
-        }
-        
-        logger.info(f"Invoking Intent Agent for thread {thread_id}")
-        intent_result_state = await intent_app.ainvoke(intent_state, config=intent_config)
-        intent = intent_result_state.get("intent_result") or {
-            "status": "CLEAR_STANDALONE", 
-            "rewritten_query": question, 
-            "clarification_options": None
-        }
+            
+            intent_config = {
+                "configurable": {
+                    "thread_id": thread_id
+                }
+            }
+            
+            logger.info(f"Invoking Intent Agent for thread {thread_id}")
+            intent_result_state = await intent_app.ainvoke(intent_state, config=intent_config)
+            intent = intent_result_state.get("intent_result") or {
+                "status": "CLEAR_STANDALONE", 
+                "rewritten_query": question, 
+                "clarification_options": None
+            }
+        else:
+            logger.info(f"Intent Agent disabled for thread {thread_id}, skipping")
+            intent = {
+                "status": "CLEAR_STANDALONE",
+                "rewritten_query": question,
+                "clarification_options": None,
+                "context_coverage": "INSUFFICIENT",
+            }
         
         # If ambiguous, return early with clarification options
         if intent["status"] == "AMBIGUOUS" and intent.get("clarification_options"):

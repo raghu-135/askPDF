@@ -110,6 +110,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [tooltipOpen, setTooltipOpen] = useState(false);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<string[] | null>(null);
+    const [useIntentAgent, setUseIntentAgent] = useState(true);
+    const [intentAgentMaxIterations, setIntentAgentMaxIterations] = useState(1);
+    const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -132,6 +135,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setSystemRole(defaultSystemRole);
             setToolInstructions({});
             setCustomInstructions(defaultCustomInstructions);
+            setUseIntentAgent(true);
+            setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
         }
     }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions]);
 
@@ -146,6 +151,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setMaxMaxIterations(res.defaults.max_max_iterations);
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
+                    setDefaultIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
                     if (res.defaults.context_window) {
                         setContextWindow(res.defaults.context_window);
                     }
@@ -153,6 +159,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         setMaxIterations(res.defaults.max_iterations);
                         setSystemRole(res.defaults.system_role ?? '');
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
+                        setUseIntentAgent(res.defaults.use_intent_agent ?? true);
+                        setIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
                     }
                 }
             } catch (error) {
@@ -171,12 +179,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setSystemRole(settings.system_role ?? defaultSystemRole);
             setToolInstructions(settings.tool_instructions ?? {});
             setCustomInstructions(settings.custom_instructions ?? defaultCustomInstructions);
+            setUseIntentAgent(settings.use_intent_agent ?? true);
+            setIntentAgentMaxIterations(settings.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
         } catch (error) {
             console.error('Failed to load thread settings:', error);
             setMaxIterations(defaultMaxIterations);
             setSystemRole(defaultSystemRole);
             setToolInstructions({});
             setCustomInstructions(defaultCustomInstructions);
+            setUseIntentAgent(true);
+            setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
         }
     };
 
@@ -280,6 +292,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setSystemRole(defaultSystemRole);
         setToolInstructions(defaults);
         setCustomInstructions(defaultCustomInstructions);
+        setUseIntentAgent(true);
+        setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -399,7 +413,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 maxIterations,
                 systemRole,
                 effectiveToolInstructions,
-                customInstructions
+                customInstructions,
+                useIntentAgent,
+                useIntentAgent ? intentAgentMaxIterations : undefined
             );
 
             // Handle ambiguous query / clarification options
@@ -531,11 +547,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 system_role: systemRole,
                 tool_instructions: effectiveToolInstructions,
                 custom_instructions: customInstructions,
+                use_intent_agent: useIntentAgent,
+                intent_agent_max_iterations: Math.max(1, Math.min(10, intentAgentMaxIterations)),
             });
             setMaxIterations(saved.max_iterations);
             setSystemRole(saved.system_role);
             setToolInstructions(saved.tool_instructions || {});
             setCustomInstructions(saved.custom_instructions);
+            setUseIntentAgent(saved.use_intent_agent ?? true);
+            setIntentAgentMaxIterations(saved.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
             setSettingsDialogOpen(false);
         } catch (error) {
             console.error('Failed to save thread settings:', error);
@@ -1026,6 +1046,40 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     ) : (
                         <Typography variant="caption" color="error">Iteration limits not loaded from server.</Typography>
                     )}
+                    <Divider />
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={useIntentAgent}
+                                    onChange={(e) => setUseIntentAgent(e.target.checked)}
+                                />
+                            }
+                            label={
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                    <Typography variant="body2" fontWeight={500}>Intent Agent</Typography>
+                                </Box>
+                            }
+                        />
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
+                            Before answering, runs a lightweight LLM pass to detect ambiguity, rewrite follow-up questions
+                            into standalone queries, and estimate whether the pre-fetched context is sufficient — reducing
+                            unnecessary tool calls. Disable to skip this step and process questions directly, which is faster
+                            but may produce less focused answers for follow-up questions.
+                        </Typography>
+                        {useIntentAgent && (
+                            <TextField
+                                label="Intent agent iterations"
+                                type="number"
+                                value={intentAgentMaxIterations}
+                                onChange={(e) => setIntentAgentMaxIterations(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
+                                inputProps={{ min: 1, max: 10 }}
+                                helperText="Number of reasoning steps allowed for intent classification (1 is usually sufficient)."
+                                size="small"
+                                sx={{ mt: 1.5 }}
+                            />
+                        )}
+                    </Box>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
                         <TextField
                             fullWidth

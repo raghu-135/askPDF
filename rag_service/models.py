@@ -119,6 +119,8 @@ def default_thread_settings():
         "system_role": "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers.",
         "tool_instructions": {},
         "custom_instructions": "",
+        "use_intent_agent": True,
+        "intent_agent_max_iterations": INTENT_AGENT_MAX_ITERATIONS,
     }
 
 

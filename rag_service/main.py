@@ -38,6 +38,7 @@ from models import (
     MAX_MAX_ITERATIONS,
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
     MAX_SYSTEM_ROLE_CHARS,
+    INTENT_AGENT_MAX_ITERATIONS,
     merge_thread_settings,
 )
 from chat_service import handle_chat, handle_thread_chat
@@ -120,6 +121,8 @@ class ThreadChatRequest(BaseModel):
     system_role_override: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions_override: Optional[Dict[str, str]] = None
     custom_instructions_override: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
+    use_intent_agent: Optional[bool] = None
+    intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
 
 
 class ThreadSettingsResponse(BaseModel):
@@ -127,6 +130,8 @@ class ThreadSettingsResponse(BaseModel):
     system_role: str = Field(default="", max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Dict[str, str] = Field(default_factory=dict)
     custom_instructions: str = Field(default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
+    use_intent_agent: bool = True
+    intent_agent_max_iterations: int = Field(default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10)
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -134,6 +139,8 @@ class ThreadSettingsUpdateRequest(BaseModel):
     system_role: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Optional[Dict[str, str]] = None
     custom_instructions: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
+    use_intent_agent: Optional[bool] = None
+    intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
 
 
 class ToolCatalogEntry(BaseModel):
@@ -151,6 +158,8 @@ class PromptDefaults(BaseModel):
     system_role: str
     tool_instructions: Dict[str, str]
     custom_instructions: str
+    use_intent_agent: bool = True
+    intent_agent_max_iterations: int = INTENT_AGENT_MAX_ITERATIONS
 
 
 class PromptPreviewRequest(BaseModel):
@@ -593,6 +602,10 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
             req.tool_instructions_override = normalize_tool_instructions(thread_settings.get("tool_instructions", {}))
         if req.custom_instructions_override is None:
             req.custom_instructions_override = thread_settings["custom_instructions"]
+        if req.use_intent_agent is None:
+            req.use_intent_agent = thread_settings.get("use_intent_agent", True)
+        if req.intent_agent_max_iterations is None:
+            req.intent_agent_max_iterations = thread_settings.get("intent_agent_max_iterations", INTENT_AGENT_MAX_ITERATIONS)
         
         result = await handle_thread_chat(thread_id, req, thread.embed_model)
         return result

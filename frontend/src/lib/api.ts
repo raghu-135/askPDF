@@ -78,6 +78,8 @@ export interface ThreadSettings {
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
+  use_intent_agent: boolean;
+  intent_agent_max_iterations: number;
 }
 
 export interface PromptToolDefinition {
@@ -89,9 +91,14 @@ export interface PromptToolDefinition {
 
 export interface PromptDefaults {
   max_iterations: number;
+  min_max_iterations: number;
+  max_max_iterations: number;
+  context_window: number;
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
+  use_intent_agent: boolean;
+  intent_agent_max_iterations: number;
 }
 
 export interface ThreadFile {
@@ -251,7 +258,9 @@ export async function threadChat(
   maxIterations?: number,
   systemRoleOverride?: string,
   toolInstructionsOverride?: Record<string, string>,
-  customInstructionsOverride?: string
+  customInstructionsOverride?: string,
+  useIntentAgent?: boolean,
+  intentAgentMaxIterations?: number
 ): Promise<{
   answer: string;
   user_message_id: string | null;
@@ -283,6 +292,12 @@ export async function threadChat(
   }
   if (typeof customInstructionsOverride === "string") {
     payload.custom_instructions_override = customInstructionsOverride;
+  }
+  if (typeof useIntentAgent === "boolean") {
+    payload.use_intent_agent = useIntentAgent;
+  }
+  if (typeof intentAgentMaxIterations === "number") {
+    payload.intent_agent_max_iterations = intentAgentMaxIterations;
   }
 
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/chat`, {
