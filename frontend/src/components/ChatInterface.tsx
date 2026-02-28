@@ -38,6 +38,7 @@ import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
 import { 
     Thread, 
     Message,
+    WebSource,
     PromptToolDefinition,
     threadChat, 
     getThreadMessages, 
@@ -56,6 +57,7 @@ interface ChatMessage extends Message {
     reasoning_available?: boolean;
     reasoning_format?: 'structured' | 'tagged_text' | 'none';
     rewritten_query?: string;
+    web_sources?: WebSource[];
 }
 
 interface ChatInterfaceProps {
@@ -176,7 +178,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setMessages(response.messages.map(m => ({ 
                 ...m, 
                 isRecollected: false,
-                rewritten_query: m.role === 'user' ? m.context_compact : undefined
+                rewritten_query: m.role === 'user' ? m.context_compact : undefined,
+                web_sources: m.role === 'assistant' ? (m.web_sources || []) : undefined,
             })));
         } catch (error) {
             console.error('Failed to load messages:', error);
@@ -416,6 +419,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             reasoning: response.reasoning || '',
                             reasoning_available: !!response.reasoning_available,
                             reasoning_format: response.reasoning_format || 'none',
+                            web_sources: response.web_sources || [],
                             created_at: new Date().toISOString()
                         });
                     }
@@ -773,6 +777,67 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             >
                                                 {msg.reasoning}
                                             </Typography>
+                                        </details>
+                                    </Box>
+                                )}
+                                {msg.role === 'assistant' && msg.web_sources && msg.web_sources.length > 0 && (
+                                    <Box sx={{ mt: 1 }}>
+                                        <details>
+                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                🌐 Web sources used ({msg.web_sources.length})
+                                            </summary>
+                                            <Box sx={{ mt: 0.75, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                                                {msg.web_sources.map((source, i) => (
+                                                    <Box
+                                                        key={i}
+                                                        sx={{
+                                                            p: 1,
+                                                            borderRadius: 1,
+                                                            bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                                                            borderLeft: '3px solid',
+                                                            borderColor: 'primary.light',
+                                                        }}
+                                                    >
+                                                        {source.url ? (
+                                                            <Typography
+                                                                variant="caption"
+                                                                component="a"
+                                                                href={source.url}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                sx={{
+                                                                    color: 'primary.main',
+                                                                    display: 'block',
+                                                                    fontWeight: 600,
+                                                                    textDecoration: 'none',
+                                                                    mb: 0.25,
+                                                                    '&:hover': { textDecoration: 'underline' },
+                                                                }}
+                                                            >
+                                                                {source.title || source.url}
+                                                            </Typography>
+                                                        ) : (
+                                                            <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.25 }}>
+                                                                {source.title || 'Web result'}
+                                                            </Typography>
+                                                        )}
+                                                        {source.url && (
+                                                            <Typography
+                                                                variant="caption"
+                                                                sx={{ color: 'text.secondary', display: 'block', wordBreak: 'break-all', mb: 0.25 }}
+                                                            >
+                                                                {source.url}
+                                                            </Typography>
+                                                        )}
+                                                        <Typography
+                                                            variant="caption"
+                                                            sx={{ display: 'block', opacity: 0.85, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                                                        >
+                                                            {source.text}
+                                                        </Typography>
+                                                    </Box>
+                                                ))}
+                                            </Box>
                                         </details>
                                     </Box>
                                 )}

@@ -41,6 +41,19 @@ def _parse_settings(raw: Optional[str]) -> Dict[str, Any]:
         return {}
 
 
+def _parse_json_list(raw: Optional[str]) -> Optional[List[Dict[str, Any]]]:
+    """Deserialize a JSON-encoded list from a SQLite text column."""
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return parsed
+        return None
+    except Exception:
+        return None
+
+
 class Thread(BaseModel):
     id: str
     name: str
@@ -69,6 +82,7 @@ class Message(BaseModel):
     reasoning: Optional[str] = None
     reasoning_available: bool = False
     reasoning_format: str = "none"
+    web_sources: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
 
 
@@ -125,6 +139,7 @@ async def init_db():
             "ALTER TABLE messages ADD COLUMN reasoning_format TEXT NOT NULL DEFAULT 'none'",
             "ALTER TABLE messages ADD COLUMN context_compact TEXT",
             "ALTER TABLE threads ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE messages ADD COLUMN web_sources TEXT",
         ]
         for stmt in migrations:
             try:
@@ -366,17 +381,19 @@ async def create_message(
     reasoning: Optional[str] = None,
     reasoning_available: bool = False,
     reasoning_format: str = "none",
+    web_sources: Optional[List[Dict[str, Any]]] = None,
 ) -> Message:
     """Create a new message in a thread."""
     message_id = str(uuid.uuid4())
     created_at = datetime.utcnow()
-    
+    web_sources_json = json.dumps(web_sources) if web_sources else None
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
             INSERT INTO messages (
-                id, thread_id, role, content, context_compact, reasoning, reasoning_available, reasoning_format, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, thread_id, role, content, context_compact, reasoning, reasoning_available, reasoning_format, web_sources, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message_id,
@@ -387,11 +404,12 @@ async def create_message(
                 reasoning,
                 int(reasoning_available),
                 reasoning_format,
+                web_sources_json,
                 created_at,
             )
         )
         await db.commit()
-    
+
     return Message(
         id=message_id,
         thread_id=thread_id,
@@ -401,6 +419,7 @@ async def create_message(
         reasoning=reasoning,
         reasoning_available=reasoning_available,
         reasoning_format=reasoning_format,
+        web_sources=web_sources,
         created_at=created_at
     )
 
@@ -411,8 +430,8 @@ async def get_message(message_id: str) -> Optional[Message]:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             """
-            SELECT id, thread_id, role, content, reasoning, reasoning_available, reasoning_format, created_at
-                   , context_compact
+            SELECT id, thread_id, role, content, reasoning, reasoning_available, reasoning_format,
+                   context_compact, web_sources, created_at
             FROM messages
             WHERE id = ?
             """,
@@ -429,22 +448,24 @@ async def get_message(message_id: str) -> Optional[Message]:
                 reasoning=row["reasoning"],
                 reasoning_available=bool(row["reasoning_available"]),
                 reasoning_format=row["reasoning_format"] or "none",
+                web_sources=_parse_json_list(row["web_sources"]),
                 created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"]
             )
     return None
 
 
 async def get_thread_messages(
-    thread_id: str, 
-    limit: int = 100, 
+    thread_id: str,
+    limit: int = 100,
     offset: int = 0
 ) -> List[Message]:
     """Get messages for a thread with pagination."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
-            SELECT id, thread_id, role, content, context_compact, reasoning, reasoning_available, reasoning_format, created_at 
-            FROM messages 
+            SELECT id, thread_id, role, content, context_compact, reasoning, reasoning_available,
+                   reasoning_format, web_sources, created_at
+            FROM messages
             WHERE thread_id = ?
             ORDER BY created_at ASC
             LIMIT ? OFFSET ?
@@ -460,6 +481,7 @@ async def get_thread_messages(
                 reasoning=row["reasoning"],
                 reasoning_available=bool(row["reasoning_available"]),
                 reasoning_format=row["reasoning_format"] or "none",
+                web_sources=_parse_json_list(row["web_sources"]),
                 created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"]
             )
             for row in rows
@@ -471,8 +493,9 @@ async def get_recent_messages(thread_id: str, limit: int = 10) -> List[Message]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute("""
-            SELECT id, thread_id, role, content, context_compact, reasoning, reasoning_available, reasoning_format, created_at 
-            FROM messages 
+            SELECT id, thread_id, role, content, context_compact, reasoning, reasoning_available,
+                   reasoning_format, web_sources, created_at
+            FROM messages
             WHERE thread_id = ?
             ORDER BY created_at DESC
             LIMIT ?
@@ -489,6 +512,7 @@ async def get_recent_messages(thread_id: str, limit: int = 10) -> List[Message]:
                 reasoning=row["reasoning"],
                 reasoning_available=bool(row["reasoning_available"]),
                 reasoning_format=row["reasoning_format"] or "none",
+                web_sources=_parse_json_list(row["web_sources"]),
                 created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"]
             )
             for row in rows

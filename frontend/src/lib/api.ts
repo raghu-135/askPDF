@@ -100,6 +100,13 @@ export interface ThreadFile {
   file_path?: string;
 }
 
+export interface WebSource {
+  text: string;
+  url: string;
+  title: string;
+  score?: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -110,6 +117,7 @@ export interface Message {
   reasoning_available?: boolean;
   reasoning_format?: 'structured' | 'tagged_text' | 'none';
   context_compact?: string;
+  web_sources?: WebSource[];
 }
 
 export async function createThread(name: string, embedModel: string): Promise<Thread> {
@@ -250,6 +258,7 @@ export async function threadChat(
   assistant_message_id: string | null;
   used_chat_ids: string[];
   pdf_sources: { text: string; file_hash: string; score: number }[];
+  web_sources?: WebSource[];
   reasoning?: string;
   reasoning_available?: boolean;
   reasoning_format?: 'structured' | 'tagged_text' | 'none';

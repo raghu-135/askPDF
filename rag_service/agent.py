@@ -5,7 +5,7 @@ from typing import TypedDict, List, Annotated, Dict, Any, Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.runnables import RunnableConfig
 
 from langgraph.graph import StateGraph, END, START
@@ -17,7 +17,7 @@ from vectordb.qdrant import QdrantAdapter
 
 logger = logging.getLogger(__name__)
 
-search_tool = DuckDuckGoSearchRun()
+search_tool = DuckDuckGoSearchResults(output_format="list", num_results=6)
 
 async def invoke_with_retry(func, *args, **kwargs):
     max_retries = 10
@@ -42,6 +42,7 @@ class AgentState(TypedDict):
     context_window: int
     use_web_search: bool
     pdf_sources: List[Dict[str, Any]]
+    web_sources: List[Dict[str, Any]]
     used_chat_ids: List[str]
     clarification_options: Optional[List[str]]
     iteration_count: int
@@ -55,17 +56,21 @@ class AgentState(TypedDict):
 @tool
 async def search_documents(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """
-    Perform a semantic vector search over all uploaded PDF documents for this thread.
+    Perform a semantic vector search over all uploaded PDF documents AND previously cached
+    internet search results for this thread.
     Returns the most relevant chunks along with neighboring context passages for continuity.
 
     This uses embedding-based similarity — phrase queries as natural questions rather than
     keyword strings for best results. If the first call returns weak or irrelevant evidence,
     retry with a rephrased or more specific query before concluding the information is absent.
 
+    Each returned passage is prefixed with its source so you can cite it accurately:
+      - PDF passages: [Source: Document "<filename>"]
+      - Cached web results: [Source: Internet Search — "<title>" | <url>]
+
     Args:
-        query: A natural-language question or description of the fact to locate in the PDFs.
-        max_results: Number of seed chunks to retrieve before context expansion. Increase
-                     for broad topics; decrease when the context window is nearly full.
+        query: A natural-language question or description of the fact to locate.
+        max_results: Number of seed chunks to retrieve before context expansion.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -78,15 +83,24 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
 
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
-        
+
         db = QdrantAdapter()
-        
+
+        # ── Build a file_hash → file_name lookup from the thread's document list ──
+        from database import get_thread_files
+        try:
+            thread_files = await get_thread_files(thread_id)
+            hash_to_name = {f.file_hash: f.file_name for f in thread_files}
+        except Exception:
+            hash_to_name = {}
+
+        # ── PDF chunk search with neighbor expansion ──
         raw_pdf_chunks = await db.search_pdf_chunks(
             thread_id=thread_id,
             query_vector=query_vector,
             limit=max_results
         )
-        
+
         expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
         file_chunk_map = {}
         for hit in raw_pdf_chunks:
@@ -98,7 +112,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 for neighbor_id in range(chunk_id - expansion_radius, chunk_id + expansion_radius + 1):
                     if neighbor_id >= 0:
                         file_chunk_map[file_hash].add(neighbor_id)
-        
+
         expanded_pdf_chunks = []
         for file_hash, id_set in file_chunk_map.items():
             expanded_batch = await db.get_chunks_by_ids(
@@ -107,30 +121,58 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 chunk_ids=list(id_set)
             )
             expanded_pdf_chunks.extend(expanded_batch)
-            
-        expanded_pdf_chunks.sort(key=lambda x: (x.get("file_hash", ""), x.get("chunk_id", 0)))
-        
-        if not expanded_pdf_chunks:
-            return "No relevant PDF content found."
 
-        sources = []
+        expanded_pdf_chunks.sort(key=lambda x: (x.get("file_hash", ""), x.get("chunk_id", 0)))
+
+        # ── Cached web search results ──
+        web_chunks = await db.search_web_chunks(
+            thread_id=thread_id,
+            query_vector=query_vector,
+            limit=max(3, max_results // 3),
+        )
+
+        if not expanded_pdf_chunks and not web_chunks:
+            return "No relevant content found in documents or cached web results."
+
+        pdf_sources = []
+        web_sources = []
         context_parts = []
+
         for chunk in expanded_pdf_chunks:
             text = chunk.get("text", "")
-            context_parts.append(text)
-            sources.append({
+            fh = chunk.get("file_hash", "")
+            fname = hash_to_name.get(fh, fh)
+            labeled = f'[Source: Document "{fname}"]\n{text}'
+            context_parts.append(labeled)
+            pdf_sources.append({
                 "text": text[:200] + "..." if len(text) > 200 else text,
-                "file_hash": chunk.get("file_hash"),
-                "score": chunk.get("score", 0.0)
+                "file_hash": fh,
+                "file_name": fname,
+                "score": chunk.get("score", 0.0),
             })
-            
-        return json.dumps({
-            "content": "\n\n".join(context_parts),
-            "__pdf_sources__": sources
-        })
+
+        for wchunk in web_chunks:
+            text = wchunk.get("text", "")
+            url = wchunk.get("url", "")
+            title = wchunk.get("title", url)
+            labeled = f'[Source: Internet Search — "{title}" | {url}]\n{text}'
+            context_parts.append(labeled)
+            web_sources.append({
+                "text": text[:200] + "..." if len(text) > 200 else text,
+                "url": url,
+                "title": title,
+                "score": wchunk.get("score", 0.0),
+            })
+
+        result: Dict[str, Any] = {"content": "\n\n".join(context_parts)}
+        if pdf_sources:
+            result["__pdf_sources__"] = pdf_sources
+        if web_sources:
+            result["__web_sources__"] = web_sources
+        return json.dumps(result)
     except Exception as e:
         logger.error(f"Error in search_documents: {e}", exc_info=True)
-        return f"Error retrieving PDF knowledge: {e}"
+        return f"Error retrieving knowledge: {e}"
 
 
 @tool
@@ -185,23 +227,98 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
 
 
 @tool
-async def search_web(query: str) -> str:
+async def search_web(query: str, config: RunnableConfig = None) -> str:
     """
     Search the web for external, real-time, or post-training knowledge.
+
+    Results are automatically stored in the thread's knowledge base so that future
+    questions on the same topic can be answered without a new web request.
 
     Use this along with search_documents when you need to augment the knowledge from
     uploaded documents with the latest information from the internet. This helps
     provide a more comprehensive answer by checking both internal PDFs and external
     web resources in parallel.
 
+    Each returned passage is prefixed with its source URL so you can cite it accurately:
+      [Source: Internet Search — "<title>" | <url>]
+
     Args:
         query: A concise, keyword-rich search query. Rephrase and retry with different
                keywords if initial results are off-topic or insufficient.
     """
     try:
-        results = await asyncio.to_thread(search_tool.invoke, query)
-        return str(results)
+        logger.info(f"--- WEB SEARCH INITIATED --- Query: '{query}'")
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("thread_id")
+        embedding_model = conf.get("embedding_model")
+
+        raw = await asyncio.to_thread(search_tool.invoke, query)
+        logger.info(f"Raw search results for '{query}': {raw}")
+
+        # DuckDuckGoSearchResults returns a list of dicts; fall back to string if not.
+        if isinstance(raw, list):
+            results_list = raw
+        elif isinstance(raw, str):
+            try:
+                results_list = json.loads(raw)
+            except Exception:
+                # Plain-text fallback — wrap as a single result without URL
+                results_list = [{"snippet": raw, "title": query, "link": ""}]
+        else:
+            results_list = []
+
+        if not results_list:
+            return "Web search returned no results."
+
+        texts = [r.get("snippet", r.get("body", "")) for r in results_list]
+        urls  = [r.get("link",    r.get("href",  "")) for r in results_list]
+        titles = [r.get("title", "") for r in results_list]
+
+        # Remove empty snippets
+        valid = [(t, u, ti) for t, u, ti in zip(texts, urls, titles) if t.strip()]
+        if not valid:
+            return "Web search returned no usable text."
+        texts, urls, titles = zip(*valid)
+        texts  = list(texts)
+        urls   = list(urls)
+        titles = list(titles)
+
+        # ── Persist results in Qdrant for future retrieval ──
+        if thread_id and embedding_model:
+            try:
+                from rag import index_web_search_for_thread
+                asyncio.create_task(
+                    index_web_search_for_thread(
+                        thread_id=thread_id,
+                        query=query,
+                        texts=texts,
+                        urls=urls,
+                        titles=titles,
+                        embedding_model_name=embedding_model,
+                    )
+                )
+            except Exception as idx_err:
+                logger.warning(f"Web search indexing skipped: {idx_err}")
+
+        # ── Build source-labeled content for the LLM ──
+        context_parts = []
+        web_sources = []
+        for text, url, title in zip(texts, urls, titles):
+            label = title or url or "Internet Search"
+            labeled = f'[Source: Internet Search — "{label}" | {url}]\n{text}'
+            context_parts.append(labeled)
+            web_sources.append({
+                "text": text[:200] + "..." if len(text) > 200 else text,
+                "url": url,
+                "title": title,
+            })
+
+        return json.dumps({
+            "content": "\n\n".join(context_parts),
+            "__web_sources__": web_sources,
+        })
     except Exception as e:
+        logger.error(f"Web search failed: {e}", exc_info=True)
         return f"Web search failed: {str(e)}"
 
 
@@ -316,14 +433,25 @@ async def search_pdf_by_document(
         )
         expanded_chunks.sort(key=lambda x: x.get("chunk_id", 0))
 
+        # Resolve file name for source attribution
+        from database import get_thread_files
+        try:
+            thread_files = await get_thread_files(thread_id)
+            hash_to_name = {f.file_hash: f.file_name for f in thread_files}
+            fname = hash_to_name.get(file_hash, file_hash)
+        except Exception:
+            fname = file_hash
+
         sources = []
         context_parts = []
         for chunk in expanded_chunks:
             text = chunk.get("text", "")
-            context_parts.append(text)
+            labeled = f'[Source: Document "{fname}"]\n{text}'
+            context_parts.append(labeled)
             sources.append({
                 "text": text[:200] + "..." if len(text) > 200 else text,
                 "file_hash": file_hash,
+                "file_name": fname,
                 "score": chunk.get("score", 0.0),
             })
 
@@ -756,8 +884,8 @@ TOOL_FRIENDLY_CONFIG = {
     "search_web": {
         "id": "live_web_recon",
         "display_name": "Internet Search",
-        "description": "Search the web for external, real-time, or post-training knowledge.",
-        "default_prompt": "Use this as a complementary source for information along with Document Evidence. Actively check the web to ensure the final answer is as accurate and current as possible, comparing findings with what's in the uploaded PDFs.",
+        "description": "Search the web for external, real-time, or post-training knowledge. Results are automatically cached in the thread knowledge base for future retrieval.",
+        "default_prompt": "Use this as a complementary source for information along with Document Evidence. Actively check the web to ensure the final answer is as accurate and current as possible, comparing findings with what's in the uploaded PDFs. Always cite the URL and title of web results in your answer.",
     },
     "ask_for_clarification": {
         "id": "clarify_intent",
@@ -772,34 +900,38 @@ class OrchestratorToolNode(ToolNode):
     async def ainvoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
         # Intercept tool calls to extract special JSON state updates
         res = await super().ainvoke(input, config, **kwargs)
-        
-        pdf_sources = input.get("pdf_sources", [])
-        used_chat_ids = input.get("used_chat_ids", [])
+
+        pdf_sources = list(input.get("pdf_sources", []))
+        web_sources = list(input.get("web_sources", []))
+        used_chat_ids = list(input.get("used_chat_ids", []))
         clarification_options = None
-        
+
         messages = res.get("messages", [])
         for i, msg in enumerate(messages):
             if isinstance(msg, ToolMessage) and isinstance(msg.content, str) and msg.content.startswith("{") and "__" in msg.content:
                 try:
                     data = json.loads(msg.content)
+                    # Replace the raw message content with the clean text
+                    if "content" in data:
+                        messages[i].content = data["content"]
                     if "__pdf_sources__" in data:
                         pdf_sources.extend(data["__pdf_sources__"])
-                        messages[i].content = data["content"]
+                    if "__web_sources__" in data:
+                        web_sources.extend(data["__web_sources__"])
                     if "__used_chat_ids__" in data:
                         used_chat_ids.extend(data["__used_chat_ids__"])
-                        messages[i].content = data["content"]
                     if "__clarification_options__" in data:
                         clarification_options = data["__clarification_options__"]
                         messages[i].content = f"Interrupted for clarification with options: {clarification_options}"
                 except Exception as e:
                     logger.warning(f"Failed to parse tool JSON output: {e}")
-                    pass
-                    
+
         return {
             "messages": messages,
             "pdf_sources": pdf_sources,
+            "web_sources": web_sources,
             "used_chat_ids": used_chat_ids,
-            "clarification_options": clarification_options
+            "clarification_options": clarification_options,
         }
 
 async def call_model(state: AgentState, config: RunnableConfig):
@@ -1034,6 +1166,12 @@ def build_system_prompt(
                 "2. Synthesize retrieved content into a coherent, well-structured answer — do not paste raw chunks verbatim.",
                 "3. If retrieved information is partial or uncertain, explicitly state that limitation rather than fabricating details.",
                 "4. Do NOT prefix your response with 'A:' or mimic the 'Q: ... A: ...' pattern. Answer directly.",
+                "5. ALWAYS cite the source of every fact or claim you make:",
+                "   - For PDF content: mention the document by name, e.g., 'According to research_paper.pdf, ...' or 'The uploaded document states ...'.",
+                "   - For internet search results: mention the source URL or site, e.g., 'According to [title] (source: url), ...' or 'A web search found that ...'.",
+                "   - For recalled conversation history: indicate 'Based on our earlier discussion, ...'.",
+                "   - If multiple sources agree, cite all of them.",
+                "   - If sources disagree, highlight the discrepancy and note which source says what.",
             ])
         ),
     ]

@@ -356,3 +356,43 @@ async def index_chat_memory_for_thread(
     except Exception as e:
         logger.error(f"Error indexing chat memory for thread {thread_id}: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
+
+
+async def index_web_search_for_thread(
+    thread_id: str,
+    query: str,
+    texts: List[str],
+    urls: Optional[List[str]],
+    titles: Optional[List[str]],
+    embedding_model_name: str,
+) -> Dict[str, Any]:
+    """
+    Embed and store web search result snippets into the thread's Qdrant collection
+    so they can be semantically retrieved in future queries.
+
+    Args:
+        thread_id: The thread to store snippets in.
+        query: The search query that produced these results.
+        texts: List of result snippet texts.
+        urls: Corresponding source URLs (parallel to texts).
+        titles: Corresponding page titles (parallel to texts).
+        embedding_model_name: Embedding model to use.
+
+    Returns:
+        Status dict with indexed chunk count.
+    """
+    db_client = QdrantAdapter()
+    try:
+        vectors = await generate_embeddings(texts, embedding_model_name)
+        indexed_count = await db_client.index_web_search_chunks(
+            thread_id=thread_id,
+            query=query,
+            texts=texts,
+            embeddings=vectors,
+            urls=urls,
+            titles=titles,
+        )
+        return {"status": "success", "chunks_count": indexed_count}
+    except Exception as e:
+        logger.error(f"Error indexing web search for thread {thread_id}: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}

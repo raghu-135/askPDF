@@ -409,6 +409,90 @@ class QdrantAdapter(VectorDBClient):
             print(f"Error deleting chat memory: {e}", flush=True)
             return False
 
+    # ============ Web Search Chunk Operations ============
+
+    async def index_web_search_chunks(
+        self,
+        thread_id: str,
+        query: str,
+        texts: List[str],
+        embeddings: List[List[float]],
+        urls: Optional[List[str]] = None,
+        titles: Optional[List[str]] = None,
+    ) -> int:
+        """
+        Store web search result snippets as indexed chunks for future retrieval.
+        Each snippet is stored with type='web_search' alongside its source URL/title.
+        Returns the number of chunks indexed.
+        """
+        if not embeddings:
+            return 0
+
+        collection_name = self.get_thread_collection_name(thread_id)
+        if not self.client.collection_exists(collection_name):
+            await self.create_thread_collection(thread_id, len(embeddings[0]))
+
+        points = []
+        for i, (text, vector) in enumerate(zip(texts, embeddings)):
+            payload = {
+                "text": text,
+                "type": "web_search",
+                "search_query": query,
+                "url": (urls[i] if urls and i < len(urls) else ""),
+                "title": (titles[i] if titles and i < len(titles) else ""),
+                "chunk_id": i,
+            }
+            points.append(
+                models.PointStruct(
+                    id=str(uuid.uuid4()),
+                    vector=vector,
+                    payload=payload,
+                )
+            )
+
+        self.client.upsert(collection_name=collection_name, points=points)
+        print(f"Indexed {len(points)} web search chunks for thread {thread_id}", flush=True)
+        return len(points)
+
+    async def search_web_chunks(
+        self,
+        thread_id: str,
+        query_vector: List[float],
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Semantic search over previously indexed web search results in a thread's collection.
+        Returns ranked results with URL, title, and snippet text.
+        """
+        collection_name = self.get_thread_collection_name(thread_id)
+        if not self.client.collection_exists(collection_name):
+            return []
+
+        search_filter = models.Filter(
+            must=[
+                models.FieldCondition(key="type", match=models.MatchValue(value="web_search"))
+            ]
+        )
+
+        search_result = self.client.query_points(
+            collection_name=collection_name,
+            query=query_vector,
+            query_filter=search_filter,
+            limit=limit,
+        ).points
+
+        results = []
+        for hit in search_result:
+            results.append({
+                "text": hit.payload.get("text", ""),
+                "url": hit.payload.get("url", ""),
+                "title": hit.payload.get("title", ""),
+                "search_query": hit.payload.get("search_query", ""),
+                "type": "web_search",
+                "score": hit.score,
+            })
+        return results
+
     # ============ Legacy Operations (Backward Compatibility) ============
 
     async def index_documents(
@@ -525,11 +609,19 @@ class QdrantAdapter(VectorDBClient):
                     must=[models.FieldCondition(key="type", match=models.MatchValue(value="chat_memory"))]
                 )
             ).count
+
+            web_count = self.client.count(
+                collection_name=collection_name,
+                count_filter=models.Filter(
+                    must=[models.FieldCondition(key="type", match=models.MatchValue(value="web_search"))]
+                )
+            ).count
             
             return {
                 "exists": True,
                 "pdf_chunks": pdf_count,
                 "chat_memories": chat_count,
+                "web_search_chunks": web_count,
                 "total_points": stats["points_count"]
             }
         except Exception as e:

@@ -347,6 +347,7 @@ async def handle_thread_chat(
                 "assistant_message_id": None,
                 "used_chat_ids": [],
                 "pdf_sources": [],
+                "web_sources": [],
                 "reasoning": "",
                 "reasoning_available": False,
                 "reasoning_format": "none",
@@ -384,6 +385,7 @@ async def handle_thread_chat(
             "use_web_search": use_web_search,
             # Pre-seed sources from the prefetch pass; tool calls will extend these lists
             "pdf_sources": list(prefetch_bundle.get("pdf_sources", [])),
+            "web_sources": [],
             "used_chat_ids": list(prefetch_bundle.get("used_chat_ids", [])),
             "clarification_options": None,
             "iteration_count": 0,
@@ -409,6 +411,7 @@ async def handle_thread_chat(
         normalized = normalize_ai_response(final_messages[-1] if final_messages else None)
         answer = normalized["answer"] or "Error processing request."
         pdf_sources = result.get("pdf_sources", [])
+        web_sources = result.get("web_sources", [])
         used_chat_ids = result.get("used_chat_ids", [])
         clarification_options = result.get("clarification_options", None)
         
@@ -435,6 +438,7 @@ async def handle_thread_chat(
             reasoning=normalized["reasoning"],
             reasoning_available=normalized["reasoning_available"],
             reasoning_format=normalized["reasoning_format"],
+            web_sources=web_sources if web_sources else None,
         )
         
         # Index in semantic memory if not a clarification
@@ -459,6 +463,7 @@ async def handle_thread_chat(
             "assistant_message_id": assistant_message.id,
             "used_chat_ids": used_chat_ids,
             "pdf_sources": pdf_sources,
+            "web_sources": web_sources,
             "clarification_options": clarification_options,
             "reasoning": normalized["reasoning"],
             "reasoning_available": normalized["reasoning_available"],
