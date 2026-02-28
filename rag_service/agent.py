@@ -93,6 +93,10 @@ async def fetch_historical_qa(offset: int, limit: int = 5, config: RunnableConfi
     """
     Fetch a specific slice of the conversation history by offset (0 is most recent).
     Use this to 'walk back' through the conversation in increments.
+
+    Args:
+        offset: The starting index (0 for newest message, increasing values to go further back in time).
+        limit: The number of historical messages to retrieve in this slice.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -119,7 +123,12 @@ async def fetch_historical_qa(offset: int, limit: int = 5, config: RunnableConfi
 
 @tool
 async def search_pdf_knowledge(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
-    """Search uploaded PDF documents for specific facts to answer the user's question. Pass max_results to limit the chunks appropriately based on your context window."""
+    """Search uploaded PDF documents for specific facts to answer the user's question. Pass max_results to limit the chunks appropriately based on your context window.
+    
+    Args:
+        query: The specific fact, phrase, or semantic topic to search for in the documents.
+        max_results: The maximum number of chunks to return. Adjust this based on context window limits.
+    """
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("thread_id")
@@ -188,7 +197,11 @@ async def search_pdf_knowledge(query: str, max_results: int = 10, config: Runnab
 
 @tool
 async def get_recent_qa_summaries(limit: int, config: RunnableConfig = None) -> str:
-    """Retrieve summaries of the most recent messages in this conversation. Use this to quickly understand context."""
+    """Retrieve summaries of the most recent messages in this conversation. Use this to quickly understand context.
+    
+    Args:
+        limit: The number of recent messages to retrieve.
+    """
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("thread_id")
@@ -214,7 +227,12 @@ async def get_recent_qa_summaries(limit: int, config: RunnableConfig = None) -> 
 
 @tool
 async def search_chat_memory(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
-    """Search deeply into past conversation QA pairs for semantic relevance. Returns chunks/summaries. Pass max_results appropriately to fit your context window."""
+    """Search deeply into past conversation QA pairs for semantic relevance. Returns chunks/summaries. Pass max_results appropriately to fit your context window.
+    
+    Args:
+        query: The specific fact, phrase, or semantic topic to search for in past conversations.
+        max_results: The maximum number of past conversations to return. Adjust this based on context window limits.
+    """
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("thread_id")
@@ -253,7 +271,11 @@ async def search_chat_memory(query: str, max_results: int = 10, config: Runnable
 
 @tool
 async def perform_web_search(query: str) -> str:
-    """Search the web for up-to-date information."""
+    """Search the web for up-to-date information.
+    
+    Args:
+        query: The specific fact, phrase, or topic to search for on the web.
+    """
     try:
         results = await asyncio.to_thread(search_tool.invoke, query)
         return str(results)
@@ -266,6 +288,9 @@ async def require_clarification(options: List[str]) -> str:
     """
     If the user's question is ambiguous, call this tool with a list of 2-4 possible options 
     for what they might have meant. This pauses the agent and asks the user for clarification.
+
+    Args:
+        options: A list of 2-4 strings representing distinct assumptions of what the user meant.
     """
     return json.dumps({"__clarification_options__": options})
 
@@ -725,6 +750,7 @@ def get_tool_catalog() -> List[Dict[str, str]]:
         alias_id = str(cfg.get("id", tool_item.name))
         catalog.append(
             {
+                "tool_name": tool_item.name,
                 "id": alias_id,
                 "display_name": str(cfg.get("display_name", alias_id.replace("_", " ").title())),
                 "description": str(cfg.get("description", tool_item.description or "")),
@@ -777,7 +803,7 @@ def build_system_prompt(
         ),
         (
             "TOOL ALIASES (EDITABLE REFERENCE)",
-            "\n".join([f"- {item['display_name']}: {item['description']}" for item in catalog])
+            "\n".join([f"- {item['display_name']} (Tool Name: {item['tool_name']}): {item['description']}" for item in catalog])
         ),
         (
             "TOOL CONTRACT (LOCKED)",
@@ -793,7 +819,7 @@ def build_system_prompt(
         ),
         (
             "TOOL PLAYBOOK (USER-CONFIGURABLE)",
-            "\n".join([f"- {item['display_name']}: {playbook.get(item['id'], item['default_prompt'])}" for item in catalog]),
+            "\n".join([f"- {item['tool_name']}: {playbook.get(item['id'], item['default_prompt'])}" for item in catalog]),
         ),
         (
             "ANSWER POLICY (LOCKED)",
