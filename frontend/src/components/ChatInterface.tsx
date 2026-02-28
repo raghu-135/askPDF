@@ -476,6 +476,34 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         event.stopPropagation();
         if (!confirm('Delete this message?')) return;
 
+        // Frontend-only messages (error responses and their paired user messages) are never
+        // persisted to the backend, so we remove them directly from local state.
+        const isTempId = messageId.startsWith('error-') || messageId.startsWith('temp-user-');
+        if (isTempId) {
+            setMessages(prev => {
+                const idx = prev.findIndex(m => m.id === messageId);
+                if (idx === -1) return prev;
+                const msg = prev[idx];
+                // Deleting an error assistant message → also remove the preceding temp user message
+                if (msg.role === 'assistant' && idx > 0) {
+                    const prevMsg = prev[idx - 1];
+                    if (prevMsg.id.startsWith('temp-user-')) {
+                        return prev.filter((_, i) => i !== idx && i !== idx - 1);
+                    }
+                }
+                // Deleting a temp user message → also remove the following error assistant message
+                if (msg.role === 'user' && idx < prev.length - 1) {
+                    const nextMsg = prev[idx + 1];
+                    if (nextMsg.id.startsWith('error-')) {
+                        return prev.filter((_, i) => i !== idx && i !== idx + 1);
+                    }
+                }
+                return prev.filter(m => m.id !== messageId);
+            });
+            if (onResetChatId) onResetChatId();
+            return;
+        }
+
         try {
             const { deleted_ids } = await deleteMessage(messageId);
             setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
