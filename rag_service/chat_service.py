@@ -318,7 +318,7 @@ async def handle_thread_chat(
             "llm_model": llm_model,
             "context_window": context_window,
             "iteration_count": 0,
-            "max_iterations": 3,
+            "max_iterations": 1,
             "intent_result": None,
             "pre_fetch_bundle": prefetch_bundle,
         }

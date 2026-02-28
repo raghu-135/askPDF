@@ -612,261 +612,184 @@ class IntentAgentState(TypedDict):
     intent_result: Optional[Dict[str, Any]]
     pre_fetch_bundle: Optional[Dict[str, Any]]
 
-intent_tools_list = [
-    search_conversation_history,
-    list_uploaded_documents,
-    find_topic_anchor_in_history,
-    ask_for_clarification,
-]
 
 async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
+    """
+    Single-pass Intent Agent: classifies and rewrites the user's query for the Orchestrator.
+    No tools, no retries — one LLM call, one JSON output.
+    """
     messages = state["messages"]
     llm = get_llm(state["llm_model"], temperature=0.0)
-    iteration = state.get("iteration_count", 0) + 1
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
 
-    # Detect if this is the very first message (only 1 HumanMessage, no history).
-    is_first_message = len(messages) == 1 and isinstance(messages[0], HumanMessage)
-
-    # Check if this is a retry after tool calls (iteration > 1 means we already looped)
-    is_retry_after_tools = iteration > 1
-
-    llm_with_tools = llm.bind_tools(intent_tools_list)
-
     system_prompt = (
-        f"""You are an expert query analyst. Your sole task is to classify the user's message and rewrite it into a self-contained, retrieval-optimized question.
+        f"""You are the Query Preprocessor — a single-pass retrieval optimizer that runs before the Orchestrator Agent.
+        Your output is a JSON routing signal consumed by the Orchestrator; it is NEVER shown to the user.
 
-        CONTEXT: Conversation history appears in the messages below AND as pre-fetched data at the end of this
-        system prompt (stats, recent turns, semantic history, PDF evidence, document list). Use all of it
-        directly — you do NOT need tools to retrieve recent history, stats, or PDF evidence that is already there.
+        YOUR ROLE (production RAG pattern):
+        This is the "Rewrite-Retrieve-Read" step (arXiv:2305.14283) combined with Standalone Question
+        Generation. You transform the user's raw message into an optimal search query before it is
+        embedded as a vector for semantic similarity search.
+        The rewritten_query you produce is embedded once and searched across all retrieval tools.
 
-        RUNTIME CONSTRAINTS:
-        Your maximum context window is {context_window} tokens. Stay within this budget.
+        WHY MINIMAL, FAITHFUL REWRITING MATTERS:
+        The rewritten_query is passed directly to a cosine-similarity vector search.
+        Adding topics, subtopics, or angles the user never mentioned DILUTES the query embedding —
+        it shifts the vector away from the user's actual intent and returns chunks ranked for the
+        wrong topics, burying the real answer. Your job is coreference resolution + standalone-ification,
+        NOT academic elaboration or question enhancement.
 
-        YOUR OUTPUT — respond ONLY with this JSON object, no preamble or explanation:
+        ORCHESTRATOR'S TOOLS (your rewrite optimizes for all of these):
+        - search_documents       → semantic search across ALL uploaded PDFs + cached web chunks
+        - search_pdf_by_document → same, scoped to a single file by hash (for named-document questions)
+        - search_conversation_history → semantic search over all prior Q&A pairs in this thread
+        - search_web             → live web search; results cached back into the vector store
+        - ask_for_clarification  → surfaces disambiguation options to the user (genuine ambiguity only)
+
+        CONTEXT AVAILABLE NOW:
+        - Conversation history: in the messages below (oldest → newest)
+        - Pre-fetched bundle: recent turns, semantic memory, PDF evidence, document list — appended below
+
+        RUNTIME: {context_window} tokens. No tool calls. No preamble. Respond with JSON only.
+
+        ════════════════════════════════════════════════════
+        OUTPUT — valid JSON only, no markdown fences, no extra text:
         {{
           "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
-          "rewritten_query": "A single, complete, natural-language question",
+          "rewritten_query": "<the optimized search query>",
           "reference_type": "NONE" | "SEMANTIC" | "TEMPORAL" | "ENTITY",
           "context_coverage": "SUFFICIENT" | "PROBABLY_SUFFICIENT" | "INSUFFICIENT",
-          "clarification_options": ["Full question for interpretation A", "Full question for interpretation B"] | null
+          "clarification_options": ["Full question A", "Full question B"] | null
         }}
+        ════════════════════════════════════════════════════
 
-        reference_type meanings:
-          NONE     — standalone question, no prior-context reference
-          SEMANTIC — user refers to a topic/concept discussed before ("what did we say about X")
-          TEMPORAL — user refers to a chronological position ("your first answer", "at the start")
-          ENTITY   — user refers to a specific named thing described earlier ("that figure", "the method")
+        REWRITING ALGORITHM — apply these steps in order:
 
-        context_coverage meanings:
-          SUFFICIENT          — pre-fetched context is almost certainly enough to answer; Orchestrator may skip tool calls
-          PROBABLY_SUFFICIENT — partial match; Orchestrator should verify with one targeted tool call
-          INSUFFICIENT        — clear gap; Orchestrator must retrieve more data
+        STEP 1 — COREFERENCE RESOLUTION (critical for follow-ups)
+        Replace every pronoun, "it", "this", "that", "they", "the method", "the document" etc.
+        with its explicit referent from the conversation history.
+          "How does it work?" (after discussing BERT) → "How does BERT work?"
+          "What were the main findings?" (after uploading a paper) → "What are the main findings in [paper title or 'the uploaded document']?"
+          "Tell me more about that" (after discussing attention mechanisms) → "Explain attention mechanisms in more detail"
 
-        STEP 1 — REWRITE THE QUERY (mandatory for all statuses):
-        Expand the user's message into a fully self-contained question that performs well as a semantic search query.
-        Even clear questions benefit from expansion — add specificity, resolve pronouns, and include relevant domain context.
-        Write a single, natural question. Never prefix with "Q:" or use a "Q: ... A: ..." format.
+        STEP 2 — STANDALONE-IFY (minimum context for cold retrieval)
+        Add only enough subject/domain context so a cold vector search with no conversation history
+        would retrieve the right chunks. Nothing more.
+          "What variants exist?" (after discussing glioblastoma) → "What variants of glioblastoma have been discovered?"
+          NOT: "What variants of glioblastoma exist, including subtypes, IDH mutations, and WHO classification?"
 
-        Good rewrites:
-        - "What is RAG?" → "What is Retrieval-Augmented Generation (RAG) and how does it work?"
-        - "Explain transformers" → "Explain the transformer architecture in machine learning, including self-attention mechanisms"
-        - "What are the main findings?" → "What are the main findings or conclusions presented in the uploaded document?"
-        - "How does it work?" (after discussing a document's method) → "How does the methodology described in the document work, step by step?"
-        - "Tell me more" (after discussing a specific section) → "Provide a more detailed explanation of [the specific topic just discussed]"
-        - "Summarize it" (after user uploads a PDF) → "Provide a comprehensive summary of the uploaded document"
+        STEP 3 — PRESERVE SCOPE EXACTLY
+        The user's question has a scope. Do NOT widen or narrow it.
 
-        STEP 2 — CLASSIFY:
-        - CLEAR_STANDALONE: The question is self-contained and its intent is unambiguous
-        - CLEAR_FOLLOWUP: The question references earlier context but its intent is clear from the inline history
-        - AMBIGUOUS: The question has multiple plausible interpretations that the inline history cannot resolve
+        FORBIDDEN — SCOPE WIDENING (adding topics the user never mentioned):
+          "what is glioblastoma, are there new variants?" → "What are the characteristics, causes, and new variants of glioblastoma?"
+          ↑ BAD: "characteristics" and "causes" were never asked for
 
-        STEP 3 — TOOL USE POLICY:
-        Pre-fetched context (stats, recent turns, semantic history, PDF evidence, document list) is already in
-        the PRE-FETCHED CONTEXT block at the end of this prompt. Use it directly — no tool needed for that data.
-        Only call tools for information that is NOT present or clearly insufficient in the pre-fetched block.
+          "Explain transformers" → "Explain the transformer architecture including self-attention, positional encoding, and feed-forward layers"
+          ↑ BAD: user asked to explain it, not enumerate every sub-component
 
-        AVAILABLE TOOLS AND WHEN TO USE:
-        - `search_conversation_history` — ONLY if the pre-fetched semantic history block is absent or misses
-          critical context required to rewrite an ambiguous follow-up.
-        - `list_uploaded_documents` — ONLY when the user references a document by name/topic AND the document
-          list in the pre-fetched block does not identify it.
-        - `find_topic_anchor_in_history` — ONLY for TEMPORAL references ("your first answer about X", "when we
-          started discussing Y") that cannot be resolved from the pre-fetched content.
-        - `ask_for_clarification` — ONLY for genuinely ambiguous questions where a wrong assumption would answer
-          an entirely different question. Each option must be a distinct, complete, self-contained question.
-        - Do NOT call any tool on a clear standalone first message — output the JSON immediately."""
+        FORBIDDEN — SCOPE NARROWING (collapsing a broad question to one aspect):
+          "What are the main findings?" → "What are the statistical findings in the results section?"
+          ↑ BAD: user didn't specify results section or statistics
+
+        CORRECT:
+          "what is glioblastoma, are there new variants?" → "What is glioblastoma, and have any new variants been discovered?"
+          "Explain transformers" → "Explain the transformer architecture in machine learning"
+          "What are the main findings?" → "What are the main findings or conclusions in the uploaded document?"
+          "How does RAG work?" → "How does Retrieval-Augmented Generation (RAG) work?"
+          "Summarize it" (after PDF upload) → "Provide a summary of the uploaded document"
+
+        STEP 4 — ONE CLEAN QUESTION
+        Output a single natural question. No "Q:" prefix, no bullet lists, no semicolon-joined sub-questions.
+        If the user asked multiple related things (as in glioblastoma above), preserve them as a single
+        compound question using natural conjunctions.
+
+        ════════════════════════════════════════════════════
+        CLASSIFICATION:
+
+        CLEAR_STANDALONE — Self-contained, no prior-context references. All first messages in a thread are this.
+        CLEAR_FOLLOWUP   — References prior context, but the referent is unambiguously resolved from history.
+        AMBIGUOUS        — Multiple genuinely different interpretations AND history cannot resolve which one.
+                           HIGH BAR: Only use this if guessing would answer an entirely different question.
+                           "Tell me more" is NOT ambiguous — it continues the last topic.
+                           A pronoun with one clear referent is NOT ambiguous.
+
+        CONTEXT_COVERAGE — controls how many tool calls the Orchestrator is budgeted:
+        SUFFICIENT          — Pre-fetched bundle directly and fully answers the rewritten query.
+                              The Orchestrator should synthesize from pre-fetch, no extra retrieval needed.
+                              Use for: well-known factual questions, greetings, questions fully answered in pre-fetch.
+        PROBABLY_SUFFICIENT — Pre-fetched bundle has partial or adjacent content. One targeted tool call may sharpen the answer.
+        INSUFFICIENT        — Pre-fetched content clearly lacks what's needed. Orchestrator must retrieve.
+                              Use for: first messages (nothing pre-fetched), deep history questions,
+                              questions about specific doc sections not visible in pre-fetch.
+
+        REFERENCE_TYPE:
+          NONE     — No dependency on prior conversation
+          SEMANTIC — References a topic/concept discussed earlier ("what did we say about X?")
+          TEMPORAL — References a chronological position ("your first answer", "earlier you mentioned")
+          ENTITY   — References a specific named thing from earlier ("that figure", "the equation", "that method")"""
     )
 
-    # Inject pre-fetched context bundle so the LLM has everything in its system prompt
+    # Inject pre-fetched context bundle
     bundle = state.get("pre_fetch_bundle")
     if bundle:
         system_prompt += _format_prefetch_for_prompt(bundle)
 
-    # For first messages, reinforce no-tool usage
-    if is_first_message:
-        system_prompt += (
-            "\n\nFIRST MESSAGE: This is the opening message — there is no prior conversation history. "
-            "Do NOT call any tools. Classify as CLEAR_STANDALONE, rewrite the query for retrieval clarity, "
-            "and output the JSON immediately."
-        )
-        logger.info("First message in thread detected. LLM will rewrite without tools.")
-
-    # Ensure system prompt is first
     if not messages or not isinstance(messages[0], SystemMessage):
         input_messages = [SystemMessage(content=system_prompt)] + messages
     else:
         input_messages = [SystemMessage(content=system_prompt)] + messages[1:]
 
-    # Default path: invoke WITHOUT tools. The LLM has inline history and should
-    # be able to rewrite directly. Only give tools on a retry if the first attempt
-    # explicitly requested them (iteration > 1 means we looped back from tool calls).
-    if is_first_message or not is_retry_after_tools:
-        # First pass: no tools — force the LLM to rewrite from inline context
-        response = await invoke_with_retry(llm.ainvoke, input_messages)
-    else:
-        # Retry pass: tools were requested and executed, now LLM should finalize
-        response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
-
-    # Try to parse JSON if it's not a tool call
-    intent_result = None
-    if not getattr(response, "tool_calls", None):
-        content = response.content.strip()
-        try:
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            intent_result = json.loads(content)
-        except Exception as e:
-            logger.error(f"Failed to parse intent JSON: {e}")
-            # Fallback
-            original_question = ""
-            for msg in reversed(messages):
-                if isinstance(msg, HumanMessage):
-                    original_question = msg.content
-                    break
-            intent_result = {
-                "status": "CLEAR_STANDALONE",
-                "rewritten_query": original_question,
-                "clarification_options": None
-            }
-
-    return {
-        "messages": [response],
-        "iteration_count": iteration,
-        "intent_result": intent_result
-    }
-
-def should_continue_intent(state: IntentAgentState):
-    messages = state["messages"]
-    last_message = messages[-1]
-    iteration_count = state.get("iteration_count", 0)
-    max_iterations = state.get("max_iterations", 2) # Reduced max iterations to 2 for speed
-    
-    if getattr(last_message, "tool_calls", None):
-        if iteration_count >= max_iterations:
-            logger.warning(f"Intent Agent reached max iterations ({iteration_count}). Forcing termination.")
-            return "force_intent_answer"
-        return "tools"
-    return END
-
-async def force_intent_answer(state: IntentAgentState, config: RunnableConfig):
-    """
-    Fallback when the Intent Agent tool-iteration budget is exhausted.
-    Forces the model to output the final JSON with rewriting, without tools.
-    """
-    messages = state["messages"]
-    llm = get_llm(state["llm_model"], temperature=0.0)
-    iteration = state.get("iteration_count", 0) + 1
-    context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
-
-    logger.warning("Intent Agent budget exhausted. Forcing rewrite without tools.")
-    
-    # Find the original user question
-    original_question = ""
-    for msg in reversed(messages):
-        if isinstance(msg, HumanMessage):
-            original_question = msg.content
-            break
-
-    force_prompt = SystemMessage(
-        content=(
-            f"Tool iteration budget exhausted (context window: {context_window} tokens). Do NOT call any tools.\n"
-            "Using only the conversation history already in your context, rewrite the user's question "
-            "into a standalone, retrieval-optimized form.\n"
-            "Respond ONLY with valid JSON:\n"
-            '{{"status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP", '
-            '"rewritten_query": "<rewritten question>", '
-            '"reference_type": "NONE" | "SEMANTIC" | "TEMPORAL" | "ENTITY", '
-            '"context_coverage": "PROBABLY_SUFFICIENT", '
-            '"clarification_options": null}}'
-        )
-    )
-
-    # Build input: system force prompt + all existing messages (includes history + tool results)
-    input_messages = [force_prompt] + [m for m in messages if not isinstance(m, SystemMessage)]
-
+    # Single direct call — no tools, no retries
     try:
         response = await invoke_with_retry(llm.ainvoke, input_messages)
-        content = response.content.strip()
-        try:
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            intent_result = json.loads(content)
-        except Exception:
-            logger.error(f"Failed to parse forced intent JSON, using original question")
-            intent_result = {
-                "status": "CLEAR_STANDALONE",
-                "rewritten_query": original_question,
-                "reference_type": "NONE",
-                "context_coverage": "PROBABLY_SUFFICIENT",
-                "clarification_options": None
-            }
-        return {"messages": [response], "iteration_count": iteration, "intent_result": intent_result}
     except Exception as e:
-        logger.error(f"Force intent answer LLM call failed: {e}")
+        logger.error(f"Intent Agent LLM call failed: {e}")
+        original_question = next(
+            (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
+        )
         intent_result = {
             "status": "CLEAR_STANDALONE",
             "rewritten_query": original_question,
             "reference_type": "NONE",
             "context_coverage": "PROBABLY_SUFFICIENT",
-            "clarification_options": None
+            "clarification_options": None,
         }
-        fallback_msg = AIMessage(content=json.dumps(intent_result))
-        return {"messages": [fallback_msg], "iteration_count": iteration, "intent_result": intent_result}
+        return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": 1, "intent_result": intent_result}
 
-class IntentToolNode(ToolNode):
-    async def ainvoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
-        res = await super().ainvoke(input, config, **kwargs)
-        messages = res.get("messages", [])
-        
-        # Check if ask_for_clarification was called
-        for i, msg in enumerate(messages):
-            if isinstance(msg, ToolMessage) and isinstance(msg.content, str) and msg.content.startswith("{") and "__clarification_options__" in msg.content:
-                try:
-                    data = json.loads(msg.content)
-                    if "__clarification_options__" in data:
-                        # We inject a system message to force the model to output the final JSON
-                        # with the clarification options it just generated.
-                        options = data["__clarification_options__"]
-                        messages[i].content = f"Clarification options generated: {options}. Now output the final JSON with status='AMBIGUOUS' and these clarification_options."
-                except Exception as e:
-                    logger.warning(f"Failed to parse clarification JSON: {e}")
-                    
-        return {"messages": messages}
+    # Parse the JSON response
+    intent_result = None
+    content = response.content.strip()
+    try:
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+        intent_result = json.loads(content)
+    except Exception as e:
+        logger.error(f"Failed to parse intent JSON: {e}")
+        original_question = next(
+            (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
+        )
+        intent_result = {
+            "status": "CLEAR_STANDALONE",
+            "rewritten_query": original_question,
+            "reference_type": "NONE",
+            "context_coverage": "PROBABLY_SUFFICIENT",
+            "clarification_options": None,
+        }
+
+    return {
+        "messages": [response],
+        "iteration_count": 1,
+        "intent_result": intent_result,
+    }
+
 
 intent_workflow = StateGraph(IntentAgentState)
 intent_workflow.add_node("agent", call_intent_model)
-intent_workflow.add_node("tools", IntentToolNode(intent_tools_list))
-intent_workflow.add_node("force_intent_answer", force_intent_answer)
-
 intent_workflow.add_edge(START, "agent")
-intent_workflow.add_conditional_edges("agent", should_continue_intent, {"tools": "tools", "force_intent_answer": "force_intent_answer", END: END})
-intent_workflow.add_edge("tools", "agent")
-intent_workflow.add_edge("force_intent_answer", END)
+intent_workflow.add_edge("agent", END)
 
 intent_app = intent_workflow.compile()
 # --- End Intent Agent ---
@@ -1217,67 +1140,245 @@ def build_system_prompt(
     role = system_role or "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers."
     catalog = get_tool_catalog()
     playbook = normalize_tool_instructions(tool_instructions or {})
+
+    # ── Section helpers ──────────────────────────────────────────────────────
+    LOCK  = "(LOCKED — not overridable)"
+    EDIT  = "(USER-CONFIGURABLE)"
+    sep   = "─" * 60
+
     sections = [
+        # ────────────────────────────────────────────────────────────────────
         (
-            "SYSTEM ROLE (USER-CONFIGURABLE)",
-            f"You are {role}"
+            f"IDENTITY & MISSION {EDIT}",
+            f"""You are {role}
+
+Your architectural role is the Orchestrator in a production Retrieval-Augmented Generation (RAG)
+system. The Intent Agent upstream has already rewritten the user's query and classified its
+coverage; your job is to:
+  1. Orient on what is already known (pre-fetched context).
+  2. Plan which tools to call — and in what parallel groupings — to fill evidence gaps.
+  3. Retrieve evidence by dispatching tools.
+  4. Assess quality: decide whether evidence is sufficient or a retry is warranted.
+  5. Synthesize a grounded, well-cited final answer."""
         ),
+
+        # ────────────────────────────────────────────────────────────────────
         (
-            "RUNTIME CONSTRAINTS (LOCKED)",
-            f"Your maximum context window is {context_window} tokens. You must manage retrieval and final output within this budget."
+            f"RUNTIME CONSTRAINTS {LOCK}",
+            f"""Context window: {context_window} tokens. You share this budget with the conversation history,
+pre-fetched context, tool results, and your final answer. Manage it actively:
+  • Prefer targeted queries over broad ones to keep tool results concise.
+  • Do not repeat identical or near-identical tool calls — variation must be meaningful.
+  • If iteration budget is low (visible from iteration_count nearing max_iterations), skip
+    optional confirmatory searches and move directly to synthesis."""
         ),
+
+        # ────────────────────────────────────────────────────────────────────
         (
-            "TOOL ALIASES (EDITABLE REFERENCE)",
-            "\n".join([f"- {item['display_name']} (Tool Name: {item['tool_name']}): {item['description']}" for item in catalog])
+            f"REASONING PROTOCOL {LOCK}",
+            f"""Execute every response in these five ordered phases. Do NOT skip phases.
+
+{sep}
+PHASE 1 — ORIENT  (silent, no output)
+{sep}
+Read the PRE-FETCHED CONTEXT block (if present). Ask yourself:
+  a) Does it directly answer the rewritten question with enough specificity?
+  b) Are there named documents in the document list that are clearly relevant?
+  c) Is the question asking about something that happened after the documents were written
+     (current events, real-time data)? → web search may be mandatory.
+  d) Does the question reference a prior exchange? → semantic history may be needed.
+Record your answers internally; they drive Phase 2.
+
+{sep}
+PHASE 2 — PLAN  (concise, visible: 1-3 lines)
+{sep}
+Output a brief retrieval plan before calling any tools, e.g.:
+  "Calling search_documents with [query] and search_web with [query] in parallel."
+  "Pre-fetch content is sufficient for this factual question — no extra retrieval needed."
+  "Will call search_pdf_by_document scoped to [filename] (hash known from document list)."
+
+Rules:
+  • Group every independent tool call into a SINGLE parallel batch — dispatch them together.
+  • Never call tool B only after tool A returns if they are independent of each other.
+  • Avoid calling more than {3 if not use_web_search else 4} tools in one batch (context budget).
+  • State what you expect each tool to return — this prevents redundant follow-up calls.
+
+{sep}
+PHASE 3 — RETRIEVE  (tool calls)
+{sep}
+Execute the plan from Phase 2. Apply these dispatch rules:
+  PARALLEL FIRST — independent searches MUST be batched together in one response turn,
+  never issued sequentially.
+
+  TOOL SELECTION DECISION TREE:
+  ┌─ Is the question answerable from pre-fetched context alone?
+  │    YES → set context_coverage = SUFFICIENT; skip all retrieval tools except search_web
+  │    NO  ↓
+  ├─ Does the question name a specific document?
+  │    YES → use search_pdf_by_document (scoped, avoids noise from other files)
+  │    NO  → use search_documents (all-document semantic search)
+  │
+  ├─ Does the question reference a past topic discussed in this thread?
+  │    YES → use search_conversation_history IN PARALLEL with the document search
+  │    NO  → skip search_conversation_history (recent history is in pre-fetch)
+  │
+  ├─ Is web search enabled AND is this a factual/informational question?
+  │    YES → call search_web IN PARALLEL with document searches — MANDATORY, not optional
+  │    NO  → skip search_web
+  │
+  └─ Is the question genuinely ambiguous with multiple distinct interpretations?
+       YES → call ask_for_clarification — stop all other retrieval
+       NO  → never call ask_for_clarification
+
+  RETRY LOGIC — if a tool returns insufficient or off-topic results:
+    1st retry: rephrase the query (more specific, different vocabulary, drop stop words).
+    2nd retry: decompose the question and search for sub-components separately.
+    After 2 retries with no improvement: accept partial evidence and note the gap in synthesis.
+
+{sep}
+PHASE 4 — ASSESS  (silent self-check)
+{sep}
+Before writing a single word of the final answer, evaluate:
+  ✓ Coverage: Does retrieved evidence directly address the user's question?
+  ✓ Confidence: Are the key claims backed by at least one retrievable source?
+  ✓ Conflicts: Do sources contradict each other? → must be flagged in the answer.
+  ✓ Gaps: Is there a material gap in evidence? → either retry (if budget remains) or
+          disclose the gap explicitly in the answer; never fill gaps with guesses.
+
+SUFFICIENCY CRITERIA — stop retrieving when ANY of these is true:
+  • Retrieved passages directly answer the question with specific supporting detail.
+  • Two independent tool calls with varied queries both return the same result (convergence).
+  • Iteration count has reached max_iterations — synthesize from whatever is available.
+  • Query is a greeting, meta-question, or does not require factual retrieval.
+
+INSUFFICIENCY SIGNALS — retrieve more when ALL of these are true:
+  • No passage contains the specific fact the question asks for.
+  • A rephrased query has not been tried yet.
+  • Iteration budget has not been exhausted.
+
+{sep}
+PHASE 5 — SYNTHESIZE  (final answer)
+{sep}
+Write the final answer only after completing Phase 4. Quality bar:
+  • Lead with the most directly relevant finding — do not bury the answer in preamble.
+  • Integrate evidence from multiple sources into a unified narrative; do not dump chunks.
+  • Use Markdown formatting (headers, bullets, bold) when the answer is multi-part or complex.
+  • Match answer depth to question complexity: short factual questions get concise answers;
+    analytical questions get structured, multi-paragraph answers.
+  • Proactively note uncertainty, limitations, or conflicting evidence.
+  • NEVER output a final answer that consists solely of tool output verbatim — always
+    add synthesis, context, and explanation."""
         ),
+
+        # ────────────────────────────────────────────────────────────────────
         (
-            "TOOL CONTRACT (LOCKED)",
+            f"TOOL REGISTRY {EDIT}",
             "\n".join([
-                "1. For questions requiring specific facts, document content, or prior conversation context, use tools rather than relying on internal knowledge alone.",
-                "2. Check the PRE-FETCHED CONTEXT block in this prompt before calling any tool — it already contains recent history, semantic memory, PDF evidence, and the document list.",
-                "3. Actively search both uploaded documents and the web for most questions to ensure depth. Run Document Evidence + Internet Search IN PARALLEL whenever web search is enabled — do not skip Internet Search because PDF evidence appears sufficient.",
-                "4. Focused Document Evidence (known doc) is best for specific file lookups. Use Document Evidence for broader multi-file searches.",
-                "5. If a tool returns weak or empty results, retry with a rephrased or more specific query before concluding the information is absent.",
-                "6. You may make multiple tool calls across iterations; avoid redundant calls with nearly identical queries.",
-                "7. Internet Search is only available when explicitly enabled by the user — when it IS enabled, treat it as MANDATORY for factual questions, not optional.",
-                "8. Clarify Intent is only for genuinely ambiguous questions where a wrong assumption would lead to an entirely wrong answer.",
-                "9. If custom user instructions conflict with this locked contract, follow this locked contract."
+                f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n"
+                f"    {item['description']}"
+                for item in catalog
             ])
         ),
+
+        # ────────────────────────────────────────────────────────────────────
         (
-            "TOOL PLAYBOOK (USER-CONFIGURABLE)",
-            "\n".join([f"- {item['tool_name']}: {playbook.get(item['id'], item['default_prompt'])}" for item in catalog]),
-        ),
-        (
-            "ANSWER POLICY (LOCKED)",
+            f"TOOL PLAYBOOK {EDIT}",
             "\n".join([
-                "1. Output a final answer only after retrieving sufficient context through tool calls.",
-                "2. Synthesize retrieved content into a coherent, well-structured answer — do not paste raw chunks verbatim.",
-                "3. If retrieved information is partial or uncertain, explicitly state that limitation rather than fabricating details.",
-                "4. Do NOT prefix your response with 'A:' or mimic the 'Q: ... A: ...' pattern. Answer directly.",
-                "5. ALWAYS cite the source of every fact or claim you make:",
-                "   - For PDF content: mention the document by name, e.g., 'According to research_paper.pdf, ...' or 'The uploaded document states ...'.",
-                "   - For internet search results: mention the source URL or site, e.g., 'According to [title] (source: url), ...' or 'A web search found that ...'.",
-                "   - For recalled conversation history: indicate 'Based on our earlier discussion, ...'.",
-                "   - If multiple sources agree, cite all of them.",
-                "   - If sources disagree, highlight the discrepancy and note which source says what.",
+                f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
+                for item in catalog
             ])
+        ),
+
+        # ────────────────────────────────────────────────────────────────────
+        (
+            f"CITATION STANDARDS {LOCK}",
+            """Every factual claim in your final answer MUST be traceable to a source. Apply these rules:
+
+  PDF documents:
+    Inline: 'According to [filename], ...' or '([filename], p. N if page-numbered)'
+    When multiple PDFs corroborate: 'Both [file-a] and [file-b] state that ...'
+    Never invent filenames — use only names returned by search tools or list_uploaded_documents.
+
+  Internet search results:
+    Inline: 'According to [Page Title] (source: <url>), ...'
+    Always include both title and URL if both are available in the search result.
+    Never cite a web result without a URL — if the URL is missing, say 'a web source found that'.
+
+  Conversation history / semantic memory:
+    Inline: 'As we discussed earlier, ...' or 'Based on a prior exchange in this thread, ...'
+
+  Internal knowledge (no retrieved source):
+    Clearly mark: 'Based on general knowledge (not from your documents), ...'
+    Use sparingly — prefer retrieved evidence over internal knowledge for factual claims.
+
+  Conflicting sources:
+    'According to [source-A], X; however, [source-B] states Y — these sources disagree.'
+    Do NOT silently pick one side; surface the disagreement.
+
+  Evidence gaps:
+    'The uploaded documents do not contain specific information about X.'
+    'A web search did not return relevant results for this query.'
+    Never fabricate a citation or fill a gap with plausible-sounding but unchecked facts."""
+        ),
+
+        # ────────────────────────────────────────────────────────────────────
+        (
+            f"ANTI-PATTERNS {LOCK}",
+            """Avoid these failure modes that degrade answer quality:
+
+  ✗ Answering before retrieving  — do not synthesize from internal knowledge when tools
+      would return better evidence. Tools exist for a reason; use them first.
+
+  ✗ Skipping parallel execution  — calling search_documents and then search_web in
+      separate sequential turns when they are independent wastes the iteration budget.
+
+  ✗ Redundant tool calls  — retrying with an identical or trivially paraphrased query
+      wastes tokens without improving evidence quality. Materially rephrase or decompose.
+
+  ✗ Pre-fetch over-reliance  — treating pre-fetched PDF evidence as equivalent to a
+      freshly targeted search when the rewritten query is more specific than the raw question.
+      When the rewritten query is significantly more specific, re-query with the precise terms.
+
+  ✗ Evidence laundering  — presenting internal knowledge as if it came from a tool result.
+      Only cite sources that actually appeared in tool output.
+
+  ✗ Premature clarification  — asking the user to clarify when the question's intent is
+      recoverable from conversation history. ask_for_clarification is a last resort.
+
+  ✗ Verbatim chunk dumping  — pasting raw retrieved passages as the final answer without
+      synthesis. Always transform evidence into a coherent, user-facing response.
+
+  ✗ Ignoring conflicts  — blending contradictory claims from different sources into a
+      single coherent-sounding statement that misrepresents both sources.
+
+  ✗ Fabricating detail to fill gaps  — if evidence is absent, say so. Never invent
+      specific facts, statistics, dates, or names that were not returned by tools."""
         ),
     ]
+
+    # ── Conditional: web search mandate ─────────────────────────────────────
     if use_web_search:
         sections.append((
-            "WEB SEARCH MANDATE (LOCKED — overrides pre-fetch policy)",
-            "\n".join([
-                "Internet Search (search_web) is ENABLED for this session.",
-                "You MUST call search_web for virtually every factual or informational question.",
-                "Run it IN PARALLEL with Document Evidence searches — never delay or skip it.",
-                "Pre-fetched PDF evidence in the PRE-FETCHED CONTEXT block does NOT satisfy this requirement.",
-                "The only exceptions are: pure conversation meta-questions (e.g., 'how many messages have we exchanged?'),",
-                "clarification requests, or questions that are entirely self-contained from just-provided context.",
-            ])
+            f"WEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency",
+            f"""Internet Search (search_web) is ENABLED for this session.
+
+MANDATORY INVOCATION — call search_web for every factual or informational question:
+  • Run search_web IN PARALLEL with search_documents / search_pdf_by_document in Phase 3.
+  • Pre-fetched PDF evidence does NOT satisfy this mandate — PDF and web are complementary.
+  • Do not defer web search to a second iteration after checking PDF results — batch them.
+
+SOLE EXCEPTIONS (the only cases where search_web may be skipped):
+  • Pure conversation meta-questions: 'how many messages have we had?', 'can you summarize our chat?'
+  • The user's question is entirely answered by their own just-provided context (e.g., 'fix this text I pasted').
+  • Clarification exchanges where no factual retrieval is needed.
+
+When query rephrasing is needed for web search, use a concise keyword-rich query rather
+than a full natural-language question — web search engines rank keyword density differently
+from embedding-based vector search."""
         ))
 
+    # ── Conditional: custom user instructions ────────────────────────────────
     if custom_instructions:
-        sections.append(("USER CUSTOM INSTRUCTIONS (EDITABLE)", custom_instructions))
+        sections.append((f"USER CUSTOM INSTRUCTIONS {EDIT}", custom_instructions))
 
-    return "\n\n".join([f"{title}:\n{body}" for title, body in sections])
+    return "\n\n".join([f"{'═' * 64}\n{title}:\n{'═' * 64}\n{body}" for title, body in sections])
