@@ -403,7 +403,8 @@ async def handle_thread_chat(
             "configurable": {
                 "thread_id": thread_id,
                 "embedding_model": embed_model,
-                "context_window": context_window
+                "context_window": context_window,
+                "use_web_search": use_web_search,
             }
         }
         

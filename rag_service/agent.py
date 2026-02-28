@@ -251,6 +251,9 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
     provide a more comprehensive answer by checking both internal PDFs and external
     web resources in parallel.
 
+    If internet search is not enabled for this session, this tool will return a
+    message indicating that and no search will be performed.
+
     Each returned passage is prefixed with its source URL so you can cite it accurately:
       [Source: Internet Search — "<title>" | <url>]
 
@@ -259,8 +262,11 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
                keywords if initial results are off-topic or insufficient.
     """
     try:
-        logger.info(f"--- WEB SEARCH INITIATED --- Query: '{query}'")
         conf = config.get("configurable", {}) if config else {}
+        if not conf.get("use_web_search", False):
+            return "Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available. Answer using only the uploaded documents and conversation history."
+
+        logger.info(f"--- WEB SEARCH INITIATED --- Query: '{query}'")
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
 
@@ -897,7 +903,7 @@ TOOL_FRIENDLY_CONFIG = {
         "id": "live_web_recon",
         "display_name": "Internet Search",
         "description": "Search the web for external, real-time, or post-training knowledge. Results are automatically cached in the thread knowledge base for future retrieval.",
-        "default_prompt": "Use this as a complementary source for information along with Document Evidence. Actively check the web to ensure the final answer is as accurate and current as possible, comparing findings with what's in the uploaded PDFs. Always cite the URL and title of web results in your answer.",
+        "default_prompt": "MANDATORY when web search is enabled: call search_web for virtually every factual question to supplement PDF content with current, external knowledge. Run it IN PARALLEL with document searches — do not wait for PDF results first. Never skip it based on pre-fetched PDF evidence alone. Always cite the URL and title of web results in your answer.",
     },
     "ask_for_clarification": {
         "id": "clarify_intent",
@@ -951,20 +957,20 @@ async def call_model(state: AgentState, config: RunnableConfig):
     llm = get_llm(state["llm_model"])
     iteration = state.get("iteration_count", 0) + 1
     
-    # Enable tools (filter web search if disabled)
-    valid_tools = tools_list if state.get("use_web_search", False) else [t for t in tools_list if t.name != "search_web"]
-    llm_with_tools = llm.bind_tools(valid_tools)
+    llm_with_tools = llm.bind_tools(tools_list)
     
     context_window = state.get('context_window', DEFAULT_TOKEN_BUDGET)
     system_role = sanitize_system_role(state.get("system_role", ""))
     tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
 
+    use_web_search = state.get("use_web_search", False)
     prompt_content = build_system_prompt(
         context_window=context_window,
         system_role=system_role,
         tool_instructions=tool_instructions,
-        custom_instructions=custom_instructions
+        custom_instructions=custom_instructions,
+        use_web_search=use_web_search,
     )
 
     # Inject pre-fetched context bundle + pre-fetch-first retrieval policy
@@ -977,13 +983,19 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 "Pre-fetched context (recent turns, semantic history, PDF evidence, document list) is\n"
                 "already present in the PRE-FETCHED CONTEXT block below. Before calling any tool:\n"
                 "1. Assess whether the pre-fetched content answers the rewritten query with confidence.\n"
-                "   If YES — answer directly; call no tool.\n"
+                "   If YES, skip PDF/history tool calls — but NEVER skip search_web when it is available.\n"
                 "2. If PDF evidence is present but the rewritten query is more specific than the raw question:\n"
                 "   call search_documents or search_pdf_by_document ONCE with the rewritten query.\n"
                 "3. If the question targets a specific document and its file_hash is in the document list:\n"
                 "   prefer search_pdf_by_document (scoped) over search_documents (all documents).\n"
                 "4. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
                 "   conversation and semantic history are already in the pre-fetched block.\n"
+                + (
+                    "5. WEB SEARCH IS ENABLED AND MANDATORY: call search_web for this question IN PARALLEL\n"
+                    "   with any document search. Pre-fetched PDF evidence does NOT replace a web search.\n"
+                    "   Do not skip search_web regardless of how complete the pre-fetched content appears.\n"
+                    if use_web_search else ""
+                )
             ) + bundle_text
 
     sys_prompt = SystemMessage(content=prompt_content)
@@ -1200,6 +1212,7 @@ def build_system_prompt(
     system_role: str = "",
     tool_instructions: Optional[Dict[str, str]] = None,
     custom_instructions: str = "",
+    use_web_search: bool = False,
 ) -> str:
     role = system_role or "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers."
     catalog = get_tool_catalog()
@@ -1222,11 +1235,11 @@ def build_system_prompt(
             "\n".join([
                 "1. For questions requiring specific facts, document content, or prior conversation context, use tools rather than relying on internal knowledge alone.",
                 "2. Check the PRE-FETCHED CONTEXT block in this prompt before calling any tool — it already contains recent history, semantic memory, PDF evidence, and the document list.",
-                "3. Actively search both uploaded documents and the web for most questions to ensure depth. Prefer parallel searches (Document Evidence + Internet Search) when suitable.",
+                "3. Actively search both uploaded documents and the web for most questions to ensure depth. Run Document Evidence + Internet Search IN PARALLEL whenever web search is enabled — do not skip Internet Search because PDF evidence appears sufficient.",
                 "4. Focused Document Evidence (known doc) is best for specific file lookups. Use Document Evidence for broader multi-file searches.",
                 "5. If a tool returns weak or empty results, retry with a rephrased or more specific query before concluding the information is absent.",
                 "6. You may make multiple tool calls across iterations; avoid redundant calls with nearly identical queries.",
-                "7. Internet Search is only available when explicitly enabled by the user — do not call it otherwise.",
+                "7. Internet Search is only available when explicitly enabled by the user — when it IS enabled, treat it as MANDATORY for factual questions, not optional.",
                 "8. Clarify Intent is only for genuinely ambiguous questions where a wrong assumption would lead to an entirely wrong answer.",
                 "9. If custom user instructions conflict with this locked contract, follow this locked contract."
             ])
@@ -1251,6 +1264,19 @@ def build_system_prompt(
             ])
         ),
     ]
+    if use_web_search:
+        sections.append((
+            "WEB SEARCH MANDATE (LOCKED — overrides pre-fetch policy)",
+            "\n".join([
+                "Internet Search (search_web) is ENABLED for this session.",
+                "You MUST call search_web for virtually every factual or informational question.",
+                "Run it IN PARALLEL with Document Evidence searches — never delay or skip it.",
+                "Pre-fetched PDF evidence in the PRE-FETCHED CONTEXT block does NOT satisfy this requirement.",
+                "The only exceptions are: pure conversation meta-questions (e.g., 'how many messages have we exchanged?'),",
+                "clarification requests, or questions that are entirely self-contained from just-provided context.",
+            ])
+        ))
+
     if custom_instructions:
         sections.append(("USER CUSTOM INSTRUCTIONS (EDITABLE)", custom_instructions))
 
