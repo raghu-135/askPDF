@@ -8,14 +8,12 @@ This module provides:
 
 import asyncio
 import logging
-import json
 from typing import List, Dict, Any
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, BaseMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from rag import index_chat_memory_for_thread
 from models import (
-    get_llm,
     get_embedding_model,
     DEFAULT_TOKEN_BUDGET,
     DEFAULT_MAX_ITERATIONS,

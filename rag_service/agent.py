@@ -14,7 +14,6 @@ from langgraph.graph.message import add_messages
 
 from models import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
 from vectordb.qdrant import QdrantAdapter
-from database import get_recent_messages, MessageRole
 
 logger = logging.getLogger(__name__)
 
@@ -51,85 +50,6 @@ class AgentState(TypedDict):
     tool_instructions: Dict[str, str]
     custom_instructions: str
     pre_fetch_bundle: Optional[Dict[str, Any]]
-
-
-@tool
-async def get_conversation_stats(config: RunnableConfig = None) -> str:
-    """
-    A lightweight meta-tool that returns statistics about the current conversation:
-    message count, user/assistant split, average message length, and estimated token usage.
-
-    Use this as a PLANNING step before calling `page_conversation_history` to decide appropriate
-    offset and limit values. This tool returns no message content — do not use it when
-    `search_conversation_history` (semantic search) can answer the question.
-    """
-    try:
-        conf = config.get("configurable", {}) if config else {}
-        thread_id = conf.get("thread_id")
-        if not thread_id:
-            return "No thread context found."
-        
-        from database import get_thread_messages
-        messages = await get_thread_messages(thread_id, limit=1000)
-        
-        if not messages:
-            return "History is empty."
-            
-        total_count = len(messages)
-        user_msgs = [m for m in messages if m.role == MessageRole.USER]
-        assistant_msgs = [m for m in messages if m.role == MessageRole.ASSISTANT]
-        
-        avg_len = sum(len(m.content) for m in messages) / total_count if total_count > 0 else 0
-        
-        return json.dumps({
-            "total_messages": total_count,
-            "user_messages": len(user_msgs),
-            "assistant_messages": len(assistant_msgs),
-            "average_message_chars": round(avg_len, 2),
-            "estimated_history_tokens": round((avg_len * total_count) / 4, 0)
-        })
-    except Exception as e:
-        return f"Error getting history stats: {e}"
-
-
-@tool
-async def page_conversation_history(offset: int, limit: int = 5, config: RunnableConfig = None) -> str:
-    """
-    Retrieve a time-ordered slice of verbatim conversation messages by position.
-    Messages are ordered newest-first (offset=0 returns the most recent messages).
-    Increment offset by `limit` on each call to page sequentially through the full history.
-
-    Prefer `search_conversation_history` for semantic or thematic recall. Use this tool when you
-    need to read the exact verbatim text of messages at a known chronological position,
-    or when paging through the full conversation in order. Call `get_conversation_stats` first
-    if you need to know the total message count before choosing an offset.
-
-    Args:
-        offset: Starting position in the message list (0 = most recent). Increase by
-                `limit` on each subsequent call to walk further back through history.
-        limit: Number of messages to return in this slice (default: 5).
-    """
-    try:
-        conf = config.get("configurable", {}) if config else {}
-        thread_id = conf.get("thread_id")
-        if not thread_id:
-            return "No thread context found."
-
-        from database import get_thread_messages
-        # get_thread_messages uses offset but it's usually newest first if ordered by created_at DESC
-        messages = await get_thread_messages(thread_id, limit=limit, offset=offset)
-        
-        if not messages:
-            return f"No messages found at offset {offset}."
-            
-        transcript = []
-        for msg in messages:
-            role = "User" if msg.role == MessageRole.USER else "Assistant"
-            transcript.append(f"{role} [{msg.id}]: {msg.content}")
-            
-        return "\n\n".join(transcript)
-    except Exception as e:
-        return f"Error fetching historical QA: {e}"
 
 
 @tool
@@ -214,42 +134,6 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
 
 
 @tool
-async def get_recent_context(limit: int, config: RunnableConfig = None) -> str:
-    """
-    Retrieve the N most recent conversation turns (user + assistant), ordered newest-first.
-    Returns compact summaries when available, otherwise truncated full message content.
-
-    Use this for lightweight recency context — for example, to understand what was just
-    discussed before the current question. For semantic or thematic recall across a longer
-    history, prefer `search_conversation_history` instead.
-
-    Args:
-        limit: Number of recent messages to retrieve.
-    """
-    try:
-        conf = config.get("configurable", {}) if config else {}
-        thread_id = conf.get("thread_id")
-        if not thread_id:
-            return "No thread context found."
-
-        messages = await get_recent_messages(thread_id, limit=limit)
-        if not messages:
-            return "No recent messages found."
-            
-        transcript = []
-        for msg in messages:
-            role = "User" if msg.role == MessageRole.USER else "Assistant"
-            text = msg.context_compact or msg.content
-            if len(text) > 300:
-                text = text[:300] + "... [truncated]"
-            transcript.append(f"{role} [{msg.id}]: {text}")
-        
-        return "\n".join(transcript)
-    except Exception as e:
-        return f"Error retrieving recent messages: {e}"
-
-
-@tool
 async def search_conversation_history(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """
     Perform a semantic vector search across all past conversation QA pairs in this thread.
@@ -257,9 +141,8 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
     of when they occurred in the conversation.
 
     Use this for thematic or conceptual recall (e.g., "what did we previously discuss
-    about X?"). Unlike `page_conversation_history`, which returns verbatim messages by time
-    position, this finds semantically related content from anywhere in the history.
-    Retry with a rephrased query if initial results are off-topic.
+    about X?"). Searches by embedding similarity regardless of when in the conversation
+    the content appeared. Retry with a rephrased query if initial results are off-topic.
 
     Args:
         query: A natural-language description of the topic or fact to recall from prior exchanges.
@@ -585,13 +468,6 @@ class IntentAgentState(TypedDict):
     intent_result: Optional[Dict[str, Any]]
     pre_fetch_bundle: Optional[Dict[str, Any]]
 
-# Intent Agent tools:
-# - Removed: get_conversation_stats, page_conversation_history, search_documents,
-#   get_recent_context  (all covered by the pre-fetched bundle injected in the prompt)
-# - Added:   list_uploaded_documents (resolve doc references),
-#            find_topic_anchor_in_history (temporal anchoring)
-# - Kept:    search_conversation_history (deep semantic recall beyond bundle),
-#            ask_for_clarification (ambiguity resolution)
 intent_tools_list = [
     search_conversation_history,
     list_uploaded_documents,
@@ -851,12 +727,6 @@ intent_workflow.add_edge("force_intent_answer", END)
 intent_app = intent_workflow.compile()
 # --- End Intent Agent ---
 
-# Orchestrator tools list:
-# - Removed: get_conversation_stats, page_conversation_history, get_recent_context
-#   (all covered by the pre-fetched bundle injected in the system prompt)
-# - Added:   search_pdf_by_document (scoped single-document search)
-# - Kept:    search_documents (re-run with rewritten query for better precision),
-#            search_conversation_history, search_web, ask_for_clarification
 tools_list = [
     search_documents,
     search_pdf_by_document,
@@ -1045,10 +915,6 @@ workflow.add_conditional_edges("tools", clarification_router, {END: END, "agent"
 workflow.add_edge("force_final_answer", END)
 
 app = workflow.compile()
-
-# Legacy export for non-thread backward compatibility
-async def generate_optimized_search_query(question, context, history, llm_name):
-    return question # stubbed for backward auth if needed
 
 
 def _sanitize_lines_with_blocklist(raw: str, blocklist: List[str], max_chars: int) -> str:
