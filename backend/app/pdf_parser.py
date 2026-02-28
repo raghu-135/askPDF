@@ -18,13 +18,19 @@ for logger_name in ["docling", "docling_core", "huggingface_hub", "pypdfium2", "
 # Initialize Docling converter as a module-level singleton
 _pipeline_options = PdfPipelineOptions()
 
+def _get_required_env(name: str) -> str:
+    val = os.environ.get(name)
+    if val is None:
+        raise ValueError(f"{name} environment variable is not set")
+    return val
+
 # Tuneable via environment variables for accuracy vs speed
-_pipeline_options.do_ocr = os.environ.get("DOCLING_DO_OCR", "False").lower() == "true"
-_pipeline_options.do_table_structure = os.environ.get("DOCLING_DO_TABLE_STRUCTURE", "True").lower() == "true"
-_pipeline_options.do_formula_enrichment = os.environ.get("DOCLING_DO_FORMULA_ENRICHMENT", "False").lower() == "true"
+_pipeline_options.do_ocr = _get_required_env("DOCLING_DO_OCR").lower() == "true"
+_pipeline_options.do_table_structure = _get_required_env("DOCLING_DO_TABLE_STRUCTURE").lower() == "true"
+_pipeline_options.do_formula_enrichment = _get_required_env("DOCLING_DO_FORMULA_ENRICHMENT").lower() == "true"
 
 # Table structure mode (FAST or ACCURATE)
-_table_mode = os.environ.get("DOCLING_TABLE_MODE", "FAST").upper()
+_table_mode = _get_required_env("DOCLING_TABLE_MODE").upper()
 if _table_mode == "ACCURATE":
     _pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
 else:
@@ -32,7 +38,7 @@ else:
 
 # OCR options
 if _pipeline_options.do_ocr:
-    _pipeline_options.ocr_options.force_full_page_ocr = os.environ.get("DOCLING_FORCE_FULL_PAGE_OCR", "False").lower() == "true"
+    _pipeline_options.ocr_options.force_full_page_ocr = _get_required_env("DOCLING_FORCE_FULL_PAGE_OCR").lower() == "true"
 
 _docling_converter = DocumentConverter(
     format_options={

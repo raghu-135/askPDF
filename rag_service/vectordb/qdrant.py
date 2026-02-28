@@ -23,9 +23,13 @@ class QdrantAdapter(VectorDBClient):
     """
     def __init__(self) -> None:
         """Initialize the Qdrant client using environment variables for host and port."""
-        host = os.getenv("QDRANT_HOST", "localhost")
-        port = int(os.getenv("QDRANT_PORT", 6333))
-        self.client = QdrantClient(host=host, port=port)
+        host = os.getenv("QDRANT_HOST")
+        port_str = os.getenv("QDRANT_PORT")
+        if host is None:
+            raise ValueError("QDRANT_HOST environment variable is not set")
+        if port_str is None:
+            raise ValueError("QDRANT_PORT environment variable is not set")
+        self.client = QdrantClient(host=host, port=int(port_str))
 
     # ============ Collection Naming Helpers ============
     

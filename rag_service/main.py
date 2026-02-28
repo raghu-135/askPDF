@@ -145,6 +145,9 @@ class ToolCatalogEntry(BaseModel):
 
 class PromptDefaults(BaseModel):
     max_iterations: int
+    min_max_iterations: int
+    max_max_iterations: int
+    context_window: int
     system_role: str
     tool_instructions: Dict[str, str]
     custom_instructions: str

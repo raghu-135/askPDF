@@ -17,7 +17,9 @@ from enum import Enum
 
 
 # Database path - use /data for persistence in Docker
-DATA_DIR = os.getenv("DATA_DIR", "/data")
+DATA_DIR = os.getenv("DATA_DIR")
+if DATA_DIR is None:
+    raise ValueError("DATA_DIR environment variable is not set")
 DB_PATH = os.path.join(DATA_DIR, "rag.db")
 
 # Ensure data directory exists

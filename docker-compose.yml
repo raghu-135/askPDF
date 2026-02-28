@@ -65,6 +65,13 @@ services:
       - QDRANT_PORT=6333
       - DATA_DIR=/data
       - BACKEND_URL=http://backend:8000
+      - DEFAULT_TOKEN_BUDGET=128000
+      - DEFAULT_MAX_ITERATIONS=10
+      - MIN_MAX_ITERATIONS=1
+      - MAX_MAX_ITERATIONS=30
+      - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
+      - MAX_SYSTEM_ROLE_CHARS=500
+      - MAX_TOOL_INSTRUCTION_CHARS=500
     env_file:
       - .env
     depends_on:

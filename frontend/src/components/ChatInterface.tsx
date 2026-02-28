@@ -92,9 +92,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [isModelWarming, setIsModelWarming] = useState(false);
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
-    const [contextWindow, setContextWindow] = useState(4096);
-    const [maxIterations, setMaxIterations] = useState(10);
-    const [defaultMaxIterations, setDefaultMaxIterations] = useState(10);
+    const [contextWindow, setContextWindow] = useState<number>(0);
+    const [maxIterations, setMaxIterations] = useState(0);
+    const [defaultMaxIterations, setDefaultMaxIterations] = useState(0);
+    const [minMaxIterations, setMinMaxIterations] = useState<number | null>(null);
+    const [maxMaxIterations, setMaxMaxIterations] = useState<number | null>(null);
     const [defaultSystemRole, setDefaultSystemRole] = useState('');
     const [defaultCustomInstructions, setDefaultCustomInstructions] = useState('');
     const [systemRole, setSystemRole] = useState('');
@@ -139,11 +141,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 const res = await getPromptTools();
                 setToolCatalog(res.tools || []);
                 if (res.defaults) {
-                    setDefaultMaxIterations(res.defaults.max_iterations ?? 10);
+                    setDefaultMaxIterations(res.defaults.max_iterations);
+                    setMinMaxIterations(res.defaults.min_max_iterations);
+                    setMaxMaxIterations(res.defaults.max_max_iterations);
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
+                    if (res.defaults.context_window) {
+                        setContextWindow(res.defaults.context_window);
+                    }
                     if (!activeThread) {
-                        setMaxIterations(res.defaults.max_iterations ?? 10);
+                        setMaxIterations(res.defaults.max_iterations);
                         setSystemRole(res.defaults.system_role ?? '');
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
                     }
@@ -160,7 +167,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!activeThread) return;
         try {
             const settings = await getThreadSettings(activeThread.id);
-            setMaxIterations(settings.max_iterations ?? 10);
+            setMaxIterations(settings.max_iterations ?? defaultMaxIterations);
             setSystemRole(settings.system_role ?? defaultSystemRole);
             setToolInstructions(settings.tool_instructions ?? {});
             setCustomInstructions(settings.custom_instructions ?? defaultCustomInstructions);
@@ -491,7 +498,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             setSavingSettings(true);
             const saved = await updateThreadSettings(activeThread.id, {
-                max_iterations: Math.max(1, Math.min(30, maxIterations)),
+                max_iterations: Math.max(minMaxIterations ?? 1, Math.min(maxMaxIterations ?? 30, maxIterations)),
                 system_role: systemRole,
                 tool_instructions: effectiveToolInstructions,
                 custom_instructions: customInstructions,
@@ -616,7 +623,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     },
                                 },
                             }}
-                            inputProps={{ min: 4096, step: 4096, style: { textAlign: 'right' } }}
+                            inputProps={{ min: 1, step: 1, style: { textAlign: 'right' } }}
                         />
                     </Tooltip>
                     <FormControl fullWidth size="small">
@@ -978,14 +985,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             </IconButton>
                         </Tooltip>
                     </Box>
+                    {minMaxIterations !== null && maxMaxIterations !== null ? (
                     <TextField
                         label="Max tool iterations"
                         type="number"
                         value={maxIterations}
-                        onChange={(e) => setMaxIterations(Math.max(1, Math.min(30, parseInt(e.target.value) || 1)))}
-                        inputProps={{ min: 1, max: 30 }}
+                        onChange={(e) => setMaxIterations(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
+                        inputProps={{ min: minMaxIterations, max: maxMaxIterations }}
                         helperText="Lower is faster; higher allows deeper research."
                     />
+                    ) : (
+                        <Typography variant="caption" color="error">Iteration limits not loaded from server.</Typography>
+                    )}
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
                         <TextField
                             fullWidth

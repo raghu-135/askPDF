@@ -15,13 +15,44 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Token budget configuration
-DEFAULT_TOKEN_BUDGET = 4096
-DEFAULT_MAX_ITERATIONS = 10
-MIN_MAX_ITERATIONS = 1
-MAX_MAX_ITERATIONS = 30
-MAX_CUSTOM_INSTRUCTIONS_CHARS = 2000
-MAX_SYSTEM_ROLE_CHARS = 500
-MAX_TOOL_INSTRUCTION_CHARS = 500
+def get_default_token_budget():
+    budget = os.getenv("DEFAULT_TOKEN_BUDGET")
+    if budget is None:
+        raise ValueError("DEFAULT_TOKEN_BUDGET environment variable is not set")
+    return int(budget)
+
+def get_default_max_iterations():
+    val = os.getenv("DEFAULT_MAX_ITERATIONS")
+    if val is None:
+        raise ValueError("DEFAULT_MAX_ITERATIONS environment variable is not set")
+    return int(val)
+
+def get_min_max_iterations():
+    val = os.getenv("MIN_MAX_ITERATIONS")
+    if val is None:
+        raise ValueError("MIN_MAX_ITERATIONS environment variable is not set")
+    return int(val)
+
+def get_max_max_iterations():
+    val = os.getenv("MAX_MAX_ITERATIONS")
+    if val is None:
+        raise ValueError("MAX_MAX_ITERATIONS environment variable is not set")
+    return int(val)
+
+DEFAULT_TOKEN_BUDGET = get_default_token_budget()
+DEFAULT_MAX_ITERATIONS = get_default_max_iterations()
+MIN_MAX_ITERATIONS = get_min_max_iterations()
+MAX_MAX_ITERATIONS = get_max_max_iterations()
+
+def get_env_int(name: str) -> int:
+    val = os.getenv(name)
+    if val is None:
+        raise ValueError(f"{name} environment variable is not set")
+    return int(val)
+
+MAX_CUSTOM_INSTRUCTIONS_CHARS = get_env_int("MAX_CUSTOM_INSTRUCTIONS_CHARS")
+MAX_SYSTEM_ROLE_CHARS = get_env_int("MAX_SYSTEM_ROLE_CHARS")
+MAX_TOOL_INSTRUCTION_CHARS = get_env_int("MAX_TOOL_INSTRUCTION_CHARS")
 
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
@@ -75,6 +106,9 @@ def default_thread_settings():
     """Default persisted settings for a thread."""
     return {
         "max_iterations": DEFAULT_MAX_ITERATIONS,
+        "min_max_iterations": MIN_MAX_ITERATIONS,
+        "max_max_iterations": MAX_MAX_ITERATIONS,
+        "context_window": DEFAULT_TOKEN_BUDGET,
         "system_role": "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers.",
         "tool_instructions": {},
         "custom_instructions": "",

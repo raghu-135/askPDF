@@ -31,7 +31,9 @@ from .pdf_service import PDFService, get_indexing_status, IndexingStatus
 API_PREFIX = "/api"
 AUDIO_DIR = "/data/audio"
 # RAG service URL (can be overridden by environment variable)
-RAG_SERVICE_URL = os.getenv("RAG_SERVICE_URL", "http://rag-service:8000")
+RAG_SERVICE_URL = os.getenv("RAG_SERVICE_URL")
+if RAG_SERVICE_URL is None:
+    raise ValueError("RAG_SERVICE_URL environment variable is not set")
 
 
 app = FastAPI(title="PDF TTS")
