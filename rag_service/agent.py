@@ -187,14 +187,12 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
 @tool
 async def search_web(query: str) -> str:
     """
-    Search the web for external, real-time, or post-training knowledge that is not
-    available in the uploaded documents or conversation history.
+    Search the web for external, real-time, or post-training knowledge.
 
-    Only use this when: (a) the question explicitly requires current events, live data,
-    or broadly external facts, AND (b) `search_documents` and `search_conversation_history`
-    have already been tried or are clearly irrelevant. Do NOT use this for questions
-    that can be answered from the uploaded documents. Web search may be disabled by
-    the user — calling it when disabled will return an error.
+    Use this along with search_documents when you need to augment the knowledge from
+    uploaded documents with the latest information from the internet. This helps
+    provide a more comprehensive answer by checking both internal PDFs and external
+    web resources in parallel.
 
     Args:
         query: A concise, keyword-rich search query. Rephrase and retry with different
@@ -759,7 +757,7 @@ TOOL_FRIENDLY_CONFIG = {
         "id": "live_web_recon",
         "display_name": "Internet Search",
         "description": "Search the web for external, real-time, or post-training knowledge.",
-        "default_prompt": "Last resort for external or live information. Exhaust Document Evidence and Deep Memory first. Rephrase and retry with different keywords if initial results are off-topic.",
+        "default_prompt": "Use this as a complementary source for information along with Document Evidence. Actively check the web to ensure the final answer is as accurate and current as possible, comparing findings with what's in the uploaded PDFs.",
     },
     "ask_for_clarification": {
         "id": "clarify_intent",
@@ -1016,12 +1014,13 @@ def build_system_prompt(
             "\n".join([
                 "1. For questions requiring specific facts, document content, or prior conversation context, use tools rather than relying on internal knowledge alone.",
                 "2. Check the PRE-FETCHED CONTEXT block in this prompt before calling any tool — it already contains recent history, semantic memory, PDF evidence, and the document list.",
-                "3. Tool priority when pre-fetched context is insufficient: Focused Document Evidence (known doc) → Document Evidence (all docs) → Deep Memory → Internet Search.",
-                "4. If a tool returns weak or empty results, retry with a rephrased or more specific query before concluding the information is absent.",
-                "5. You may make multiple tool calls across iterations; avoid redundant calls with nearly identical queries.",
-                "6. Internet Search is only available when explicitly enabled by the user — do not call it otherwise.",
-                "7. Clarify Intent is only for genuinely ambiguous questions where a wrong assumption would lead to an entirely wrong answer.",
-                "8. If custom user instructions conflict with this locked contract, follow this locked contract."
+                "3. Actively search both uploaded documents and the web for most questions to ensure depth. Prefer parallel searches (Document Evidence + Internet Search) when suitable.",
+                "4. Focused Document Evidence (known doc) is best for specific file lookups. Use Document Evidence for broader multi-file searches.",
+                "5. If a tool returns weak or empty results, retry with a rephrased or more specific query before concluding the information is absent.",
+                "6. You may make multiple tool calls across iterations; avoid redundant calls with nearly identical queries.",
+                "7. Internet Search is only available when explicitly enabled by the user — do not call it otherwise.",
+                "8. Clarify Intent is only for genuinely ambiguous questions where a wrong assumption would lead to an entirely wrong answer.",
+                "9. If custom user instructions conflict with this locked contract, follow this locked contract."
             ])
         ),
         (
