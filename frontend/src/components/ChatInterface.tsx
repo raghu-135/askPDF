@@ -68,6 +68,7 @@ interface ChatInterfaceProps {
     currentChatId: number | null;
     activeSource: 'pdf' | 'chat';
     onJump: (id: number) => void;
+    onResetChatId?: () => void;
     onThreadUpdate?: () => void;
     darkMode?: boolean;
 }
@@ -81,6 +82,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     activeSource,
     onJump,
     onThreadUpdate,
+    onResetChatId,
     darkMode = false
 }) => {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -469,6 +471,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             const { deleted_ids } = await deleteMessage(messageId);
             setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
+            
+            // Critical: If the current active chat sentence belongs to a deleted message, 
+            // reset the chat ID selection to prevent out-of-bounds access.
+            if (onResetChatId) {
+                onResetChatId();
+            }
+
             if (onThreadUpdate) {
                 onThreadUpdate();
             }

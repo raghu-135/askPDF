@@ -472,6 +472,10 @@ export default function Home() {
                       setCurrentChatId(id);
                       setPlayRequestId(id);
                     }}
+                    onResetChatId={() => {
+                      setCurrentChatId(null);
+                      setPlayRequestId(null);
+                    }}
                     darkMode={pdfDarkMode}
                   />
                 ) : (
