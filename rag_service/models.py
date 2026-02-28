@@ -44,15 +44,22 @@ DEFAULT_MAX_ITERATIONS = get_default_max_iterations()
 MIN_MAX_ITERATIONS = get_min_max_iterations()
 MAX_MAX_ITERATIONS = get_max_max_iterations()
 
-def get_env_int(name: str) -> int:
+def get_env_int(name: str, default: int | None = None) -> int:
     val = os.getenv(name)
     if val is None:
+        if default is not None:
+            return default
         raise ValueError(f"{name} environment variable is not set")
     return int(val)
 
 MAX_CUSTOM_INSTRUCTIONS_CHARS = get_env_int("MAX_CUSTOM_INSTRUCTIONS_CHARS")
 MAX_SYSTEM_ROLE_CHARS = get_env_int("MAX_SYSTEM_ROLE_CHARS")
 MAX_TOOL_INSTRUCTION_CHARS = get_env_int("MAX_TOOL_INSTRUCTION_CHARS")
+
+INTENT_AGENT_MAX_ITERATIONS = get_env_int("INTENT_AGENT_MAX_ITERATIONS", default=1)
+MAX_ITERATIONS_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_SUFFICIENT_COVERAGE", default=2)
+MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE", default=4)
+WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS", default=2)
 
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer

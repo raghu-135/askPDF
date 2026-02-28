@@ -20,6 +20,10 @@ from models import (
     RATIO_SEMANTIC_MEMORY,
     CHARS_PER_TOKEN,
     compute_prefetch_budget,
+    INTENT_AGENT_MAX_ITERATIONS,
+    MAX_ITERATIONS_SUFFICIENT_COVERAGE,
+    MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE,
+    WEB_SEARCH_ITERATION_BONUS,
 )
 from database import (
     create_message,
@@ -318,7 +322,7 @@ async def handle_thread_chat(
             "llm_model": llm_model,
             "context_window": context_window,
             "iteration_count": 0,
-            "max_iterations": 1,
+            "max_iterations": INTENT_AGENT_MAX_ITERATIONS,
             "intent_result": None,
             "pre_fetch_bundle": prefetch_bundle,
         }
@@ -371,11 +375,11 @@ async def handle_thread_chat(
         # When web search is enabled, add 2 extra iterations so the agent has room to
         # call search_web after an initial search_documents call that may return nothing.
         coverage = intent.get("context_coverage", "PROBABLY_SUFFICIENT")
-        web_bonus = 2 if use_web_search else 0
+        web_bonus = WEB_SEARCH_ITERATION_BONUS if use_web_search else 0
         if coverage == "SUFFICIENT":
-            effective_max_iterations = min(max_iterations, 2 + web_bonus)
+            effective_max_iterations = min(max_iterations, MAX_ITERATIONS_SUFFICIENT_COVERAGE + web_bonus)
         elif coverage == "PROBABLY_SUFFICIENT":
-            effective_max_iterations = min(max_iterations, 4 + web_bonus)
+            effective_max_iterations = min(max_iterations, MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE + web_bonus)
         else:
             effective_max_iterations = max_iterations
 
