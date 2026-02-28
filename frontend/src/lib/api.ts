@@ -189,6 +189,8 @@ export async function getPromptPreview(payload: {
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
+  use_web_search?: boolean;
+  intent_agent_ran?: boolean;
 }): Promise<{ prompt: string }> {
   const res = await fetch(`${RAG_API_BASE}/prompt-preview`, {
     method: "POST",

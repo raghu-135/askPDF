@@ -167,6 +167,8 @@ class PromptPreviewRequest(BaseModel):
     system_role: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Optional[Dict[str, str]] = None
     custom_instructions: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
+    use_web_search: bool = False
+    intent_agent_ran: bool = True
 
 
 # ============ Thread Endpoints ============
@@ -198,6 +200,8 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
             system_role=req.system_role or "",
             tool_instructions=tool_instructions,
             custom_instructions=req.custom_instructions or "",
+            use_web_search=req.use_web_search,
+            intent_agent_ran=req.intent_agent_ran,
         )
         return {"prompt": prompt}
     except Exception as e:

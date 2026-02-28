@@ -267,6 +267,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     system_role: systemRole,
                     tool_instructions: effectiveToolInstructions,
                     custom_instructions: customInstructions,
+                    use_web_search: useWebSearch,
+                    intent_agent_ran: useIntentAgent,
                 });
                 if (!cancelled) {
                     setPromptPreview(res.prompt || '');
@@ -281,7 +283,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             cancelled = true;
             clearTimeout(timeoutId);
         };
-    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions]);
+    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, useIntentAgent]);
 
     const resetAllSettingsToDefault = () => {
         const defaults: Record<string, string> = {};
