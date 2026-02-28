@@ -19,12 +19,15 @@ import hashlib
 import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 
 # Local imports
 from .tts import tts_sentence_to_wav, list_voice_styles
 from .pdf_service import PDFService, get_indexing_status, IndexingStatus
+from .web_capture_service import capture_webpage, webpage_exists, url_to_hash
 
 
 
@@ -145,6 +148,57 @@ async def get_file_index_status(file_hash: str):
         "file_hash": file_hash,
         **status.to_dict()
     }
+
+
+# ---------------------------------------------------------------------------
+# Web capture endpoints
+# ---------------------------------------------------------------------------
+
+class WebCaptureRequest(BaseModel):
+    url: str
+    force: bool = False
+
+
+@app.post(f"{API_PREFIX}/web-capture")
+async def web_capture(req: WebCaptureRequest):
+    """
+    Fetch a webpage, inline its assets, and save a self-contained HTML file.
+
+    Returns the file_hash and page title so the frontend can build the
+    iframe URL: GET /api/web-page/{file_hash}
+    """
+    try:
+        result = await capture_webpage(req.url, force=req.force)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to capture page: {exc}")
+    return {
+        "file_hash": result["file_hash"],
+        "title": result["title"],
+        "cached": result["cached"],
+    }
+
+
+@app.get(f"{API_PREFIX}/web-page/{{file_hash}}")
+async def get_web_page(file_hash: str):
+    """
+    Return the saved self-contained HTML for a captured webpage.
+
+    The frontend fetches this as text, wraps it in a Blob URL, and renders
+    it inside an <iframe> — bypassing any X-Frame-Options / CSP from the
+    original site entirely.
+    """
+    if not webpage_exists(file_hash):
+        raise HTTPException(status_code=404, detail="Web page capture not found.")
+    html_path = f"/static/webpages/{file_hash}.html"
+    return FileResponse(
+        html_path,
+        media_type="text/html",
+        headers={
+            # Explicitly allow framing from our own frontend origin
+            "X-Frame-Options": "ALLOWALL",
+            "Content-Security-Policy": "frame-ancestors *",
+        },
+    )
 
 
 @app.get("/health")

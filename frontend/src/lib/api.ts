@@ -247,6 +247,43 @@ export async function addWebSourceToThread(
   return res.json();
 }
 
+// ============ Web Capture ============
+
+export interface WebCaptureResult {
+  file_hash: string;
+  title: string;
+  cached: boolean;
+}
+
+/**
+ * Ask the backend to fetch a URL, inline its assets, and save a self-contained
+ * HTML file.  Returns the file_hash you can pass to fetchWebPageHtml().
+ */
+export async function captureWebPage(url: string, force = false): Promise<WebCaptureResult> {
+  const res = await fetch(`${API_BASE}/api/web-capture`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, force }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/**
+ * Fetch the saved HTML for a captured page as raw text.
+ * The caller can wrap it in a Blob URL for use as an iframe src.
+ */
+export async function fetchWebPageHtml(fileHash: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/web-page/${fileHash}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.text();
+}
+
+/** Convenience: return the direct URL to the saved HTML (for FileResponse). */
+export function webPageUrl(fileHash: string): string {
+  return `${API_BASE}/api/web-page/${fileHash}`;
+}
+
 export async function removeSourceFromThread(
   threadId: string,
   fileHash: string

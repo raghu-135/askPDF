@@ -14,6 +14,7 @@ declare const process: {
 import PdfUploader from "../components/PdfUploader";
 import WebUploader from "../components/WebUploader";
 import PdfViewer from "../components/PdfViewer";
+import WebViewer from "../components/WebViewer";
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
@@ -388,30 +389,14 @@ export default function Home() {
                 <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
                 <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
               </Box>
-            ) : activeTab?.sourceType === 'web' ? (
-              /* Web source view */
-              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit', p: 4 }}>
-                <Box sx={{ textAlign: 'center', maxWidth: 480 }}>
-                  <Typography variant="h6" gutterBottom sx={{ color: pdfDarkMode ? '#eee' : 'text.primary' }}>
-                    🌐 Webpage Indexed
-                  </Typography>
-                  <Typography variant="body2" sx={{ mb: 2, color: pdfDarkMode ? '#ccc' : 'text.secondary', wordBreak: 'break-all' }}>
-                    {activeTab.sourceUrl || activeTab.fileName}
-                  </Typography>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    href={activeTab.sourceUrl || activeTab.fileName}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open in browser ↗
-                  </Button>
-                  <Typography variant="caption" sx={{ display: 'block', mt: 2, color: pdfDarkMode ? '#aaa' : 'text.secondary' }}>
-                    This page has been indexed and is searchable in the Chat tab.
-                  </Typography>
-                </Box>
-              </Box>
+            ) : activeTab?.sourceType === 'web' && activeTab.sourceUrl && activeTab.fileHash ? (
+              /* Web source view — rendered as a self-contained saved HTML page */
+              <WebViewer
+                url={activeTab.sourceUrl}
+                fileHash={activeTab.fileHash}
+                darkMode={pdfDarkMode}
+                isResizing={isResizing}
+              />
             ) : (pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
               <PdfViewer
                 pdfUrl={pdfUrl}
