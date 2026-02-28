@@ -185,7 +185,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             const response = await getThreadMessages(activeThread.id);
             setMessages(response.messages.map(m => ({ 
-                ...m, 
+                ...m,
+                content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
                 isRecollected: false,
                 rewritten_query: m.role === 'user' ? m.context_compact : undefined,
                 web_sources: m.role === 'assistant' ? (m.web_sources || []) : undefined,
@@ -424,7 +425,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         finalMessages.push({ 
                             id: response.assistant_message_id || ('assistant-' + Date.now()), 
                             role: 'assistant', 
-                            content: response.answer,
+                            content: typeof response.answer === 'string' ? response.answer : String(response.answer ?? ''),
                             reasoning: response.reasoning || '',
                             reasoning_available: !!response.reasoning_available,
                             reasoning_format: response.reasoning_format || 'none',
@@ -746,7 +747,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     '& pre': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 }
                                 }}>
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {msg.content}
+                                        {typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')}
                                     </ReactMarkdown>
                                 </Typography>
                                 {msg.role === 'user' && msg.rewritten_query && (
