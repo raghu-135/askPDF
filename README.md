@@ -1,6 +1,6 @@
 # askpdf
 
-A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retrieval Augmented Generation)**, and **AI chat**—all designed to run privately and locally on your own machine. Upload a PDF, have it read aloud with synchronized text highlighting, and chat with your document using AI. Everything works for free using open-source models like Docker Model Runner, Ollama, or LMStudio—no cloud/subscriptions required.
+A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retrieval Augmented Generation)**, **multi-agent AI chat**, and **reasoning trace support**—all designed to run privately and locally on your own machine. Upload a PDF, have it read aloud with synchronized text highlighting, and chat with your document using a LangGraph-powered orchestrator with an optional Intent Agent. Everything works for free using open-source models like Docker Model Runner, Ollama, or LMStudio—no cloud/subscriptions required.
 
 ## 🌟 Features
 
@@ -13,13 +13,35 @@ A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retriev
 - **Interactive Navigation**: Double-click any sentence in the PDF or any message in the Chat to start playback
 - **Centralized Controls**: Unified player in the footer manages all audio sources (Speed 0.5x - 2.0x)
 
+### 🤖 Multi-Agent AI Architecture
+- **Orchestrator Agent**: A LangGraph-powered agent that plans, selects tools, and synthesizes answers across multiple iterations
+- **Intent Agent** *(optional, per-thread)*: A lightweight pre-processing agent that captures and rewrites the user's question before passing it to the orchestrator — improving query clarity and search precision
+- **Tool-Calling Agents**: The orchestrator selects from a rich catalog of tools each turn, including document search, conversation memory recall, web search, document listing, and clarification requests
+- **Configurable Iterations**: Control how many tool-call steps the agent is allowed to perform, tunable globally and per-thread
+- **Force Final Answer**: When the maximum iteration budget is exhausted the agent is forced to synthesize a final answer from all gathered evidence instead of looping indefinitely
+
+### 🧠 Reasoning / Thinking Trace Support
+- **Multi-Provider Extraction**: Automatically extracts chain-of-thought reasoning from responses, supporting structured blocks (Anthropic Claude, OpenAI `o`-series, Responses API) and `<think>` tags (DeepSeek, QwQ, Qwen3-Thinking)
+- **Stored in Database**: Reasoning traces are persisted in SQLite alongside the answer and can be re-displayed after page reload
+- **Shown in UI**: Expandable reasoning panel in chat bubbles lets you inspect the AI's internal thinking step-by-step
+
 ### 💬 RAG-Powered Chat, Threads & Semantic Memory
 - **Threaded Chat**: Organize conversations into threads with persistent SQLite storage for messages and file associations
 - **Per-Thread Collections**: Each thread has its own isolated vector collection in Qdrant, locked to a specific embedding model
 - **Dual-Search Retrieval**: AI searches both document chunks AND past Q&A pairs (semantic memory) simultaneously
 - **Semantic Recollection**: The UI highlights which past chat messages were "recalled" and used by the AI to answer the current question
-- **Internet Search (DuckDuckGo)**: Optionally augment answers with live web search results for up-to-date or external information
-- **Context Management**: Intelligent token budgeting ensures the most relevant PDF chunks, recent history, and semantic memories fit the LLM context window
+- **Internet Search (DuckDuckGo)**: Optionally augment answers with live web search results for up-to-date or external information; web sources are stored in SQLite and displayed after page reload
+- **Context Management**: Intelligent token budgeting that scales proportionally to the configured context window, ensuring the most relevant PDF chunks, recent history, and semantic memories fit the LLM context window
+
+### ⚙️ Per-Thread Prompt & Behaviour Settings
+- **Thread Settings Dialog**: A per-thread configuration panel accessible from the chat header lets you tune AI behaviour without touching code
+- **System Role**: Customise the AI's persona and expertise focus for each thread (up to 500 chars)
+- **Tool Instructions**: Override the default prompt for each individual tool (document search, web search, memory recall, etc.) to guide how the agent uses that tool (up to 500 chars per tool)
+- **Custom Instructions**: Append freeform additional instructions to every prompt in the thread (up to 2 000 chars)
+- **Max Iterations**: Set the maximum number of tool-use rounds the orchestrator may take (range: 1–30)
+- **Intent Agent Toggle**: Enable or disable the Intent Agent per thread; also configure how many rewrite iterations it is allowed
+- **Prompt Preview**: Live preview of the fully composed system prompt before saving, so you know exactly what the LLM will see
+- **Persistent Settings**: All thread settings are saved to SQLite and restored automatically when returning to a thread
 ### 🌐 Internet Search (DuckDuckGo)
 
 You can enable **Internet Search** in the chat panel to let the AI answer questions using both your PDF and live web results (via DuckDuckGo). This is useful for:
@@ -30,6 +52,8 @@ You can enable **Internet Search** in the chat panel to let the AI answer questi
 **How it works:**
 - When enabled, the app performs a DuckDuckGo search for your question and injects the top results into the LLM's context window, along with PDF content.
 - The LLM then answers using both sources.
+- Web search results (source URLs and snippets) are stored in SQLite and Qdrant, so they are still visible in the chat after a page reload.
+- When a message is deleted, its associated web search results are also removed from SQLite and Qdrant.
 
 **Privacy:**
 - All queries are sent to DuckDuckGo only when Internet Search is enabled.
@@ -91,14 +115,22 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 ## 📋 Prerequisites
 
 - **Docker** and **Docker Compose**
-- **Local LLM Server**: The app is configured to use an **OpenAI-compatible API** by default on port `12434`.
-  - **Option A: DMR (Default)** - Built into Docker Desktop.
-  - **Option B: Ollama** - Requires running on port `12434` or updating configuration.
-  - **Option C: LMStudio** - Desktop app, exposes OpenAI-compatible API (default: `http://localhost:1234/v1`).
+- **A local LLM runtime** — pick any one of:
+  - **Docker Model Runner (DMR)** — built into Docker Desktop, no extra install needed
+  - **Ollama** — lightweight CLI runtime, great model library
+  - **LMStudio** — GUI app, easy model browsing and loading
 
 ### Required Models (on your LLM server)
-- **LLM Model**: e.g., `ai/qwen3:latest` (DMR), `llama3` (Ollama), or any chat model supported by LMStudio
-- **Embedding Model**: e.g., `ai/nomic-embed-text-v1.5:latest` (DMR), `nomic-embed-text` (Ollama), or any embedding model supported by LMStudio
+
+You need one **chat model** and one **embedding model** loaded in whichever runtime you choose:
+
+| Runtime | Chat model example | Embedding model example |
+|---------|-------------------|------------------------|
+| DMR | `ai/qwen3:latest` | `ai/nomic-embed-text-v1.5:latest` |
+| Ollama | `llama3.2` | `nomic-embed-text` |
+| LMStudio | any GGUF chat model | any GGUF embedding model |
+
+You select both models inside the app after it starts — no hardcoding required.
 
 ## 🚀 Quick Start
 
@@ -111,88 +143,60 @@ cd askpdf
 
 
 
-### 2. Create Your .env File
+### 2. Choose a Local LLM Runtime and Set Up Your `.env`
 
-At the root of the project directory (the same folder as `docker-compose.yml`), create a file named `.env` with the following content:
+The app needs an **OpenAI-compatible LLM server** running on your machine for both chat and embeddings. Pick whichever option suits you best, then create a `.env` file at the project root with the shown value.
 
-```env
-LLM_API_URL=http://host.docker.internal:12434
-```
+---
 
-This variable configures the LLM server endpoint. If you are using Ollama on its default port, set:
+#### Option A: Docker Model Runner (DMR) *(built into Docker Desktop — easiest if you already use Docker)*
 
-```env
-LLM_API_URL=http://host.docker.internal:11434
-```
-
-> **Note:** After editing `.env`, restart your containers for changes to take effect.
-
-
-### 3. Start Your Local LLM Server
-
-The application requires an OpenAI-compatible API for LLM and embeddings. You can use Docker Model Runner (DMR), Ollama, or LMStudio as your local LLM server.
-
-#### Option A: Docker Model Runner (DMR) (Recommended)
-
-1. Ensure Docker Desktop is running and the DMR extension is installed.
-2. Set `LLM_API_URL` in your `.env` file to:
+1. Open **Docker Desktop** and make sure the **Model Runner** feature is enabled (Settings → Features in development → Enable Docker Model Runner).
+2. Pull the required models from the Docker Desktop UI **or** via the CLI:
+   ```bash
+   docker model pull ai/qwen3:latest              # LLM
+   docker model pull ai/nomic-embed-text-v1.5:latest  # Embeddings
+   ```
+3. Verify both models appear as **Running** in Docker Desktop → Model Runner.
+4. Create your `.env` file:
    ```env
    LLM_API_URL=http://host.docker.internal:12434
    ```
-3. Download the required models:
-   - LLM Model (e.g., `ai/qwen3:latest`): [Qwen3 on Hugging Face](https://huggingface.co/Qwen/Qwen1.5-7B-Chat)
-   - Embedding Model (e.g., `ai/nomic-embed-text-v1.5:latest`): [nomic-embed-text-v1.5 on Hugging Face](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5)
-4. Import models into DMR:
-   - Open Docker Desktop, go to the DMR extension, and use the "Import Model" button to add the downloaded models.
-   - Or, use the DMR CLI:
-     ```bash
-     dmr import <path-to-model-directory>
-     ```
-5. Verify both models are listed as **Ready** in the DMR UI.
 
+---
 
-#### Option B: Ollama
-#### Option C: LMStudio
+#### Option B: Ollama *(great for running many open-source models)*
 
-1. Download and install [LMStudio](https://lmstudio.ai/) on your machine.
-2. Launch LMStudio and load your desired LLM and embedding models.
-3. LMStudio exposes an OpenAI-compatible API at `http://localhost:1234/v1` by default.
-4. Edit your `.env` file and set:
-  ```env
-  LLM_API_URL=http://host.docker.internal:1234/v1
-  ```
-  (If running outside Docker, use `http://localhost:1234/v1`.)
-5. Restart your containers for changes to take effect.
+> Requires Ollama **v0.1.34+** for OpenAI-compatible API support.
 
-> **Note:** LMStudio supports a wide range of models and provides a user-friendly interface for model management. Ensure the models you want to use are loaded and available in LMStudio.
+1. [Download and install Ollama](https://ollama.com/download) for your OS.
+2. Pull the required models:
+   ```bash
+   ollama pull llama3.2          # or any chat model you prefer
+   ollama pull nomic-embed-text  # embedding model
+   ```
+3. Ollama runs on port `11434` by default. Create your `.env` file:
+   ```env
+   LLM_API_URL=http://host.docker.internal:11434
+   ```
 
-Ollama runs on port `11434` by default. The easiest way to use Ollama with this app is to update your `.env` file (recommended):
-> **Note:** Ollama supports the OpenAI-compatible API (used by this app) starting from version **0.1.34** and above. Ensure your Ollama installation is up to date.
+---
 
-**Option 1 (Recommended): Change the API endpoint in your `.env` file**
+#### Option C: LMStudio *(best if you prefer a GUI for browsing and loading models)*
 
-Edit your `.env` file at the project root and set:
+1. [Download and install LMStudio](https://lmstudio.ai/).
+2. Open LMStudio, search for and download:
+   - A chat model (e.g. `Llama 3.2`, `Qwen 2.5`, or any GGUF model)
+   - An embedding model (e.g. `nomic-embed-text`)
+3. Go to **Local Server** in LMStudio and click **Start Server**. The default port is `1234`.
+4. Create your `.env` file:
+   ```env
+   LLM_API_URL=http://host.docker.internal:1234/v1
+   ```
 
-```env
-LLM_API_URL=http://host.docker.internal:11434
-```
+---
 
-This will direct the app to use Ollama's default port. (If running outside Docker, you can use `http://localhost:11434`.)
-
-> **Note:** After changing `.env`, restart your containers for the new value to take effect.
-
-**Option 2: Change Ollama's port to 12434**
-
-If you prefer, you can start Ollama on port 12434 to match the default expected by the app:
-
-```bash
-# Start Ollama on the expected port
-OLLAMA_HOST=0.0.0.0:12434 ollama serve
-
-# In a new terminal, pull the models
-ollama pull llama3
-ollama pull nomic-embed-text
-```
+> **Note:** After creating or editing `.env`, you must restart the containers for the change to take effect.
 
 ### 3. Start the Application
 
@@ -232,6 +236,20 @@ docker-compose up --build
 4. **Semantic Identification**: If the AI uses past conversations to answer, the relevant messages will glow with a purple border in the chat history.
 5. **Follow-up**: The system maintains context for follow-up questions within the thread.
 6. **Read AI Answers**: Double-click any assistant chat bubble to have the response read aloud.
+7. **View Reasoning**: If the model emits a reasoning/thinking trace (e.g. DeepSeek's `<think>` blocks or Claude's extended thinking), an expandable panel appears in the chat bubble.
+8. **Clarification**: When the agent is unsure of the intent, it may present multiple-choice clarification options—click one to continue.
+
+### Thread Settings (Prompt Customisation)
+
+1. Open any thread and click the **⚙ Settings** icon in the chat header.
+2. Adjust the fields:
+   - **System Role** — changes the AI's persona for this thread.
+   - **Tool Instructions** — override how the AI uses each tool (document search, web search, memory recall, etc.).
+   - **Custom Instructions** — extra instructions appended to every prompt.
+   - **Max Iterations** — maximum number of tool-use rounds before a forced final answer.
+   - **Intent Agent** — toggle on/off; configure its iteration budget.
+3. Click **Prompt Preview** to see the exact system prompt the LLM will receive.
+4. Click **Save** — settings are persisted per-thread in SQLite.
 
 ## 🛠️ Technology Stack
 
@@ -248,8 +266,9 @@ docker-compose up --build
 |------------|---------|
 | **FastAPI** | Web framework |
 | **LangChain** | LLM/Embedding integration |
-| **LangGraph** | Stateful RAG workflow |
+| **LangGraph** | Stateful multi-agent workflow (Orchestrator + Intent Agent) |
 | **Qdrant Client** | Vector database operations |
+| **aiosqlite** | Async SQLite for threads, messages, settings, and web sources |
 
 ### Frontend
 | Technology | Purpose |
@@ -275,14 +294,15 @@ askpdf/
 ├── rag_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── main.py                 # FastAPI app, index, chat, thread, file, and message endpoints
+│   ├── main.py                 # FastAPI app, index, chat, thread, file, message, settings, and prompt endpoints
 │   ├── rag.py                  # Document chunking & indexing (thread-aware)
-│   ├── agent.py                # LangGraph RAG workflow
-│   ├── models.py               # LLM/Embedding model clients
-│   ├── database.py             # SQLite thread/message/file management
+│   ├── agent.py                # LangGraph multi-agent workflow (Orchestrator + Intent Agent + tools)
+│   ├── reasoning.py            # Multi-provider reasoning/thinking trace extraction
+│   ├── models.py               # LLM/Embedding model clients, constants, and config helpers
+│   ├── database.py             # SQLite thread/message/file/settings management
 │   └── vectordb/
 │       ├── base.py             # Abstract vector DB interface
-│       └── qdrant.py           # Qdrant adapter implementation (threaded collections)
+│       └── qdrant.py           # Qdrant adapter implementation (threaded collections, web-source storage)
 └── frontend/
   ├── Dockerfile
   ├── package.json
@@ -293,11 +313,11 @@ askpdf/
     │   ├── PdfUploader.tsx     # File upload with model selection
     │   ├── PdfViewer.tsx       # PDF rendering with overlays
     │   ├── PlayerControls.tsx  # Audio playback controls
-    │   ├── ChatInterface.tsx   # RAG chat UI (thread-aware)
+    │   ├── ChatInterface.tsx   # RAG chat UI (thread-aware, settings dialog, reasoning panel)
     │   ├── ThreadSidebar.tsx   # Thread management UI
     │   └── TextViewer.tsx      # Alternative text display
     └── lib/
-      ├── api.ts          # Backend & RAG API client (thread/message/file)
+      ├── api.ts          # Backend & RAG API client (thread/message/file/settings/prompt)
       └── tts-api.ts      # TTS API client
 ```
 The application expects an OpenAI-compatible API at the URL specified by `LLM_API_URL` in your `.env` file (default: `http://host.docker.internal:12434`).
@@ -371,7 +391,7 @@ Create, list, update, and delete chat threads. Each thread has its own context, 
 Add a file to a thread and trigger background indexing. Associates PDFs with threads for context-aware chat.
 
 #### `POST /threads/{thread_id}/chat`
-Chat with a thread using semantic memory (retrieves both PDF chunks and previous chat answers for context).
+Chat with a thread using the multi-agent orchestrator (and optional Intent Agent).
 
 **Request:**
 ```json
@@ -379,7 +399,14 @@ Chat with a thread using semantic memory (retrieves both PDF chunks and previous
   "thread_id": "abc123",
   "question": "What is this document about?",
   "llm_model": "ai/qwen3:latest",
-  "use_web_search": false
+  "use_web_search": false,
+  "max_iterations": 10,
+  "context_window": 128000,
+  "use_intent_agent": true,
+  "intent_agent_max_iterations": 1,
+  "system_role_override": "Expert researcher",
+  "tool_instructions_override": {},
+  "custom_instructions_override": ""
 }
 ```
 
@@ -387,13 +414,57 @@ Chat with a thread using semantic memory (retrieves both PDF chunks and previous
 ```json
 {
   "answer": "This document discusses...",
+  "reasoning": "First I searched for...",
+  "reasoning_available": true,
+  "reasoning_format": "tagged_text",
   "used_chat_ids": ["msg1", "msg2"],
-  "pdf_sources": [ ... ]
+  "pdf_sources": [ ... ],
+  "web_sources": [ ... ]
 }
 ```
 
+#### `GET /threads/{thread_id}/settings`
+Get persisted prompt/behaviour settings for a thread.
+
+#### `PUT /threads/{thread_id}/settings`
+Update persisted settings for a thread.
+
+**Request body fields (all optional):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `max_iterations` | int (1–30) | Max tool-call rounds for orchestrator |
+| `system_role` | string (≤500 chars) | AI persona override |
+| `tool_instructions` | object | Per-tool prompt overrides |
+| `custom_instructions` | string (≤2000 chars) | Additional instructions appended to every prompt |
+| `use_intent_agent` | bool | Enable/disable the Intent Agent |
+| `intent_agent_max_iterations` | int (1–10) | Iteration budget for Intent Agent |
+
+#### `GET /prompt-tools`
+Returns the tool catalog (id, display name, description, default prompt) and current default thread settings. Used by the settings dialog to populate tool instruction editors.
+
+#### `POST /prompt-preview`
+Returns the fully composed system prompt that will be sent to the LLM, given a set of settings. Used for live preview in the settings dialog.
+
+**Request:**
+```json
+{
+  "context_window": 128000,
+  "system_role": "Expert researcher",
+  "tool_instructions": {},
+  "custom_instructions": "",
+  "use_web_search": false,
+  "intent_agent_ran": true
+}
+```
+
+**Response:**
+```json
+{ "prompt": "You are an Expert researcher..." }
+```
+
 #### `GET /threads/{thread_id}/messages` / `DELETE /messages/{message_id}`
-List and delete messages in a thread. Supports per-thread chat history management.
+List and delete messages in a thread. Deleting a message also removes associated web-search results from Qdrant.
 
 #### `GET /models`
 Fetch available models from LLM server.
@@ -413,6 +484,17 @@ Health check endpoint.
 | `QDRANT_HOST` | RAG Service | `qdrant` | Qdrant hostname |
 | `QDRANT_PORT` | RAG Service | `6333` | Qdrant port |
 | `LLM_API_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (Change to `...:11434` for default Ollama) |
+| `DEFAULT_TOKEN_BUDGET` | RAG Service | `128000` | Default context-window size in tokens |
+| `DEFAULT_MAX_ITERATIONS` | RAG Service | `10` | Default max orchestrator tool-call rounds |
+| `MIN_MAX_ITERATIONS` | RAG Service | `1` | Minimum allowed value for max iterations |
+| `MAX_MAX_ITERATIONS` | RAG Service | `30` | Maximum allowed value for max iterations |
+| `INTENT_AGENT_MAX_ITERATIONS` | RAG Service | `1` | Default iteration budget for the Intent Agent |
+| `MAX_CUSTOM_INSTRUCTIONS_CHARS` | RAG Service | `2000` | Max characters for custom instructions |
+| `MAX_SYSTEM_ROLE_CHARS` | RAG Service | `500` | Max characters for system role override |
+| `MAX_TOOL_INSTRUCTION_CHARS` | RAG Service | `500` | Max characters per tool instruction override |
+| `MAX_ITERATIONS_SUFFICIENT_COVERAGE` | RAG Service | `2` | Iteration threshold for "sufficient coverage" early-exit hint |
+| `MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE` | RAG Service | `4` | Iteration threshold for "probably sufficient" hint |
+| `WEB_SEARCH_ITERATION_BONUS` | RAG Service | `2` | Extra iterations granted when web search is enabled |
 
 ### Voice Styles
 
@@ -449,17 +531,24 @@ User creates/selects thread
   ↓
 User asks question in thread
   ↓
-RAG Service: Embed question
+RAG Service: [Optional] Intent Agent rewrites / clarifies question
   ↓
-RAG Service: Search Qdrant for top-5 relevant PDF chunks (thread collection)
+RAG Service: Orchestrator Agent begins tool-call loop (up to max_iterations)
   ↓
-RAG Service: Search Qdrant for relevant previous chat answers (semantic memory)
+  ├── search_documents          → Qdrant: top-K PDF chunks for thread
+  ├── search_conversation_history → Qdrant: semantic memory recall
+  ├── search_web                → DuckDuckGo (if enabled); stored in SQLite + Qdrant
+  ├── search_pdf_by_document    → targeted per-document search
+  ├── list_uploaded_documents   → enumerate PDFs in thread
+  └── ask_for_clarification     → present choices to user
   ↓
-RAG Service: Build prompt (system + context + history + question + semantic memory)
+RAG Service: Force final answer when budget exhausted
   ↓
-RAG Service: Call LLM via OpenAI-compatible API
+RAG Service: Extract reasoning trace (structured blocks or <think> tags)
   ↓
-Frontend: Display markdown-rendered answer in thread
+RAG Service: Store answer + reasoning + web_sources in SQLite
+  ↓
+Frontend: Display markdown answer, expandable reasoning panel, web source cards
 ```
 
 ### TTS Playback Flow
