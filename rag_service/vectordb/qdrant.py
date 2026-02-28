@@ -3,9 +3,14 @@ qdrant.py - Qdrant vector database adapter with per-thread collections
 
 This adapter supports:
 - Per-thread collections (col_thread_{thread_id})
-- PDF chunk storage with file_hash filtering
+- Knowledge source storage (PDFs and webpages) with file_hash filtering
 - Chat QA memory storage and retrieval
-- Semantic search across both PDF and chat content
+- Semantic search across knowledge sources and chat content
+
+Data types stored in each thread collection:
+- knowledge_source  (source_kind: 'pdf' | 'webpage')  — uploaded documents & indexed webpages
+- chat_memory       — past QA conversation pairs
+- web_search        — cached internet search result snippets
 """
 
 from typing import List, Dict, Any, Optional
@@ -67,6 +72,17 @@ class QdrantAdapter(VectorDBClient):
                     distance=models.Distance.COSINE
                 ),
             )
+            # Create payload indexes for commonly filtered fields to speed up
+            # filtered vector searches as the collection grows.
+            for field in ["type", "file_hash", "message_id", "source_kind"]:
+                try:
+                    self.client.create_payload_index(
+                        collection_name=collection_name,
+                        field_name=field,
+                        field_schema=models.PayloadSchemaType.KEYWORD,
+                    )
+                except Exception as idx_err:
+                    print(f"Warning: could not create index on '{field}': {idx_err}", flush=True)
             print(f"Created thread collection: {collection_name}", flush=True)
         
         return collection_name
@@ -97,7 +113,7 @@ class QdrantAdapter(VectorDBClient):
         """Delete a collection from Qdrant."""
         self.client.delete_collection(collection_name=collection_name)
 
-    # ============ PDF Chunk Operations ============
+    # ============ Knowledge Source Operations (PDF + Webpage) ============
 
     async def index_pdf_chunks(
         self,
@@ -125,7 +141,8 @@ class QdrantAdapter(VectorDBClient):
             metadata = metadatas[i] if metadatas else {}
             payload = {
                 "text": text,
-                "type": "pdf_chunk",
+                "type": "knowledge_source",
+                "source_kind": "pdf",
                 "file_hash": file_hash,
                 "chunk_id": i,
                 **metadata
@@ -155,7 +172,7 @@ class QdrantAdapter(VectorDBClient):
         file_hash: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
-        Search for indexed document chunks (PDF and web sources) in a thread's collection.
+        Search for indexed knowledge source chunks (PDFs and webpages) in a thread's collection.
         Optionally filter by file_hash.
         """
         collection_name = self.get_thread_collection_name(thread_id)
@@ -163,11 +180,11 @@ class QdrantAdapter(VectorDBClient):
         if not self.client.collection_exists(collection_name):
             return []
 
-        # Build filter for document chunks (both PDF and web sources)
+        # Build filter for knowledge sources (PDFs and webpages share type='knowledge_source')
         must_conditions = [
             models.FieldCondition(
                 key="type",
-                match=models.MatchAny(any=["pdf_chunk", "web_source"])
+                match=models.MatchValue(value="knowledge_source")
             )
         ]
         
@@ -190,12 +207,13 @@ class QdrantAdapter(VectorDBClient):
 
         results = []
         for hit in search_result:
-            payload_type = hit.payload.get("type", "pdf_chunk")
+            source_kind = hit.payload.get("source_kind", "pdf")
             results.append({
                 "text": hit.payload.get("text", ""),
                 "file_hash": hit.payload.get("file_hash"),
                 "chunk_id": hit.payload.get("chunk_id"),
-                "type": payload_type,
+                "type": "knowledge_source",
+                "source_kind": source_kind,
                 "url": hit.payload.get("url"),
                 "title": hit.payload.get("title"),
                 "score": hit.score,
@@ -216,7 +234,8 @@ class QdrantAdapter(VectorDBClient):
 
         # Filter for the specific chunks
         must_conditions = [
-            models.FieldCondition(key="type", match=models.MatchValue(value="pdf_chunk")),
+            models.FieldCondition(key="type", match=models.MatchValue(value="knowledge_source")),
+            models.FieldCondition(key="source_kind", match=models.MatchValue(value="pdf")),
             models.FieldCondition(key="file_hash", match=models.MatchValue(value=file_hash)),
         ]
         
@@ -248,8 +267,9 @@ class QdrantAdapter(VectorDBClient):
                 "text": hit.payload.get("text", ""),
                 "file_hash": hit.payload.get("file_hash"),
                 "chunk_id": hit.payload.get("chunk_id"),
-                "type": "pdf_chunk",
-                "metadata": {k: v for k, v in hit.payload.items() if k not in ["text", "type"]}
+                "type": "knowledge_source",
+                "source_kind": "pdf",
+                "metadata": {k: v for k, v in hit.payload.items() if k not in ["text", "type", "source_kind"]}
             })
         
         # Sort by chunk_id to maintain sequence
@@ -553,7 +573,7 @@ class QdrantAdapter(VectorDBClient):
     ) -> int:
         """
         Index webpage content chunks into a thread's collection.
-        Stored with type='web_source' and file_hash for later deletion.
+        Stored with type='knowledge_source', source_kind='webpage' and file_hash for later deletion.
         Returns the number of chunks indexed.
         """
         if not embeddings:
@@ -568,7 +588,8 @@ class QdrantAdapter(VectorDBClient):
             metadata = metadatas[i] if metadatas else {}
             payload = {
                 "text": text,
-                "type": "web_source",
+                "type": "knowledge_source",
+                "source_kind": "webpage",
                 "file_hash": file_hash,
                 "url": url,
                 "title": title,
@@ -593,7 +614,7 @@ class QdrantAdapter(VectorDBClient):
         file_hash: str,
     ) -> bool:
         """
-        Delete all indexed chunks (pdf_chunk or web_source) belonging to a given file_hash
+        Delete all knowledge_source chunks belonging to a given file_hash
         from a thread's collection.  Used when a source is removed from a thread.
         """
         collection_name = self.get_thread_collection_name(thread_id)
@@ -718,14 +739,34 @@ class QdrantAdapter(VectorDBClient):
         stats = await self.get_collection_stats(collection_name)
         
         if not stats:
-            return {"exists": False, "pdf_chunks": 0, "chat_memories": 0}
+            return {"exists": False, "knowledge_sources": 0, "chat_memories": 0}
         
         # Count by type
         try:
+            knowledge_count = self.client.count(
+                collection_name=collection_name,
+                count_filter=models.Filter(
+                    must=[models.FieldCondition(key="type", match=models.MatchValue(value="knowledge_source"))]
+                )
+            ).count
+
             pdf_count = self.client.count(
                 collection_name=collection_name,
                 count_filter=models.Filter(
-                    must=[models.FieldCondition(key="type", match=models.MatchValue(value="pdf_chunk"))]
+                    must=[
+                        models.FieldCondition(key="type", match=models.MatchValue(value="knowledge_source")),
+                        models.FieldCondition(key="source_kind", match=models.MatchValue(value="pdf")),
+                    ]
+                )
+            ).count
+
+            webpage_count = self.client.count(
+                collection_name=collection_name,
+                count_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(key="type", match=models.MatchValue(value="knowledge_source")),
+                        models.FieldCondition(key="source_kind", match=models.MatchValue(value="webpage")),
+                    ]
                 )
             ).count
             
@@ -736,26 +777,20 @@ class QdrantAdapter(VectorDBClient):
                 )
             ).count
 
-            web_count = self.client.count(
+            web_search_count = self.client.count(
                 collection_name=collection_name,
                 count_filter=models.Filter(
                     must=[models.FieldCondition(key="type", match=models.MatchValue(value="web_search"))]
                 )
             ).count
             
-            web_source_count = self.client.count(
-                collection_name=collection_name,
-                count_filter=models.Filter(
-                    must=[models.FieldCondition(key="type", match=models.MatchValue(value="web_source"))]
-                )
-            ).count
-            
             return {
                 "exists": True,
+                "knowledge_sources": knowledge_count,
                 "pdf_chunks": pdf_count,
+                "webpage_chunks": webpage_count,
                 "chat_memories": chat_count,
-                "web_search_chunks": web_count,
-                "web_source_chunks": web_source_count,
+                "web_search_chunks": web_search_count,
                 "total_points": stats["points_count"]
             }
         except Exception as e:
@@ -763,7 +798,7 @@ class QdrantAdapter(VectorDBClient):
             return {"exists": True, **stats}
 
     async def has_file_indexed(self, thread_id: str, file_hash: str) -> bool:
-        """Check if a specific file has been indexed in a thread's collection (any source type)."""
+        """Check if a specific file has been indexed in a thread's collection (any knowledge source)."""
         collection_name = self.get_thread_collection_name(thread_id)
         if not await self.thread_collection_exists(thread_id):
             return False
@@ -775,7 +810,7 @@ class QdrantAdapter(VectorDBClient):
                     must=[
                         models.FieldCondition(
                             key="type",
-                            match=models.MatchAny(any=["pdf_chunk", "web_source"])
+                            match=models.MatchValue(value="knowledge_source")
                         ),
                         models.FieldCondition(key="file_hash", match=models.MatchValue(value=file_hash))
                     ]

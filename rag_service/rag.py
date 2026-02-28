@@ -366,7 +366,7 @@ async def index_webpage_for_thread(
 ) -> Dict[str, Any]:
     """
     Fetch a webpage, extract its text, chunk it, generate embeddings,
-    and index into the thread's Qdrant collection as web_source chunks.
+    and index into the thread's Qdrant collection as knowledge_source (webpage) chunks.
 
     Args:
         thread_id: The thread to index into.
