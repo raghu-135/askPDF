@@ -460,9 +460,11 @@ async def get_thread_messages_endpoint(
                     "id": m.id,
                     "role": m.role.value,
                     "content": m.content,
+                    "context_compact": m.context_compact,
                     "reasoning": m.reasoning,
                     "reasoning_available": m.reasoning_available,
                     "reasoning_format": m.reasoning_format,
+                    "web_sources": m.web_sources,
                     "created_at": m.created_at.isoformat()
                 }
                 for m in messages
