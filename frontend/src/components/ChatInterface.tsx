@@ -585,26 +585,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
             {/* Header */}
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
-                {/* Left controls: Embedding model, Ctx Size, Internet Search, Settings */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1, minWidth: 0 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                     <Tooltip title={`Embedding model locked: ${activeThread.embed_model}`}>
-                        <Chip 
-                            icon={<LockIcon fontSize="small" />}
-                            label={activeThread.embed_model.split('/').pop()?.split(':')[0] || activeThread.embed_model}
+                        <LockIcon fontSize="medium" color="action" />
+                    </Tooltip>
+                </Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
+                    <Tooltip title="AI prompt settings for this thread" placement="top">
+                        <IconButton
                             size="small"
-                            variant="outlined"
-                            sx={{ 
-                                opacity: 0.7, 
-                                fontSize: '0.8rem', 
-                                bgcolor: 'background.paper', 
-                                borderColor: 'divider',
-                                maxWidth: 90,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                px: 1
-                            }}
-                        />
+                            onClick={() => setSettingsDialogOpen(true)}
+                            sx={{ p: 0.5 }}
+                        >
+                            <SettingsIcon />
+                        </IconButton>
+                    </Tooltip>
+                    <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
+                        <IconButton
+                            size="small"
+                            color={useWebSearch ? "primary" : "default"}
+                            onClick={() => setUseWebSearch(v => !v)}
+                            sx={{ p: 0.5 }}
+                        >
+                            {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
+                        </IconButton>
                     </Tooltip>
                     <Tooltip 
                         title={
@@ -668,29 +672,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             inputProps={{ min: 1, step: 1, style: { textAlign: 'right' } }}
                         />
                     </Tooltip>
-                    <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
-                        <IconButton
-                            size="small"
-                            color={useWebSearch ? "primary" : "default"}
-                            onClick={() => setUseWebSearch(v => !v)}
-                            sx={{ p: 0.5, minWidth: 30 }}
-                        >
-                            {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
-                        </IconButton>
-                    </Tooltip>
-                    <Tooltip title="AI prompt settings for this thread" placement="top">
-                        <IconButton
-                            size="small"
-                            onClick={() => setSettingsDialogOpen(true)}
-                            sx={{ p: 0.5, minWidth: 30 }}
-                        >
-                            <SettingsIcon />
-                        </IconButton>
-                    </Tooltip>
-                </Box>
-                {/* Right: SelectLLM */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-                    <FormControl size="small" sx={{ minWidth: 80 }}>
+                    <FormControl fullWidth size="small">
                         <InputLabel id="llm-label">Select LLM</InputLabel>
                         <Select
                             labelId="llm-label"
