@@ -18,13 +18,27 @@ import os
 import uuid
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from vectordb.base import VectorDBClient
 
 
-class QdrantAdapter(VectorDBClient):
+# Module-level singleton — avoids re-creating a TCP connection on every call.
+_singleton_instance: Optional["QdrantAdapter"] = None
+
+
+def get_qdrant() -> "QdrantAdapter":
+    """Return the shared QdrantAdapter singleton."""
+    global _singleton_instance
+    if _singleton_instance is None:
+        _singleton_instance = QdrantAdapter()
+    return _singleton_instance
+
+
+class QdrantAdapter:
     """
-    Adapter for Qdrant vector database, implementing the VectorDBClient interface.
-    Supports per-thread collections and dual-search (PDF + chat memory).
+    Adapter for Qdrant vector database.
+    Supports per-thread collections and dual-search (knowledge sources + chat memory).
+
+    Prefer using the module-level ``get_qdrant()`` factory to obtain a shared
+    singleton instance rather than instantiating this class directly.
     """
     def __init__(self) -> None:
         """Initialize the Qdrant client using environment variables for host and port."""
@@ -43,18 +57,6 @@ class QdrantAdapter(VectorDBClient):
         """Get the collection name for a thread."""
         return f"col_thread_{thread_id}"
     
-    @staticmethod
-    def get_legacy_collection_name(embedding_model_name: str, file_hash: Optional[str] = None) -> str:
-        """
-        Generate a safe collection name for legacy compatibility.
-        Used for non-thread-based indexing (backward compatible).
-        """
-        base_model_name = embedding_model_name.split(":")[0]
-        safe_model_name = base_model_name.replace("-", "_").replace(".", "_").replace("/", "_")
-        if file_hash:
-            return f"rag_{safe_model_name}_{file_hash}"
-        return f"rag_{safe_model_name}"
-
     # ============ Collection Management ============
 
     async def create_thread_collection(self, thread_id: str, vector_size: int = 768) -> str:
@@ -74,12 +76,18 @@ class QdrantAdapter(VectorDBClient):
             )
             # Create payload indexes for commonly filtered fields to speed up
             # filtered vector searches as the collection grows.
-            for field in ["type", "file_hash", "message_id", "source_kind"]:
+            for field, schema in [
+                ("type",        models.PayloadSchemaType.KEYWORD),
+                ("file_hash",   models.PayloadSchemaType.KEYWORD),
+                ("message_id",  models.PayloadSchemaType.KEYWORD),
+                ("source_kind", models.PayloadSchemaType.KEYWORD),
+                ("chunk_id",    models.PayloadSchemaType.INTEGER),
+            ]:
                 try:
                     self.client.create_payload_index(
                         collection_name=collection_name,
                         field_name=field,
-                        field_schema=models.PayloadSchemaType.KEYWORD,
+                        field_schema=schema,
                     )
                 except Exception as idx_err:
                     print(f"Warning: could not create index on '{field}': {idx_err}", flush=True)
@@ -164,7 +172,7 @@ class QdrantAdapter(VectorDBClient):
         print(f"Indexed {len(points)} PDF chunks for thread {thread_id}, file {file_hash}", flush=True)
         return len(points)
 
-    async def search_pdf_chunks(
+    async def search_knowledge_sources(
         self,
         thread_id: str,
         query_vector: List[float],
@@ -322,27 +330,6 @@ class QdrantAdapter(VectorDBClient):
         
         print(f"Stored {len(points)} chat memory chunks for message {message_id} in thread {thread_id}", flush=True)
         return len(points)
-
-    async def upsert_chat_memory(
-        self,
-        thread_id: str,
-        message_id: str,
-        question: str,
-        answer: str,
-        embedding: List[float]
-    ) -> bool:
-        """
-        Legacy: Deprecated in favor of index_chat_memory.
-        Store a QA pair as a single chat memory point.
-        """
-        return await self.index_chat_memory(
-            thread_id=thread_id,
-            message_id=message_id,
-            question=question,
-            answer=answer,
-            texts=[f"Q: {question}\nA: {answer}"],
-            embeddings=[embedding]
-        ) > 0
 
     async def search_chat_memory(
         self,
@@ -639,75 +626,6 @@ class QdrantAdapter(VectorDBClient):
         except Exception as e:
             print(f"Error deleting source chunks: {e}", flush=True)
             return False
-
-    # ============ Legacy Operations (Backward Compatibility) ============
-
-    async def index_documents(
-        self,
-        collection_name: str,
-        texts: List[str],
-        metadatas: List[Dict[str, Any]],
-        embeddings: List[List[float]]
-    ) -> None:
-        """
-        Legacy method: Index documents into the specified Qdrant collection.
-        Creates the collection if it does not exist.
-        Uses UUIDs for point IDs.
-        """
-        if not embeddings:
-            return
-
-        dimension = len(embeddings[0])
-
-        # Create collection if it does not exist
-        if not self.client.collection_exists(collection_name):
-            self.client.create_collection(
-                collection_name=collection_name,
-                vectors_config=models.VectorParams(size=dimension, distance=models.Distance.COSINE),
-            )
-
-        points = [
-            models.PointStruct(
-                id=str(uuid.uuid4()),
-                vector=vector,
-                payload={"text": text, **metadata}
-            )
-            for text, metadata, vector in zip(texts, metadatas, embeddings)
-        ]
-
-        # Batch upsert
-        self.client.upsert(
-            collection_name=collection_name,
-            points=points
-        )
-
-    async def search(
-        self,
-        collection_name: str,
-        query_vector: List[float],
-        limit: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        Legacy method: Search for similar vectors in the specified collection.
-        Returns a list of dicts with text, metadata, and score.
-        """
-        if not self.client.collection_exists(collection_name):
-            return []
-            
-        search_result = self.client.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            limit=limit
-        ).points
-
-        results = []
-        for hit in search_result:
-            results.append({
-                "text": hit.payload.get("text", ""),
-                "metadata": {k: v for k, v in hit.payload.items() if k != "text"},
-                "score": hit.score
-            })
-        return results
 
     # ============ Utility Methods ============
 

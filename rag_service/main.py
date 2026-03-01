@@ -26,8 +26,8 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import app as agent_app, get_tool_catalog, normalize_tool_instructions, build_system_prompt
-from rag import index_document, index_document_for_thread, index_webpage_for_thread
-from vectordb.qdrant import QdrantAdapter
+from rag import index_document_for_thread, index_webpage_for_thread
+from vectordb.qdrant import get_qdrant
 from models import (
     check_chat_model_ready,
     check_embed_model_ready,
@@ -41,7 +41,7 @@ from models import (
     INTENT_AGENT_MAX_ITERATIONS,
     merge_thread_settings,
 )
-from chat_service import handle_chat, handle_thread_chat
+from chat_service import handle_thread_chat
 from database import (
     init_db, 
     create_thread, get_thread, list_threads, update_thread, delete_thread,
@@ -76,12 +76,6 @@ app.add_middleware(
 
 # ============ Request/Response Models ============
 
-class IndexRequest(BaseModel):
-    """Request body for /index endpoint."""
-    embedding_model: str
-    metadata: Optional[Dict[str, Any]] = None
-
-
 class ThreadCreateRequest(BaseModel):
     """Request body for creating a thread."""
     name: str
@@ -103,17 +97,6 @@ class ThreadFileRequest(BaseModel):
 class WebSourceRequest(BaseModel):
     """Request body for indexing a webpage into a thread."""
     url: str
-
-
-class ChatRequest(BaseModel):
-    """Request body for /chat endpoint (legacy)."""
-    question: str
-    llm_model: str
-    embedding_model: str
-    collection_name: Optional[str] = None
-    use_web_search: bool = False
-    max_iterations: int = DEFAULT_MAX_ITERATIONS
-    history: List[Dict[str, str]] = []  # list of {role: "user"|"assistant", content: "..."}
 
 
 class ThreadChatRequest(BaseModel):
@@ -226,7 +209,7 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
         thread = await create_thread(req.name, req.embed_model)
         
         # Create Qdrant collection for the thread
-        db = QdrantAdapter()
+        db = get_qdrant()
         # Default vector size will be determined when first embeddings are added
         # For now, we'll create it on first index
         
@@ -268,7 +251,7 @@ async def get_thread_endpoint(thread_id: str):
             raise HTTPException(status_code=404, detail="Thread not found")
         
         files = await get_thread_files(thread_id)
-        db = QdrantAdapter()
+        db = get_qdrant()
         stats = await db.get_thread_stats(thread_id)
         return {
             "id": thread.id,
@@ -364,7 +347,7 @@ async def delete_thread_endpoint(thread_id: str):
     """
     try:
         # Delete Qdrant collection first
-        db = QdrantAdapter()
+        db = get_qdrant()
         await db.delete_thread_collection(thread_id)
         
         # Delete from SQLite
@@ -405,7 +388,7 @@ async def add_file_to_thread_endpoint(
         await add_file_to_thread(thread_id, req.file_hash)
         
         # Check if already indexed in this thread's collection
-        db = QdrantAdapter()
+        db = get_qdrant()
         collection_exists = await db.thread_collection_exists(thread_id)
         
         # Trigger background indexing
@@ -521,7 +504,7 @@ async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
             raise HTTPException(status_code=404, detail="Thread not found")
 
         # Delete vectors from Qdrant
-        qdrant = QdrantAdapter()
+        qdrant = get_qdrant()
         await qdrant.delete_source_chunks_by_file_hash(thread_id, file_hash)
 
         # Remove from SQLite
@@ -626,7 +609,7 @@ async def delete_message_endpoint(message_id: str):
                     if url:
                         urls_to_check.add(url)
 
-        db = QdrantAdapter()
+        db = get_qdrant()
 
         # ── Delete chat-memory vector ──
         qdrant_msg_id = assistant_msg_id or message_id
@@ -659,21 +642,6 @@ async def delete_message_endpoint(message_id: str):
 
 
 # ============ Chat Endpoints ============
-
-@app.post("/chat")
-async def chat_endpoint(req: ChatRequest):
-    """
-    Legacy chat endpoint for retrieval-augmented generation.
-    Use /threads/{thread_id}/chat for thread-based chat.
-    """
-    try:
-        result = await handle_chat(req)
-        return result
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/threads/{thread_id}/chat")
 async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
@@ -715,24 +683,6 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
 
 # ============ Indexing Endpoints ============
 
-@app.post("/index")
-async def index_endpoint(req: IndexRequest):
-    """
-    Legacy index endpoint for document indexing.
-    For thread-based indexing, use POST /threads/{thread_id}/files.
-    """
-    try:
-        result = await index_document(
-            embedding_model_name=req.embedding_model,
-            metadata=req.metadata,
-        )
-        return result
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/threads/{thread_id}/index-status")
 async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = None):
     """
@@ -743,7 +693,7 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
         
-        db = QdrantAdapter()
+        db = get_qdrant()
         
         if file_hash:
             # Check specific file
@@ -776,19 +726,6 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/status")
-async def status_endpoint(collection_name: str):
-    """
-    Legacy: Check if a collection exists and is ready in the vector database.
-    """
-    try:
-        db = QdrantAdapter()
-        exists = await db.collection_exists(collection_name)
-        return {"status": "ready" if exists else "not_ready", "collection": collection_name}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
 # ============ Model Endpoints ============

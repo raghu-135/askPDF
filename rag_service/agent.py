@@ -13,7 +13,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 
 from models import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
-from vectordb.qdrant import QdrantAdapter
+from vectordb.qdrant import get_qdrant
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
 
-        db = QdrantAdapter()
+        db = get_qdrant()
 
         # ── Build a file_hash → file_name lookup from the thread's document list ──
         from database import get_thread_files
@@ -108,7 +108,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             hash_to_name = {}
 
         # ── PDF chunk search with neighbor expansion ──
-        raw_pdf_chunks = await db.search_pdf_chunks(
+        raw_pdf_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
             limit=max_results
@@ -215,7 +215,7 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
         
-        db = QdrantAdapter()
+        db = get_qdrant()
         recalled_memories = await db.search_chat_memory(
             thread_id=thread_id,
             query_vector=query_vector,
@@ -425,8 +425,8 @@ async def search_pdf_by_document(
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
 
-        db = QdrantAdapter()
-        raw_chunks = await db.search_pdf_chunks(
+        db = get_qdrant()
+        raw_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
             limit=max_results,
@@ -510,7 +510,7 @@ async def find_topic_anchor_in_history(
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, topic)
 
-        db = QdrantAdapter()
+        db = get_qdrant()
         recalled = await db.search_chat_memory(
             thread_id=thread_id,
             query_vector=query_vector,

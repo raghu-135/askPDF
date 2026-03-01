@@ -3,7 +3,6 @@ rag.py - Document indexing for RAG Service
 
 This module handles:
 - Text chunking and embedding generation
-- Legacy collection-based indexing
 - Per-thread collection indexing
 - PDF download and parsing
 """
@@ -23,23 +22,12 @@ from models import (
     DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
 )
-from vectordb.qdrant import QdrantAdapter
+from vectordb.qdrant import get_qdrant
 
 logger = logging.getLogger(__name__)
 
 TEMP_PDF_DIR = "/tmp/pdfs"
 os.makedirs(TEMP_PDF_DIR, exist_ok=True)
-
-
-def get_collection_name(embedding_model_name: str, file_hash: Optional[str] = None) -> str:
-    """
-    Generate a safe collection name for legacy vector database indexing.
-    """
-    base_model_name = embedding_model_name.split(":")[0]
-    safe_model_name = base_model_name.replace("-", "_").replace(".", "_").replace("/", "_")
-    if file_hash:
-        return f"rag_{safe_model_name}_{file_hash}"
-    return f"rag_{safe_model_name}"
 
 
 async def summarize_qa(
@@ -192,56 +180,6 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     return vectors
 
 
-async def index_chunks_to_db(
-    collection_name: str, 
-    chunks: List[str], 
-    metadatas_list: List[Dict[str, Any]], 
-    vectors: List[List[float]], 
-    db_client: QdrantAdapter
-) -> None:
-    """
-    Index the chunks and their embeddings into the vector database.
-    """
-    await db_client.index_documents(collection_name, chunks, metadatas_list, vectors)
-
-
-async def index_document(embedding_model_name: str, metadata: Optional[Dict[str, Any]] = None):
-    """
-    Legacy: Indexes a document into the vector database.
-    Creates a collection based on embedding model and file hash.
-    """
-    metadata = metadata or {}
-    file_hash = metadata.get("file_hash")
-    
-    if not file_hash:
-        return {"status": "error", "message": "file_hash is required for indexing"}
-
-    # 1. Determine Collection Name
-    collection_name = get_collection_name(embedding_model_name, file_hash)
-    db_client = QdrantAdapter()
-
-    # 2. Check if collection exists
-    if await db_client.collection_exists(collection_name):
-        logger.info(f"Collection {collection_name} already exists. Skipping indexing.")
-        return {"status": "skipped", "reason": "exists", "collection": collection_name}
-
-    # 3. Parsing & Chunking
-    chunks = await get_chunks(file_hash)
-    if not chunks:
-        return {"status": "error", "message": "No text extracted from PDF"}
-
-    # 4. Embeddings
-    try:
-        vectors = await generate_embeddings(chunks, embedding_model_name)
-        # 5. Storage
-        metadatas_list = [metadata for _ in chunks]
-        await index_chunks_to_db(collection_name, chunks, metadatas_list, vectors, db_client)
-        return {"status": "success", "chunks_count": len(chunks), "collection": collection_name}
-    except Exception as e:
-        logger.error(f"Error indexing: {e}")
-        return {"status": "error", "message": str(e)}
-
-
 async def index_document_for_thread(
     thread_id: str,
     file_hash: str,
@@ -261,7 +199,7 @@ async def index_document_for_thread(
     Returns:
         Status dict with indexing results
     """
-    db_client = QdrantAdapter()
+    db_client = get_qdrant()
     metadata = metadata or {}
     
     try:
@@ -322,7 +260,7 @@ async def index_chat_memory_for_thread(
     Process, chunk, and index a chat message as semantic memory.
     Uses LangChain splitters and optional LLM summarization with dynamic budgets.
     """
-    db_client = QdrantAdapter()
+    db_client = get_qdrant()
     
     try:
         # 1. Build compact memory text and chunk for indexing.
@@ -379,7 +317,7 @@ async def index_webpage_for_thread(
     """
     from bs4 import BeautifulSoup
 
-    db_client = QdrantAdapter()
+    db_client = get_qdrant()
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
             resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AskPDF bot)"})
@@ -470,7 +408,7 @@ async def index_web_search_for_thread(
     Returns:
         Status dict with indexed chunk count.
     """
-    db_client = QdrantAdapter()
+    db_client = get_qdrant()
     try:
         vectors = await generate_embeddings(texts, embedding_model_name)
         indexed_count = await db_client.index_web_search_chunks(

@@ -2,7 +2,6 @@
 chat_service.py - Business logic for chat endpoints in RAG Service
 
 This module provides:
-- Legacy chat handling (handle_chat)
 - Thread-based chat with semantic memory (handle_thread_chat)
 """
 
@@ -64,10 +63,14 @@ async def prefetch_context(
     - Both agents receive the same bundle; no re-fetching between Intent and
       Orchestrator for the same raw question.
     """
-    from vectordb.qdrant import QdrantAdapter
+    from vectordb.qdrant import get_qdrant
     from agent import invoke_with_retry
 
     budget = compute_prefetch_budget(context_window)
+
+    # Embed the raw question ONCE and share the vector across parallel tasks
+    embed_model = get_embedding_model(embed_model_name)
+    shared_query_vector = await invoke_with_retry(embed_model.aembed_query, raw_question)
 
     async def _fetch_recent() -> str:
         msgs = await get_recent_messages(thread_id, limit=budget["recent_turn_limit"] * 2)
@@ -107,12 +110,10 @@ async def prefetch_context(
 
     async def _fetch_semantic() -> tuple:
         try:
-            embed_model = get_embedding_model(embed_model_name)
-            query_vector = await invoke_with_retry(embed_model.aembed_query, raw_question)
-            db = QdrantAdapter()
+            db = get_qdrant()
             recalled = await db.search_chat_memory(
                 thread_id=thread_id,
-                query_vector=query_vector,
+                query_vector=shared_query_vector,
                 limit=budget["semantic_limit"],
             )
             used_ids = [m["message_id"] for m in recalled if m.get("message_id")]
@@ -131,12 +132,10 @@ async def prefetch_context(
 
     async def _fetch_pdf() -> tuple:
         try:
-            embed_model = get_embedding_model(embed_model_name)
-            query_vector = await invoke_with_retry(embed_model.aembed_query, raw_question)
-            db = QdrantAdapter()
-            raw_chunks = await db.search_pdf_chunks(
+            db = get_qdrant()
+            raw_chunks = await db.search_knowledge_sources(
                 thread_id=thread_id,
-                query_vector=query_vector,
+                query_vector=shared_query_vector,
                 limit=budget["pdf_limit"],
             )
             sources: List[Dict[str, Any]] = []
@@ -227,58 +226,6 @@ async def _build_recent_history_messages(
         used_chars += text_chars
 
     return list(reversed(packed_reversed))
-
-
-async def handle_chat(req) -> Dict[str, Any]:
-    """
-    Legacy chat handler for backward compatibility.
-    Uses collection-based retrieval without semantic memory.
-    """
-    from agent import app as agent_app
-    chat_history = []
-    for msg in req.history:
-        if msg["role"] == "user":
-            chat_history.append(HumanMessage(content=msg["content"]))
-        elif msg["role"] == "assistant":
-            chat_history.append(AIMessage(content=msg["content"]))
-
-    inputs = {
-        "messages": chat_history + [HumanMessage(content=req.question)],
-        "question": req.question,
-        "llm_model": req.llm_model,
-        "embedding_model": req.embedding_model,
-        "collection_name": req.collection_name,
-        "use_web_search": req.use_web_search,
-        "context": "",
-        "web_context": "",
-        "answer": "",
-        "iteration_count": 0,
-        "max_iterations": getattr(req, 'max_iterations', DEFAULT_MAX_ITERATIONS),
-        "system_role": "",
-        "tool_instructions": {},
-        "custom_instructions": "",
-    }
-    
-    # Provide a dummy config for backward compatibility
-    config = {
-        "configurable": {
-            "thread_id": "legacy_thread",
-            "embedding_model": req.embedding_model,
-            "context_window": 8000
-        }
-    }
-    
-    result = await agent_app.ainvoke(inputs, config=config)
-    messages = result.get("messages", [])
-    normalized = normalize_ai_response(messages[-1] if messages else None)
-    answer = normalized["answer"] or "Error"
-    return {
-        "answer": answer,
-        "reasoning": normalized["reasoning"],
-        "reasoning_available": normalized["reasoning_available"],
-        "reasoning_format": normalized["reasoning_format"],
-        "context": "Legacy context retrieval unsupported",
-    }
 
 
 async def handle_thread_chat(
