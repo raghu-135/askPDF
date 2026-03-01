@@ -7,6 +7,7 @@ This module provides:
 
 import asyncio
 import logging
+import time
 from typing import List, Dict, Any
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -249,6 +250,10 @@ async def handle_thread_chat(
         use_intent_agent = True
     intent_agent_max_iterations = getattr(req, 'intent_agent_max_iterations', None) or INTENT_AGENT_MAX_ITERATIONS
     
+    start_total = time.perf_counter()
+    intent_duration = 0.0
+    orchestrator_duration = 0.0
+    
     try:
         from agent import app as agent_app, intent_app, AgentState
         
@@ -286,7 +291,9 @@ async def handle_thread_chat(
             }
             
             logger.info(f"Invoking Intent Agent for thread {thread_id}")
+            intent_start = time.perf_counter()
             intent_result_state = await intent_app.ainvoke(intent_state, config=intent_config)
+            intent_duration = time.perf_counter() - intent_start
             intent = intent_result_state.get("intent_result") or {
                 "status": "CLEAR_STANDALONE", 
                 "rewritten_query": question, 
@@ -375,7 +382,19 @@ async def handle_thread_chat(
         }
         
         logger.info(f"Invoking Orchestrator Agent for thread {thread_id}")
+        orchestrator_start = time.perf_counter()
         result = await agent_app.ainvoke(initial_state, config=config)
+        orchestrator_duration = time.perf_counter() - orchestrator_start
+        total_duration = time.perf_counter() - start_total
+        
+        logger.info(
+            f"CHAT COMPLETED [thread {thread_id}] | "
+            f"Intent: {intent_duration:.2f}s | "
+            f"Orchestrator: {orchestrator_duration:.2f}s | "
+            f"Total: {total_duration:.2f}s | "
+            f"LLM: {llm_model} | "
+            f"Agent_Iterations: {result.get('iteration_count', 0)}"
+        )
         
         final_messages = result.get("messages", [])
         normalized = normalize_ai_response(final_messages[-1] if final_messages else None)
