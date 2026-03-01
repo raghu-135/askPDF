@@ -137,7 +137,7 @@ You select both models inside the app after it starts — no hardcoding required
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/raghu13590/askpdf.git
+git clone https://github.com/raghu-135/askpdf.git
 cd askpdf
 ```
 
