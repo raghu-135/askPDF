@@ -585,27 +585,27 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
             {/* Header */}
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
-                {/* Left controls: LLM, Ctx Size, Internet Search, Settings */}
+                {/* Left controls: Embedding model, Ctx Size, Internet Search, Settings */}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1, minWidth: 0 }}>
-                    <FormControl size="small" sx={{ minWidth: 120 }}>
-                        <InputLabel id="llm-label">Select LLM</InputLabel>
-                        <Select
-                            labelId="llm-label"
-                            id="llm-select"
-                            value={llmModel}
-                            label="Select LLM"
-                            onChange={(e) => handleLlmModelChange(e.target.value)}
-                        >
-                            {availableModels.map(m => (
-                                <MenuItem key={m} value={m}>{m}</MenuItem>
-                            ))}
-                        </Select>
-                        {isLlmModelValid === false && (
-                            <Typography color="error" variant="caption" sx={{ ml: 2 }}>
-                                Selected model is not a valid chat model.
-                            </Typography>
-                        )}
-                    </FormControl>
+                    <Tooltip title={`Embedding model locked: ${activeThread.embed_model}`}>
+                        <Chip 
+                            icon={<LockIcon fontSize="small" />}
+                            label={activeThread.embed_model.split('/').pop()?.split(':')[0] || activeThread.embed_model}
+                            size="small"
+                            variant="outlined"
+                            sx={{ 
+                                opacity: 0.7, 
+                                fontSize: '0.8rem', 
+                                bgcolor: 'background.paper', 
+                                borderColor: 'divider',
+                                maxWidth: 90,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                px: 1
+                            }}
+                        />
+                    </Tooltip>
                     <Tooltip 
                         title={
                             <Box sx={{ p: 0.5 }}>
@@ -673,7 +673,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             size="small"
                             color={useWebSearch ? "primary" : "default"}
                             onClick={() => setUseWebSearch(v => !v)}
-                            sx={{ p: 0.5 }}
+                            sx={{ p: 0.5, minWidth: 30 }}
                         >
                             {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
                         </IconButton>
@@ -682,33 +682,33 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <IconButton
                             size="small"
                             onClick={() => setSettingsDialogOpen(true)}
-                            sx={{ p: 0.5 }}
+                            sx={{ p: 0.5, minWidth: 30 }}
                         >
                             <SettingsIcon />
                         </IconButton>
                     </Tooltip>
                 </Box>
-                {/* Right: Embedding model, less priority */}
+                {/* Right: SelectLLM */}
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-                    <Tooltip title={`Embedding model locked: ${activeThread.embed_model}`}>
-                        <Chip 
-                            icon={<LockIcon fontSize="small" />}
-                            label={activeThread.embed_model.split('/').pop()?.split(':')[0] || activeThread.embed_model}
-                            size="small"
-                            variant="outlined"
-                            sx={{ 
-                                opacity: 0.7, 
-                                fontSize: '0.8rem', 
-                                bgcolor: 'background.paper', 
-                                borderColor: 'divider',
-                                maxWidth: 90,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                                px: 1
-                            }}
-                        />
-                    </Tooltip>
+                    <FormControl size="small" sx={{ minWidth: 80 }}>
+                        <InputLabel id="llm-label">Select LLM</InputLabel>
+                        <Select
+                            labelId="llm-label"
+                            id="llm-select"
+                            value={llmModel}
+                            label="Select LLM"
+                            onChange={(e) => handleLlmModelChange(e.target.value)}
+                        >
+                            {availableModels.map(m => (
+                                <MenuItem key={m} value={m}>{m}</MenuItem>
+                            ))}
+                        </Select>
+                        {isLlmModelValid === false && (
+                            <Typography color="error" variant="caption" sx={{ ml: 2 }}>
+                                Selected model is not a valid chat model.
+                            </Typography>
+                        )}
+                    </FormControl>
                 </Box>
             </Box>
 
