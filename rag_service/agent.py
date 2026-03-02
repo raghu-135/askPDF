@@ -99,11 +99,11 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
 
         db = get_qdrant()
 
-        # ── Build a file_hash → file_name lookup from the thread's document list ──
-        from database import get_thread_files
+        # ── Build a file_hash → file_name lookup from thread_stats (no DB join) ──
         try:
-            thread_files = await get_thread_files(thread_id)
-            hash_to_name = {f.file_hash: f.file_name for f in thread_files}
+            from database import get_thread_shape as _get_shape
+            _shape = await _get_shape(thread_id)
+            hash_to_name = {fh: meta["file_name"] for fh, meta in _shape["documents"].items()}
         except Exception:
             hash_to_name = {}
 
@@ -378,15 +378,23 @@ async def list_uploaded_documents(config: RunnableConfig = None) -> str:
         if not thread_id:
             return "No thread context found."
 
-        from database import get_thread_files
-        files = await get_thread_files(thread_id)
+        from database import get_thread_shape as _get_shape
+        shape = await _get_shape(thread_id)
+        docs = shape["documents"]
 
-        if not files:
+        if not docs:
             return "No documents are uploaded to this thread."
 
         doc_list = [
-            {"index": i + 1, "file_name": f.file_name, "file_hash": f.file_hash}
-            for i, f in enumerate(files)
+            {
+                "index": i + 1,
+                "file_name": meta["file_name"],
+                "file_hash": fh,
+                "source_type": meta.get("source_type", "pdf"),
+                "chunks": meta.get("chunk_count", 0),
+                "status": meta.get("indexing_status", "unknown"),
+            }
+            for i, (fh, meta) in enumerate(docs.items())
         ]
         return json.dumps(doc_list, indent=2)
     except Exception as e:
@@ -452,12 +460,11 @@ async def search_pdf_by_document(
         )
         expanded_chunks.sort(key=lambda x: x.get("chunk_id", 0))
 
-        # Resolve file name for source attribution
-        from database import get_thread_files
+        # Resolve file name for source attribution from thread_stats (no DB join)
         try:
-            thread_files = await get_thread_files(thread_id)
-            hash_to_name = {f.file_hash: f.file_name for f in thread_files}
-            fname = hash_to_name.get(file_hash, file_hash)
+            from database import get_thread_shape as _get_shape
+            _shape = await _get_shape(thread_id)
+            fname = _shape["documents"].get(file_hash, {}).get("file_name", file_hash)
         except Exception:
             fname = file_hash
 
