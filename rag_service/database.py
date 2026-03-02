@@ -128,6 +128,17 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_thread_files_thread_id ON thread_files(thread_id);
 CREATE INDEX IF NOT EXISTS idx_thread_files_file_hash ON thread_files(file_hash);
+
+CREATE TABLE IF NOT EXISTS thread_stats (
+    thread_id       TEXT PRIMARY KEY,
+    total_qa_pairs  INTEGER NOT NULL DEFAULT 0,
+    total_qa_chars  INTEGER NOT NULL DEFAULT 0,
+    avg_qa_chars    REAL    NOT NULL DEFAULT 0.0,
+    last_qa_at      TIMESTAMP,
+    documents_meta  TEXT    NOT NULL DEFAULT '{}',
+    last_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE
+);
 """
 
 
@@ -145,6 +156,7 @@ async def init_db():
             "ALTER TABLE threads ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'",
             "ALTER TABLE messages ADD COLUMN web_sources TEXT",
             "ALTER TABLE files ADD COLUMN source_type TEXT NOT NULL DEFAULT 'pdf'",
+            # thread_stats is created by SCHEMA above; new columns go here if needed later
         ]
         for stmt in migrations:
             try:
@@ -630,3 +642,246 @@ async def get_message_count(thread_id: str) -> int:
         )
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+
+# ============ Thread Stats Operations ============
+
+def _load_documents_meta(raw: Optional[str]) -> Dict[str, Any]:
+    """Deserialize the documents_meta JSON column."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+async def _ensure_thread_stats_row(db, thread_id: str) -> None:
+    """Insert a thread_stats row if one doesn't exist yet."""
+    await db.execute(
+        "INSERT OR IGNORE INTO thread_stats (thread_id) VALUES (?)",
+        (thread_id,),
+    )
+
+
+async def upsert_thread_stats_document(
+    thread_id: str,
+    file_hash: str,
+    file_name: str,
+    source_type: str = "pdf",
+) -> None:
+    """
+    Insert or upsert a document entry in thread_stats.documents_meta.
+    Called immediately when a file is added to the thread (status=pending).
+    If an entry for this file_hash already exists, preserves existing fields
+    (e.g. chunk_count already set) and updates only file_name/source_type.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await _ensure_thread_stats_row(db, thread_id)
+
+        cursor = await db.execute(
+            "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
+            (thread_id,),
+        )
+        row = await cursor.fetchone()
+        docs = _load_documents_meta(row["documents_meta"] if row else None)
+
+        existing = docs.get(file_hash, {})
+        docs[file_hash] = {
+            "file_name": file_name,
+            "source_type": source_type,
+            "chunk_count": existing.get("chunk_count", 0),
+            "total_chars": existing.get("total_chars", 0),
+            "indexing_status": existing.get("indexing_status", "pending"),
+            "indexed_at": existing.get("indexed_at"),
+        }
+
+        await db.execute(
+            """
+            UPDATE thread_stats
+            SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
+            WHERE thread_id = ?
+            """,
+            (json.dumps(docs), thread_id),
+        )
+        await db.commit()
+
+
+async def update_document_indexing_status(
+    thread_id: str,
+    file_hash: str,
+    status: str,
+    chunk_count: int = 0,
+    total_chars: int = 0,
+    indexed_at: Optional[str] = None,
+) -> None:
+    """
+    Update a document's indexing status and size metadata after background
+    indexing completes (status='indexed') or fails (status='failed').
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await _ensure_thread_stats_row(db, thread_id)
+
+        cursor = await db.execute(
+            "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
+            (thread_id,),
+        )
+        row = await cursor.fetchone()
+        docs = _load_documents_meta(row["documents_meta"] if row else None)
+
+        entry = docs.get(file_hash, {})
+        entry["indexing_status"] = status
+        if status == "indexed":
+            entry["chunk_count"] = chunk_count
+            entry["total_chars"] = total_chars
+            entry["indexed_at"] = indexed_at or datetime.utcnow().isoformat()
+        docs[file_hash] = entry
+
+        await db.execute(
+            """
+            UPDATE thread_stats
+            SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
+            WHERE thread_id = ?
+            """,
+            (json.dumps(docs), thread_id),
+        )
+        await db.commit()
+
+
+async def remove_document_from_stats(thread_id: str, file_hash: str) -> None:
+    """Remove a document entry from thread_stats.documents_meta."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
+            (thread_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return
+        docs = _load_documents_meta(row["documents_meta"])
+        docs.pop(file_hash, None)
+        await db.execute(
+            """
+            UPDATE thread_stats
+            SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
+            WHERE thread_id = ?
+            """,
+            (json.dumps(docs), thread_id),
+        )
+        await db.commit()
+
+
+async def increment_qa_stats(thread_id: str, qa_chars: int) -> None:
+    """
+    Increment QA aggregate counters after each answered turn.
+    Called on the hot path (every chat answer).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        await _ensure_thread_stats_row(db, thread_id)
+        await db.execute(
+            """
+            UPDATE thread_stats
+            SET
+                total_qa_pairs  = total_qa_pairs + 1,
+                total_qa_chars  = total_qa_chars + ?,
+                avg_qa_chars    = CAST(total_qa_chars + ? AS REAL) / (total_qa_pairs + 1),
+                last_qa_at      = CURRENT_TIMESTAMP,
+                last_updated_at = CURRENT_TIMESTAMP
+            WHERE thread_id = ?
+            """,
+            (qa_chars, qa_chars, thread_id),
+        )
+        await db.commit()
+
+
+async def recompute_qa_stats(thread_id: str) -> None:
+    """
+    Recompute QA stats from the messages table.
+    Called after message pair deletion (rare path) to prevent drift.
+    Counts assistant messages as QA pairs and sums their content chars.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT COUNT(*) as cnt, COALESCE(SUM(LENGTH(content)), 0) as total_chars
+            FROM messages
+            WHERE thread_id = ? AND role = 'assistant'
+            """,
+            (thread_id,),
+        )
+        row = await cursor.fetchone()
+        cnt = row["cnt"] or 0
+        total_chars = row["total_chars"] or 0
+        avg = (total_chars / cnt) if cnt > 0 else 0.0
+
+        await _ensure_thread_stats_row(db, thread_id)
+        await db.execute(
+            """
+            UPDATE thread_stats
+            SET total_qa_pairs  = ?,
+                total_qa_chars  = ?,
+                avg_qa_chars    = ?,
+                last_updated_at = CURRENT_TIMESTAMP
+            WHERE thread_id = ?
+            """,
+            (cnt, total_chars, avg, thread_id),
+        )
+        await db.commit()
+
+
+async def get_thread_shape(thread_id: str) -> Dict[str, Any]:
+    """
+    Return a structured snapshot of the thread's content inventory.
+    Used by the prefetch path in chat_service and by the get_thread_shape agent tool.
+
+    Returns:
+        {
+          "total_qa_pairs": int,
+          "total_qa_chars": int,
+          "avg_qa_chars": float,
+          "last_qa_at": str | None,
+          "documents": {
+              "<file_hash>": {
+                  "file_name": str,
+                  "source_type": str,
+                  "chunk_count": int,
+                  "total_chars": int,
+                  "indexing_status": str,
+                  "indexed_at": str | None
+              }
+          }
+        }
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT total_qa_pairs, total_qa_chars, avg_qa_chars,
+                   last_qa_at, documents_meta
+            FROM thread_stats WHERE thread_id = ?
+            """,
+            (thread_id,),
+        )
+        row = await cursor.fetchone()
+
+    if not row:
+        return {
+            "total_qa_pairs": 0,
+            "total_qa_chars": 0,
+            "avg_qa_chars": 0.0,
+            "last_qa_at": None,
+            "documents": {},
+        }
+
+    return {
+        "total_qa_pairs": row["total_qa_pairs"],
+        "total_qa_chars": row["total_qa_chars"],
+        "avg_qa_chars": round(row["avg_qa_chars"], 1),
+        "last_qa_at": row["last_qa_at"],
+        "documents": _load_documents_meta(row["documents_meta"]),
+    }

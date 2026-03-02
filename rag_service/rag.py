@@ -234,16 +234,34 @@ async def index_document_for_thread(
         )
         
         logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
-        
+
+        # Update thread stats snapshot
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(
+                thread_id=thread_id,
+                file_hash=file_hash,
+                status="indexed",
+                chunk_count=indexed_count,
+                total_chars=sum(len(c) for c in chunks),
+            )
+        except Exception as stats_err:
+            logger.warning(f"thread_stats update skipped after indexing: {stats_err}")
+
         return {
             "status": "success",
             "thread_id": thread_id,
             "file_hash": file_hash,
             "chunks_count": indexed_count
         }
-        
+
     except Exception as e:
         logger.error(f"Error indexing document for thread {thread_id}: {e}", exc_info=True)
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
+        except Exception:
+            pass
         return {"status": "error", "message": str(e)}
 
 
@@ -367,6 +385,20 @@ async def index_webpage_for_thread(
         )
 
         logger.info(f"Indexed {indexed_count} web source chunks for thread {thread_id}, url {url}")
+
+        # Update thread stats snapshot
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(
+                thread_id=thread_id,
+                file_hash=file_hash,
+                status="indexed",
+                chunk_count=indexed_count,
+                total_chars=sum(len(c) for c in chunks),
+            )
+        except Exception as stats_err:
+            logger.warning(f"thread_stats update skipped after web indexing: {stats_err}")
+
         return {
             "status": "success",
             "thread_id": thread_id,
@@ -379,9 +411,19 @@ async def index_webpage_for_thread(
     except httpx.HTTPStatusError as e:
         msg = f"HTTP error fetching {url}: {e.response.status_code}"
         logger.error(msg)
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
+        except Exception:
+            pass
         return {"status": "error", "message": msg}
     except Exception as e:
         logger.error(f"Error indexing webpage for thread {thread_id}: {e}", exc_info=True)
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
+        except Exception:
+            pass
         return {"status": "error", "message": str(e)}
 
 

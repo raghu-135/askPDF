@@ -28,10 +28,10 @@ from models import (
 from database import (
     create_message,
     get_recent_messages,
-    get_thread_files,
-    get_thread_messages,
     update_message_context_compact,
     MessageRole,
+    get_thread_shape,
+    increment_qa_stats,
 )
 from reasoning import normalize_ai_response
 
@@ -92,20 +92,19 @@ async def prefetch_context(
         return "\n\n".join(lines)
 
     async def _fetch_stats_and_docs() -> Dict[str, Any]:
-        import asyncio as _asyncio
-        msgs, files = await _asyncio.gather(
-            get_thread_messages(thread_id, limit=2000),
-            get_thread_files(thread_id),
-        )
-        total = len(msgs)
-        avg_len = sum(len(m.content) for m in msgs) / total if total else 0
+        """
+        Read thread shape from the pre-maintained thread_stats table.
+        O(1) lookup — no message scanning needed.
+        """
+        shape = await get_thread_shape(thread_id)
         stats = {
-            "total_messages": total,
-            "estimated_history_tokens": round((avg_len * total) / 4, 0),
+            "total_messages": shape["total_qa_pairs"] * 2,  # user + assistant
+            "estimated_history_tokens": round(shape["total_qa_chars"] / 4, 0),
         }
+        # Build indexed document list (exclude pending/failed if no chunks yet)
         documents = [
-            {"index": i + 1, "file_name": f.file_name, "file_hash": f.file_hash}
-            for i, f in enumerate(files)
+            {"index": i + 1, "file_name": meta["file_name"], "file_hash": fh}
+            for i, (fh, meta) in enumerate(shape["documents"].items())
         ]
         return {"stats": stats, "documents": documents}
 
@@ -452,7 +451,14 @@ async def handle_thread_chat(
             compact_text = indexing_result.get("memory_compact_text") if isinstance(indexing_result, dict) else None
             if compact_text:
                 await update_message_context_compact(assistant_message.id, compact_text)
-        
+
+        # Update thread stats: increment QA pair counter
+        try:
+            qa_chars = len(req.question) + len(answer)
+            await increment_qa_stats(thread_id, qa_chars)
+        except Exception as stats_err:
+            logger.warning(f"thread_stats QA increment skipped: {stats_err}")
+
         return {
             "answer": answer,
             "rewritten_query": question, # Return rewritten version for UI

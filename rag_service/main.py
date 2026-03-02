@@ -49,7 +49,8 @@ from database import (
     create_or_get_file, get_file, add_file_to_thread, get_thread_files, is_file_in_thread,
     remove_file_from_thread,
     create_message, get_message, get_thread_messages, delete_message, delete_message_pair, get_recent_messages,
-    MessageRole
+    MessageRole,
+    upsert_thread_stats_document, remove_document_from_stats, recompute_qa_stats,
 )
 
 # Load environment variables from .env file
@@ -386,7 +387,15 @@ async def add_file_to_thread_endpoint(
         
         # Associate file with thread
         await add_file_to_thread(thread_id, req.file_hash)
-        
+
+        # Seed stats row with pending status immediately
+        await upsert_thread_stats_document(
+            thread_id=thread_id,
+            file_hash=req.file_hash,
+            file_name=req.file_name,
+            source_type="pdf",
+        )
+
         # Check if already indexed in this thread's collection
         db = get_qdrant()
         collection_exists = await db.thread_collection_exists(thread_id)
@@ -468,6 +477,14 @@ async def add_web_source_to_thread_endpoint(
         )
         await add_file_to_thread(thread_id, file_hash)
 
+        # Seed stats row with pending status immediately
+        await upsert_thread_stats_document(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            file_name=req.url,
+            source_type="web",
+        )
+
         # Background indexing
         background_tasks.add_task(
             index_webpage_for_thread,
@@ -509,6 +526,9 @@ async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
 
         # Remove from SQLite
         removed = await remove_file_from_thread(thread_id, file_hash)
+
+        # Remove from thread stats
+        await remove_document_from_stats(thread_id, file_hash)
 
         return {
             "status": "deleted",
@@ -631,6 +651,12 @@ async def delete_message_endpoint(message_id: str):
 
         # ── Delete from SQLite (pair-aware) ──
         deleted_ids = await delete_message_pair(message_id)
+
+        # ── Recompute QA stats to reflect the deletion ──
+        try:
+            await recompute_qa_stats(message.thread_id)
+        except Exception as stats_err:
+            logger.warning(f"thread_stats recompute skipped after delete: {stats_err}")
 
         return {"status": "deleted", "deleted_ids": deleted_ids}
     except HTTPException:

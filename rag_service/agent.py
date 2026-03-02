@@ -795,7 +795,61 @@ intent_workflow.add_edge("agent", END)
 intent_app = intent_workflow.compile()
 # --- End Intent Agent ---
 
+@tool
+async def get_thread_shape(config: RunnableConfig = None) -> str:
+    """
+    Return a compact snapshot of this thread's content inventory: number of
+    uploaded documents/websites with their chunk counts and indexing status,
+    plus QA history volume (total pairs and average size).
+
+    Use this to calibrate your retrieval strategy BEFORE making tool calls:
+    - Documents with large chunk_count → deep retrieval likely needed
+    - Many QA pairs with high avg_qa_chars → rich semantic memory available
+    - Documents with status 'pending' or 'failed' → indexing incomplete, warn user
+
+    This reads from a pre-maintained stats table — it is very fast and does NOT
+    perform any vector search or scan the messages table.
+    """
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("thread_id")
+        if not thread_id:
+            return "No thread context found."
+
+        from database import get_thread_shape as _get_shape
+        shape = await _get_shape(thread_id)
+
+        qa_pairs = shape["total_qa_pairs"]
+        avg_qa = shape["avg_qa_chars"]
+        total_qa = shape["total_qa_chars"]
+        docs = shape["documents"]
+
+        lines = ["[THREAD SHAPE]"]
+        lines.append(
+            f"QA History  : {qa_pairs} pair(s) | {avg_qa:,.0f} avg chars/pair | {total_qa:,} total chars"
+        )
+        if docs:
+            lines.append(f"Documents   : {len(docs)} source(s)")
+            for i, (fh, meta) in enumerate(docs.items(), start=1):
+                status = meta.get("indexing_status", "unknown")
+                chunks = meta.get("chunk_count", 0)
+                chars = meta.get("total_chars", 0)
+                name = meta.get("file_name", fh)
+                stype = meta.get("source_type", "pdf")
+                tag = f"[{stype}]" if stype != "pdf" else ""
+                lines.append(
+                    f"  {i}. {name} {tag}  →  {chunks} chunks | {chars:,} chars | {status}"
+                )
+        else:
+            lines.append("Documents   : none uploaded yet")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error reading thread shape: {e}"
+
+
 tools_list = [
+    get_thread_shape,
     search_documents,
     search_pdf_by_document,
     search_conversation_history,
@@ -841,6 +895,12 @@ TOOL_FRIENDLY_CONFIG = {
         "display_name": "Clarify Intent",
         "description": "Present the user with distinct interpretations of an ambiguous question.",
         "default_prompt": "Use only when the question has multiple plausible interpretations and making an assumption risks answering the wrong question entirely. Each option must be a complete, self-contained question.",
+    },
+    "get_thread_shape": {
+        "id": "thread_shape",
+        "display_name": "Thread Shape",
+        "description": "Returns a snapshot of the thread's content inventory: document list with chunk counts and indexing status, plus QA history volume metrics.",
+        "default_prompt": "Use to calibrate retrieval strategy: check document chunk counts to decide between search_documents vs. search_pdf_by_document, and check QA history volume to decide whether semantic memory search is worthwhile. Only call once — the snapshot is current at the time of the call.",
     },
 }
 

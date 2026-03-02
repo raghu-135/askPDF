@@ -82,7 +82,7 @@ services:
       - qdrant
     volumes:
       - ./rag_service:/app
-      - rag_data:/data
+      - ./data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -100,5 +100,4 @@ services:
 
 volumes:
   qdrant_data:
-  rag_data:
   pdf_data:
