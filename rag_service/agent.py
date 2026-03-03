@@ -748,6 +748,12 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     else:
         input_messages = [SystemMessage(content=system_prompt)] + messages[1:]
 
+    # Log complete prompt for Intent Agent
+    logger.debug(f"--- INTENT AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}] ---")
+    for msg in input_messages:
+        logger.debug(f"[{type(msg).__name__}]: {msg.content}")
+    logger.debug(f"--- INTENT AGENT PROMPT END ---")
+
     # Single direct call — no tools, no retries
     try:
         response = await invoke_with_retry(llm.ainvoke, input_messages)
@@ -1002,6 +1008,15 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
     # Langchain expects SystemMessage at the start
     input_messages = [sys_prompt] + messages
+
+    # Log complete prompt for Orchestrator Agent
+    logger.debug(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
+    for msg in input_messages:
+        logger.debug(f"[{type(msg).__name__}]: {msg.content}")
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            logger.debug(f"TOOL CALLS: {msg.tool_calls}")
+    logger.debug(f"--- ORCHESTRATOR AGENT PROMPT END ---")
+
     response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
     return {"messages": [response], "iteration_count": iteration}
 
