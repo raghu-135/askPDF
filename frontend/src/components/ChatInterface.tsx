@@ -1064,7 +1064,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             unnecessary tool calls. Disable to skip this step and process questions directly, which is faster
                             but may produce less focused answers for follow-up questions.
                         </Typography>
-                        {useIntentAgent && (
+                        {/* 
+                          HIDDEN: intentAgentMaxIterations is currently single-pass (no tools). 
+                          Can be exposed to user when Intent agent is upgraded with tools/multi-step reasoning.
+                          
+                          {useIntentAgent && (
                             <TextField
                                 label="Intent agent iterations"
                                 type="number"
@@ -1075,7 +1079,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 size="small"
                                 sx={{ mt: 1.5 }}
                             />
-                        )}
+                          )} 
+                        */}
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
                         <TextField

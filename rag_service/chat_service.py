@@ -205,6 +205,9 @@ async def handle_thread_chat(
     use_intent_agent = getattr(req, 'use_intent_agent', True)
     if use_intent_agent is None:
         use_intent_agent = True
+    # NOTE: intent_agent_max_iterations is passed to the LangGraph Intent Agent State. 
+    # It is currently not exposed in the UI (hardcoded to single-pass logic); 
+    # it can be re-exposed when the Intent Agent is upgraded with tools or multi-step reasoning.
     intent_agent_max_iterations = getattr(req, 'intent_agent_max_iterations', None) or INTENT_AGENT_MAX_ITERATIONS
     
     start_total = time.perf_counter()
@@ -223,6 +226,13 @@ async def handle_thread_chat(
         )
 
         # 2. Analyze intent using the Intent Agent (optional)
+        intent = {
+            "status": "CLEAR_STANDALONE",
+            "rewritten_query": question,
+            "clarification_options": None,
+            "context_coverage": "INSUFFICIENT",
+        }
+
         if use_intent_agent:
             intent_state = {
                 "messages": [HumanMessage(content=question)],
@@ -235,29 +245,15 @@ async def handle_thread_chat(
                 "pre_fetch_bundle": prefetch_bundle,
             }
             
-            intent_config = {
-                "configurable": {
-                    "thread_id": thread_id
-                }
-            }
-            
             logger.info(f"Invoking Intent Agent for thread {thread_id}")
             intent_start = time.perf_counter()
-            intent_result_state = await intent_app.ainvoke(intent_state, config=intent_config)
+            intent_result_state = await intent_app.ainvoke(intent_state, config={"configurable": {"thread_id": thread_id}})
             intent_duration = time.perf_counter() - intent_start
-            intent = intent_result_state.get("intent_result") or {
-                "status": "CLEAR_STANDALONE", 
-                "rewritten_query": question, 
-                "clarification_options": None
-            }
+            
+            if intent_result_state.get("intent_result"):
+                intent = intent_result_state["intent_result"]
         else:
             logger.info(f"Intent Agent disabled for thread {thread_id}, skipping")
-            intent = {
-                "status": "CLEAR_STANDALONE",
-                "rewritten_query": question,
-                "clarification_options": None,
-                "context_coverage": "INSUFFICIENT",
-            }
         
         # If ambiguous, return early with clarification options
         if intent["status"] == "AMBIGUOUS" and intent.get("clarification_options"):
@@ -276,17 +272,17 @@ async def handle_thread_chat(
                 "context": "Needs human-in-the-loop clarification."
             }
          
+        # Normalize question from intent results
+        question = intent.get("rewritten_query") or question
+
         logger.info(
             f"Intent analysis done for thread {thread_id} | "
-            f"rewritten_query: {intent['rewritten_query']} | "
+            f"rewritten_query: {question} | "
             f"reference_type: {intent.get('reference_type', 'NONE')} | "
             f"context_coverage: {intent.get('context_coverage', 'PROBABLY_SUFFICIENT')}"
         )
-        # Use rewritten query for the rest of the path
-        if intent.get("rewritten_query"):
-            question = intent["rewritten_query"]
 
-        # Cap orchestrator iterations based on intent's coverage signal:
+        # Cap orchestrator iterations based on intent's coverage signal
         # SUFFICIENT          → 2 rounds max  (pre-fetch + 1 targeted tool if needed)
         # PROBABLY_SUFFICIENT → 4 rounds max
         # INSUFFICIENT        → full budget (default max_iterations)
