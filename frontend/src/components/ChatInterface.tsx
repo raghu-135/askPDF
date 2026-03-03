@@ -35,13 +35,13 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
-import { 
-    Thread, 
+import {
+    Thread,
     Message,
     WebSource,
     PromptToolDefinition,
-    threadChat, 
-    getThreadMessages, 
+    threadChat,
+    getThreadMessages,
     deleteMessage,
     getThreadIndexStatus,
     getThreadSettings,
@@ -196,7 +196,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!activeThread) return;
         try {
             const response = await getThreadMessages(activeThread.id);
-            setMessages(response.messages.map(m => ({ 
+            setMessages(response.messages.map(m => ({
                 ...m,
                 content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
                 isRecollected: false,
@@ -380,8 +380,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         return () => clearInterval(intervalId);
     }, [activeThread?.id, indexingStatus]);
 
-    const handleSend = async (overrideInput?: string) => {
-        const textToSend = overrideInput || input.trim();
+    const handleSend = async (overrideInput?: string | React.SyntheticEvent) => {
+        const textToSend = typeof overrideInput === 'string' ? overrideInput : input.trim();
         if (!textToSend || !llmModel || !activeThread) return;
 
         setInput('');
@@ -390,9 +390,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setIsModelWarming(false);
 
         // Optimistically add user message
-        const tempUserMsg: ChatMessage = { 
-            id: 'temp-user-' + Date.now(), 
-            role: 'user', 
+        const tempUserMsg: ChatMessage = {
+            id: 'temp-user-' + Date.now(),
+            role: 'user',
             content: textToSend,
             created_at: new Date().toISOString()
         };
@@ -430,19 +430,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 setMessages(prev => {
                     const updated = prev.filter(m => m.id !== tempUserMsg.id);
                     const finalMessages = [...updated];
-                    
-                    finalMessages.push({ 
-                        id: response.user_message_id || ('final-user-' + Date.now()), 
-                        role: 'user', 
+
+                    finalMessages.push({
+                        id: response.user_message_id || ('final-user-' + Date.now()),
+                        role: 'user',
                         content: textToSend, // Keep original input
                         rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
                         created_at: new Date().toISOString()
                     });
 
                     if (response.assistant_message_id || response.answer) {
-                        finalMessages.push({ 
-                            id: response.assistant_message_id || ('assistant-' + Date.now()), 
-                            role: 'assistant', 
+                        finalMessages.push({
+                            id: response.assistant_message_id || ('assistant-' + Date.now()),
+                            role: 'assistant',
                             content: typeof response.answer === 'string' ? response.answer : String(response.answer ?? ''),
                             reasoning: response.reasoning || '',
                             reasoning_available: !!response.reasoning_available,
@@ -451,7 +451,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             created_at: new Date().toISOString()
                         });
                     }
-                    
+
                     return finalMessages;
                 });
 
@@ -476,9 +476,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 return [
                     ...updated,
                     tempUserMsg,
-                    { 
-                        id: 'error-' + Date.now(), 
-                        role: 'assistant', 
+                    {
+                        id: 'error-' + Date.now(),
+                        role: 'assistant',
                         content: `Error: ${err.message || "Failed to get response."}`,
                         created_at: new Date().toISOString()
                     }
@@ -525,7 +525,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             const { deleted_ids } = await deleteMessage(messageId);
             setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
-            
+
             // Critical: If the current active chat sentence belongs to a deleted message, 
             // reset the chat ID selection to prevent out-of-bounds access.
             if (onResetChatId) {
@@ -610,17 +610,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
                         </IconButton>
                     </Tooltip>
-                    <Tooltip 
+                    <Tooltip
                         title={
                             <Box sx={{ p: 0.5 }}>
                                 <Typography variant="caption" display="block">
-                                    Set context window size for the LLM. 
+                                    Set context window size for the LLM.
                                 </Typography>
                                 <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
                                     Search for your model here and plug in numbers only from column "Context Len" e.g. 8000 for 8k, 128000 for 128k: <br />
-                                    <a 
-                                        href="https://llm-explorer.com/list/" 
-                                        target="_blank" 
+                                    <a
+                                        href="https://llm-explorer.com/list/"
+                                        target="_blank"
                                         rel="noopener noreferrer"
                                         style={{ color: '#90caf9', marginLeft: '4px', textDecoration: 'underline' }}
                                     >
@@ -653,9 +653,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 setShowContextHighlight(false);
                                 setTooltipOpen(false);
                             }}
-                            sx={{ 
-                                width: 'auto', 
-                                minWidth: 100, 
+                            sx={{
+                                width: 'auto',
+                                minWidth: 100,
                                 maxWidth: 100,
                                 '& .MuiOutlinedInput-root': {
                                     transition: 'all 0.3s ease',
@@ -700,10 +700,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     const isRecollected = recollectedIds.has(msg.id);
                     const isUser = msg.role === 'user';
                     return (
-                        <ListItem 
-                            key={msg.id} 
-                            ref={el => messageRefs.current[idx] = el} 
-                            alignItems="flex-start" 
+                        <ListItem
+                            key={msg.id}
+                            ref={el => messageRefs.current[idx] = el}
+                            alignItems="flex-start"
                             sx={{
                                 flexDirection: 'column',
                                 alignItems: isUser ? 'flex-end' : 'flex-start',
@@ -725,10 +725,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         ? theme.palette.getContrastText(theme.palette.primary.main)
                                         : theme.palette.text.primary,
                                     maxWidth: '90%',
-                                    boxShadow: activeMessageIndex === idx 
-                                        ? '0 0 10px rgba(255, 255, 0, 0.4)' 
-                                        : isRecollected 
-                                            ? '0 0 10px rgba(156, 39, 176, 0.5)' 
+                                    boxShadow: activeMessageIndex === idx
+                                        ? '0 0 10px rgba(255, 255, 0, 0.4)'
+                                        : isRecollected
+                                            ? '0 0 10px rgba(156, 39, 176, 0.5)'
                                             : 'none',
                                     border: isRecollected ? '2px solid' : 'none',
                                     borderColor: isRecollected ? 'secondary.main' : 'transparent',
@@ -753,16 +753,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         label="Used as context"
                                         size="small"
                                         color="secondary"
-                                        sx={{ 
-                                            position: 'absolute', 
-                                            top: -10, 
+                                        sx={{
+                                            position: 'absolute',
+                                            top: -10,
                                             left: 10,
                                             height: 20,
                                             fontSize: '0.65rem'
                                         }}
                                     />
                                 )}
-                                
+
                                 {/* Delete button */}
                                 <IconButton
                                     className="delete-btn"
@@ -933,23 +933,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             I need a bit more clarification. Did you mean one of these?
                         </Typography>
                         {clarificationOptions.map((opt, i) => (
-                            <Chip 
-                                key={i} 
-                                label={opt} 
-                                onClick={() => handleSend(opt)} 
-                                color="primary" 
-                                variant="outlined" 
+                            <Chip
+                                key={i}
+                                label={opt}
+                                onClick={() => handleSend(opt)}
+                                color="primary"
+                                variant="outlined"
                                 size="medium"
-                                sx={{ 
-                                    cursor: 'pointer', 
+                                sx={{
+                                    cursor: 'pointer',
                                     maxWidth: '300px',
-                                    '&:hover': { bgcolor: 'primary.main', color: 'white' } 
+                                    '&:hover': { bgcolor: 'primary.main', color: 'white' }
                                 }}
                             />
                         ))}
-                        <Button 
-                            size="small" 
-                            variant="text" 
+                        <Button
+                            size="small"
+                            variant="text"
                             onClick={() => setClarificationOptions(null)}
                             sx={{ fontSize: '0.7rem' }}
                         >
@@ -994,9 +994,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             },
                         }}
                     />
-                    <IconButton 
-                        color="primary" 
-                        onClick={handleSend} 
+                    <IconButton
+                        color="primary"
+                        onClick={handleSend}
                         disabled={loading || !llmModel || indexingStatus !== 'ready'}
                     >
                         {loading ? <CircularProgress size={24} /> : <SendIcon />}
@@ -1032,14 +1032,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         </Tooltip>
                     </Box>
                     {minMaxIterations !== null && maxMaxIterations !== null ? (
-                    <TextField
-                        label="Max tool iterations"
-                        type="number"
-                        value={maxIterations}
-                        onChange={(e) => setMaxIterations(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
-                        inputProps={{ min: minMaxIterations, max: maxMaxIterations }}
-                        helperText="Lower is faster; higher allows deeper research."
-                    />
+                        <TextField
+                            label="Max tool iterations"
+                            type="number"
+                            value={maxIterations}
+                            onChange={(e) => setMaxIterations(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
+                            inputProps={{ min: minMaxIterations, max: maxMaxIterations }}
+                            helperText="Lower is faster; higher allows deeper research."
+                        />
                     ) : (
                         <Typography variant="caption" color="error">Iteration limits not loaded from server.</Typography>
                     )}
