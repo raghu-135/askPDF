@@ -175,6 +175,7 @@ async def web_capture(req: WebCaptureRequest):
         "file_hash": result["file_hash"],
         "title": result["title"],
         "cached": result["cached"],
+        "content_hash": result.get("content_hash"),
     }
 
 

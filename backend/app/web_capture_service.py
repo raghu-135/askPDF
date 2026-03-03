@@ -134,7 +134,18 @@ async def capture_webpage(url: str, force: bool = False) -> dict:
             cached_html = fh.read()
         soup_tmp = BeautifulSoup(cached_html, "lxml")
         title = soup_tmp.title.get_text(strip=True) if soup_tmp.title else url
-        return {"file_hash": file_hash, "title": title, "saved_path": saved_path, "cached": True}
+        # Compute content_hash from the cached HTML so it's always available
+        content_tag = soup_tmp.find("main") or soup_tmp.find("article") or soup_tmp.body or soup_tmp
+        raw_text = content_tag.get_text(separator="\n", strip=True)
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        cached_content_hash = hashlib.md5("\n".join(lines).encode("utf-8", errors="replace")).hexdigest()
+        return {
+            "file_hash": file_hash,
+            "title": title,
+            "saved_path": saved_path,
+            "cached": True,
+            "content_hash": cached_content_hash,
+        }
 
     # ---- Step 1: fetch the page ----------------------------------------
     async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
@@ -224,10 +235,25 @@ async def capture_webpage(url: str, force: bool = False) -> dict:
     for script in soup.find_all("script", src=True):
         script.decompose()
 
-    # ---- Step 5: save ---------------------------------------------------
+    # ---- Step 5: compute content hash from extracted text ---------------
+    # Use the same text-extraction logic as rag.py/index_webpage_for_thread
+    # so the hash reflects meaningful content changes, not just whitespace.
+    content_tag = soup.find("main") or soup.find("article") or soup.body or soup
+    raw_text = content_tag.get_text(separator="\n", strip=True)
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    page_text = "\n".join(lines)
+    content_hash = hashlib.md5(page_text.encode("utf-8", errors="replace")).hexdigest()
+
+    # ---- Step 6: save ---------------------------------------------------
     final_html = str(soup)
     with open(saved_path, "w", encoding="utf-8") as fh:
         fh.write(final_html)
 
-    logger.info("Captured webpage %s → %s", url, saved_path)
-    return {"file_hash": file_hash, "title": title, "saved_path": saved_path, "cached": False}
+    logger.info("Captured webpage %s → %s (content_hash=%s)", url, saved_path, content_hash)
+    return {
+        "file_hash": file_hash,
+        "title": title,
+        "saved_path": saved_path,
+        "cached": False,
+        "content_hash": content_hash,
+    }

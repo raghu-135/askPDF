@@ -210,18 +210,18 @@ export async function deleteThread(threadId: string): Promise<void> {
 }
 
 export async function addFileToThread(
-  threadId: string, 
-  fileHash: string, 
-  fileName: string, 
+  threadId: string,
+  fileHash: string,
+  fileName: string,
   text?: string
 ): Promise<any> {
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/files`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ 
-      file_hash: fileHash, 
+    body: JSON.stringify({
+      file_hash: fileHash,
       file_name: fileName,
-      text 
+      text
     })
   });
   if (!res.ok) throw new Error(await res.text());
@@ -247,12 +247,54 @@ export async function addWebSourceToThread(
   return res.json();
 }
 
+export type RefreshStatus = 'unchanged' | 'confirmation_required' | 'accepted';
+
+export interface RefreshWebSourceResult {
+  status: RefreshStatus;
+  message?: string;
+  thread_id: string;
+  file_hash: string;
+  url?: string;
+  indexing?: string;
+  new_content_hash?: string;
+}
+
+/**
+ * Re-index a web source after a forced recapture.
+ *
+ * Phase 1 (confirmed=false): compares content_hash with the stored one.
+ *   - "unchanged"            → page content hasn't changed, skip re-indexing.
+ *   - "confirmation_required" → content changed, show dialog before proceeding.
+ *
+ * Phase 2 (confirmed=true): purges old Qdrant chunks and re-indexes fresh content.
+ *   - "accepted"             → re-indexing kicked off in the background.
+ */
+export async function refreshWebSource(
+  threadId: string,
+  fileHash: string,
+  contentHash: string | null,
+  confirmed: boolean,
+): Promise<RefreshWebSourceResult> {
+  const res = await fetch(
+    `${RAG_API_BASE}/threads/${threadId}/web-sources/${fileHash}/refresh`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content_hash: contentHash, confirmed }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ============ Web Capture ============
 
 export interface WebCaptureResult {
   file_hash: string;
   title: string;
   cached: boolean;
+  /** MD5 hash of the page's extracted text content — changes when the page content changes. */
+  content_hash: string | null;
 }
 
 /**
@@ -296,8 +338,8 @@ export async function removeSourceFromThread(
 }
 
 export async function getThreadMessages(
-  threadId: string, 
-  limit: number = 100, 
+  threadId: string,
+  limit: number = 100,
   offset: number = 0
 ): Promise<{ messages: Message[] }> {
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/messages?limit=${limit}&offset=${offset}`);

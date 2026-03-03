@@ -670,12 +670,15 @@ async def upsert_thread_stats_document(
     file_hash: str,
     file_name: str,
     source_type: str = "pdf",
+    content_hash: Optional[str] = None,
 ) -> None:
     """
     Insert or upsert a document entry in thread_stats.documents_meta.
     Called immediately when a file is added to the thread (status=pending).
-    If an entry for this file_hash already exists, preserves existing fields
-    (e.g. chunk_count already set) and updates only file_name/source_type.
+
+    If content_hash is provided this is a refresh-reset: chunk_count and
+    indexing_status are cleared back to pending so agents see fresh state.
+    When no content_hash is given (normal add), existing fields are preserved.
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -689,14 +692,28 @@ async def upsert_thread_stats_document(
         docs = _load_documents_meta(row["documents_meta"] if row else None)
 
         existing = docs.get(file_hash, {})
-        docs[file_hash] = {
-            "file_name": file_name,
-            "source_type": source_type,
-            "chunk_count": existing.get("chunk_count", 0),
-            "total_chars": existing.get("total_chars", 0),
-            "indexing_status": existing.get("indexing_status", "pending"),
-            "indexed_at": existing.get("indexed_at"),
-        }
+        if content_hash is not None:
+            # Refresh-reset: clear stale indexing fields, store new content hash
+            docs[file_hash] = {
+                "file_name": file_name,
+                "source_type": source_type,
+                "chunk_count": 0,
+                "total_chars": 0,
+                "indexing_status": "pending",
+                "indexed_at": None,
+                "content_hash": content_hash,
+            }
+        else:
+            # Normal add: preserve existing indexed fields if doc was already indexed
+            docs[file_hash] = {
+                "file_name": file_name,
+                "source_type": source_type,
+                "chunk_count": existing.get("chunk_count", 0),
+                "total_chars": existing.get("total_chars", 0),
+                "indexing_status": existing.get("indexing_status", "pending"),
+                "indexed_at": existing.get("indexed_at"),
+                "content_hash": existing.get("content_hash"),
+            }
 
         await db.execute(
             """

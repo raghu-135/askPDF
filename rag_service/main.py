@@ -544,6 +544,103 @@ async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class RefreshWebSourceRequest(BaseModel):
+    content_hash: Optional[str] = None
+    confirmed: bool = False
+
+
+@app.post("/threads/{thread_id}/web-sources/{file_hash}/refresh")
+async def refresh_web_source_endpoint(
+    thread_id: str,
+    file_hash: str,
+    req: RefreshWebSourceRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Smart re-index for a web source after a forced visual recapture.
+
+    Phase 1 (confirmed=False): compare new content_hash against the stored one.
+      - If unchanged → return status="unchanged" (caller should skip re-indexing).
+      - If changed  → return status="confirmation_required" so the caller can show
+                       a dialog warning about data replacement.
+
+    Phase 2 (confirmed=True): purge stale Qdrant vectors and re-index fresh content.
+
+    This ensures resources are only spent when page content actually changed, and
+    the user gets a chance to acknowledge that old indexed data will be replaced.
+    """
+    try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        file = await get_file(file_hash)
+        if not file:
+            raise HTTPException(status_code=404, detail="Web source not found")
+
+        url = file.file_path or file.file_name  # file_path holds the URL for web sources
+
+        # ── Phase 1: content-change check ──────────────────────────────────
+        if req.content_hash and not req.confirmed:
+            # Read stored content_hash from thread_stats
+            from database import get_thread_shape as _get_shape
+            shape = await _get_shape(thread_id)
+            stored_meta = shape["documents"].get(file_hash, {})
+            stored_hash = stored_meta.get("content_hash")
+
+            if stored_hash and stored_hash == req.content_hash:
+                return {
+                    "status": "unchanged",
+                    "message": "Page content has not changed since last index. No re-indexing needed.",
+                    "thread_id": thread_id,
+                    "file_hash": file_hash,
+                }
+
+            # Content changed (or no stored hash yet) → ask for confirmation
+            return {
+                "status": "confirmation_required",
+                "message": "Page content has changed. Re-indexing will remove the current indexed data for this page and replace it with the new content.",
+                "thread_id": thread_id,
+                "file_hash": file_hash,
+                "new_content_hash": req.content_hash,
+            }
+
+        # ── Phase 2: confirmed — purge and re-index ────────────────────────
+        qdrant = get_qdrant()
+        await qdrant.delete_source_chunks_by_file_hash(thread_id, file_hash)
+
+        # Reset thread_stats to pending; store new content_hash immediately
+        await upsert_thread_stats_document(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            file_name=file.file_name,
+            source_type="web",
+            content_hash=req.content_hash,
+        )
+
+        background_tasks.add_task(
+            index_webpage_for_thread,
+            thread_id=thread_id,
+            url=url,
+            file_hash=file_hash,
+            embedding_model_name=thread.embed_model,
+        )
+
+        return {
+            "status": "accepted",
+            "thread_id": thread_id,
+            "file_hash": file_hash,
+            "url": url,
+            "indexing": "in_progress",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============ Message Endpoints ============
 
 @app.get("/threads/{thread_id}/messages")

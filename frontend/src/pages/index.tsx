@@ -69,7 +69,7 @@ export default function Home() {
 
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
-  
+
   // Right panel tab state (0 = Threads, 1 = Chat)
   const [rightPanelTab, setRightPanelTab] = useState(0);
 
@@ -97,7 +97,7 @@ export default function Home() {
     setCurrentChatId(null);
     setPlayRequestId(null);
     setActiveSource('pdf');
-    
+
     if (thread) {
       try {
         setIsPdfLoading(true);
@@ -105,7 +105,7 @@ export default function Home() {
         const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
         const detailedThread = await import("../lib/api").then(m => m.getThread(thread.id));
         setActiveThread(detailedThread);
-        
+
         const loadedTabs = await loadThreadTabs(detailedThread, apiBase);
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
@@ -330,17 +330,17 @@ export default function Home() {
                 </IconButton>
               </Tooltip>
 
-                {/* PDF Dark Mode Toggle */}
-                <Tooltip title={pdfDarkMode ? "Disable PDF Dark Mode" : "Enable PDF Dark Mode"}>
-                  <IconButton
-                    color={pdfDarkMode ? "primary" : "default"}
-                    onClick={() => setPdfDarkMode(d => !d)}
-                    sx={{ border: pdfDarkMode ? 1 : 0, borderColor: pdfDarkMode ? 'primary.main' : 'transparent' }}
-                    size="small"
-                  >
-                    <DarkModeIcon />
-                  </IconButton>
-                </Tooltip>
+              {/* PDF Dark Mode Toggle */}
+              <Tooltip title={pdfDarkMode ? "Disable PDF Dark Mode" : "Enable PDF Dark Mode"}>
+                <IconButton
+                  color={pdfDarkMode ? "primary" : "default"}
+                  onClick={() => setPdfDarkMode(d => !d)}
+                  sx={{ border: pdfDarkMode ? 1 : 0, borderColor: pdfDarkMode ? 'primary.main' : 'transparent' }}
+                  size="small"
+                >
+                  <DarkModeIcon />
+                </IconButton>
+              </Tooltip>
 
               {/* Right Panel Toggle */}
               <Button
@@ -394,6 +394,7 @@ export default function Home() {
               <WebViewer
                 url={activeTab.sourceUrl}
                 fileHash={activeTab.fileHash}
+                threadId={activeThread?.id}
                 darkMode={pdfDarkMode}
                 isResizing={isResizing}
               />
@@ -481,21 +482,21 @@ export default function Home() {
           }}>
             {/* Tabs Header */}
             <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-              <Tabs 
-                value={rightPanelTab} 
+              <Tabs
+                value={rightPanelTab}
                 onChange={(_, newValue) => setRightPanelTab(newValue)}
                 variant="fullWidth"
               >
-                <Tab 
-                  icon={<ForumIcon fontSize="small" />} 
-                  iconPosition="start" 
-                  label="Threads" 
+                <Tab
+                  icon={<ForumIcon fontSize="small" />}
+                  iconPosition="start"
+                  label="Threads"
                   sx={{ minHeight: 56, textTransform: 'none', flex: 2 }}
                 />
-                <Tab 
-                  icon={<ChatIcon fontSize="small" />} 
-                  iconPosition="start" 
-                  label={activeThread ? activeThread.name : "Chat"} 
+                <Tab
+                  icon={<ChatIcon fontSize="small" />}
+                  iconPosition="start"
+                  label={activeThread ? activeThread.name : "Chat"}
                   disabled={!activeThread}
                   sx={{ minHeight: 56, textTransform: 'none', flex: 8 }}
                 />
@@ -505,8 +506,8 @@ export default function Home() {
             {/* Tab Content */}
             <Box sx={{ flex: 1, overflow: 'hidden' }}>
               {/* Threads Tab */}
-              <Box sx={{ 
-                height: '100%', 
+              <Box sx={{
+                height: '100%',
                 display: rightPanelTab === 0 ? 'block' : 'none',
                 overflow: 'auto'
               }}>
@@ -525,8 +526,8 @@ export default function Home() {
               </Box>
 
               {/* Chat Tab */}
-              <Box sx={{ 
-                height: '100%', 
+              <Box sx={{
+                height: '100%',
                 display: rightPanelTab === 1 ? 'flex' : 'none',
                 flexDirection: 'column'
               }}>
@@ -549,10 +550,10 @@ export default function Home() {
                     darkMode={pdfDarkMode}
                   />
                 ) : (
-                  <Box sx={{ 
-                    flex: 1, 
-                    display: 'flex', 
-                    alignItems: 'center', 
+                  <Box sx={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
                     justifyContent: 'center',
                     p: 3
                   }}>

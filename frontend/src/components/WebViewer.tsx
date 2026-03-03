@@ -17,67 +17,114 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, CircularProgress, Typography, Button, Tooltip, IconButton } from '@mui/material';
+import {
+  Box, CircularProgress, Typography, Button, Tooltip, IconButton,
+  Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
+  Snackbar, Alert,
+} from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import { captureWebPage, fetchWebPageHtml } from '../lib/api';
+import { captureWebPage, fetchWebPageHtml, refreshWebSource } from '../lib/api';
 
 type Props = {
   /** The original URL of the webpage. */
   url: string;
   /** MD5 hash of the URL — used to retrieve the saved HTML. */
   fileHash: string;
+  /** Thread ID — if provided, refresh also re-indexes the page in the RAG service. */
+  threadId?: string;
   darkMode?: boolean;
   isResizing?: boolean;
 };
 
 type Status = 'idle' | 'capturing' | 'loading' | 'ready' | 'error';
 
-const WebViewer = React.memo(function WebViewer({ url, fileHash, darkMode = false, isResizing = false }: Props) {
+const WebViewer = React.memo(function WebViewer({ url, fileHash, threadId, darkMode = false, isResizing = false }: Props) {
   const [status, setStatus] = useState<Status>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [pageTitle, setPageTitle] = useState<string>('');
   const blobUrlRef = useRef<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  // Confirmation dialog state (content changed, warn before re-indexing)
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingContentHash, setPendingContentHash] = useState<string | null>(null);
+
+  // Snackbar for "no changes detected" feedback
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'info' }>({
+    open: false, message: '', severity: 'info',
+  });
+
+  const loadHtml = async () => {
+    setStatus('loading');
+    try {
+      const html = await fetchWebPageHtml(fileHash);
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+      const blob = new Blob([html], { type: 'text/html' });
+      blobUrlRef.current = URL.createObjectURL(blob);
+      if (iframeRef.current) iframeRef.current.src = blobUrlRef.current;
+      setStatus('ready');
+    } catch (err: any) {
+      setStatus('error');
+      setErrorMsg(`Failed to load page: ${err.message}`);
+    }
+  };
+
   const load = async (force = false) => {
     setStatus('capturing');
     setErrorMsg(null);
 
     try {
-      // Step 1 – ask backend to capture (caches after first call)
+      // Step 1 – capture (or use cache) and always get the content_hash
       const capture = await captureWebPage(url, force);
       setPageTitle(capture.title);
+
+      // Step 2 – if forced AND in a thread context, run the two-phase refresh check
+      if (force && threadId) {
+        try {
+          const result = await refreshWebSource(threadId, fileHash, capture.content_hash, false);
+
+          if (result.status === 'unchanged') {
+            setSnackbar({ open: true, message: 'Page content has not changed. Index is already up to date.', severity: 'info' });
+            // Still reload the visual view with fresh HTML
+            await loadHtml();
+            return;
+          }
+
+          if (result.status === 'confirmation_required') {
+            // Store hash, show dialog — loadHtml will run after confirmation
+            setPendingContentHash(result.new_content_hash ?? capture.content_hash);
+            setConfirmOpen(true);
+            // Reload visual without re-indexing for now
+            await loadHtml();
+            return;
+          }
+          // 'accepted' (no content_hash sent / forced straight through): fall through to loadHtml
+        } catch (reindexErr: any) {
+          // Non-fatal: visual refresh still continues; log for debugging
+          console.warn('Web source refresh check failed:', reindexErr.message);
+        }
+      }
     } catch (err: any) {
       setStatus('error');
       setErrorMsg(`Capture failed: ${err.message}`);
       return;
     }
 
-    setStatus('loading');
+    await loadHtml();
+  };
 
+  /** Called when the user confirms the "replace index" dialog. */
+  const handleConfirmReindex = async () => {
+    setConfirmOpen(false);
+    if (!threadId) return;
     try {
-      // Step 2 – fetch the saved HTML as text
-      const html = await fetchWebPageHtml(fileHash);
-
-      // Step 3 – revoke any previous blob URL to avoid memory leaks
-      if (blobUrlRef.current) {
-        URL.revokeObjectURL(blobUrlRef.current);
-      }
-
-      // Step 4 – create a local Blob URL and point the iframe at it
-      const blob = new Blob([html], { type: 'text/html' });
-      blobUrlRef.current = URL.createObjectURL(blob);
-
-      if (iframeRef.current) {
-        iframeRef.current.src = blobUrlRef.current;
-      }
-
-      setStatus('ready');
+      await refreshWebSource(threadId, fileHash, pendingContentHash, true);
+      setSnackbar({ open: true, message: 'Re-indexing started. New content will be available shortly.', severity: 'success' });
     } catch (err: any) {
-      setStatus('error');
-      setErrorMsg(`Failed to load page: ${err.message}`);
+      console.warn('Re-index (after confirmation) failed:', err.message);
     }
+    setPendingContentHash(null);
   };
 
   // Trigger initial load once on mount
@@ -230,6 +277,44 @@ const WebViewer = React.memo(function WebViewer({ url, fileHash, darkMode = fals
           }}
         />
       </Box>
+
+      {/* Confirmation dialog — shown when page content has changed */}
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Update page index?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            The content of this page has changed since it was last indexed.
+            Re-indexing will <strong>remove the existing indexed data</strong> for this page
+            and replace it with the new content. The updated knowledge will be available
+            to the AI after indexing completes.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => { setConfirmOpen(false); setPendingContentHash(null); }}>
+            Keep existing index
+          </Button>
+          <Button onClick={handleConfirmReindex} variant="contained" color="primary">
+            Re-index new content
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Snackbar for non-blocking feedback */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setSnackbar(s => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          onClose={() => setSnackbar(s => ({ ...s, open: false }))}
+          severity={snackbar.severity}
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 });
