@@ -748,10 +748,19 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     else:
         input_messages = [SystemMessage(content=system_prompt)] + messages[1:]
 
-    # Log complete prompt for Intent Agent
+    # Log complete prompt for Intent Agent in OpenAI-like format
     logger.debug(f"--- INTENT AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}] ---")
+    payload = []
     for msg in input_messages:
-        logger.debug(f"[{type(msg).__name__}]: {msg.content}")
+        role = "system" if isinstance(msg, SystemMessage) else "user" if isinstance(msg, HumanMessage) else "assistant"
+        entry = {"role": role, "content": msg.content}
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            entry["tool_calls"] = msg.tool_calls
+        if isinstance(msg, ToolMessage):
+            entry["role"] = "tool"
+            entry["tool_call_id"] = msg.tool_call_id
+        payload.append(entry)
+    logger.debug(json.dumps(payload, indent=2))
     logger.debug(f"--- INTENT AGENT PROMPT END ---")
 
     # Single direct call — no tools, no retries
@@ -1009,12 +1018,19 @@ async def call_model(state: AgentState, config: RunnableConfig):
     # Langchain expects SystemMessage at the start
     input_messages = [sys_prompt] + messages
 
-    # Log complete prompt for Orchestrator Agent
+    # Log complete prompt for Orchestrator Agent in OpenAI-like format
     logger.debug(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
+    payload = []
     for msg in input_messages:
-        logger.debug(f"[{type(msg).__name__}]: {msg.content}")
+        role = "system" if isinstance(msg, SystemMessage) else "user" if isinstance(msg, HumanMessage) else "assistant"
+        entry = {"role": role, "content": msg.content}
         if hasattr(msg, "tool_calls") and msg.tool_calls:
-            logger.debug(f"TOOL CALLS: {msg.tool_calls}")
+            entry["tool_calls"] = msg.tool_calls
+        if isinstance(msg, ToolMessage):
+            entry["role"] = "tool"
+            entry["tool_call_id"] = msg.tool_call_id
+        payload.append(entry)
+    logger.debug(json.dumps(payload, indent=2))
     logger.debug(f"--- ORCHESTRATOR AGENT PROMPT END ---")
 
     response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
