@@ -186,48 +186,6 @@ async def prefetch_context(
     }
 
 
-async def _build_recent_history_messages(
-    thread_id: str,
-    context_window: int,
-) -> List[Any]:
-    """
-    Load a compact recent transcript so follow-up questions remain grounded
-    even when the model skips history-related tool calls.
-    """
-    safe_window = max(DEFAULT_TOKEN_BUDGET, int(context_window or DEFAULT_TOKEN_BUDGET))
-    # Reuse the semantic-memory allocation ratio as the direct recent-history budget.
-    history_budget_chars = int(safe_window * RATIO_SEMANTIC_MEMORY * CHARS_PER_TOKEN)
-
-    # Fetch a ratio-scaled candidate pool, then pack newest->oldest within budget.
-    candidate_limit = max(1, int((safe_window * RATIO_SEMANTIC_MEMORY) / max(1, DEFAULT_MAX_ITERATIONS)))
-    recent = await get_recent_messages(thread_id, limit=candidate_limit)
-
-    packed_reversed: List[Any] = []
-    used_chars = 0
-
-    for msg in reversed(recent):
-        if msg.role == MessageRole.USER:
-            text = (msg.context_compact or msg.content or "").strip()
-            message_obj = HumanMessage
-        elif msg.role == MessageRole.ASSISTANT:
-            text = (msg.context_compact or msg.content or "").strip()
-            message_obj = AIMessage
-        else:
-            continue
-
-        if not text:
-            continue
-
-        text_chars = len(text)
-        if packed_reversed and used_chars + text_chars > history_budget_chars:
-            break
-
-        packed_reversed.append(message_obj(content=text))
-        used_chars += text_chars
-
-    return list(reversed(packed_reversed))
-
-
 async def handle_thread_chat(
     thread_id: str,
     req,  # ThreadChatRequest
@@ -256,24 +214,18 @@ async def handle_thread_chat(
     try:
         from agent import app as agent_app, intent_app, AgentState
         
-        # 1. Run recent-history build and context pre-fetch in parallel (no LLM cost)
-        recent_history_messages, prefetch_bundle = await asyncio.gather(
-            _build_recent_history_messages(
-                thread_id=thread_id,
-                context_window=context_window,
-            ),
-            prefetch_context(
-                thread_id=thread_id,
-                raw_question=question,
-                embed_model_name=embed_model,
-                context_window=context_window,
-            ),
+        # 1. Run context pre-fetch (no LLM cost)
+        prefetch_bundle = await prefetch_context(
+            thread_id=thread_id,
+            raw_question=question,
+            embed_model_name=embed_model,
+            context_window=context_window,
         )
 
         # 2. Analyze intent using the Intent Agent (optional)
         if use_intent_agent:
             intent_state = {
-                "messages": recent_history_messages + [HumanMessage(content=question)],
+                "messages": [HumanMessage(content=question)],
                 "thread_id": thread_id,
                 "llm_model": llm_model,
                 "context_window": context_window,
@@ -350,7 +302,7 @@ async def handle_thread_chat(
             effective_max_iterations = max_iterations
 
         initial_state = {
-            "messages": recent_history_messages + [HumanMessage(content=question)],
+            "messages": [HumanMessage(content=question)],
             "thread_id": thread_id,
             "llm_model": llm_model,
             "embedding_model": embed_model,
