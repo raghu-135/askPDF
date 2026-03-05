@@ -138,21 +138,42 @@ async def prefetch_context(
                 query_vector=shared_query_vector,
                 limit=budget["pdf_limit"],
             )
+            
+            # Resolve file names for the pre-fetched bundle
+            shape = await get_thread_shape(thread_id)
+            hash_to_name = {fh: meta["file_name"] for fh, meta in shape["documents"].items()}
+
             sources: List[Dict[str, Any]] = []
-            parts: List[str] = []
+            pdf_groups = {}  # Grouping by file_hash
             used_chars = 0
+            
             for chunk in raw_chunks:
                 text = chunk.get("text", "")
+                fh = chunk.get("file_hash")
+                
                 if used_chars + len(text) > budget["pdf_context_chars"]:
                     break
-                parts.append(text)
+                
+                # Group texts for the context block
+                if fh not in pdf_groups:
+                    pdf_groups[fh] = {"name": hash_to_name.get(fh, fh), "texts": []}
+                pdf_groups[fh]["texts"].append(text)
+                
                 used_chars += len(text)
                 sources.append({
                     "text": text[:200] + "..." if len(text) > 200 else text,
-                    "file_hash": chunk.get("file_hash"),
+                    "file_hash": fh,
+                    "file_name": hash_to_name.get(fh, fh),
                     "score": chunk.get("score", 0.0),
                 })
-            return "\n\n".join(parts), sources
+            
+            # Format as grouped blocks
+            context_parts = []
+            for group in pdf_groups.values():
+                combined_text = "\n".join(group["texts"])
+                context_parts.append(f'[Source: Document "{group["name"]}"]\n{combined_text}')
+                
+            return "\n\n".join(context_parts), sources
         except Exception as exc:
             logger.warning(f"Prefetch PDF evidence failed: {exc}")
             return "", []

@@ -153,31 +153,44 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         web_sources = []
         context_parts = []
 
+        # Group PDF chunks by file to reduce context window bloat
+        pdf_groups = {}
         for chunk in expanded_pdf_chunks:
-            text = chunk.get("text", "")
             fh = chunk.get("file_hash", "")
-            fname = hash_to_name.get(fh, fh)
-            labeled = f'[Source: Document "{fname}"]\n{text}'
-            context_parts.append(labeled)
+            if fh not in pdf_groups:
+                pdf_groups[fh] = {"name": hash_to_name.get(fh, fh), "texts": []}
+            pdf_groups[fh]["texts"].append(chunk.get("text", ""))
+            
+            # Keep flat metadata for UI citations
             pdf_sources.append({
-                "text": text[:200] + "..." if len(text) > 200 else text,
+                "text": chunk.get("text", "")[:200] + "...",
                 "file_hash": fh,
-                "file_name": fname,
+                "file_name": hash_to_name.get(fh, fh),
                 "score": chunk.get("score", 0.0),
             })
 
+        for group in pdf_groups.values():
+            combined_text = "\n".join(group["texts"])
+            context_parts.append(f'[Source: Document "{group["name"]}"]\n{combined_text}')
+
+        # Group cached web chunks by URL
+        web_groups = {}
         for wchunk in web_chunks:
-            text = wchunk.get("text", "")
             url = wchunk.get("url", "")
-            title = wchunk.get("title", url)
-            labeled = f'[Source: Internet Search — "{title}" | {url}]\n{text}'
-            context_parts.append(labeled)
+            if url not in web_groups:
+                web_groups[url] = {"title": wchunk.get("title", url), "texts": []}
+            web_groups[url]["texts"].append(wchunk.get("text", ""))
+
             web_sources.append({
-                "text": text[:200] + "..." if len(text) > 200 else text,
+                "text": wchunk.get("text", "")[:200] + "...",
                 "url": url,
-                "title": title,
+                "title": wchunk.get("title", url),
                 "score": wchunk.get("score", 0.0),
             })
+
+        for url, group in web_groups.items():
+            combined_text = "\n".join(group["texts"])
+            context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
 
         result: Dict[str, Any] = {"content": "\n\n".join(context_parts)}
         if pdf_sources:
@@ -322,17 +335,23 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
                 logger.warning(f"Web search indexing skipped: {idx_err}")
 
         # ── Build source-labeled content for the LLM ──
-        context_parts = []
+        web_groups = {}
         web_sources = []
         for text, url, title in zip(texts, urls, titles):
-            label = title or url or "Internet Search"
-            labeled = f'[Source: Internet Search — "{label}" | {url}]\n{text}'
-            context_parts.append(labeled)
+            if url not in web_groups:
+                web_groups[url] = {"title": title or url or "Internet Search", "texts": []}
+            web_groups[url]["texts"].append(text)
+
             web_sources.append({
-                "text": text[:200] + "..." if len(text) > 200 else text,
+                "text": text[:200] + "...",
                 "url": url,
-                "title": title,
+                "title": title or "Internet Search",
             })
+
+        context_parts = []
+        for url, group in web_groups.items():
+            combined_text = "\n".join(group["texts"])
+            context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
 
         return json.dumps({
             "content": "\n\n".join(context_parts),
@@ -472,12 +491,16 @@ async def search_pdf_by_document(
 
         sources = []
         context_parts = []
+        
+        # Single document search - group all chunks into one block
+        all_texts = [chunk.get("text", "") for chunk in expanded_chunks]
+        combined_text = "\n".join(all_texts)
+        context_parts.append(f'[Source: Document "{fname}"]\n{combined_text}')
+
         for chunk in expanded_chunks:
             text = chunk.get("text", "")
-            labeled = f'[Source: Document "{fname}"]\n{text}'
-            context_parts.append(labeled)
             sources.append({
-                "text": text[:200] + "..." if len(text) > 200 else text,
+                "text": text[:200] + "...",
                 "file_hash": file_hash,
                 "file_name": fname,
                 "score": chunk.get("score", 0.0),
@@ -646,7 +669,7 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         input_messages = [SystemMessage(content=system_prompt)] + messages[1:]
 
     # Log complete prompt for Intent Agent in OpenAI-like format
-    logger.debug(f"--- INTENT AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}] ---")
+    logger.info(f"--- INTENT AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}] ---")
     payload = []
     for msg in input_messages:
         role = "system" if isinstance(msg, SystemMessage) else "user" if isinstance(msg, HumanMessage) else "assistant"
@@ -657,8 +680,8 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
             entry["role"] = "tool"
             entry["tool_call_id"] = msg.tool_call_id
         payload.append(entry)
-    logger.debug(json.dumps(payload, indent=2))
-    logger.debug(f"--- INTENT AGENT PROMPT END ---")
+    logger.info(json.dumps(payload, indent=2))
+    logger.info(f"--- INTENT AGENT PROMPT END ---")
 
     # Single direct call — no tools, no retries
     try:
@@ -916,7 +939,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
     input_messages = [sys_prompt] + messages
 
     # Log complete prompt for Orchestrator Agent in OpenAI-like format
-    logger.debug(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
+    logger.info(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
     payload = []
     for msg in input_messages:
         role = "system" if isinstance(msg, SystemMessage) else "user" if isinstance(msg, HumanMessage) else "assistant"
@@ -927,8 +950,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
             entry["role"] = "tool"
             entry["tool_call_id"] = msg.tool_call_id
         payload.append(entry)
-    logger.debug(json.dumps(payload, indent=2))
-    logger.debug(f"--- ORCHESTRATOR AGENT PROMPT END ---")
+    logger.info(json.dumps(payload, indent=2))
+    logger.info(f"--- ORCHESTRATOR AGENT PROMPT END ---")
 
     response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
     return {"messages": [response], "iteration_count": iteration}
