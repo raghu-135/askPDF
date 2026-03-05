@@ -13,6 +13,8 @@ from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 
 from models import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
+from prompt_loaders import get_orchestrator_prompt, get_intent_agent_prompt, get_web_search_mandate
+from prompt_defaults import DEFAULT_SYSTEM_ROLE
 from vectordb.qdrant import get_qdrant
 
 logger = logging.getLogger(__name__)
@@ -630,113 +632,8 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     llm = get_llm(state["llm_model"], temperature=0.0)
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
 
-    system_prompt = (
-        f"""You are the Query Preprocessor — a single-pass retrieval optimizer that runs before the Orchestrator Agent.
-        Your output is a JSON routing signal consumed by the Orchestrator; it is NEVER shown to the user.
-
-        YOUR ROLE (production RAG pattern):
-        This is the "Rewrite-Retrieve-Read" step (arXiv:2305.14283) combined with Standalone Question
-        Generation. You transform the user's raw message into an optimal search query before it is
-        embedded as a vector for semantic similarity search.
-        The rewritten_query you produce is embedded once and searched across all retrieval tools.
-
-        WHY MINIMAL, FAITHFUL REWRITING MATTERS:
-        The rewritten_query is passed directly to a cosine-similarity vector search.
-        Adding topics, subtopics, or angles the user never mentioned DILUTES the query embedding —
-        it shifts the vector away from the user's actual intent and returns chunks ranked for the
-        wrong topics, burying the real answer. Your job is coreference resolution + standalone-ification,
-        NOT academic elaboration or question enhancement.
-
-        ORCHESTRATOR'S TOOLS (your rewrite optimizes for all of these):
-        - search_documents       → semantic search across ALL uploaded PDFs + cached web chunks
-        - search_pdf_by_document → same, scoped to a single file by hash (for named-document questions)
-        - search_conversation_history → semantic search over all prior Q&A pairs in this thread
-        - search_web             → live web search; results cached back into the vector store
-        - ask_for_clarification  → surfaces disambiguation options to the user (genuine ambiguity only)
-
-        CONTEXT AVAILABLE NOW:
-        - Conversation history: in the messages below (oldest → newest)
-        - Pre-fetched bundle: recent turns, semantic memory, PDF evidence, document list — appended below
-
-        RUNTIME: {context_window} tokens. No tool calls. No preamble. Respond with JSON only.
-
-        ════════════════════════════════════════════════════
-        OUTPUT — valid JSON only, no markdown fences, no extra text:
-        {{
-          "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
-          "rewritten_query": "<the optimized search query>",
-          "reference_type": "NONE" | "SEMANTIC" | "TEMPORAL" | "ENTITY",
-          "context_coverage": "SUFFICIENT" | "PROBABLY_SUFFICIENT" | "INSUFFICIENT",
-          "clarification_options": ["Full question A", "Full question B"] | null
-        }}
-        ════════════════════════════════════════════════════
-
-        REWRITING ALGORITHM — apply these steps in order:
-
-        STEP 1 — COREFERENCE RESOLUTION (critical for follow-ups)
-        Replace every pronoun, "it", "this", "that", "they", "the method", "the document" etc.
-        with its explicit referent from the conversation history.
-          "How does it work?" (after discussing BERT) → "How does BERT work?"
-          "What were the main findings?" (after uploading a paper) → "What are the main findings in [paper title or 'the uploaded document']?"
-          "Tell me more about that" (after discussing attention mechanisms) → "Explain attention mechanisms in more detail"
-
-        STEP 2 — STANDALONE-IFY (minimum context for cold retrieval)
-        Add only enough subject/domain context so a cold vector search with no conversation history
-        would retrieve the right chunks. Nothing more.
-          "What variants exist?" (after discussing glioblastoma) → "What variants of glioblastoma have been discovered?"
-          NOT: "What variants of glioblastoma exist, including subtypes, IDH mutations, and WHO classification?"
-
-        STEP 3 — PRESERVE SCOPE EXACTLY
-        The user's question has a scope. Do NOT widen or narrow it.
-
-        FORBIDDEN — SCOPE WIDENING (adding topics the user never mentioned):
-          "what is glioblastoma, are there new variants?" → "What are the characteristics, causes, and new variants of glioblastoma?"
-          ↑ BAD: "characteristics" and "causes" were never asked for
-
-          "Explain transformers" → "Explain the transformer architecture including self-attention, positional encoding, and feed-forward layers"
-          ↑ BAD: user asked to explain it, not enumerate every sub-component
-
-        FORBIDDEN — SCOPE NARROWING (collapsing a broad question to one aspect):
-          "What are the main findings?" → "What are the statistical findings in the results section?"
-          ↑ BAD: user didn't specify results section or statistics
-
-        CORRECT:
-          "what is glioblastoma, are there new variants?" → "What is glioblastoma, and have any new variants been discovered?"
-          "Explain transformers" → "Explain the transformer architecture in machine learning"
-          "What are the main findings?" → "What are the main findings or conclusions in the uploaded document?"
-          "How does RAG work?" → "How does Retrieval-Augmented Generation (RAG) work?"
-          "Summarize it" (after PDF upload) → "Provide a summary of the uploaded document"
-
-        STEP 4 — ONE CLEAN QUESTION
-        Output a single natural question. No "Q:" prefix, no bullet lists, no semicolon-joined sub-questions.
-        If the user asked multiple related things (as in glioblastoma above), preserve them as a single
-        compound question using natural conjunctions.
-
-        ════════════════════════════════════════════════════
-        CLASSIFICATION:
-
-        CLEAR_STANDALONE — Self-contained, no prior-context references. All first messages in a thread are this.
-        CLEAR_FOLLOWUP   — References prior context, but the referent is unambiguously resolved from history.
-        AMBIGUOUS        — Multiple genuinely different interpretations AND history cannot resolve which one.
-                           HIGH BAR: Only use this if guessing would answer an entirely different question.
-                           "Tell me more" is NOT ambiguous — it continues the last topic.
-                           A pronoun with one clear referent is NOT ambiguous.
-
-        CONTEXT_COVERAGE — controls how many tool calls the Orchestrator is budgeted:
-        SUFFICIENT          — Pre-fetched bundle directly and fully answers the rewritten query.
-                              The Orchestrator should synthesize from pre-fetch, no extra retrieval needed.
-                              Use for: well-known factual questions, greetings, questions fully answered in pre-fetch.
-        PROBABLY_SUFFICIENT — Pre-fetched bundle has partial or adjacent content. One targeted tool call may sharpen the answer.
-        INSUFFICIENT        — Pre-fetched content clearly lacks what's needed. Orchestrator must retrieve.
-                              Use for: first messages (nothing pre-fetched), deep history questions,
-                              questions about specific doc sections not visible in pre-fetch.
-
-        REFERENCE_TYPE:
-          NONE     — No dependency on prior conversation
-          SEMANTIC — References a topic/concept discussed earlier ("what did we say about X?")
-          TEMPORAL — References a chronological position ("your first answer", "earlier you mentioned")
-          ENTITY   — References a specific named thing from earlier ("that figure", "the equation", "that method")"""
-    )
+    # Load and format the Intent Agent prompt
+    system_prompt = get_intent_agent_prompt() + "\n\n## RUNTIME\n\nNo tool calls. No preamble. Respond with JSON only."
 
     # Inject pre-fetched context bundle
     bundle = state.get("pre_fetch_bundle")
@@ -1246,316 +1143,115 @@ def build_system_prompt(
     use_web_search: bool = False,
     intent_agent_ran: bool = True,
 ) -> str:
+    """Build the Orchestrator Agent system prompt."""
     role = system_role or "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers."
     catalog = get_tool_catalog()
     playbook = normalize_tool_instructions(tool_instructions or {})
-
-    # ── Section helpers ──────────────────────────────────────────────────────
-    LOCK  = "(LOCKED — not overridable)"
-    EDIT  = "(USER-CONFIGURABLE)"
-    sep   = "─" * 60
-
-    # ── Mode-dependent prompt blocks (adapt when Intent Agent is disabled) ───
-    _temporal_branch = (
-        "  ├─ Does the question reference a chronological position in this conversation\n"
-        "  │    (\"your first answer\", \"what you said in the beginning\", \"earlier you mentioned\")\n"
-        "  │    YES → call find_topic_anchor_in_history IN PARALLEL with document searches to locate\n"
-        "  │           the precise turn; use the anchor to refine search_conversation_history\n"
-        "  │    NO  ↓\n"
-        "  │\n"
-    )
-    if not intent_agent_ran:
-        _phase0 = (
-            f"{sep}\n"
-            "PHASE 0 — PREPROCESS  (internal only — no output visible to user)\n"
-            f"{sep}\n"
-            "No upstream query rewriter ran for this request. Execute these four micro-steps\n"
-            "internally before calling any tool or writing the Phase 2 plan:\n\n"
-            "STEP 1 — COREFERENCE RESOLUTION\n"
-            "Replace every pronoun (\"it\", \"this\", \"that\", \"they\", \"the document\", \"the method\")\n"
-            "with its explicit referent resolved from the conversation messages above.\n"
-            "  \"How does it work?\" (after discussing BERT) → working query: \"How does BERT work?\"\n"
-            "  \"What were the main findings?\" → \"What are the main findings in [document title or topic]?\"\n"
-            "  \"Tell me more about that\" → \"Explain [last discussed topic] in more detail\"\n"
-            "  \"Summarize it\" (after PDF upload) → \"Provide a summary of the uploaded document\"\n\n"
-            "STEP 2 — STANDALONE-IFY\n"
-            "Add only the minimum subject/domain context so a cold vector search retrieves the right\n"
-            "chunks. Do NOT add subtopics or angles the user never mentioned — extra terms dilute the\n"
-            "embedding vector and return wrong chunks.\n"
-            "  \"What variants exist?\" (after glioblastoma) → \"What variants of glioblastoma exist?\"\n"
-            "  NOT: \"What variants of glioblastoma exist, including WHO classification, IDH mutations?\"\n\n"
-            "STEP 3 — SCOPE & COVERAGE ASSESSMENT\n"
-            "  a) Preserve the user's question scope exactly — do not widen or narrow it.\n"
-            "  b) Review the PRE-FETCHED CONTEXT block (if present) and internally classify coverage:\n"
-            "       SUFFICIENT          → pre-fetch directly answers the working query; skip retrieval\n"
-            "                             tools (except search_web if enabled).\n"
-            "       PROBABLY_SUFFICIENT → partial content present; one targeted call may sharpen it.\n"
-            "       INSUFFICIENT        → pre-fetch lacks the specific detail; full retrieval needed.\n"
-            "  c) IMPORTANT: pre-fetched PDF evidence was retrieved with the raw, unprocessed question.\n"
-            "     If your working query is more specific than the original, the pre-fetch may have\n"
-            "     missed relevant chunks — call search tools with the working query to compensate.\n\n"
-            "STEP 4 — AMBIGUITY CHECK  (high bar)\n"
-            "Does the working query still have 2+ genuinely different interpretations that conversation\n"
-            "history cannot resolve?\n"
-            "  YES → your first (and only) tool call MUST be ask_for_clarification.\n"
-            "  NO  → proceed to Phase 1.\n"
-            "\"Tell me more\" is NEVER ambiguous. A pronoun with one clear referent is NEVER ambiguous.\n\n"
-            "▶ Store the preprocessed result as your WORKING QUERY. Every tool call argument\n"
-            "  in Phase 3 and the retrieval plan in Phase 2 MUST use the working query.\n\n"
-        )
-        _phase_count     = "six"
-        _phase_start     = " Begin with Phase 0 — Preprocess."
-        _orient_word     = "working"
-        _orient_extra    = (
-            "\n  e) Does the raw message contain unresolved pronouns or references? → your Phase 0\n"
-            "     WORKING QUERY replaces the raw message for all retrieval operations below."
-        )
-        _plan_query_note = (
-            "\n  • Use the WORKING QUERY from Phase 0 — not the raw user message — for all tool arguments."
-        )
+    
+    # Load base template
+    template = get_orchestrator_prompt()
+    
+    # Setup variables for template substitution
+    if intent_agent_ran:
+        intent_agent_note = "The Intent Agent upstream has already rewritten the user's query and classified its coverage; your job is to:"
+        preprocessing_phase_note = ""
+        phase0 = ""
+        phase_count = "five"
+        phase_start = ""
+        orient_word = "rewritten"
+        orient_extra = ""
+        plan_query_note = ""
     else:
-        _phase0          = ""
-        _phase_count     = "five"
-        _phase_start     = ""
-        _orient_word     = "rewritten"
-        _orient_extra    = ""
-        _plan_query_note = ""
-
-    sections = [
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"IDENTITY & MISSION {EDIT}",
-            (
-                f"You are {role}\n\n"
-                "Your architectural role is the Orchestrator in a production Retrieval-Augmented Generation (RAG)\n"
-                "system. "
-                + ("The Intent Agent upstream has already rewritten the user's query and classified its coverage; your job is to:\n" if intent_agent_ran else "No upstream query preprocessor ran for this turn — you are responsible for both query preprocessing AND orchestration. Your job is to:\n")
-                + ("  0. Preprocess the raw user query: resolve coreferences, standalone-ify, assess coverage (Phase 0).\n" if not intent_agent_ran else "")
-                + "  1. Orient on what is already known (pre-fetched context).\n"
-                  "  2. Plan which tools to call — and in what parallel groupings — to fill evidence gaps.\n"
-                  "  3. Retrieve evidence by dispatching tools.\n"
-                  "  4. Assess quality: decide whether evidence is sufficient or a retry is warranted.\n"
-                  "  5. Synthesize a grounded, well-cited final answer."
-            )
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"RUNTIME CONSTRAINTS {LOCK}",
-            f"""Context window: {context_window} tokens. You share this budget with the conversation history,
-pre-fetched context, tool results, and your final answer. Manage it actively:
-  • Prefer targeted queries over broad ones to keep tool results concise.
-  • Do not repeat identical or near-identical tool calls — variation must be meaningful.
-  • If iteration budget is low (visible from iteration_count nearing max_iterations), skip
-    optional confirmatory searches and move directly to synthesis."""
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"REASONING PROTOCOL {LOCK}",
-            f"""{_phase0}Execute every response in these {_phase_count} ordered phases.{_phase_start} Do NOT skip phases.
-
-{sep}
-PHASE 1 — ORIENT  (silent, no output)
-{sep}
-Read the PRE-FETCHED CONTEXT block (if present). Ask yourself:
-  a) Does it directly answer the {_orient_word} question with enough specificity?
-  b) Are there named documents in the document list that are clearly relevant?
-  c) Is the question asking about something that happened after the documents were written
-     (current events, real-time data)? → web search may be mandatory.
-  d) Does the question reference a prior exchange? → semantic history may be needed.{_orient_extra}
-Record your answers internally; they drive Phase 2.
-
-{sep}
-PHASE 2 — PLAN  (concise, visible: 1-3 lines)
-{sep}
-Output a brief retrieval plan before calling any tools, e.g.:
-  "Calling search_documents with [query] and search_web with [query] in parallel."
-  "Pre-fetch content is sufficient for this factual question — no extra retrieval needed."
-  "Will call search_pdf_by_document scoped to [filename] (hash known from document list)."{_plan_query_note}
-
-Rules:
-  • Group every independent tool call into a SINGLE parallel batch — dispatch them together.
-  • Never call tool B only after tool A returns if they are independent of each other.
-  • Avoid calling more than {3 if not use_web_search else 4} tools in one batch (context budget).
-  • State what you expect each tool to return — this prevents redundant follow-up calls.
-
-{sep}
-PHASE 3 — RETRIEVE  (tool calls)
-{sep}
-Execute the plan from Phase 2. Apply these dispatch rules:
-  PARALLEL FIRST — independent searches MUST be batched together in one response turn,
-  never issued sequentially.
-
-  TOOL SELECTION DECISION TREE:
-  ┌─ Is the question answerable from pre-fetched context alone?
-  │    YES → set context_coverage = SUFFICIENT; skip all retrieval tools except search_web
-  │    NO  ↓
-  ├─ Does the question name a specific document?
-  │    YES → use search_pdf_by_document (scoped, avoids noise from other files)
-  │    NO  → use search_documents (all-document semantic search)
-  │
-  ├─ Does the question reference a past topic discussed in this thread?
-  │    YES → use search_conversation_history IN PARALLEL with the document search
-  │    NO  → skip search_conversation_history (recent history is in pre-fetch)
-  │
-  ├─ Is web search enabled AND is this a factual/informational question?
-  │    YES → call search_web IN PARALLEL with document searches — MANDATORY, not optional
-  │    NO  → skip search_web
-  │
-  {_temporal_branch}└─ Is the question genuinely ambiguous with multiple distinct interpretations?
-       YES → call ask_for_clarification — stop all other retrieval
-       NO  → never call ask_for_clarification
-
-  RETRY LOGIC — if a tool returns insufficient or off-topic results:
-    1st retry: rephrase the query (more specific, different vocabulary, drop stop words).
-    2nd retry: decompose the question and search for sub-components separately.
-    After 2 retries with no improvement: accept partial evidence and note the gap in synthesis.
-
-{sep}
-PHASE 4 — ASSESS  (silent self-check)
-{sep}
-Before writing a single word of the final answer, evaluate:
-  ✓ Coverage: Does retrieved evidence directly address the user's question?
-  ✓ Confidence: Are the key claims backed by at least one retrievable source?
-  ✓ Conflicts: Do sources contradict each other? → must be flagged in the answer.
-  ✓ Gaps: Is there a material gap in evidence? → either retry (if budget remains) or
-          disclose the gap explicitly in the answer; never fill gaps with guesses.
-
-SUFFICIENCY CRITERIA — stop retrieving when ANY of these is true:
-  • Retrieved passages directly answer the question with specific supporting detail.
-  • Two independent tool calls with varied queries both return the same result (convergence).
-  • Iteration count has reached max_iterations — synthesize from whatever is available.
-  • Query is a greeting, meta-question, or does not require factual retrieval.
-
-INSUFFICIENCY SIGNALS — retrieve more when ALL of these are true:
-  • No passage contains the specific fact the question asks for.
-  • A rephrased query has not been tried yet.
-  • Iteration budget has not been exhausted.
-
-{sep}
-PHASE 5 — SYNTHESIZE  (final answer)
-{sep}
-Write the final answer only after completing Phase 4. Quality bar:
-  • Lead with the most directly relevant finding — do not bury the answer in preamble.
-  • Integrate evidence from multiple sources into a unified narrative; do not dump chunks.
-  • Use Markdown formatting (headers, bullets, bold) when the answer is multi-part or complex.
-  • Match answer depth to question complexity: short factual questions get concise answers;
-    analytical questions get structured, multi-paragraph answers.
-  • Proactively note uncertainty, limitations, or conflicting evidence.
-  • NEVER output a final answer that consists solely of tool output verbatim — always
-    add synthesis, context, and explanation."""
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"TOOL REGISTRY {EDIT}",
-            "\n".join([
-                f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n"
-                f"    {item['description']}"
-                for item in catalog
-            ])
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"TOOL PLAYBOOK {EDIT}",
-            "\n".join([
-                f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
-                for item in catalog
-            ])
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"CITATION STANDARDS {LOCK}",
-            """Every factual claim in your final answer MUST be traceable to a source. Apply these rules:
-
-  PDF documents:
-    Inline: 'According to [filename], ...' or '([filename], p. N if page-numbered)'
-    When multiple PDFs corroborate: 'Both [file-a] and [file-b] state that ...'
-    Never invent filenames — use only names returned by search tools or list_uploaded_documents.
-
-  Internet search results:
-    Inline: 'According to [Page Title] (source: <url>), ...'
-    Always include both title and URL if both are available in the search result.
-    Never cite a web result without a URL — if the URL is missing, say 'a web source found that'.
-
-  Conversation history / semantic memory:
-    Inline: 'As we discussed earlier, ...' or 'Based on a prior exchange in this thread, ...'
-
-  Internal knowledge (no retrieved source):
-    Clearly mark: 'Based on general knowledge (not from your documents), ...'
-    Use sparingly — prefer retrieved evidence over internal knowledge for factual claims.
-
-  Conflicting sources:
-    'According to [source-A], X; however, [source-B] states Y — these sources disagree.'
-    Do NOT silently pick one side; surface the disagreement.
-
-  Evidence gaps:
-    'The uploaded documents do not contain specific information about X.'
-    'A web search did not return relevant results for this query.'
-    Never fabricate a citation or fill a gap with plausible-sounding but unchecked facts."""
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"ANTI-PATTERNS {LOCK}",
-            """Avoid these failure modes that degrade answer quality:
-
-  ✗ Answering before retrieving  — do not synthesize from internal knowledge when tools
-      would return better evidence. Tools exist for a reason; use them first.
-
-  ✗ Skipping parallel execution  — calling search_documents and then search_web in
-      separate sequential turns when they are independent wastes the iteration budget.
-
-  ✗ Redundant tool calls  — retrying with an identical or trivially paraphrased query
-      wastes tokens without improving evidence quality. Materially rephrase or decompose.
-
-  ✗ Pre-fetch over-reliance  — treating pre-fetched PDF evidence as equivalent to a
-      freshly targeted search when the rewritten query is more specific than the raw question.
-      When the rewritten query is significantly more specific, re-query with the precise terms.
-
-  ✗ Evidence laundering  — presenting internal knowledge as if it came from a tool result.
-      Only cite sources that actually appeared in tool output.
-
-  ✗ Premature clarification  — asking the user to clarify when the question's intent is
-      recoverable from conversation history. ask_for_clarification is a last resort.
-
-  ✗ Verbatim chunk dumping  — pasting raw retrieved passages as the final answer without
-      synthesis. Always transform evidence into a coherent, user-facing response.
-
-  ✗ Ignoring conflicts  — blending contradictory claims from different sources into a
-      single coherent-sounding statement that misrepresents both sources.
-
-  ✗ Fabricating detail to fill gaps  — if evidence is absent, say so. Never invent
-      specific facts, statistics, dates, or names that were not returned by tools."""
-        ),
-    ]
-
-    # ── Conditional: web search mandate ─────────────────────────────────────
+        intent_agent_note = "No upstream query preprocessor ran for this turn — you are responsible for both query preprocessing AND orchestration. Your job is to:"
+        preprocessing_phase_note = "  0. Preprocess the raw user query: resolve coreferences, standalone-ify, assess coverage (Phase 0)."
+        phase0 = _compose_phase0()
+        phase_count = "six"
+        phase_start = " Begin with Phase 0 — Preprocess."
+        orient_word = "working"
+        orient_extra = "\n  e) Does the raw message contain unresolved pronouns or references? → your Phase 0\n     WORKING QUERY replaces the raw message for all retrieval operations below."
+        plan_query_note = "\n  • Use the WORKING QUERY from Phase 0 — not the raw user message — for all tool arguments."
+    
+    max_parallel_tools = 4 if use_web_search else 3
+    
+    # Substitute placeholders in template
+    prompt = template.format(
+        SYSTEM_ROLE=role,
+        CONTEXT_WINDOW=context_window,
+        INTENT_AGENT_NOTE=intent_agent_note,
+        PREPROCESSING_PHASE_NOTE=preprocessing_phase_note,
+        PREPROCESSING_SECTION=phase0,
+        PHASE_COUNT=phase_count,
+        PHASE_START=phase_start,
+        ORIENT_WORD=orient_word,
+        ORIENT_EXTRA=orient_extra,
+        PLAN_QUERY_NOTE=plan_query_note,
+        MAX_PARALLEL_TOOLS=max_parallel_tools,
+    )
+    
+    # Append tool registry and playbook
+    EDIT = "(USER-CONFIGURABLE)"
+    prompt += f"\n\n{'═' * 64}\nTOOL REGISTRY {EDIT}:\n{'═' * 64}\n"
+    prompt += "\n".join([f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n    {item['description']}" for item in catalog])
+    
+    prompt += f"\n\n{'═' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'═' * 64}\n"
+    prompt += "\n".join([f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}" for item in catalog])
+    
+    # Add web search mandate if enabled
     if use_web_search:
-        sections.append((
-            f"WEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency",
-            f"""Internet Search (search_web) is ENABLED for this session.
-
-MANDATORY INVOCATION — call search_web for every factual or informational question:
-  • Run search_web IN PARALLEL with search_documents / search_pdf_by_document in Phase 3.
-  • Pre-fetched PDF evidence does NOT satisfy this mandate — PDF and web are complementary.
-  • Do not defer web search to a second iteration after checking PDF results — batch them.
-
-SOLE EXCEPTIONS (the only cases where search_web may be skipped):
-  • Pure conversation meta-questions: 'how many messages have we had?', 'can you summarize our chat?'
-  • The user's question is entirely answered by their own just-provided context (e.g., 'fix this text I pasted').
-  • Clarification exchanges where no factual retrieval is needed.
-
-When query rephrasing is needed for web search, use a concise keyword-rich query rather
-than a full natural-language question — web search engines rank keyword density differently
-from embedding-based vector search."""
-        ))
-
-    # ── Conditional: custom user instructions ────────────────────────────────
+        LOCK = "(LOCKED — not overridable)"
+        prompt += f"\n\n{'═' * 64}\nWEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency\n{'═' * 64}\n"
+        prompt += get_web_search_mandate()
+    
+    # Add custom instructions if provided
     if custom_instructions:
-        sections.append((f"USER CUSTOM INSTRUCTIONS {EDIT}", custom_instructions))
+        prompt += f"\n\n{'═' * 64}\nUSER CUSTOM INSTRUCTIONS {EDIT}\n{'═' * 64}\n"
+        prompt += custom_instructions
+    
+    return prompt
 
-    return "\n\n".join([f"{'═' * 64}\n{title}:\n{'═' * 64}\n{body}" for title, body in sections])
+
+def _compose_phase0() -> str:
+    """Generate Phase 0 preprocessing section."""
+    sep = "─" * 60
+    return f"""{sep}
+PHASE 0 — PREPROCESS  (internal only — no output visible to user)
+{sep}
+No upstream query rewriter ran for this request. Execute these four micro-steps
+internally before calling any tool or writing the Phase 2 plan:
+
+STEP 1 — COREFERENCE RESOLUTION
+Replace every pronoun ("it", "this", "that", "they", "the document", "the method")
+with its explicit referent resolved from the conversation messages above.
+  "How does it work?" (after discussing BERT) → working query: "How does BERT work?"
+  "What were the main findings?" → "What are the main findings in [document title or topic]?"
+  "Tell me more about that" → "Explain [last discussed topic] in more detail"
+  "Summarize it" (after PDF upload) → "Provide a summary of the uploaded document"
+
+STEP 2 — STANDALONE-IFY
+Add only the minimum subject/domain context so a cold vector search retrieves the right
+chunks. Do NOT add subtopics or angles the user never mentioned — extra terms dilute the
+embedding vector and return wrong chunks.
+  "What variants exist?" (after glioblastoma) → "What variants of glioblastoma exist?"
+  NOT: "What variants of glioblastoma exist, including WHO classification, IDH mutations?"
+
+STEP 3 — SCOPE & COVERAGE ASSESSMENT
+  a) Preserve the user's question scope exactly — do not widen or narrow it.
+  b) Review the PRE-FETCHED CONTEXT block (if present) and internally classify coverage:
+       SUFFICIENT          → pre-fetch directly answers the working query; skip retrieval
+                             tools (except search_web if enabled).
+       PROBABLY_SUFFICIENT → partial content present; one targeted call may sharpen it.
+       INSUFFICIENT        → pre-fetch lacks the specific detail; full retrieval needed.
+  c) IMPORTANT: pre-fetched PDF evidence was retrieved with the raw, unprocessed question.
+     If your working query is more specific than the original, the pre-fetch may have
+     missed relevant chunks — call search tools with the working query to compensate.
+
+STEP 4 — AMBIGUITY CHECK  (high bar)
+Does the working query still have 2+ genuinely different interpretations that conversation
+history cannot resolve?
+  YES → your first (and only) tool call MUST be ask_for_clarification.
+  NO  → proceed to Phase 1.
+"Tell me more" is NEVER ambiguous. A pronoun with one clear referent is NEVER ambiguous.
+
+▶ Store the preprocessed result as your WORKING QUERY. Every tool call argument
+  in Phase 3 and the retrieval plan in Phase 2 MUST use the working query.
+"""
