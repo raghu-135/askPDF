@@ -638,7 +638,7 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
             entry["role"] = "tool"
             entry["tool_call_id"] = msg.tool_call_id
         payload.append(entry)
-    logger.info(json.dumps(payload, indent=2))
+    logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
     logger.info(f"--- INTENT AGENT PROMPT END ---")
 
     # Single direct call — no tools, no retries
@@ -908,7 +908,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
             entry["role"] = "tool"
             entry["tool_call_id"] = msg.tool_call_id
         payload.append(entry)
-    logger.info(json.dumps(payload, indent=2))
+    logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
     logger.info(f"--- ORCHESTRATOR AGENT PROMPT END ---")
 
     response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
