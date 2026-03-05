@@ -34,6 +34,7 @@ from database import (
     increment_qa_stats,
 )
 from reasoning import normalize_ai_response
+from retrieval import fetch_semantic_history, get_document_name_lookup, group_pdf_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -110,22 +111,12 @@ async def prefetch_context(
 
     async def _fetch_semantic() -> tuple:
         try:
-            db = get_qdrant()
-            recalled = await db.search_chat_memory(
+            return await fetch_semantic_history(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
                 limit=budget["semantic_limit"],
+                char_budget=budget["semantic_history_chars"],
             )
-            used_ids = [m["message_id"] for m in recalled if m.get("message_id")]
-            parts: List[str] = []
-            used_chars = 0
-            for mem in recalled:
-                text = mem.get("text", "")
-                if used_chars + len(text) > budget["semantic_history_chars"]:
-                    break
-                parts.append(text)
-                used_chars += len(text)
-            return "\n\n---\n\n".join(parts), used_ids
         except Exception as exc:
             logger.warning(f"Prefetch semantic history failed: {exc}")
             return "", []
@@ -138,42 +129,13 @@ async def prefetch_context(
                 query_vector=shared_query_vector,
                 limit=budget["pdf_limit"],
             )
-            
-            # Resolve file names for the pre-fetched bundle
-            shape = await get_thread_shape(thread_id)
-            hash_to_name = {fh: meta["file_name"] for fh, meta in shape["documents"].items()}
 
-            sources: List[Dict[str, Any]] = []
-            pdf_groups = {}  # Grouping by file_hash
-            used_chars = 0
-            
-            for chunk in raw_chunks:
-                text = chunk.get("text", "")
-                fh = chunk.get("file_hash")
-                
-                if used_chars + len(text) > budget["pdf_context_chars"]:
-                    break
-                
-                # Group texts for the context block
-                if fh not in pdf_groups:
-                    pdf_groups[fh] = {"name": hash_to_name.get(fh, fh), "texts": []}
-                pdf_groups[fh]["texts"].append(text)
-                
-                used_chars += len(text)
-                sources.append({
-                    "text": text[:200] + "..." if len(text) > 200 else text,
-                    "file_hash": fh,
-                    "file_name": hash_to_name.get(fh, fh),
-                    "score": chunk.get("score", 0.0),
-                })
-            
-            # Format as grouped blocks
-            context_parts = []
-            for group in pdf_groups.values():
-                combined_text = "\n".join(group["texts"])
-                context_parts.append(f'[Source: Document "{group["name"]}"]\n{combined_text}')
-                
-            return "\n\n".join(context_parts), sources
+            hash_to_name = await get_document_name_lookup(thread_id)
+            return group_pdf_chunks(
+                raw_chunks,
+                hash_to_name,
+                char_budget=budget["pdf_context_chars"],
+            )
         except Exception as exc:
             logger.warning(f"Prefetch PDF evidence failed: {exc}")
             return "", []

@@ -16,6 +16,7 @@ from models import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_M
 from prompt_loaders import get_orchestrator_prompt, get_intent_agent_prompt, get_web_search_mandate
 from prompt_defaults import DEFAULT_SYSTEM_ROLE
 from vectordb.qdrant import get_qdrant
+from retrieval import fetch_semantic_history, get_document_name_lookup, group_pdf_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -102,12 +103,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         db = get_qdrant()
 
         # ── Build a file_hash → file_name lookup from thread_stats (no DB join) ──
-        try:
-            from database import get_thread_shape as _get_shape
-            _shape = await _get_shape(thread_id)
-            hash_to_name = {fh: meta["file_name"] for fh, meta in _shape["documents"].items()}
-        except Exception:
-            hash_to_name = {}
+        hash_to_name = await get_document_name_lookup(thread_id)
 
         # ── PDF chunk search with neighbor expansion ──
         raw_pdf_chunks = await db.search_knowledge_sources(
@@ -154,24 +150,9 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         context_parts = []
 
         # Group PDF chunks by file to reduce context window bloat
-        pdf_groups = {}
-        for chunk in expanded_pdf_chunks:
-            fh = chunk.get("file_hash", "")
-            if fh not in pdf_groups:
-                pdf_groups[fh] = {"name": hash_to_name.get(fh, fh), "texts": []}
-            pdf_groups[fh]["texts"].append(chunk.get("text", ""))
-            
-            # Keep flat metadata for UI citations
-            pdf_sources.append({
-                "text": chunk.get("text", "")[:200] + "...",
-                "file_hash": fh,
-                "file_name": hash_to_name.get(fh, fh),
-                "score": chunk.get("score", 0.0),
-            })
-
-        for group in pdf_groups.values():
-            combined_text = "\n".join(group["texts"])
-            context_parts.append(f'[Source: Document "{group["name"]}"]\n{combined_text}')
+        pdf_context, pdf_sources = group_pdf_chunks(expanded_pdf_chunks, hash_to_name)
+        if pdf_context:
+            context_parts.append(pdf_context)
 
         # Group cached web chunks by URL
         web_groups = {}
@@ -231,23 +212,17 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
         
         db = get_qdrant()
-        recalled_memories = await db.search_chat_memory(
+        history, used_ids = await fetch_semantic_history(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=max_results
+            limit=max_results,
         )
 
-        if not recalled_memories:
+        if not history:
             return "No relevant past conversations found."
 
-        used_ids = [mem["message_id"] for mem in recalled_memories if mem.get("message_id")]
-        
-        context_parts = []
-        for mem in recalled_memories:
-            context_parts.append(mem.get("text", ""))
-
         return json.dumps({
-            "content": "\n\n---\n\n".join(context_parts),
+            "content": history,
             "__used_chat_ids__": used_ids
         })
     except Exception as e:
@@ -482,32 +457,15 @@ async def search_pdf_by_document(
         expanded_chunks.sort(key=lambda x: x.get("chunk_id", 0))
 
         # Resolve file name for source attribution from thread_stats (no DB join)
-        try:
-            from database import get_thread_shape as _get_shape
-            _shape = await _get_shape(thread_id)
-            fname = _shape["documents"].get(file_hash, {}).get("file_name", file_hash)
-        except Exception:
-            fname = file_hash
+        hash_to_name = await get_document_name_lookup(thread_id)
+        fname = hash_to_name.get(file_hash, file_hash)
 
-        sources = []
-        context_parts = []
-        
-        # Single document search - group all chunks into one block
-        all_texts = [chunk.get("text", "") for chunk in expanded_chunks]
-        combined_text = "\n".join(all_texts)
-        context_parts.append(f'[Source: Document "{fname}"]\n{combined_text}')
-
-        for chunk in expanded_chunks:
-            text = chunk.get("text", "")
-            sources.append({
-                "text": text[:200] + "...",
-                "file_hash": file_hash,
-                "file_name": fname,
-                "score": chunk.get("score", 0.0),
-            })
+        pdf_context, sources = group_pdf_chunks(expanded_chunks, {file_hash: fname})
+        if not pdf_context:
+            pdf_context = ""
 
         return json.dumps({
-            "content": "\n\n".join(context_parts),
+            "content": pdf_context,
             "__pdf_sources__": sources,
         })
     except Exception as e:
