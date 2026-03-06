@@ -113,6 +113,7 @@ class ThreadChatRequest(BaseModel):
     custom_instructions_override: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
+    reasoning_mode: Optional[bool] = None
 
 
 class ThreadSettingsResponse(BaseModel):
@@ -122,6 +123,7 @@ class ThreadSettingsResponse(BaseModel):
     custom_instructions: str = Field(default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
     use_intent_agent: bool = True
     intent_agent_max_iterations: int = Field(default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10)
+    reasoning_mode: bool = True
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -131,6 +133,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     custom_instructions: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
+    reasoning_mode: Optional[bool] = None
 
 
 class ToolCatalogEntry(BaseModel):
@@ -150,6 +153,7 @@ class PromptDefaults(BaseModel):
     custom_instructions: str
     use_intent_agent: bool = True
     intent_agent_max_iterations: int = INTENT_AGENT_MAX_ITERATIONS
+    reasoning_mode: bool = True
 
 
 class PromptPreviewRequest(BaseModel):
@@ -159,6 +163,7 @@ class PromptPreviewRequest(BaseModel):
     custom_instructions: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
     use_web_search: bool = False
     intent_agent_ran: bool = True
+    reasoning_mode: bool = True
 
 
 # ============ Thread Endpoints ============
@@ -192,6 +197,7 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
             custom_instructions=req.custom_instructions or "",
             use_web_search=req.use_web_search,
             intent_agent_ran=req.intent_agent_ran,
+            reasoning_mode=req.reasoning_mode,
         )
         return {"prompt": prompt}
     except Exception as e:
@@ -793,6 +799,8 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
             req.use_intent_agent = thread_settings.get("use_intent_agent", True)
         if req.intent_agent_max_iterations is None:
             req.intent_agent_max_iterations = thread_settings.get("intent_agent_max_iterations", INTENT_AGENT_MAX_ITERATIONS)
+        if req.reasoning_mode is None:
+            req.reasoning_mode = thread_settings.get("reasoning_mode", True)
         
         result = await handle_thread_chat(thread_id, req, thread.embed_model)
         return result

@@ -80,6 +80,7 @@ export interface ThreadSettings {
   custom_instructions: string;
   use_intent_agent: boolean;
   intent_agent_max_iterations: number;
+  reasoning_mode: boolean;
 }
 
 export interface PromptToolDefinition {
@@ -99,6 +100,7 @@ export interface PromptDefaults {
   custom_instructions: string;
   use_intent_agent: boolean;
   intent_agent_max_iterations: number;
+  reasoning_mode: boolean;
 }
 
 export interface ThreadFile {
@@ -192,6 +194,7 @@ export async function getPromptPreview(payload: {
   custom_instructions: string;
   use_web_search?: boolean;
   intent_agent_ran?: boolean;
+  reasoning_mode?: boolean;
 }): Promise<{ prompt: string }> {
   const res = await fetch(`${RAG_API_BASE}/prompt-preview`, {
     method: "POST",
@@ -366,7 +369,8 @@ export async function threadChat(
   toolInstructionsOverride?: Record<string, string>,
   customInstructionsOverride?: string,
   useIntentAgent?: boolean,
-  intentAgentMaxIterations?: number
+  intentAgentMaxIterations?: number,
+  reasoningMode?: boolean
 ): Promise<{
   answer: string;
   user_message_id: string | null;
@@ -404,6 +408,9 @@ export async function threadChat(
   }
   if (typeof intentAgentMaxIterations === "number") {
     payload.intent_agent_max_iterations = intentAgentMaxIterations;
+  }
+  if (typeof reasoningMode === "boolean") {
+    payload.reasoning_mode = reasoningMode;
   }
 
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/chat`, {

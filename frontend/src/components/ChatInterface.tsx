@@ -113,6 +113,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [useIntentAgent, setUseIntentAgent] = useState(true);
     const [intentAgentMaxIterations, setIntentAgentMaxIterations] = useState(1);
     const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
+    const [reasoningMode, setReasoningMode] = useState(true);
+    const [defaultReasoningMode, setDefaultReasoningMode] = useState(true);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -137,8 +139,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(defaultCustomInstructions);
             setUseIntentAgent(true);
             setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
+            setReasoningMode(defaultReasoningMode);
         }
-    }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions]);
+    }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions, defaultReasoningMode]);
 
     useEffect(() => {
         const loadTools = async () => {
@@ -152,6 +155,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
+                    setDefaultReasoningMode(res.defaults.reasoning_mode ?? true);
                     if (res.defaults.context_window) {
                         setContextWindow(res.defaults.context_window);
                     }
@@ -161,6 +165,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
                         setUseIntentAgent(res.defaults.use_intent_agent ?? true);
                         setIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
+                        setReasoningMode(res.defaults.reasoning_mode ?? true);
                     }
                 }
             } catch (error) {
@@ -181,6 +186,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(settings.custom_instructions ?? defaultCustomInstructions);
             setUseIntentAgent(settings.use_intent_agent ?? true);
             setIntentAgentMaxIterations(settings.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
+            setReasoningMode(settings.reasoning_mode ?? defaultReasoningMode);
         } catch (error) {
             console.error('Failed to load thread settings:', error);
             setMaxIterations(defaultMaxIterations);
@@ -189,6 +195,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(defaultCustomInstructions);
             setUseIntentAgent(true);
             setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
+            setReasoningMode(defaultReasoningMode);
         }
     };
 
@@ -269,6 +276,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     custom_instructions: customInstructions,
                     use_web_search: useWebSearch,
                     intent_agent_ran: useIntentAgent,
+                    reasoning_mode: reasoningMode,
                 });
                 if (!cancelled) {
                     setPromptPreview(res.prompt || '');
@@ -283,7 +291,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             cancelled = true;
             clearTimeout(timeoutId);
         };
-    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, useIntentAgent]);
+    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, useIntentAgent, reasoningMode]);
 
     const resetAllSettingsToDefault = () => {
         const defaults: Record<string, string> = {};
@@ -296,6 +304,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setCustomInstructions(defaultCustomInstructions);
         setUseIntentAgent(true);
         setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
+        setReasoningMode(defaultReasoningMode);
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -417,7 +426,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions,
                 customInstructions,
                 useIntentAgent,
-                useIntentAgent ? intentAgentMaxIterations : undefined
+                useIntentAgent ? intentAgentMaxIterations : undefined,
+                reasoningMode
             );
 
             // Handle ambiguous query / clarification options
@@ -551,6 +561,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 custom_instructions: customInstructions,
                 use_intent_agent: useIntentAgent,
                 intent_agent_max_iterations: Math.max(1, Math.min(10, intentAgentMaxIterations)),
+                reasoning_mode: reasoningMode,
             });
             setMaxIterations(saved.max_iterations);
             setSystemRole(saved.system_role);
@@ -558,6 +569,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(saved.custom_instructions);
             setUseIntentAgent(saved.use_intent_agent ?? true);
             setIntentAgentMaxIterations(saved.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
+            setReasoningMode(saved.reasoning_mode ?? defaultReasoningMode);
             setSettingsDialogOpen(false);
         } catch (error) {
             console.error('Failed to save thread settings:', error);
@@ -1081,6 +1093,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             />
                           )} 
                         */}
+                    </Box>
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={reasoningMode}
+                                    onChange={(e) => setReasoningMode(e.target.checked)}
+                                />
+                            }
+                            label={
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                    <Typography variant="body2" fontWeight={500}>Reasoning mode</Typography>
+                                </Box>
+                            }
+                        />
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
+                            Uses detailed multi-step prompts for reasoning-capable models. Turn off for compact prompts that
+                            perform better on non-reasoning models.
+                        </Typography>
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
                         <TextField

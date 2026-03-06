@@ -13,8 +13,24 @@ from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 
 from models import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
-from prompt_loaders import get_orchestrator_prompt, get_intent_agent_prompt, get_web_search_mandate
+from prompt_loaders import (
+    get_orchestrator_prompt,
+    get_orchestrator_prompt_compact,
+    get_orchestrator_phase0_prompt,
+    get_orchestrator_phase0_prompt_compact,
+    get_intent_agent_prompt,
+    get_intent_agent_prompt_compact,
+    get_web_search_mandate,
+)
+from agent_helpers import (
+    build_chat_prompt,
+    parse_intent_response,
+    looks_like_followup,
+    evidence_insufficient,
+    collect_tool_sources,
+)
 from prompt_defaults import DEFAULT_SYSTEM_ROLE
+from intent_fallback import heuristic_rewrite_query
 from vectordb.qdrant import get_qdrant
 from retrieval import fetch_semantic_history, get_document_name_lookup, group_pdf_chunks
 
@@ -67,6 +83,11 @@ class AgentState(TypedDict):
     custom_instructions: str
     pre_fetch_bundle: Optional[Dict[str, Any]]
     intent_agent_ran: bool  # True when Intent Agent preprocessed the query; False = Orchestrator self-preprocesses
+    reasoning_mode: bool
+    working_query: str
+    intent_reference_type: str
+
+
 
 
 @tool
@@ -575,6 +596,10 @@ def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
     if pdf:
         parts.append(f"[PDF DOCUMENT EVIDENCE  (queried with raw/un-rewritten question)]\n{pdf}")
 
+    web = bundle.get("web_evidence_text", "")
+    if web:
+        parts.append(f"[WEB SEARCH EVIDENCE]\n{web}")
+
     if not parts:
         return ""
 
@@ -602,6 +627,7 @@ class IntentAgentState(TypedDict):
     max_iterations: int
     intent_result: Optional[Dict[str, Any]]
     pre_fetch_bundle: Optional[Dict[str, Any]]
+    reasoning_mode: bool
 
 
 async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
@@ -612,19 +638,19 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     messages = state["messages"]
     llm = get_llm(state["llm_model"], temperature=0.0)
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
+    reasoning_mode = state.get("reasoning_mode", True)
 
     # Load and format the Intent Agent prompt
-    system_prompt = get_intent_agent_prompt() + "\n\n## RUNTIME\n\nNo tool calls. No preamble. Respond with JSON only."
-
-    # Inject pre-fetched context bundle
     bundle = state.get("pre_fetch_bundle")
-    if bundle:
-        system_prompt += _format_prefetch_for_prompt(bundle)
+    prefetch_text = _format_prefetch_for_prompt(bundle) if bundle else ""
 
-    if not messages or not isinstance(messages[0], SystemMessage):
-        input_messages = [SystemMessage(content=system_prompt)] + messages
-    else:
-        input_messages = [SystemMessage(content=system_prompt)] + messages[1:]
+    base_prompt = get_intent_agent_prompt() if reasoning_mode else get_intent_agent_prompt_compact()
+    system_prompt = base_prompt.replace("{PREFETCH_CONTEXT}", prefetch_text)
+    prompt_template = build_chat_prompt()
+    input_messages = prompt_template.format_messages(
+        system_prompt=system_prompt,
+        messages=messages if not (messages and isinstance(messages[0], SystemMessage)) else messages[1:],
+    )
 
     # Log complete prompt for Intent Agent in OpenAI-like format
     logger.info(f"--- INTENT AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}] ---")
@@ -641,7 +667,7 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
     logger.info(f"--- INTENT AGENT PROMPT END ---")
 
-    # Single direct call — no tools, no retries
+    # Single direct call — no tools, minimal retries
     try:
         response = await invoke_with_retry(llm.ainvoke, input_messages)
     except Exception as e:
@@ -658,33 +684,42 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         }
         return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": 1, "intent_result": intent_result}
 
-    # Parse the JSON response
-    intent_result = None
-    content = response.content.strip()
-    try:
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        intent_result = json.loads(content)
-    except Exception as e:
-        logger.error(f"Failed to parse intent JSON: {e}")
+    intent_result = parse_intent_response(response.content, logger=logger)
+    if intent_result is None and not reasoning_mode:
+        logger.warning("Intent JSON invalid; retrying once with strict JSON instruction.")
+        retry_msg = HumanMessage(
+            content="Your previous output was invalid JSON. Output a single JSON object matching the schema. No code fences."
+        )
+        retry_messages = input_messages + [retry_msg]
+        try:
+            retry_response = await invoke_with_retry(llm.ainvoke, retry_messages)
+            intent_result = parse_intent_response(retry_response.content, logger=logger)
+            response = retry_response
+        except Exception as e:
+            logger.error(f"Intent Agent retry failed: {e}")
+
+    if intent_result is None:
         original_question = next(
             (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
         )
+        fallback_query = heuristic_rewrite_query(original_question, state.get("pre_fetch_bundle"))
+        status = "CLEAR_FOLLOWUP" if looks_like_followup(original_question) else "CLEAR_STANDALONE"
         intent_result = {
-            "status": "CLEAR_STANDALONE",
-            "rewritten_query": original_question,
+            "status": status,
+            "rewritten_query": fallback_query,
             "reference_type": "NONE",
-            "context_coverage": "PROBABLY_SUFFICIENT",
+            "context_coverage": "INSUFFICIENT",
             "clarification_options": None,
         }
+        logger.warning("Intent JSON invalid after retry; using heuristic fallback.")
 
     return {
         "messages": [response],
         "iteration_count": 1,
         "intent_result": intent_result,
     }
+
+
 
 
 intent_workflow = StateGraph(IntentAgentState)
@@ -854,9 +889,11 @@ async def call_model(state: AgentState, config: RunnableConfig):
     system_role = sanitize_system_role(state.get("system_role", ""))
     tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
+    reasoning_mode = state.get("reasoning_mode", True)
 
     use_web_search = state.get("use_web_search", False)
     intent_agent_ran = state.get("intent_agent_ran", True)
+    reasoning_mode = state.get("reasoning_mode", True)
     prompt_content = build_system_prompt(
         context_window=context_window,
         system_role=system_role,
@@ -864,6 +901,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
         custom_instructions=custom_instructions,
         use_web_search=use_web_search,
         intent_agent_ran=intent_agent_ran,
+        reasoning_mode=reasoning_mode,
     )
 
     # Inject pre-fetched context bundle + pre-fetch-first retrieval policy
@@ -891,10 +929,11 @@ async def call_model(state: AgentState, config: RunnableConfig):
                 )
             ) + bundle_text
 
-    sys_prompt = SystemMessage(content=prompt_content)
-
-    # Langchain expects SystemMessage at the start
-    input_messages = [sys_prompt] + messages
+    prompt_template = build_chat_prompt()
+    input_messages = prompt_template.format_messages(
+        system_prompt=prompt_content,
+        messages=messages,
+    )
 
     # Log complete prompt for Orchestrator Agent in OpenAI-like format
     logger.info(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
@@ -962,12 +1001,13 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
                 prior_ai_parts.append(txt.strip())
 
     # ── Build a direct synthesis prompt ──
-    sys_prompt = SystemMessage(content=build_system_prompt(
+    sys_prompt = build_system_prompt(
         context_window=context_window,
         system_role=system_role,
         tool_instructions=tool_instructions,
-        custom_instructions=custom_instructions
-    ))
+        custom_instructions=custom_instructions,
+        reasoning_mode=reasoning_mode,
+    )
 
     parts = []
     if tool_context_parts:
@@ -984,7 +1024,12 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
     )
     force_msg = HumanMessage(content=force_content)
 
-    response = await invoke_with_retry(llm.ainvoke, [sys_prompt, force_msg])
+    prompt_template = build_chat_prompt()
+    input_messages = prompt_template.format_messages(
+        system_prompt=sys_prompt,
+        messages=[force_msg],
+    )
+    response = await invoke_with_retry(llm.ainvoke, input_messages)
     return {"messages": [response], "iteration_count": iteration}
 
 
@@ -993,6 +1038,7 @@ def should_continue(state: AgentState):
     last_message = messages[-1]
     iteration_count = state.get("iteration_count", 0)
     max_iterations = state.get("max_iterations", DEFAULT_MAX_ITERATIONS)
+    reasoning_mode = state.get("reasoning_mode", True)
 
     if getattr(last_message, "tool_calls", None):
         if iteration_count >= max_iterations:
@@ -1006,6 +1052,13 @@ def should_continue(state: AgentState):
             logger.warning(f"Reaching max agent iterations ({iteration_count}/{max_iterations}). Forcing termination.")
             return "force_final_answer"
         return "tools"
+
+    if not reasoning_mode and evidence_insufficient(state):
+        if iteration_count >= max_iterations:
+            logger.warning(f"Reaching max agent iterations ({iteration_count}/{max_iterations}). Forcing termination.")
+            return "force_final_answer"
+        logger.info("Non-reasoning mode: auto-tools pass triggered (no tool calls, insufficient evidence).")
+        return "auto_tools"
 
     # Detect empty-content response after tool execution (e.g. model outputs nothing after
     # receiving tool results). Force a final answer instead of silently ending with blank text.
@@ -1023,6 +1076,55 @@ def should_continue(state: AgentState):
 
     return END
 
+
+async def auto_tools(state: AgentState, config: RunnableConfig):
+    """
+    Non-reasoning fallback: run required tools when the model fails to call any.
+    """
+    tool_messages: list[ToolMessage] = []
+    pdf_sources: list[Dict[str, Any]] = []
+    web_sources: list[Dict[str, Any]] = []
+    used_chat_ids: list[str] = []
+
+    working_query = state.get("working_query", "")
+    use_web_search = state.get("use_web_search", False)
+    intent_ref = state.get("intent_reference_type", "NONE")
+    prefetch = state.get("pre_fetch_bundle") or {}
+    documents = prefetch.get("documents") or []
+
+    async def _run_tool(tool_name: str, result: str):
+        tool_messages.append(ToolMessage(content=result, tool_call_id=f"auto_{tool_name}"))
+        collect_tool_sources(result, pdf_sources, web_sources, used_chat_ids)
+
+    if use_web_search and not state.get("web_sources"):
+        logger.info("Auto-tools: running search_web.")
+        result = await search_web(working_query, config=config)
+        await _run_tool("search_web", result)
+
+    if documents and not state.get("pdf_sources"):
+        if intent_ref == "ENTITY" and len(documents) == 1:
+            file_hash = documents[0].get("file_hash")
+            if file_hash:
+                logger.info("Auto-tools: running search_pdf_by_document.")
+                result = await search_pdf_by_document(working_query, file_hash, config=config)
+                await _run_tool("search_pdf_by_document", result)
+        else:
+            logger.info("Auto-tools: running search_documents.")
+            result = await search_documents(working_query, config=config)
+            await _run_tool("search_documents", result)
+
+    if intent_ref == "SEMANTIC":
+        logger.info("Auto-tools: running search_conversation_history.")
+        result = await search_conversation_history(working_query, config=config)
+        await _run_tool("search_conversation_history", result)
+
+    return {
+        "messages": tool_messages,
+        "pdf_sources": pdf_sources,
+        "web_sources": web_sources,
+        "used_chat_ids": used_chat_ids,
+    }
+
 def clarification_router(state: AgentState):
     if state.get("clarification_options"):
         return END  # Suspend graph
@@ -1034,9 +1136,15 @@ workflow = StateGraph(AgentState)
 workflow.add_node("agent", call_model)
 workflow.add_node("tools", OrchestratorToolNode(tools_list))
 workflow.add_node("force_final_answer", force_final_answer)
+workflow.add_node("auto_tools", auto_tools)
 
 workflow.add_edge(START, "agent")
-workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", "force_final_answer": "force_final_answer", END: END})
+workflow.add_conditional_edges(
+    "agent",
+    should_continue,
+    {"tools": "tools", "auto_tools": "auto_tools", "force_final_answer": "force_final_answer", END: END},
+)
+workflow.add_edge("auto_tools", "agent")
 
 workflow.add_conditional_edges("tools", clarification_router, {END: END, "agent": "agent"})
 workflow.add_edge("force_final_answer", END)
@@ -1123,6 +1231,7 @@ def build_system_prompt(
     custom_instructions: str = "",
     use_web_search: bool = False,
     intent_agent_ran: bool = True,
+    reasoning_mode: bool = True,
 ) -> str:
     """Build the Orchestrator Agent system prompt."""
     role = system_role or "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers."
@@ -1130,7 +1239,7 @@ def build_system_prompt(
     playbook = normalize_tool_instructions(tool_instructions or {})
     
     # Load base template
-    template = get_orchestrator_prompt()
+    template = get_orchestrator_prompt() if reasoning_mode else get_orchestrator_prompt_compact()
     
     # Setup variables for template substitution
     if intent_agent_ran:
@@ -1145,7 +1254,7 @@ def build_system_prompt(
     else:
         intent_agent_note = "No upstream query preprocessor ran for this turn — you are responsible for both query preprocessing AND orchestration. Your job is to:"
         preprocessing_phase_note = "  0. Preprocess the raw user query: resolve coreferences, standalone-ify, assess coverage (Phase 0)."
-        phase0 = _compose_phase0()
+        phase0 = get_orchestrator_phase0_prompt() if reasoning_mode else get_orchestrator_phase0_prompt_compact()
         phase_count = "six"
         phase_start = " Begin with Phase 0 — Preprocess."
         orient_word = "working"
@@ -1154,6 +1263,45 @@ def build_system_prompt(
     
     max_parallel_tools = 4 if use_web_search else 3
     
+    # Build tool registry/playbook sections
+    EDIT = "(USER-CONFIGURABLE)"
+    tool_registry_section = (
+        f"\n\n{'═' * 64}\nTOOL REGISTRY {EDIT}:\n{'═' * 64}\n"
+        + "\n".join(
+            [
+                f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n    {item['description']}"
+                for item in catalog
+            ]
+        )
+    )
+    tool_playbook_section = (
+        f"\n\n{'═' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'═' * 64}\n"
+        + "\n".join(
+            [
+                f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
+                for item in catalog
+            ]
+        )
+    )
+
+    # Build web search mandate section if enabled
+    web_search_mandate_section = ""
+    if use_web_search:
+        LOCK = "(LOCKED — not overridable)"
+        web_search_mandate_section = (
+            f"\n\n{'═' * 64}\nWEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency\n"
+            f"{'═' * 64}\n"
+            + get_web_search_mandate()
+        )
+
+    # Build custom instructions section if provided
+    custom_instructions_section = ""
+    if custom_instructions:
+        custom_instructions_section = (
+            f"\n\n{'═' * 64}\nUSER CUSTOM INSTRUCTIONS {EDIT}\n{'═' * 64}\n"
+            + custom_instructions
+        )
+
     # Substitute placeholders in template
     prompt = template.format(
         SYSTEM_ROLE=role,
@@ -1167,72 +1315,10 @@ def build_system_prompt(
         ORIENT_EXTRA=orient_extra,
         PLAN_QUERY_NOTE=plan_query_note,
         MAX_PARALLEL_TOOLS=max_parallel_tools,
+        TOOL_REGISTRY_SECTION=tool_registry_section,
+        TOOL_PLAYBOOK_SECTION=tool_playbook_section,
+        WEB_SEARCH_MANDATE_SECTION=web_search_mandate_section,
+        CUSTOM_INSTRUCTIONS_SECTION=custom_instructions_section,
     )
-    
-    # Append tool registry and playbook
-    EDIT = "(USER-CONFIGURABLE)"
-    prompt += f"\n\n{'═' * 64}\nTOOL REGISTRY {EDIT}:\n{'═' * 64}\n"
-    prompt += "\n".join([f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n    {item['description']}" for item in catalog])
-    
-    prompt += f"\n\n{'═' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'═' * 64}\n"
-    prompt += "\n".join([f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}" for item in catalog])
-    
-    # Add web search mandate if enabled
-    if use_web_search:
-        LOCK = "(LOCKED — not overridable)"
-        prompt += f"\n\n{'═' * 64}\nWEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency\n{'═' * 64}\n"
-        prompt += get_web_search_mandate()
-    
-    # Add custom instructions if provided
-    if custom_instructions:
-        prompt += f"\n\n{'═' * 64}\nUSER CUSTOM INSTRUCTIONS {EDIT}\n{'═' * 64}\n"
-        prompt += custom_instructions
-    
+
     return prompt
-
-
-def _compose_phase0() -> str:
-    """Generate Phase 0 preprocessing section."""
-    sep = "─" * 60
-    return f"""{sep}
-PHASE 0 — PREPROCESS  (internal only — no output visible to user)
-{sep}
-No upstream query rewriter ran for this request. Execute these four micro-steps
-internally before calling any tool or writing the Phase 2 plan:
-
-STEP 1 — COREFERENCE RESOLUTION
-Replace every pronoun ("it", "this", "that", "they", "the document", "the method")
-with its explicit referent resolved from the conversation messages above.
-  "How does it work?" (after discussing BERT) → working query: "How does BERT work?"
-  "What were the main findings?" → "What are the main findings in [document title or topic]?"
-  "Tell me more about that" → "Explain [last discussed topic] in more detail"
-  "Summarize it" (after PDF upload) → "Provide a summary of the uploaded document"
-
-STEP 2 — STANDALONE-IFY
-Add only the minimum subject/domain context so a cold vector search retrieves the right
-chunks. Do NOT add subtopics or angles the user never mentioned — extra terms dilute the
-embedding vector and return wrong chunks.
-  "What variants exist?" (after glioblastoma) → "What variants of glioblastoma exist?"
-  NOT: "What variants of glioblastoma exist, including WHO classification, IDH mutations?"
-
-STEP 3 — SCOPE & COVERAGE ASSESSMENT
-  a) Preserve the user's question scope exactly — do not widen or narrow it.
-  b) Review the PRE-FETCHED CONTEXT block (if present) and internally classify coverage:
-       SUFFICIENT          → pre-fetch directly answers the working query; skip retrieval
-                             tools (except search_web if enabled).
-       PROBABLY_SUFFICIENT → partial content present; one targeted call may sharpen it.
-       INSUFFICIENT        → pre-fetch lacks the specific detail; full retrieval needed.
-  c) IMPORTANT: pre-fetched PDF evidence was retrieved with the raw, unprocessed question.
-     If your working query is more specific than the original, the pre-fetch may have
-     missed relevant chunks — call search tools with the working query to compensate.
-
-STEP 4 — AMBIGUITY CHECK  (high bar)
-Does the working query still have 2+ genuinely different interpretations that conversation
-history cannot resolve?
-  YES → your first (and only) tool call MUST be ask_for_clarification.
-  NO  → proceed to Phase 1.
-"Tell me more" is NEVER ambiguous. A pronoun with one clear referent is NEVER ambiguous.
-
-▶ Store the preprocessed result as your WORKING QUERY. Every tool call argument
-  in Phase 3 and the retrieval plan in Phase 2 MUST use the working query.
-"""

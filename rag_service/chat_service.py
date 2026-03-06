@@ -35,6 +35,7 @@ from database import (
 )
 from reasoning import normalize_ai_response
 from retrieval import fetch_semantic_history, get_document_name_lookup, group_pdf_chunks
+from web_prefetch import prefetch_web_context
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,8 @@ async def prefetch_context(
     raw_question: str,
     embed_model_name: str,
     context_window: int,
+    use_web_search: bool,
+    reasoning_mode: bool,
 ) -> Dict[str, Any]:
     """
     Gather all retrieval context in parallel BEFORE any LLM call.
@@ -140,12 +143,23 @@ async def prefetch_context(
             logger.warning(f"Prefetch PDF evidence failed: {exc}")
             return "", []
 
-    # Run all four fetches in parallel
+    async def _fetch_web() -> tuple:
+        return await prefetch_web_context(
+            raw_question=raw_question,
+            thread_id=thread_id,
+            embed_model_name=embed_model_name,
+            use_web_search=use_web_search,
+            reasoning_mode=reasoning_mode,
+            logger=logger,
+        )
+
+    # Run all fetches in parallel
     results = await asyncio.gather(
         _fetch_recent(),
         _fetch_stats_and_docs(),
         _fetch_semantic(),
         _fetch_pdf(),
+        _fetch_web(),
         return_exceptions=True,
     )
 
@@ -153,17 +167,21 @@ async def prefetch_context(
     meta: Dict[str, Any] = results[1] if not isinstance(results[1], Exception) else {"stats": {}, "documents": []}
     semantic_result = results[2] if not isinstance(results[2], Exception) else ("", [])
     pdf_result = results[3] if not isinstance(results[3], Exception) else ("", [])
+    web_result = results[4] if not isinstance(results[4], Exception) else ("", [])
 
     semantic_text, used_chat_ids = semantic_result if isinstance(semantic_result, tuple) else ("", [])
     pdf_text, pdf_sources = pdf_result if isinstance(pdf_result, tuple) else ("", [])
+    web_text, web_sources = web_result if isinstance(web_result, tuple) else ("", [])
 
     return {
         "recent_history_text":   recent_text,
         "semantic_history_text": semantic_text,
         "pdf_evidence_text":     pdf_text,
+        "web_evidence_text":     web_text,
         "stats":                 meta.get("stats", {}),
         "documents":             meta.get("documents", []),
         "pdf_sources":           pdf_sources,
+        "web_sources":           web_sources,
         "used_chat_ids":         used_chat_ids,
         "budget":                budget,
     }
@@ -186,6 +204,7 @@ async def handle_thread_chat(
     tool_instructions = getattr(req, 'tool_instructions_override', None) or {}
     custom_instructions = getattr(req, 'custom_instructions_override', "") or ""
     use_intent_agent = getattr(req, 'use_intent_agent', True)
+    reasoning_mode = getattr(req, 'reasoning_mode', True)
     if use_intent_agent is None:
         use_intent_agent = True
     # NOTE: intent_agent_max_iterations is passed to the LangGraph Intent Agent State. 
@@ -206,6 +225,8 @@ async def handle_thread_chat(
             raw_question=question,
             embed_model_name=embed_model,
             context_window=context_window,
+            use_web_search=use_web_search,
+            reasoning_mode=reasoning_mode,
         )
 
         # 2. Analyze intent using the Intent Agent (optional)
@@ -226,6 +247,7 @@ async def handle_thread_chat(
                 "max_iterations": intent_agent_max_iterations,
                 "intent_result": None,
                 "pre_fetch_bundle": prefetch_bundle,
+                "reasoning_mode": reasoning_mode,
             }
             
             logger.info(f"Invoking Intent Agent for thread {thread_id}")
@@ -257,6 +279,7 @@ async def handle_thread_chat(
          
         # Normalize question from intent results
         question = intent.get("rewritten_query") or question
+        reference_type = intent.get("reference_type", "NONE")
 
         logger.info(
             f"Intent analysis done for thread {thread_id} | "
@@ -289,7 +312,7 @@ async def handle_thread_chat(
             "use_web_search": use_web_search,
             # Pre-seed sources from the prefetch pass; tool calls will extend these lists
             "pdf_sources": list(prefetch_bundle.get("pdf_sources", [])),
-            "web_sources": [],
+            "web_sources": list(prefetch_bundle.get("web_sources", [])),
             "used_chat_ids": list(prefetch_bundle.get("used_chat_ids", [])),
             "clarification_options": None,
             "iteration_count": 0,
@@ -300,6 +323,9 @@ async def handle_thread_chat(
             "pre_fetch_bundle": prefetch_bundle,
             # Signal whether the Intent Agent ran; Orchestrator adapts its prompting strategy
             "intent_agent_ran": use_intent_agent,
+            "reasoning_mode": reasoning_mode,
+            "working_query": question,
+            "intent_reference_type": reference_type,
         }
         
         config = {
