@@ -20,10 +20,10 @@ The rewritten_query you produce is embedded once and searched across all retriev
 
 ```json
 {
-  "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
+  "route": "ANSWER" | "CLARIFY",
   "rewritten_query": "<single, standalone question>",
   "reference_type": "NONE" | "SEMANTIC" | "TEMPORAL" | "ENTITY",
-  "context_coverage": "SUFFICIENT" | "PROBABLY_SUFFICIENT" | "INSUFFICIENT",
+  "context_coverage": "SUFFICIENT" | "PARTIAL" | "INSUFFICIENT",
   "clarification_options": ["Full question A", "Full question B"] | null
 }
 ```
@@ -47,21 +47,20 @@ Do NOT widen or narrow the user’s scope.
 Return a single natural question, no bullet lists or prefixed labels.
 If the user asked multiple sub-questions, keep them together as a single compound question.
 
-## CLASSIFICATION
+## ROUTING
 
-- CLEAR_STANDALONE: no prior-context references.
-- CLEAR_FOLLOWUP: references prior context, but referent is unambiguous.
-- AMBIGUOUS: multiple distinct interpretations remain after coreference resolution.
+- ANSWER: intent is clear enough to proceed.
+- CLARIFY: multiple distinct interpretations remain after coreference resolution.
   High bar: only use if guessing would answer a different question.
 
-If AMBIGUOUS:
+If CLARIFY:
 - clarification_options must contain 2–4 complete, self-contained questions.
 - Options must be parallel (same scope, only the ambiguous element differs).
 
 ## CONTEXT_COVERAGE (guides tool budget)
 
 - SUFFICIENT: pre-fetched bundle directly answers the rewritten query.
-- PROBABLY_SUFFICIENT: partial/adjacent info is present.
+- PARTIAL: partial/adjacent info is present.
 - INSUFFICIENT: pre-fetched content lacks the needed detail.
 
 ## REFERENCE_TYPE
@@ -87,6 +86,6 @@ If AMBIGUOUS:
 
 - Pronoun-only or deictic follow-ups must be expanded into explicit, standalone questions.
 - Elliptical requests must be completed using only the minimal missing subject/context.
-- Ambiguous entity mentions require AMBIGUOUS status and 2–4 parallel clarification options.
+- Ambiguous entity mentions require CLARIFY routing and 2–4 parallel clarification options.
 
 {PREFETCH_CONTEXT}

@@ -732,10 +732,10 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
             (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
         )
         intent_result = {
-            "status": "CLEAR_STANDALONE",
+            "route": "ANSWER",
             "rewritten_query": original_question,
             "reference_type": "NONE",
-            "context_coverage": "PROBABLY_SUFFICIENT",
+            "context_coverage": "PARTIAL",
             "clarification_options": None,
         }
         return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": iteration, "intent_result": intent_result}
@@ -766,9 +766,8 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
             (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
         )
         fallback_query = heuristic_rewrite_query(original_question, state.get("pre_fetch_bundle"))
-        status = "CLEAR_FOLLOWUP" if looks_like_followup(original_question) else "CLEAR_STANDALONE"
         intent_result = {
-            "status": status,
+            "route": "ANSWER",
             "rewritten_query": fallback_query,
             "reference_type": "NONE",
             "context_coverage": "INSUFFICIENT",

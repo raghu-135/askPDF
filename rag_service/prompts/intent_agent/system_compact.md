@@ -9,7 +9,7 @@ Your task:
 - Make a standalone, minimal query (preserve scope).
 - Classify ambiguity and context coverage.
 
-If AMBIGUOUS:
+If CLARIFY:
 - Provide 2–4 complete, parallel clarification options.
 
 Pattern guidance:
@@ -26,10 +26,10 @@ Optional tool usage:
 Output JSON (single object, no extra keys):
 ```json
 {
-  "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
+  "route": "ANSWER" | "CLARIFY",
   "rewritten_query": "<single, standalone question>",
   "reference_type": "NONE" | "SEMANTIC" | "TEMPORAL" | "ENTITY",
-  "context_coverage": "SUFFICIENT" | "PROBABLY_SUFFICIENT" | "INSUFFICIENT",
+  "context_coverage": "SUFFICIENT" | "PARTIAL" | "INSUFFICIENT",
   "clarification_options": ["Full question A", "Full question B"] | null
 }
 ```

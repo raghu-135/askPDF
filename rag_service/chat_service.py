@@ -216,10 +216,11 @@ async def handle_thread_chat(
 
         # 2. Analyze intent using the Intent Agent (optional)
         intent = {
-            "status": "CLEAR_STANDALONE",
+            "route": "ANSWER",
             "rewritten_query": question,
             "clarification_options": None,
             "context_coverage": "INSUFFICIENT",
+            "reference_type": "NONE",
         }
 
         if use_intent_agent:
@@ -259,7 +260,7 @@ async def handle_thread_chat(
             logger.info(f"Intent Agent disabled for thread {thread_id}, skipping")
         
         # If ambiguous, return early with clarification options
-        if intent["status"] == "AMBIGUOUS" and intent.get("clarification_options"):
+        if intent.get("route") == "CLARIFY" and intent.get("clarification_options"):
             return {
                 "answer": "I'm not sure I understand. Could you clarify which of these you meant?",
                 "clarification_options": intent["clarification_options"],
@@ -283,7 +284,7 @@ async def handle_thread_chat(
             f"Intent analysis done for thread {thread_id} | "
             f"rewritten_query: {question} | "
             f"reference_type: {intent.get('reference_type', 'NONE')} | "
-            f"context_coverage: {intent.get('context_coverage', 'PROBABLY_SUFFICIENT')}"
+            f"context_coverage: {intent.get('context_coverage', 'PARTIAL')}"
         )
 
         # Use max_iterations as a ceiling only; the Orchestrator will stop early

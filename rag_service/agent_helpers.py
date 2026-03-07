@@ -26,18 +26,21 @@ def parse_intent_response(raw: str, logger: logging.Logger) -> Optional[Dict[str
     if not isinstance(data, dict):
         return None
 
-    required = {"status", "rewritten_query", "reference_type", "context_coverage", "clarification_options"}
+    required = {"route", "rewritten_query", "reference_type", "context_coverage", "clarification_options"}
     if not required.issubset(set(data.keys())):
         return None
 
-    status_ok = data["status"] in {"CLEAR_STANDALONE", "CLEAR_FOLLOWUP", "AMBIGUOUS"}
+    route_ok = data["route"] in {"ANSWER", "CLARIFY"}
     ref_ok = data["reference_type"] in {"NONE", "SEMANTIC", "TEMPORAL", "ENTITY"}
-    cov_ok = data["context_coverage"] in {"SUFFICIENT", "PROBABLY_SUFFICIENT", "INSUFFICIENT"}
-    if not (status_ok and ref_ok and cov_ok):
+    cov_ok = data["context_coverage"] in {"SUFFICIENT", "PARTIAL", "INSUFFICIENT"}
+    if not (route_ok and ref_ok and cov_ok):
         return None
 
     clar = data.get("clarification_options")
-    if clar is not None and not isinstance(clar, list):
+    if data["route"] == "CLARIFY":
+        if not isinstance(clar, list) or len(clar) < 2:
+            return None
+    elif clar is not None and not isinstance(clar, list):
         data["clarification_options"] = None
 
     if not isinstance(data.get("rewritten_query"), str) or not data["rewritten_query"].strip():

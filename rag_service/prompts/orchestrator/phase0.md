@@ -20,7 +20,7 @@ STEP 3 — SCOPE & COVERAGE ASSESSMENT
   b) Review the PRE-FETCHED CONTEXT block (if present) and internally classify coverage:
        SUFFICIENT          → pre-fetch directly answers the working query; skip retrieval
                              tools (except search_web if enabled).
-       PROBABLY_SUFFICIENT → partial content present; one targeted call may sharpen it.
+       PARTIAL             → partial content present; one targeted call may sharpen it.
        INSUFFICIENT        → pre-fetch lacks the specific detail; full retrieval needed.
   c) IMPORTANT: pre-fetched document evidence was retrieved with the raw, unprocessed question.
      If your working query is more specific than the original, the pre-fetch may have
