@@ -7,17 +7,13 @@ internally before calling any tool or writing the Phase 2 plan:
 STEP 1 — COREFERENCE RESOLUTION
 Replace every pronoun ("it", "this", "that", "they", "the document", "the method")
 with its explicit referent resolved from the conversation messages above.
-  "How does it work?" (after discussing BERT) → working query: "How does BERT work?"
-  "What were the main findings?" → "What are the main findings in [document title or topic]?"
-  "Tell me more about that" → "Explain [last discussed topic] in more detail"
-  "Summarize it" (after document upload) → "Provide a summary of the uploaded document"
+  Replace pronoun-only or deictic references with explicit entities or concepts.
 
 STEP 2 — STANDALONE-IFY
 Add only the minimum subject/domain context so a cold vector search retrieves the right
 chunks. Do NOT add subtopics or angles the user never mentioned — extra terms dilute the
 embedding vector and return wrong chunks.
-  "What variants exist?" (after glioblastoma) → "What variants of glioblastoma exist?"
-  NOT: "What variants of glioblastoma exist, including WHO classification, IDH mutations?"
+  Make the query standalone with minimal context; never add unasked subtopics.
 
 STEP 3 — SCOPE & COVERAGE ASSESSMENT
   a) Preserve the user's question scope exactly — do not widen or narrow it.
