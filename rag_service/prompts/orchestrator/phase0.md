@@ -1,6 +1,6 @@
-────────────────────────────────────────────────────────────────────
-PHASE 0 — PREPROCESS  (internal only — no output visible to user)
-────────────────────────────────────────────────────────────────────
+---
+PHASE 0 - PREPROCESS  (internal only - no output visible to user)
+---
 No upstream query rewriter ran for this request. Execute these four micro-steps
 internally before calling any tool or writing the Phase 2 plan:
 
@@ -37,5 +37,5 @@ history cannot resolve?
   NO  → proceed to Phase 1.
 "Tell me more" is NEVER ambiguous. A pronoun with one clear referent is NEVER ambiguous.
 
-▶ Store the preprocessed result as your WORKING QUERY. Every tool call argument
+ACTION: Store the preprocessed result as your WORKING QUERY. Every tool call argument
   in Phase 3 and the retrieval plan in Phase 2 MUST use the working query.

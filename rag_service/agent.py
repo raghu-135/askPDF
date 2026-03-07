@@ -652,7 +652,7 @@ def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
     if not parts:
         return ""
 
-    sep = "═" * 64
+    sep = "=" * 64
     return (
         f"\n\n{sep}\n"
         "PRE-FETCHED CONTEXT  (assembled before this call — no tool calls needed for this data):\n"
@@ -1383,14 +1383,14 @@ def build_system_prompt(
         phase_start = " Begin with Phase 0 — Preprocess."
         orient_word = "working"
         orient_extra = "\n  e) Does the raw message contain unresolved pronouns or references? → your Phase 0\n     WORKING QUERY replaces the raw message for all retrieval operations below."
-        plan_query_note = "\n  • Use the WORKING QUERY from Phase 0 — not the raw user message — for all tool arguments."
+        plan_query_note = "\n  - Use the WORKING QUERY from Phase 0 — not the raw user message — for all tool arguments."
     
     max_parallel_tools = 4 if use_web_search else 3
     
     # Build tool registry/playbook sections
     EDIT = "(USER-CONFIGURABLE)"
     tool_registry_section = (
-        f"\n\n{'═' * 64}\nTOOL REGISTRY {EDIT}:\n{'═' * 64}\n"
+        f"\n\n{'=' * 64}\nTOOL REGISTRY {EDIT}:\n{'=' * 64}\n"
         + "\n".join(
             [
                 f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n    {item['description']}"
@@ -1399,7 +1399,7 @@ def build_system_prompt(
         )
     )
     tool_playbook_section = (
-        f"\n\n{'═' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'═' * 64}\n"
+        f"\n\n{'=' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'=' * 64}\n"
         + "\n".join(
             [
                 f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
@@ -1413,8 +1413,8 @@ def build_system_prompt(
     if use_web_search:
         LOCK = "(LOCKED — not overridable)"
         web_search_mandate_section = (
-            f"\n\n{'═' * 64}\nWEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency\n"
-            f"{'═' * 64}\n"
+            f"\n\n{'=' * 64}\nWEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency\n"
+            f"{'=' * 64}\n"
             + get_web_search_mandate()
         )
 
@@ -1422,7 +1422,7 @@ def build_system_prompt(
     custom_instructions_section = ""
     if custom_instructions:
         custom_instructions_section = (
-            f"\n\n{'═' * 64}\nUSER CUSTOM INSTRUCTIONS {EDIT}\n{'═' * 64}\n"
+            f"\n\n{'=' * 64}\nUSER CUSTOM INSTRUCTIONS {EDIT}\n{'=' * 64}\n"
             + custom_instructions
         )
 

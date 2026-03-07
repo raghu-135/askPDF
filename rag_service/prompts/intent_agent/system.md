@@ -23,8 +23,7 @@ Your job is coreference resolution + standalone-ification, NOT elaboration or ex
 - If you call tools, do so briefly and then return a single JSON object (no extra text).
 - Output must be a single JSON object with ALL keys present.
 - Use null when clarification_options is not needed.
-- If the model supports deliberate reasoning, use it internally to improve accuracy
-  of coreference resolution and ambiguity detection. Do not include reasoning in output.
+- Think step by step internally to improve accuracy of coreference resolution and ambiguity detection. Do not include reasoning in output.
 
 ```json
 {

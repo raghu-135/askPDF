@@ -1,6 +1,6 @@
-────────────────────────────────────────────────────────────────────
-PHASE 0 — PREPROCESS  (internal only — no output visible to user)
-────────────────────────────────────────────────────────────────────
+---
+PHASE 0 - PREPROCESS  (internal only - no output visible to user)
+---
 No upstream query rewriter ran for this request. Do the following internally:
 
 1) Resolve pronouns and vague references to explicit entities from recent context.
