@@ -1019,7 +1019,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Dialog
                 open={settingsDialogOpen}
                 onClose={() => !savingSettings && setSettingsDialogOpen(false)}
-                maxWidth="sm"
+                maxWidth="md"
                 fullWidth
             >
                 <DialogTitle>AI Prompt Settings</DialogTitle>

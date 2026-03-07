@@ -250,6 +250,67 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         return f"Error retrieving chat memory: {e}"
 
 
+def _normalize_web_results(raw: Any, query: str) -> List[Dict[str, str]]:
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return [{"snippet": raw, "title": query, "link": ""}]
+    return []
+
+
+async def _run_web_search(query: str, max_results: Optional[int]) -> Optional[Dict[str, List[str]]]:
+    raw = await asyncio.to_thread(search_tool.invoke, query)
+    logger.info(f"Raw search results for '{query}': {raw}")
+    results_list = _normalize_web_results(raw, query)
+    if not results_list:
+        return None
+
+    texts = [r.get("snippet", r.get("body", "")) for r in results_list]
+    urls = [r.get("link", r.get("href", "")) for r in results_list]
+    titles = [r.get("title", "") for r in results_list]
+
+    valid = [(t, u, ti) for t, u, ti in zip(texts, urls, titles) if t.strip()]
+    if not valid:
+        return None
+
+    texts, urls, titles = zip(*valid)
+    texts = list(texts)
+    urls = list(urls)
+    titles = list(titles)
+    if max_results is not None:
+        texts = texts[:max_results]
+        urls = urls[:max_results]
+        titles = titles[:max_results]
+    return {"texts": texts, "urls": urls, "titles": titles}
+
+
+def _format_web_context(texts: List[str], urls: List[str], titles: List[str]) -> Dict[str, Any]:
+    web_groups: Dict[str, Dict[str, Any]] = {}
+    web_sources: List[Dict[str, str]] = []
+    for text, url, title in zip(texts, urls, titles):
+        if url not in web_groups:
+            web_groups[url] = {"title": title or url or "Internet Search", "texts": []}
+        web_groups[url]["texts"].append(text)
+        web_sources.append({
+            "text": text[:200] + "...",
+            "url": url,
+            "title": title or "Internet Search",
+        })
+
+    context_parts = []
+    for url, group in web_groups.items():
+        combined_text = "\n".join(group["texts"])
+        context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
+
+    return {
+        "content": "\n\n".join(context_parts),
+        "__web_sources__": web_sources,
+    }
+
+
 @tool
 async def search_web(query: str, config: RunnableConfig = None) -> str:
     """
@@ -282,39 +343,16 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
 
-        raw = await asyncio.to_thread(search_tool.invoke, query)
-        logger.info(f"Raw search results for '{query}': {raw}")
-
-        # DuckDuckGoSearchResults returns a list of dicts; fall back to string if not.
-        if isinstance(raw, list):
-            results_list = raw
-        elif isinstance(raw, str):
-            try:
-                results_list = json.loads(raw)
-            except Exception:
-                # Plain-text fallback — wrap as a single result without URL
-                results_list = [{"snippet": raw, "title": query, "link": ""}]
-        else:
-            results_list = []
-
-        if not results_list:
-            return "Web search returned no results."
-
-        texts = [r.get("snippet", r.get("body", "")) for r in results_list]
-        urls  = [r.get("link",    r.get("href",  "")) for r in results_list]
-        titles = [r.get("title", "") for r in results_list]
-
-        # Remove empty snippets
-        valid = [(t, u, ti) for t, u, ti in zip(texts, urls, titles) if t.strip()]
-        if not valid:
+        result = await _run_web_search(query, max_results=6)
+        if not result:
             return "Web search returned no usable text."
-        texts, urls, titles = zip(*valid)
-        texts  = list(texts)
-        urls   = list(urls)
-        titles = list(titles)
+
+        texts = result["texts"]
+        urls = result["urls"]
+        titles = result["titles"]
 
         # ── Persist results in Qdrant for future retrieval ──
-        if thread_id and embedding_model:
+        if thread_id and embedding_model and conf.get("web_search_index", True):
             try:
                 from rag import index_web_search_for_thread
                 asyncio.create_task(
@@ -330,31 +368,42 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
             except Exception as idx_err:
                 logger.warning(f"Web search indexing skipped: {idx_err}")
 
-        # ── Build source-labeled content for the LLM ──
-        web_groups = {}
-        web_sources = []
-        for text, url, title in zip(texts, urls, titles):
-            if url not in web_groups:
-                web_groups[url] = {"title": title or url or "Internet Search", "texts": []}
-            web_groups[url]["texts"].append(text)
-
-            web_sources.append({
-                "text": text[:200] + "...",
-                "url": url,
-                "title": title or "Internet Search",
-            })
-
-        context_parts = []
-        for url, group in web_groups.items():
-            combined_text = "\n".join(group["texts"])
-            context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
-
-        return json.dumps({
-            "content": "\n\n".join(context_parts),
-            "__web_sources__": web_sources,
-        })
+        return json.dumps(_format_web_context(texts, urls, titles))
     except Exception as e:
         logger.error(f"Web search failed: {e}", exc_info=True)
+        return f"Web search failed: {str(e)}"
+
+
+@tool
+async def search_web_intent(query: str, config: RunnableConfig = None) -> str:
+    """
+    Lightweight web lookup for query rewriting, intent disambiguation, and
+    time-sensitivity detection.
+
+    Use ONLY to identify unknown terms/entities or determine if the question is about
+    current events, prices, or other time-sensitive facts. Use results only to
+    clarify user intent and improve the rewritten query. Do NOT use this as evidence
+    in the final answer.
+
+    If internet search is not enabled for this session, this tool will return a
+    message indicating that and no search will be performed.
+
+    Args:
+        query: A concise query aimed at identifying the term or entity in question.
+    """
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        if not conf.get("use_web_search", False):
+            return "Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available."
+
+        logger.info(f"--- INTENT WEB SEARCH INITIATED --- Query: '{query}'")
+        result = await _run_web_search(query, max_results=None)
+        if not result:
+            return "Web search returned no usable text."
+
+        return json.dumps(_format_web_context(result["texts"], result["urls"], result["titles"]))
+    except Exception as e:
+        logger.error(f"Intent web search failed: {e}", exc_info=True)
         return f"Web search failed: {str(e)}"
 
 
@@ -628,6 +677,7 @@ class IntentAgentState(TypedDict):
     intent_result: Optional[Dict[str, Any]]
     pre_fetch_bundle: Optional[Dict[str, Any]]
     reasoning_mode: bool
+    intent_tools_used: bool
 
 
 async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
@@ -637,6 +687,8 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     """
     messages = state["messages"]
     llm = get_llm(state["llm_model"], temperature=0.0)
+    llm_with_tools = llm.bind_tools(intent_tools)
+    iteration = state.get("iteration_count", 0) + 1
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
     reasoning_mode = state.get("reasoning_mode", True)
 
@@ -669,7 +721,7 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
 
     # Single direct call — no tools, minimal retries
     try:
-        response = await invoke_with_retry(llm.ainvoke, input_messages)
+        response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
     except Exception as e:
         logger.error(f"Intent Agent LLM call failed: {e}")
         original_question = next(
@@ -682,17 +734,24 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
             "context_coverage": "PROBABLY_SUFFICIENT",
             "clarification_options": None,
         }
-        return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": 1, "intent_result": intent_result}
+        return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": iteration, "intent_result": intent_result}
+
+    if getattr(response, "tool_calls", None):
+        return {
+            "messages": [response],
+            "iteration_count": iteration,
+            "intent_result": None,
+        }
 
     intent_result = parse_intent_response(response.content, logger=logger)
-    if intent_result is None and not reasoning_mode:
+    if intent_result is None:
         logger.warning("Intent JSON invalid; retrying once with strict JSON instruction.")
         retry_msg = HumanMessage(
             content="Your previous output was invalid JSON. Output a single JSON object matching the schema. No code fences."
         )
         retry_messages = input_messages + [retry_msg]
         try:
-            retry_response = await invoke_with_retry(llm.ainvoke, retry_messages)
+            retry_response = await invoke_with_retry(llm_with_tools.ainvoke, retry_messages)
             intent_result = parse_intent_response(retry_response.content, logger=logger)
             response = retry_response
         except Exception as e:
@@ -715,17 +774,50 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
 
     return {
         "messages": [response],
-        "iteration_count": 1,
+        "iteration_count": iteration,
         "intent_result": intent_result,
     }
 
 
 
 
+class IntentToolNode(ToolNode):
+    async def ainvoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
+        res = await super().ainvoke(input, config, **kwargs)
+        return {
+            "messages": res.get("messages", []),
+            "intent_tools_used": True,
+        }
+
+
+def intent_should_continue(state: IntentAgentState):
+    messages = state["messages"]
+    last_message = messages[-1]
+    iteration_count = state.get("iteration_count", 0)
+    max_iterations = state.get("max_iterations", 1)
+    tools_used = state.get("intent_tools_used", False)
+
+    if getattr(last_message, "tool_calls", None):
+        if tools_used and iteration_count >= max_iterations:
+            return END
+        return "tools"
+    return END
+
+
+intent_tools = [
+    search_web_intent,
+]
+
 intent_workflow = StateGraph(IntentAgentState)
 intent_workflow.add_node("agent", call_intent_model)
+intent_workflow.add_node("tools", IntentToolNode(intent_tools))
 intent_workflow.add_edge(START, "agent")
-intent_workflow.add_edge("agent", END)
+intent_workflow.add_conditional_edges(
+    "agent",
+    intent_should_continue,
+    {"tools": "tools", END: END},
+)
+intent_workflow.add_edge("tools", "agent")
 
 intent_app = intent_workflow.compile()
 # --- End Intent Agent ---
@@ -883,12 +975,11 @@ async def call_model(state: AgentState, config: RunnableConfig):
     llm = get_llm(state["llm_model"])
     iteration = state.get("iteration_count", 0) + 1
     
-    llm_with_tools = llm.bind_tools(tools_list)
-    
     context_window = state.get('context_window', DEFAULT_TOKEN_BUDGET)
     system_role = sanitize_system_role(state.get("system_role", ""))
     tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
+    reasoning_mode = state.get("reasoning_mode", True)
     reasoning_mode = state.get("reasoning_mode", True)
 
     use_web_search = state.get("use_web_search", False)
@@ -935,6 +1026,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
         messages=messages,
     )
 
+    llm_with_tools = llm.bind_tools(tools_list) if reasoning_mode else llm
+
     # Log complete prompt for Orchestrator Agent in OpenAI-like format
     logger.info(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
     payload = []
@@ -952,6 +1045,24 @@ async def call_model(state: AgentState, config: RunnableConfig):
 
     response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
     return {"messages": [response], "iteration_count": iteration}
+
+
+def _looks_like_tool_call_text(text: str) -> bool:
+    if not text:
+        return False
+    try:
+        data = json.loads(text)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    if data.get("type") == "function":
+        return True
+    if "function" in data and "parameters" in data:
+        return True
+    if "tool" in data and "tool_input" in data:
+        return True
+    return False
 
 
 async def force_final_answer(state: AgentState, config: RunnableConfig):
@@ -1072,6 +1183,15 @@ def should_continue(state: AgentState):
 
         if not text_body:
             logger.warning("LLM returned empty response after tool execution. Triggering force_final_answer.")
+            return "force_final_answer"
+
+    if not reasoning_mode:
+        content = getattr(last_message, "content", "")
+        if isinstance(content, list):
+            from reasoning import _text_from_content_item
+            content = "\n".join([_text_from_content_item(i) for i in content if i]).strip()
+        if isinstance(content, str) and _looks_like_tool_call_text(content.strip()):
+            logger.warning("Non-reasoning mode: model returned tool-call-like JSON. Forcing final answer.")
             return "force_final_answer"
 
     return END

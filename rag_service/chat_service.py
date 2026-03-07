@@ -21,9 +21,6 @@ from models import (
     CHARS_PER_TOKEN,
     compute_prefetch_budget,
     INTENT_AGENT_MAX_ITERATIONS,
-    MAX_ITERATIONS_SUFFICIENT_COVERAGE,
-    MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE,
-    WEB_SEARCH_ITERATION_BONUS,
 )
 from database import (
     create_message,
@@ -35,7 +32,6 @@ from database import (
 )
 from reasoning import normalize_ai_response
 from retrieval import fetch_semantic_history, get_document_name_lookup, group_pdf_chunks
-from web_prefetch import prefetch_web_context
 
 logger = logging.getLogger(__name__)
 
@@ -143,23 +139,12 @@ async def prefetch_context(
             logger.warning(f"Prefetch PDF evidence failed: {exc}")
             return "", []
 
-    async def _fetch_web() -> tuple:
-        return await prefetch_web_context(
-            raw_question=raw_question,
-            thread_id=thread_id,
-            embed_model_name=embed_model_name,
-            use_web_search=use_web_search,
-            reasoning_mode=reasoning_mode,
-            logger=logger,
-        )
-
     # Run all fetches in parallel
     results = await asyncio.gather(
         _fetch_recent(),
         _fetch_stats_and_docs(),
         _fetch_semantic(),
         _fetch_pdf(),
-        _fetch_web(),
         return_exceptions=True,
     )
 
@@ -167,7 +152,7 @@ async def prefetch_context(
     meta: Dict[str, Any] = results[1] if not isinstance(results[1], Exception) else {"stats": {}, "documents": []}
     semantic_result = results[2] if not isinstance(results[2], Exception) else ("", [])
     pdf_result = results[3] if not isinstance(results[3], Exception) else ("", [])
-    web_result = results[4] if not isinstance(results[4], Exception) else ("", [])
+    web_result = ("", [])
 
     semantic_text, used_chat_ids = semantic_result if isinstance(semantic_result, tuple) else ("", [])
     pdf_text, pdf_sources = pdf_result if isinstance(pdf_result, tuple) else ("", [])
@@ -248,11 +233,23 @@ async def handle_thread_chat(
                 "intent_result": None,
                 "pre_fetch_bundle": prefetch_bundle,
                 "reasoning_mode": reasoning_mode,
+                "intent_tools_used": False,
             }
             
             logger.info(f"Invoking Intent Agent for thread {thread_id}")
             intent_start = time.perf_counter()
-            intent_result_state = await intent_app.ainvoke(intent_state, config={"configurable": {"thread_id": thread_id}})
+            intent_result_state = await intent_app.ainvoke(
+                intent_state,
+                config={
+                    "configurable": {
+                        "thread_id": thread_id,
+                        "embedding_model": embed_model,
+                        "context_window": context_window,
+                        "use_web_search": use_web_search,
+                        "web_search_index": False,
+                    }
+                },
+            )
             intent_duration = time.perf_counter() - intent_start
             
             if intent_result_state.get("intent_result"):
@@ -288,20 +285,9 @@ async def handle_thread_chat(
             f"context_coverage: {intent.get('context_coverage', 'PROBABLY_SUFFICIENT')}"
         )
 
-        # Cap orchestrator iterations based on intent's coverage signal
-        # SUFFICIENT          → 2 rounds max  (pre-fetch + 1 targeted tool if needed)
-        # PROBABLY_SUFFICIENT → 4 rounds max
-        # INSUFFICIENT        → full budget (default max_iterations)
-        # When web search is enabled, add 2 extra iterations so the agent has room to
-        # call search_web after an initial search_documents call that may return nothing.
-        coverage = intent.get("context_coverage", "PROBABLY_SUFFICIENT")
-        web_bonus = WEB_SEARCH_ITERATION_BONUS if use_web_search else 0
-        if coverage == "SUFFICIENT":
-            effective_max_iterations = min(max_iterations, MAX_ITERATIONS_SUFFICIENT_COVERAGE + web_bonus)
-        elif coverage == "PROBABLY_SUFFICIENT":
-            effective_max_iterations = min(max_iterations, MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE + web_bonus)
-        else:
-            effective_max_iterations = max_iterations
+        # Use max_iterations as a ceiling only; the Orchestrator will stop early
+        # when it can answer without further tool calls.
+        effective_max_iterations = max_iterations
 
         initial_state = {
             "messages": [HumanMessage(content=question)],
