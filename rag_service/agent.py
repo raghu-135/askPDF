@@ -678,6 +678,7 @@ class IntentAgentState(TypedDict):
     pre_fetch_bundle: Optional[Dict[str, Any]]
     reasoning_mode: bool
     intent_tools_used: bool
+    use_web_search: bool
 
 
 async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
@@ -687,7 +688,8 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     """
     messages = state["messages"]
     llm = get_llm(state["llm_model"], temperature=0.0)
-    llm_with_tools = llm.bind_tools(intent_tools)
+    allow_intent_web_search = bool(state.get("use_web_search"))
+    llm_with_tools = llm.bind_tools(intent_tools if allow_intent_web_search else [])
     iteration = state.get("iteration_count", 0) + 1
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
     reasoning_mode = state.get("reasoning_mode", True)
@@ -698,6 +700,8 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
 
     base_prompt = get_intent_agent_prompt() if reasoning_mode else get_intent_agent_prompt_compact()
     system_prompt = base_prompt.replace("{PREFETCH_CONTEXT}", prefetch_text)
+    if not allow_intent_web_search:
+        system_prompt += "\n\nWeb search is disabled for this session. Do NOT call any web search tools."
     prompt_template = build_chat_prompt()
     input_messages = prompt_template.format_messages(
         system_prompt=system_prompt,

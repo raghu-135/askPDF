@@ -234,6 +234,7 @@ async def handle_thread_chat(
                 "pre_fetch_bundle": prefetch_bundle,
                 "reasoning_mode": reasoning_mode,
                 "intent_tools_used": False,
+                "use_web_search": use_web_search,
             }
             
             logger.info(f"Invoking Intent Agent for thread {thread_id}")
