@@ -52,15 +52,15 @@ def looks_like_followup(question: str) -> bool:
 
 
 def evidence_insufficient(state: Dict[str, Any]) -> bool:
-    pdf_sources = state.get("pdf_sources") or []
+    document_sources = state.get("document_sources") or []
     web_sources = state.get("web_sources") or []
     used_chat_ids = state.get("used_chat_ids") or []
-    return not pdf_sources and not web_sources and not used_chat_ids
+    return not document_sources and not web_sources and not used_chat_ids
 
 
 def collect_tool_sources(
     content: str,
-    pdf_sources: list,
+    document_sources: list,
     web_sources: list,
     used_chat_ids: list,
 ) -> None:
@@ -70,8 +70,8 @@ def collect_tool_sources(
         data = json.loads(content)
     except Exception:
         return
-    if "__pdf_sources__" in data:
-        pdf_sources.extend(data["__pdf_sources__"])
+    if "__document_sources__" in data:
+        document_sources.extend(data["__document_sources__"])
     if "__web_sources__" in data:
         web_sources.extend(data["__web_sources__"])
     if "__used_chat_ids__" in data:

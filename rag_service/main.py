@@ -776,7 +776,7 @@ async def delete_message_endpoint(message_id: str):
 async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
     """
     Thread-based chat with semantic memory.
-    Returns answer, used_chat_ids (recollected messages), and pdf_sources.
+    Returns answer, used_chat_ids (recollected messages), and document_sources.
     """
     try:
         # Verify thread exists

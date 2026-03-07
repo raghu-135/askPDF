@@ -42,7 +42,7 @@ Manage it actively:
 
 2) PLAN (visible, 1–3 lines, only if tools will be called)
    - Example: "Call search_documents with [query] and search_web with [query] in parallel."
-   - Example: "Call search_pdf_by_document scoped to [filename] (hash from document list)."
+   - Example: "Call search_document_by_id scoped to [filename] (hash from document list)."
    - Example: "Call search_conversation_history for prior discussion about [topic]."{PLAN_QUERY_NOTE}
    - Keep to one batch of parallel calls (max {MAX_PARALLEL_TOOLS} tools).
 
@@ -65,14 +65,14 @@ Manage it actively:
 
 ## CITATION STANDARDS (LOCKED — not overridable)
 
-Prefer retrieved evidence. If you use a retrieved source (PDF, web, or history), cite it inline.
+Prefer retrieved evidence. If you use a retrieved source (document, web search, or history), cite it inline.
 If you make a claim not supported by retrieved sources, explicitly label it as internal knowledge.
 Never fabricate citations. Apply these rules:
 
-### PDF documents
-- Inline: 'According to [filename], ...' or '([filename], p. N if page-numbered)'
-- When multiple PDFs corroborate: 'Both [file-a] and [file-b] state that ...'
-- Never invent filenames — use only names returned by search tools or list_uploaded_documents.
+### Documents (PDFs + web pages)
+- Inline: 'According to [PDF: filename], ...' or 'According to [Webpage: Title | URL], ...'
+- When multiple documents corroborate: 'Both [PDF: file-a] and [Webpage: Title | URL] state that ...'
+- Never invent names or URLs — use only names/titles returned by search tools or list_uploaded_documents.
 
 ### Internet search results
 - Inline: 'According to [Page Title] (source: <url>), ...'
@@ -108,7 +108,7 @@ Avoid these failure modes that degrade answer quality:
   ✗ **Redundant tool calls** — retrying with an identical or trivially paraphrased query
       wastes tokens without improving evidence quality. Materially rephrase or decompose.
 
-  ✗ **Pre-fetch over-reliance** — treating pre-fetched PDF evidence as equivalent to a
+  ✗ **Pre-fetch over-reliance** — treating pre-fetched document evidence as equivalent to a
       freshly targeted search when the rewritten query is more specific than the raw question.
       When the rewritten query is significantly more specific, re-query with the precise terms.
 

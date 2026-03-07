@@ -284,6 +284,61 @@ class QdrantAdapter:
         results.sort(key=lambda x: x["chunk_id"])
         return results
 
+    async def get_knowledge_source_chunks_by_ids(
+        self,
+        thread_id: str,
+        file_hash: str,
+        chunk_ids: List[int]
+    ) -> List[Dict[str, Any]]:
+        """Retrieve specific knowledge_source chunks (PDFs or webpages) by chunk_ids."""
+        collection_name = self.get_thread_collection_name(thread_id)
+        if not self.client.collection_exists(collection_name):
+            return []
+
+        must_conditions = [
+            models.FieldCondition(key="type", match=models.MatchValue(value="knowledge_source")),
+            models.FieldCondition(key="file_hash", match=models.MatchValue(value=file_hash)),
+        ]
+
+        should_conditions = [
+            models.FieldCondition(
+                key="chunk_id",
+                match=models.MatchAny(any=chunk_ids)
+            )
+        ]
+
+        search_filter = models.Filter(
+            must=must_conditions,
+            should=should_conditions
+        )
+
+        scroll_result, _ = self.client.scroll(
+            collection_name=collection_name,
+            scroll_filter=search_filter,
+            limit=len(chunk_ids),
+            with_payload=True,
+            with_vectors=False
+        )
+
+        results = []
+        for hit in scroll_result:
+            results.append({
+                "text": hit.payload.get("text", ""),
+                "file_hash": hit.payload.get("file_hash"),
+                "chunk_id": hit.payload.get("chunk_id"),
+                "type": "knowledge_source",
+                "source_kind": hit.payload.get("source_kind", "pdf"),
+                "url": hit.payload.get("url"),
+                "title": hit.payload.get("title"),
+                "metadata": {
+                    k: v for k, v in hit.payload.items()
+                    if k not in ["text", "type", "source_kind"]
+                }
+            })
+
+        results.sort(key=lambda x: x["chunk_id"])
+        return results
+
     # ============ Chat Memory Operations ============
 
     async def index_chat_memory(

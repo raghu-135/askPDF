@@ -32,7 +32,7 @@ from agent_helpers import (
 from prompt_defaults import DEFAULT_SYSTEM_ROLE
 from intent_fallback import heuristic_rewrite_query
 from vectordb.qdrant import get_qdrant
-from retrieval import fetch_semantic_history, get_document_name_lookup, group_pdf_chunks
+from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class AgentState(TypedDict):
     embedding_model: str
     context_window: int
     use_web_search: bool
-    pdf_sources: List[Dict[str, Any]]
+    document_sources: List[Dict[str, Any]]
     web_sources: List[Dict[str, Any]]
     used_chat_ids: List[str]
     clarification_options: Optional[List[str]]
@@ -93,7 +93,7 @@ class AgentState(TypedDict):
 @tool
 async def search_documents(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """
-    Perform a semantic vector search over all uploaded PDF documents AND previously cached
+    Perform a semantic vector search over all uploaded documents (PDFs + webpages) AND previously cached
     internet search results for this thread.
     Returns the most relevant chunks along with neighboring context passages for continuity.
 
@@ -102,7 +102,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
     retry with a rephrased or more specific query before concluding the information is absent.
 
     Each returned passage is prefixed with its source so you can cite it accurately:
-      - PDF passages: [Source: Document "<filename>"]
+      - Document passages: [Source: PDF: <filename>] or [Source: Webpage: <title> | <url>]
       - Cached web results: [Source: Internet Search — "<title>" | <url>]
 
     Args:
@@ -126,8 +126,8 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         # ── Build a file_hash → file_name lookup from thread_stats (no DB join) ──
         hash_to_name = await get_document_name_lookup(thread_id)
 
-        # ── PDF chunk search with neighbor expansion ──
-        raw_pdf_chunks = await db.search_knowledge_sources(
+        # ── Document chunk search with neighbor expansion ──
+        raw_doc_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
             limit=max_results
@@ -135,7 +135,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
 
         expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
         file_chunk_map = {}
-        for hit in raw_pdf_chunks:
+        for hit in raw_doc_chunks:
             file_hash = hit.get("file_hash")
             chunk_id = hit.get("chunk_id")
             if file_hash is not None and chunk_id is not None:
@@ -145,16 +145,16 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                     if neighbor_id >= 0:
                         file_chunk_map[file_hash].add(neighbor_id)
 
-        expanded_pdf_chunks = []
+        expanded_doc_chunks = []
         for file_hash, id_set in file_chunk_map.items():
-            expanded_batch = await db.get_chunks_by_ids(
+            expanded_batch = await db.get_knowledge_source_chunks_by_ids(
                 thread_id=thread_id,
                 file_hash=file_hash,
                 chunk_ids=list(id_set)
             )
-            expanded_pdf_chunks.extend(expanded_batch)
+            expanded_doc_chunks.extend(expanded_batch)
 
-        expanded_pdf_chunks.sort(key=lambda x: (x.get("file_hash", ""), x.get("chunk_id", 0)))
+        expanded_doc_chunks.sort(key=lambda x: (x.get("file_hash", ""), x.get("chunk_id", 0)))
 
         # ── Cached web search results ──
         web_chunks = await db.search_web_chunks(
@@ -163,17 +163,17 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             limit=max(3, max_results // 3),
         )
 
-        if not expanded_pdf_chunks and not web_chunks:
+        if not expanded_doc_chunks and not web_chunks:
             return "No relevant content found in documents or cached web results."
 
-        pdf_sources = []
+        document_sources = []
         web_sources = []
         context_parts = []
 
-        # Group PDF chunks by file to reduce context window bloat
-        pdf_context, pdf_sources = group_pdf_chunks(expanded_pdf_chunks, hash_to_name)
-        if pdf_context:
-            context_parts.append(pdf_context)
+        # Group document chunks by file to reduce context window bloat
+        document_context, document_sources = group_document_chunks(expanded_doc_chunks, hash_to_name)
+        if document_context:
+            context_parts.append(document_context)
 
         # Group cached web chunks by URL
         web_groups = {}
@@ -195,8 +195,8 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
 
         result: Dict[str, Any] = {"content": "\n\n".join(context_parts)}
-        if pdf_sources:
-            result["__pdf_sources__"] = pdf_sources
+        if document_sources:
+            result["__document_sources__"] = document_sources
         if web_sources:
             result["__web_sources__"] = web_sources
         return json.dumps(result)
@@ -321,7 +321,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
 
     Use this along with search_documents when you need to augment the knowledge from
     uploaded documents with the latest information from the internet. This helps
-    provide a more comprehensive answer by checking both internal PDFs and external
+    provide a more comprehensive answer by checking both internal documents and external
     web resources in parallel.
 
     If internet search is not enabled for this session, this tool will return a
@@ -430,12 +430,12 @@ async def ask_for_clarification(options: List[str]) -> str:
 @tool
 async def list_uploaded_documents(config: RunnableConfig = None) -> str:
     """
-    Return metadata for all PDF documents indexed in this thread:
+    Return metadata for all documents indexed in this thread:
     file name, file hash, and upload order (most recent first).
 
-    Use when the user references "the document", "the PDF", "the first file",
+    Use when the user references "the document", "the PDF", "the webpage", "the first file",
     "the report", or any document by name or topic — to identify the correct
-    file_hash before calling search_pdf_by_document. Do NOT call this on every
+    file_hash before calling search_document_by_id. Do NOT call this on every
     request; only invoke it when you genuinely need to resolve a document reference.
     """
     try:
@@ -468,7 +468,7 @@ async def list_uploaded_documents(config: RunnableConfig = None) -> str:
 
 
 @tool
-async def search_pdf_by_document(
+async def search_document_by_id(
     query: str,
     file_hash: str,
     max_results: int = 8,
@@ -519,7 +519,7 @@ async def search_pdf_by_document(
                     if neighbor_id >= 0:
                         chunk_ids_to_fetch.add(neighbor_id)
 
-        expanded_chunks = await db.get_chunks_by_ids(
+        expanded_chunks = await db.get_knowledge_source_chunks_by_ids(
             thread_id=thread_id,
             file_hash=file_hash,
             chunk_ids=list(chunk_ids_to_fetch),
@@ -530,16 +530,16 @@ async def search_pdf_by_document(
         hash_to_name = await get_document_name_lookup(thread_id)
         fname = hash_to_name.get(file_hash, file_hash)
 
-        pdf_context, sources = group_pdf_chunks(expanded_chunks, {file_hash: fname})
-        if not pdf_context:
-            pdf_context = ""
+        document_context, sources = group_document_chunks(expanded_chunks, {file_hash: fname})
+        if not document_context:
+            document_context = ""
 
         return json.dumps({
-            "content": pdf_context,
-            "__pdf_sources__": sources,
+            "content": document_context,
+            "__document_sources__": sources,
         })
     except Exception as e:
-        logger.error(f"Error in search_pdf_by_document: {e}", exc_info=True)
+        logger.error(f"Error in search_document_by_id: {e}", exc_info=True)
         return f"Error searching document: {e}"
 
 
@@ -641,9 +641,9 @@ def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
     if semantic:
         parts.append(f"[SEMANTICALLY RELEVANT PAST QA PAIRS]\n{semantic}")
 
-    pdf = bundle.get("pdf_evidence_text", "")
-    if pdf:
-        parts.append(f"[PDF DOCUMENT EVIDENCE  (queried with raw/un-rewritten question)]\n{pdf}")
+    documents = bundle.get("document_evidence_text", "")
+    if documents:
+        parts.append(f"[DOCUMENT EVIDENCE (PDF + WEBPAGE)  (queried with raw/un-rewritten question)]\n{documents}")
 
     web = bundle.get("web_evidence_text", "")
     if web:
@@ -659,7 +659,7 @@ def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
         f"{sep}\n"
         + "\n\n".join(parts)
         + f"\n{sep}\n"
-        "NOTE: PDF Evidence and Semantic History were retrieved with the raw question.\n"
+        "NOTE: Document Evidence and Semantic History were retrieved with the raw question.\n"
         "A better-rewritten query will improve precision — call tools ONLY when this\n"
         "pre-fetched context is genuinely insufficient to answer the user's request.\n"
         f"{sep}"
@@ -882,7 +882,7 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
 tools_list = [
     get_thread_shape,
     search_documents,
-    search_pdf_by_document,
+    search_document_by_id,
     search_conversation_history,
     find_topic_anchor_in_history,
     search_web,
@@ -894,10 +894,10 @@ TOOL_FRIENDLY_CONFIG = {
     "search_documents": {
         "id": "document_evidence",
         "display_name": "Document Evidence",
-        "description": "Semantic vector search across ALL uploaded PDF documents — returns matching chunks with surrounding context.",
-        "default_prompt": "Use when the question spans multiple documents or the target document is unknown. If results are weak, retry with a rephrased or more specific query. When the document is known, prefer search_pdf_by_document instead.",
+        "description": "Semantic vector search across ALL uploaded documents (PDFs + webpages) — returns matching chunks with surrounding context.",
+        "default_prompt": "Use when the question spans multiple documents or the target document is unknown. If results are weak, retry with a rephrased or more specific query. When the document is known, prefer search_document_by_id instead.",
     },
-    "search_pdf_by_document": {
+    "search_document_by_id": {
         "id": "focused_document_evidence",
         "display_name": "Focused Document Evidence",
         "description": "Semantic search scoped to a SINGLE document by file_hash — avoids contamination from unrelated files.",
@@ -919,7 +919,7 @@ TOOL_FRIENDLY_CONFIG = {
         "id": "live_web_recon",
         "display_name": "Internet Search",
         "description": "Search the web for external, real-time, or post-training knowledge. Results are automatically cached in the thread knowledge base for future retrieval.",
-        "default_prompt": "MANDATORY when web search is enabled: call search_web for virtually every factual question to supplement PDF content with current, external knowledge. Run it IN PARALLEL with document searches — do not wait for PDF results first. Never skip it based on pre-fetched PDF evidence alone. Always cite the URL and title of web results in your answer.",
+        "default_prompt": "MANDATORY when web search is enabled: call search_web for virtually every factual question to supplement document content with current, external knowledge. Run it IN PARALLEL with document searches — do not wait for document results first. Never skip it based on pre-fetched document evidence alone. Always cite the URL and title of web results in your answer.",
     },
     "ask_for_clarification": {
         "id": "clarify_intent",
@@ -931,7 +931,7 @@ TOOL_FRIENDLY_CONFIG = {
         "id": "thread_shape",
         "display_name": "Thread Shape",
         "description": "Returns a snapshot of the thread's content inventory: document list with chunk counts and indexing status, plus QA history volume metrics.",
-        "default_prompt": "Use to calibrate retrieval strategy: check document chunk counts to decide between search_documents vs. search_pdf_by_document, and check QA history volume to decide whether semantic memory search is worthwhile. Only call once — the snapshot is current at the time of the call.",
+        "default_prompt": "Use to calibrate retrieval strategy: check document chunk counts to decide between search_documents vs. search_document_by_id, and check QA history volume to decide whether semantic memory search is worthwhile. Only call once — the snapshot is current at the time of the call.",
     },
 }
 
@@ -941,7 +941,7 @@ class OrchestratorToolNode(ToolNode):
         # Intercept tool calls to extract special JSON state updates
         res = await super().ainvoke(input, config, **kwargs)
 
-        pdf_sources = list(input.get("pdf_sources", []))
+        document_sources = list(input.get("document_sources", []))
         web_sources = list(input.get("web_sources", []))
         used_chat_ids = list(input.get("used_chat_ids", []))
         clarification_options = None
@@ -954,8 +954,8 @@ class OrchestratorToolNode(ToolNode):
                     # Replace the raw message content with the clean text
                     if "content" in data:
                         messages[i].content = data["content"]
-                    if "__pdf_sources__" in data:
-                        pdf_sources.extend(data["__pdf_sources__"])
+                    if "__document_sources__" in data:
+                        document_sources.extend(data["__document_sources__"])
                     if "__web_sources__" in data:
                         web_sources.extend(data["__web_sources__"])
                     if "__used_chat_ids__" in data:
@@ -968,7 +968,7 @@ class OrchestratorToolNode(ToolNode):
 
         return {
             "messages": messages,
-            "pdf_sources": pdf_sources,
+            "document_sources": document_sources,
             "web_sources": web_sources,
             "used_chat_ids": used_chat_ids,
             "clarification_options": clarification_options,
@@ -1006,19 +1006,19 @@ async def call_model(state: AgentState, config: RunnableConfig):
         if bundle_text:
             prompt_content += (
                 "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
-                "Pre-fetched context (recent turns, semantic history, PDF evidence, document list) is\n"
+                "Pre-fetched context (recent turns, semantic history, document evidence, document list) is\n"
                 "already present in the PRE-FETCHED CONTEXT block below. Before calling any tool:\n"
                 "1. Assess whether the pre-fetched content answers the rewritten query with confidence.\n"
-                "   If YES, skip PDF/history tool calls — but NEVER skip search_web when it is available.\n"
-                "2. If PDF evidence is present but the rewritten query is more specific than the raw question:\n"
-                "   call search_documents or search_pdf_by_document ONCE with the rewritten query.\n"
+                "   If YES, skip document/history tool calls — but NEVER skip search_web when it is available.\n"
+                "2. If document evidence is present but the rewritten query is more specific than the raw question:\n"
+                "   call search_documents or search_document_by_id ONCE with the rewritten query.\n"
                 "3. If the question targets a specific document and its file_hash is in the document list:\n"
-                "   prefer search_pdf_by_document (scoped) over search_documents (all documents).\n"
+                "   prefer search_document_by_id (scoped) over search_documents (all documents).\n"
                 "4. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
                 "   conversation and semantic history are already in the pre-fetched block.\n"
                 + (
                     "5. WEB SEARCH IS ENABLED AND MANDATORY: call search_web for this question IN PARALLEL\n"
-                    "   with any document search. Pre-fetched PDF evidence does NOT replace a web search.\n"
+                    "   with any document search. Pre-fetched document evidence does NOT replace a web search.\n"
                     "   Do not skip search_web regardless of how complete the pre-fetched content appears.\n"
                     if use_web_search else ""
                 )
@@ -1206,7 +1206,7 @@ async def auto_tools(state: AgentState, config: RunnableConfig):
     Non-reasoning fallback: run required tools when the model fails to call any.
     """
     tool_messages: list[ToolMessage] = []
-    pdf_sources: list[Dict[str, Any]] = []
+    document_sources: list[Dict[str, Any]] = []
     web_sources: list[Dict[str, Any]] = []
     used_chat_ids: list[str] = []
 
@@ -1218,20 +1218,20 @@ async def auto_tools(state: AgentState, config: RunnableConfig):
 
     async def _run_tool(tool_name: str, result: str):
         tool_messages.append(ToolMessage(content=result, tool_call_id=f"auto_{tool_name}"))
-        collect_tool_sources(result, pdf_sources, web_sources, used_chat_ids)
+        collect_tool_sources(result, document_sources, web_sources, used_chat_ids)
 
     if use_web_search and not state.get("web_sources"):
         logger.info("Auto-tools: running search_web.")
         result = await search_web(working_query, config=config)
         await _run_tool("search_web", result)
 
-    if documents and not state.get("pdf_sources"):
+    if documents and not state.get("document_sources"):
         if intent_ref == "ENTITY" and len(documents) == 1:
             file_hash = documents[0].get("file_hash")
             if file_hash:
-                logger.info("Auto-tools: running search_pdf_by_document.")
-                result = await search_pdf_by_document(working_query, file_hash, config=config)
-                await _run_tool("search_pdf_by_document", result)
+                logger.info("Auto-tools: running search_document_by_id.")
+                result = await search_document_by_id(working_query, file_hash, config=config)
+                await _run_tool("search_document_by_id", result)
         else:
             logger.info("Auto-tools: running search_documents.")
             result = await search_documents(working_query, config=config)
@@ -1244,7 +1244,7 @@ async def auto_tools(state: AgentState, config: RunnableConfig):
 
     return {
         "messages": tool_messages,
-        "pdf_sources": pdf_sources,
+        "document_sources": document_sources,
         "web_sources": web_sources,
         "used_chat_ids": used_chat_ids,
     }

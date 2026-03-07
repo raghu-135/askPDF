@@ -11,7 +11,7 @@ _FOLLOWUP_PREFIXES = (
     "this",
 )
 
-_PRONOUN_PAT = re.compile(r"\b(it|this|that|they|them|the document|the paper|the pdf)\b", re.I)
+_PRONOUN_PAT = re.compile(r"\b(it|this|that|they|them|the document|the paper|the pdf|the webpage)\b", re.I)
 
 
 def _extract_last_user_line(recent_history_text: str) -> Optional[str]:

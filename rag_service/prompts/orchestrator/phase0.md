@@ -10,7 +10,7 @@ with its explicit referent resolved from the conversation messages above.
   "How does it work?" (after discussing BERT) → working query: "How does BERT work?"
   "What were the main findings?" → "What are the main findings in [document title or topic]?"
   "Tell me more about that" → "Explain [last discussed topic] in more detail"
-  "Summarize it" (after PDF upload) → "Provide a summary of the uploaded document"
+  "Summarize it" (after document upload) → "Provide a summary of the uploaded document"
 
 STEP 2 — STANDALONE-IFY
 Add only the minimum subject/domain context so a cold vector search retrieves the right
@@ -26,7 +26,7 @@ STEP 3 — SCOPE & COVERAGE ASSESSMENT
                              tools (except search_web if enabled).
        PROBABLY_SUFFICIENT → partial content present; one targeted call may sharpen it.
        INSUFFICIENT        → pre-fetch lacks the specific detail; full retrieval needed.
-  c) IMPORTANT: pre-fetched PDF evidence was retrieved with the raw, unprocessed question.
+  c) IMPORTANT: pre-fetched document evidence was retrieved with the raw, unprocessed question.
      If your working query is more specific than the original, the pre-fetch may have
      missed relevant chunks — call search tools with the working query to compensate.
 

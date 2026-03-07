@@ -63,7 +63,7 @@ WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS", default=2
 
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
-RATIO_PDF_CONTEXT = 0.45       # 45% for PDF chunks
+RATIO_DOCUMENT_CONTEXT = 0.45       # 45% for document chunks (PDF + webpage)
 RATIO_SEMANTIC_MEMORY = 0.30   # 30% for recalled semantic memories
 
 # Individual item limits
@@ -78,7 +78,7 @@ CHARS_PER_TOKEN = 4
 # system prompt overhead (tool schemas, locked sections, etc.)
 RATIO_PREFETCH_RECENT = 0.22    # Recent verbatim conversation turns injected inline
 RATIO_PREFETCH_SEMANTIC = 0.18  # Semantic chat-memory recall from all past QA pairs
-RATIO_PREFETCH_PDF = 0.28       # PDF document evidence (top-K chunks, raw question query)
+RATIO_PREFETCH_DOCUMENT = 0.28       # Document evidence (top-K chunks, raw question query)
 
 # Average char estimates used to derive item-count limits from char budgets
 AVG_CHUNK_CHARS = 500   # Typical PDF or chat-memory chunk
@@ -101,9 +101,9 @@ def compute_prefetch_budget(context_window: int) -> dict:
         # Character budgets
         "recent_history_chars":   int(usable * RATIO_PREFETCH_RECENT),
         "semantic_history_chars": int(usable * RATIO_PREFETCH_SEMANTIC),
-        "pdf_context_chars":      int(usable * RATIO_PREFETCH_PDF),
+        "document_context_chars":      int(usable * RATIO_PREFETCH_DOCUMENT),
         # Derived item-count limits
-        "pdf_limit":              max(3, int(usable * RATIO_PREFETCH_PDF)      // AVG_CHUNK_CHARS),
+        "document_limit":              max(3, int(usable * RATIO_PREFETCH_DOCUMENT)      // AVG_CHUNK_CHARS),
         "semantic_limit":         max(3, int(usable * RATIO_PREFETCH_SEMANTIC) // AVG_CHUNK_CHARS),
         "recent_turn_limit":      max(4, int(usable * RATIO_PREFETCH_RECENT)   // AVG_TURN_CHARS),
     }
@@ -225,7 +225,7 @@ def get_system_prompt(context: str, use_history: bool = False, use_web: bool = F
     """
     Constructs a consistent system prompt for the AI assistant across different service nodes.
     """
-    sources = ["PDF context"]
+    sources = ["document context"]
     if use_web:
         sources.append("Web Search results")
     if use_history:
@@ -241,7 +241,7 @@ def get_system_prompt(context: str, use_history: bool = False, use_web: bool = F
         instructions.append("If the context contains relevant information from past conversations, incorporate it into your answer and acknowledge it naturally (e.g., 'As we discussed before...').")
     
     if use_web:
-        instructions.append("If the web search failed, rely on the PDF context.")
+        instructions.append("If the web search failed, rely on the document context.")
         
     instructions.append("If the answer is not in the context and you cannot answer it, state that you don't know based on the provided information.")
     

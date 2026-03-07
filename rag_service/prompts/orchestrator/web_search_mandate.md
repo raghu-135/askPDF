@@ -5,9 +5,9 @@ Internet Search (search_web) is ENABLED for this session.
 ## MANDATORY INVOCATION
 
 Call search_web for every factual or informational question:
-  • Run search_web IN PARALLEL with search_documents / search_pdf_by_document in Phase 3.
-  • Pre-fetched PDF evidence does NOT satisfy this mandate — PDF and web are complementary.
-  • Do not defer web search to a second iteration after checking PDF results — batch them.
+  • Run search_web IN PARALLEL with search_documents / search_document_by_id in Phase 3.
+  • Pre-fetched document evidence does NOT satisfy this mandate — documents and web are complementary.
+  • Do not defer web search to a second iteration after checking document results — batch them.
 
 ## SOLE EXCEPTIONS
 

@@ -538,7 +538,7 @@ RAG Service: Orchestrator Agent begins tool-call loop (up to max_iterations)
   ├── search_documents          → Qdrant: top-K PDF chunks for thread
   ├── search_conversation_history → Qdrant: semantic memory recall
   ├── search_web                → DuckDuckGo (if enabled); stored in SQLite + Qdrant
-  ├── search_pdf_by_document    → targeted per-document search
+  ├── search_document_by_id     → targeted per-document search
   ├── list_uploaded_documents   → enumerate PDFs in thread
   └── ask_for_clarification     → present choices to user
   ↓

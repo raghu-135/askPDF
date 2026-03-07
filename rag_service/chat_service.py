@@ -31,7 +31,7 @@ from database import (
     increment_qa_stats,
 )
 from reasoning import normalize_ai_response
-from retrieval import fetch_semantic_history, get_document_name_lookup, group_pdf_chunks
+from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +50,11 @@ async def prefetch_context(
     Runs four async tasks concurrently:
       1. Recent verbatim conversation turns (DB, position-based)
       2. Semantic chat-memory recall (vector search, raw question)
-      3. PDF document evidence (vector search, raw question)
+      3. Document evidence (vector search, raw question)
       4. Conversation stats + uploaded document list (DB metadata)
 
     Returns a bundle dict with text strings ready for injection into LLM
-    system prompts, plus structured metadata (pdf_sources, used_chat_ids,
+    system prompts, plus structured metadata (document_sources, used_chat_ids,
     document list) for state initialization.
 
     Design principles:
@@ -120,23 +120,23 @@ async def prefetch_context(
             logger.warning(f"Prefetch semantic history failed: {exc}")
             return "", []
 
-    async def _fetch_pdf() -> tuple:
+    async def _fetch_documents() -> tuple:
         try:
             db = get_qdrant()
             raw_chunks = await db.search_knowledge_sources(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
-                limit=budget["pdf_limit"],
+                limit=budget["document_limit"],
             )
 
             hash_to_name = await get_document_name_lookup(thread_id)
-            return group_pdf_chunks(
+            return group_document_chunks(
                 raw_chunks,
                 hash_to_name,
-                char_budget=budget["pdf_context_chars"],
+                char_budget=budget["document_context_chars"],
             )
         except Exception as exc:
-            logger.warning(f"Prefetch PDF evidence failed: {exc}")
+            logger.warning(f"Prefetch document evidence failed: {exc}")
             return "", []
 
     # Run all fetches in parallel
@@ -144,28 +144,28 @@ async def prefetch_context(
         _fetch_recent(),
         _fetch_stats_and_docs(),
         _fetch_semantic(),
-        _fetch_pdf(),
+        _fetch_documents(),
         return_exceptions=True,
     )
 
     recent_text: str = results[0] if not isinstance(results[0], Exception) else ""
     meta: Dict[str, Any] = results[1] if not isinstance(results[1], Exception) else {"stats": {}, "documents": []}
     semantic_result = results[2] if not isinstance(results[2], Exception) else ("", [])
-    pdf_result = results[3] if not isinstance(results[3], Exception) else ("", [])
+    document_result = results[3] if not isinstance(results[3], Exception) else ("", [])
     web_result = ("", [])
 
     semantic_text, used_chat_ids = semantic_result if isinstance(semantic_result, tuple) else ("", [])
-    pdf_text, pdf_sources = pdf_result if isinstance(pdf_result, tuple) else ("", [])
+    document_text, document_sources = document_result if isinstance(document_result, tuple) else ("", [])
     web_text, web_sources = web_result if isinstance(web_result, tuple) else ("", [])
 
     return {
         "recent_history_text":   recent_text,
         "semantic_history_text": semantic_text,
-        "pdf_evidence_text":     pdf_text,
+        "document_evidence_text":     document_text,
         "web_evidence_text":     web_text,
         "stats":                 meta.get("stats", {}),
         "documents":             meta.get("documents", []),
-        "pdf_sources":           pdf_sources,
+        "document_sources":      document_sources,
         "web_sources":           web_sources,
         "used_chat_ids":         used_chat_ids,
         "budget":                budget,
@@ -178,7 +178,7 @@ async def handle_thread_chat(
     embed_model: str
 ) -> Dict[str, Any]:
     """
-    Thread-based chat using Orchestrator Agent with dynamic memory, PDF search, and web tools.
+    Thread-based chat using Orchestrator Agent with dynamic memory, document search, and web tools.
     """
     question = req.question
     llm_model = req.llm_model
@@ -267,7 +267,7 @@ async def handle_thread_chat(
                 "user_message_id": None,
                 "assistant_message_id": None,
                 "used_chat_ids": [],
-                "pdf_sources": [],
+                "document_sources": [],
                 "web_sources": [],
                 "reasoning": "",
                 "reasoning_available": False,
@@ -298,7 +298,7 @@ async def handle_thread_chat(
             "context_window": context_window,
             "use_web_search": use_web_search,
             # Pre-seed sources from the prefetch pass; tool calls will extend these lists
-            "pdf_sources": list(prefetch_bundle.get("pdf_sources", [])),
+            "document_sources": list(prefetch_bundle.get("document_sources", [])),
             "web_sources": list(prefetch_bundle.get("web_sources", [])),
             "used_chat_ids": list(prefetch_bundle.get("used_chat_ids", [])),
             "clarification_options": None,
@@ -350,7 +350,7 @@ async def handle_thread_chat(
                 f"tool_calls={getattr(last_msg, 'tool_calls', None)}"
             )
         answer = normalized["answer"] or "I was unable to compose an answer. Please try rephrasing your question."
-        pdf_sources = result.get("pdf_sources", [])
+        document_sources = result.get("document_sources", [])
         web_sources = result.get("web_sources", [])
         used_chat_ids = result.get("used_chat_ids", [])
         clarification_options = result.get("clarification_options", None)
@@ -409,7 +409,7 @@ async def handle_thread_chat(
             "user_message_id": user_message.id,
             "assistant_message_id": assistant_message.id,
             "used_chat_ids": used_chat_ids,
-            "pdf_sources": pdf_sources,
+            "document_sources": document_sources,
             "web_sources": web_sources,
             "clarification_options": clarification_options,
             "reasoning": normalized["reasoning"],

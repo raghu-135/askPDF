@@ -14,7 +14,7 @@ DEFAULT_TOOL_INSTRUCTIONS = {
     "document_evidence": (
         "Use when the question spans multiple documents or the target document is unknown. "
         "If results are weak, retry with a rephrased or more specific query. "
-        "When the document is known, prefer search_pdf_by_document instead."
+        "When the document is known, prefer search_document_by_id instead."
     ),
     "focused_document_evidence": (
         "Prefer this over Document Evidence when the user explicitly refers to a specific document. "
@@ -31,8 +31,8 @@ DEFAULT_TOOL_INSTRUCTIONS = {
     ),
     "live_web_recon": (
         "MANDATORY when web search is enabled: call search_web for virtually every factual question to supplement "
-        "PDF content with current, external knowledge. Run it IN PARALLEL with document searches — do not wait for "
-        "PDF results first. Never skip it based on pre-fetched PDF evidence alone. Always cite the URL and title "
+        "document content with current, external knowledge. Run it IN PARALLEL with document searches — do not wait for "
+        "document results first. Never skip it based on pre-fetched document evidence alone. Always cite the URL and title "
         "of web results in your answer."
     ),
     "clarify_intent": (
@@ -41,7 +41,7 @@ DEFAULT_TOOL_INSTRUCTIONS = {
     ),
     "thread_shape": (
         "Use to calibrate retrieval strategy: check document chunk counts to decide between search_documents vs. "
-        "search_pdf_by_document, and check QA history volume to decide whether semantic memory search is worthwhile. "
+        "search_document_by_id, and check QA history volume to decide whether semantic memory search is worthwhile. "
         "Only call once — the snapshot is current at the time of the call."
     ),
 }

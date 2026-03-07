@@ -376,7 +376,7 @@ export async function threadChat(
   user_message_id: string | null;
   assistant_message_id: string | null;
   used_chat_ids: string[];
-  pdf_sources: { text: string; file_hash: string; score: number }[];
+  document_sources: { text: string; file_hash: string; score: number; source_type?: 'pdf' | 'webpage'; title?: string; url?: string }[];
   web_sources?: WebSource[];
   reasoning?: string;
   reasoning_available?: boolean;
