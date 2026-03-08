@@ -1,5 +1,7 @@
 import VerticalAlignCenterIcon from '@mui/icons-material/VerticalAlignCenter';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
+import SpeakerNotesIcon from '@mui/icons-material/SpeakerNotes';
+import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff';
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
@@ -344,13 +346,16 @@ export default function Home() {
               </Tooltip>
 
               {/* Right Panel Toggle */}
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => setIsRightPanelOpen(open => !open)}
-              >
-                {isRightPanelOpen ? "Hide Threads" : "Show Threads"}
-              </Button>
+              <Tooltip title={isRightPanelOpen ? "Hide Threads" : "Show Threads"}>
+                <IconButton
+                  color="primary"
+                  size="small"
+                  onClick={() => setIsRightPanelOpen(open => !open)}
+                  sx={{ border: 1, borderColor: 'primary.main' }}
+                >
+                  {isRightPanelOpen ? <SpeakerNotesOffIcon fontSize="small" /> : <SpeakerNotesIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
 
               {/* Player Controls */}
               {(((pdfSentences.length > 0 && pdfUrl) || chatSentences.length > 0) && activeThread && rightPanelTab === 1) && (

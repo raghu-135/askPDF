@@ -7,9 +7,11 @@ import {
   InputAdornment,
   TextField,
   Tooltip,
+  Stack,
 } from "@mui/material";
 import LanguageIcon from "@mui/icons-material/Language";
 import ClearIcon from "@mui/icons-material/Clear";
+import CheckIcon from "@mui/icons-material/Check";
 import { addWebSourceToThread } from "../lib/api";
 
 type IndexedData = {
@@ -83,20 +85,37 @@ export default function WebUploader({ threadId, onIndexed, disabled, tooltipText
         disabled={isDisabled}
         error={!!error}
         helperText={error || undefined}
-        sx={{ minWidth: 260 }}
+        sx={{ minWidth: 50 }}
         InputProps={{
-          startAdornment: (
-            <InputAdornment position="start">
-              <LanguageIcon fontSize="small" color={isDisabled ? "disabled" : "action"} />
+          endAdornment: (
+            <InputAdornment position="end">
+              <Stack direction="row" spacing={0.5}>
+                {url && (
+                  <IconButton
+                    size="small"
+                    onClick={() => { setUrl(""); setError(null); }}
+                    tabIndex={-1}
+                  >
+                    <ClearIcon fontSize="small" />
+                  </IconButton>
+                )}
+                {url.trim() && (
+                  <IconButton
+                    size="small"
+                    color="primary"
+                    onClick={handleSubmit}
+                    disabled={isDisabled}
+                  >
+                    {isLoading ? (
+                      <CircularProgress size={16} color="inherit" />
+                    ) : (
+                      <CheckIcon fontSize="small" />
+                    )}
+                  </IconButton>
+                )}
+              </Stack>
             </InputAdornment>
           ),
-          endAdornment: url ? (
-            <InputAdornment position="end">
-              <IconButton size="small" onClick={() => { setUrl(""); setError(null); }} tabIndex={-1}>
-                <ClearIcon fontSize="small" />
-              </IconButton>
-            </InputAdornment>
-          ) : undefined,
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -105,15 +124,6 @@ export default function WebUploader({ threadId, onIndexed, disabled, tooltipText
           }
         }}
       />
-      <Button
-        type="submit"
-        variant="contained"
-        disabled={isDisabled || !url.trim()}
-        startIcon={isLoading ? <CircularProgress size={14} color="inherit" /> : <LanguageIcon />}
-        sx={{ whiteSpace: "nowrap" }}
-      >
-        {isLoading ? "Indexing…" : "Add Webpage"}
-      </Button>
     </Box>
   );
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Button, Stack, Select, MenuItem, Slider, Typography, FormControl, InputLabel, IconButton } from "@mui/material";
+import { Button, Stack, Select, MenuItem, Slider, Typography, FormControl, InputLabel, IconButton, Popover, Box } from "@mui/material";
 import { PlayArrow, Pause, SkipPrevious, SkipNext } from '@mui/icons-material';
+import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 
 // For Next.js/browser env
 declare const process: {
@@ -31,6 +32,19 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
   const [speed, setSpeed] = useState<number>(1.0);
   // Track paused position for resume
   const [pausedAt, setPausedAt] = useState<number | null>(null);
+  // Popover anchor
+  const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
+
+  const handleOpenSettings = (event: React.MouseEvent<HTMLButtonElement>) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleCloseSettings = () => {
+    setAnchorEl(null);
+  };
+
+  const open = Boolean(anchorEl);
+  const id_popover = open ? 'voice-settings-popover' : undefined;
 
   // Fetch available TTS voices on mount
   useEffect(() => {
@@ -162,8 +176,8 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
   }
 
   return (
-    <Stack direction="row" spacing={2} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
-      <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
+    <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
+      <Stack direction="row" spacing={0.5} alignItems="center">
         <IconButton color="primary" onClick={handlePlayPause} size="small">
           {isPlaying ? <Pause fontSize="small" /> : <PlayArrow fontSize="small" />}
         </IconButton>
@@ -175,38 +189,70 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
         </IconButton>
       </Stack>
 
-      <FormControl size="small" style={{ minWidth: 120 }}>
-        <InputLabel>Voice</InputLabel>
-        <Select
-          value={selectedVoice}
-          label="Voice"
-          onChange={(e: any) => setSelectedVoice(e.target.value as string)}
-        >
-          {voices.map((v: string) => (
-            <MenuItem key={v} value={v}>
-              {v.replace(".json", "")}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+      <IconButton
+        aria-describedby={id_popover}
+        size="small"
+        onClick={handleOpenSettings}
+        color={open ? "primary" : "default"}
+      >
+        <RecordVoiceOverIcon fontSize="small" />
+      </IconButton>
 
-      <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
-        <Typography variant="caption">Speed</Typography>
-        <Slider
-          value={speed}
-          min={0.5}
-          max={2.0}
-          step={0.1}
-          onChange={(_: Event, val: number | number[]) => setSpeed(val as number)}
-          onChangeCommitted={() => {
-            if (isPlaying && currentId !== null) {
-              void playSentence(currentId);
-            }
-          }}
-          valueLabelDisplay="auto"
-          sx={{ width: 100 }}
-        />
-      </Stack>
+      <Popover
+        id={id_popover}
+        open={open}
+        anchorEl={anchorEl}
+        onClose={handleCloseSettings}
+        anchorOrigin={{
+          vertical: 'bottom',
+          horizontal: 'center',
+        }}
+        transformOrigin={{
+          vertical: 'top',
+          horizontal: 'center',
+        }}
+        PaperProps={{
+          sx: { p: 2, minWidth: 200 }
+        }}
+      >
+        <Stack spacing={2}>
+          <FormControl size="small" fullWidth>
+            <InputLabel>Voice</InputLabel>
+            <Select
+              value={selectedVoice}
+              label="Voice"
+              onChange={(e: any) => setSelectedVoice(e.target.value as string)}
+            >
+              {voices.map((v: string) => (
+                <MenuItem key={v} value={v}>
+                  {v.replace(".json", "")}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+          <Box>
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+              <Typography variant="caption">Speed: {speed.toFixed(1)}x</Typography>
+            </Stack>
+            <Slider
+              value={speed}
+              min={0.5}
+              max={2.0}
+              step={0.1}
+              onChange={(_: Event, val: number | number[]) => setSpeed(val as number)}
+              onChangeCommitted={() => {
+                if (isPlaying && currentId !== null) {
+                  void playSentence(currentId);
+                }
+              }}
+              valueLabelDisplay="auto"
+              size="small"
+            />
+          </Box>
+        </Stack>
+      </Popover>
+
       <audio ref={audioRef} />
     </Stack>
   );
