@@ -461,15 +461,13 @@ class QdrantAdapter:
         try:
             self.client.delete(
                 collection_name=collection_name,
-                points_selector=models.FilterSelector(
-                    filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="message_id",
-                                match=models.MatchValue(value=message_id)
-                            )
-                        ]
-                    )
+                points_selector=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="message_id",
+                            match=models.MatchValue(value=message_id)
+                        )
+                    ]
                 )
             )
             print(f"Deleted chat memory for message {message_id}", flush=True)
@@ -580,19 +578,17 @@ class QdrantAdapter:
         try:
             self.client.delete(
                 collection_name=collection_name,
-                points_selector=models.FilterSelector(
-                    filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="type",
-                                match=models.MatchValue(value="web_search"),
-                            ),
-                            models.FieldCondition(
-                                key="url",
-                                match=models.MatchAny(any=urls),
-                            ),
-                        ]
-                    )
+                points_selector=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="type",
+                            match=models.MatchValue(value="web_search"),
+                        ),
+                        models.FieldCondition(
+                            key="url",
+                            match=models.MatchAny(any=urls),
+                        ),
+                    ]
                 ),
             )
             print(f"Deleted web_search chunks for {len(urls)} URL(s) in thread {thread_id}", flush=True)
@@ -665,15 +661,17 @@ class QdrantAdapter:
         try:
             self.client.delete(
                 collection_name=collection_name,
-                points_selector=models.FilterSelector(
-                    filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="file_hash",
-                                match=models.MatchValue(value=file_hash),
-                            )
-                        ]
-                    )
+                points_selector=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="type",
+                            match=models.MatchValue(value="knowledge_source"),
+                        ),
+                        models.FieldCondition(
+                            key="file_hash",
+                            match=models.MatchValue(value=file_hash),
+                        )
+                    ]
                 ),
             )
             print(f"Deleted chunks for file_hash {file_hash} in thread {thread_id}", flush=True)
