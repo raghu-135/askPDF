@@ -485,7 +485,12 @@ export default function Home() {
             <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
               <Tabs
                 value={rightPanelTab}
-                onChange={(_, newValue) => setRightPanelTab(newValue)}
+                onChange={(_, newValue) => {
+                  setRightPanelTab(newValue);
+                  if (newValue === 0) {
+                    handleThreadSelect(null);
+                  }
+                }}
                 variant="fullWidth"
               >
                 <Tab
@@ -493,6 +498,7 @@ export default function Home() {
                   iconPosition="start"
                   label="Threads"
                   sx={{ minHeight: 56, textTransform: 'none', flex: 2 }}
+                  onClick={() => handleThreadSelect(null)}
                 />
                 <Tab
                   icon={<ChatIcon fontSize="small" />}
