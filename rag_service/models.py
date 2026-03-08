@@ -281,13 +281,31 @@ async def check_chat_model_ready(model_name: str) -> bool:
                 try:
                     chat_resp = await client.post(f"{base_url}/chat/completions", json=payload, timeout=30.0)
                     logger.info(f"Chat completion probe response status: {chat_resp.status_code}")
+                    logger.info(f"Chat completion probe response: {chat_resp.json()}")
                     if chat_resp.status_code == 200:
-                        return True
+                        try:
+                            # Verify we actually got a chat-like response structure
+                            data = chat_resp.json()
+                            
+                            # Verify model integrity
+                            resp_model = data.get("model", "")
+                            if resp_model and model_name not in resp_model and resp_model not in model_name:
+                                logger.warning(f"Model mismatch in probe! Requested: {model_name}, Got: {resp_model}")
+                                return False
+
+                            # Verify it actually generated a message structure
+                            choices = data.get("choices", [])
+                            if choices and choices[0].get("message", {}).get("content") is not None:
+                                return True
+                        except Exception:
+                            pass # Not valid JSON or missing expected keys
+
+
                     if chat_resp.status_code == 503 and attempt < max_retries - 1:
                         await asyncio.sleep(2 ** attempt)  # exponential backoff
                         continue
                     if chat_resp.status_code == 503:
-                        return True
+                        return False
                     if chat_resp.status_code == 500:
                         return False
                     break
@@ -300,9 +318,8 @@ async def check_chat_model_ready(model_name: str) -> bool:
                 except Exception as e:
                     logging.exception("Exception during chat completion probe : %s", e)
                     return False
-                
-            # 3. Fallback: If model is listed and not 503, assume reachable
-            return True
+
+            return False
 
     except Exception:
         logging.exception("Exception during model readiness check")
@@ -335,7 +352,14 @@ async def check_embed_model_ready(model_name: str) -> bool:
                         timeout=30.0
                     )
                     if emb_resp.status_code == 200:
+                        data = emb_resp.json()
+                        resp_model = data.get("model", "")
+                        # Verify integrity: Did we get embeddings for the right model?
+                        if resp_model and model_name not in resp_model and resp_model not in model_name:
+                            logger.warning(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}")
+                            return False
                         return True
+
                     if emb_resp.status_code == 503 and attempt < max_retries - 1:
                         await asyncio.sleep(2 ** attempt)  # exponential backoff
                         continue
@@ -352,7 +376,6 @@ async def check_embed_model_ready(model_name: str) -> bool:
                     logging.exception("Exception during embedding probe : %s", e)
                     return False
 
-            # 3. Fallback: If model is listed and not 200 or 503, assume not reachable
             return False
     except Exception:
         logging.exception("Exception during embedding model readiness check")

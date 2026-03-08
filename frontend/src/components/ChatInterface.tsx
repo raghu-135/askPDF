@@ -727,11 +727,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 <MenuItem key={m} value={m}>{m}</MenuItem>
                             ))}
                         </Select>
-                        {isLlmModelValid === false && (
-                            <Typography color="error" variant="caption" sx={{ ml: 2 }}>
-                                Selected model is not a valid chat model.
-                            </Typography>
-                        )}
                     </FormControl>
                 </Box>
             </Box>
@@ -1016,9 +1011,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         placeholder={
                             indexingStatus !== 'ready'
                                 ? "Indexing your document. This may take a moment..."
-                                : !llmModel
-                                    ? "Select LLM model..."
-                                    : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
+                                : (llmModel && isLlmModelValid === null)
+                                    ? "Verifying model..."
+                                    : isLlmModelValid === false
+                                        ? "Selected model is not a valid chat model."
+                                        : !llmModel
+                                            ? "Select LLM model..."
+                                            : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
                         }
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
@@ -1028,7 +1027,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 handleSend();
                             }
                         }}
-                        disabled={loading || !llmModel || indexingStatus !== 'ready'}
+                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null)}
                         sx={{
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: theme.palette.background.paper,
@@ -1046,9 +1045,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <IconButton
                         color="primary"
                         onClick={handleSend}
-                        disabled={loading || !llmModel || indexingStatus !== 'ready'}
+                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null)}
                     >
-                        {loading ? <CircularProgress size={24} /> : <SendIcon />}
+                        {(loading || (llmModel && isLlmModelValid === null)) ? <CircularProgress size={24} /> : <SendIcon />}
                     </IconButton>
                 </Box>
             </Box>
