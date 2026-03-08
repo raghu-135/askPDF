@@ -32,6 +32,9 @@ import MemoryIcon from '@mui/icons-material/Memory';
 import LockIcon from '@mui/icons-material/Lock';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ReplayIcon from '@mui/icons-material/Replay';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import VolumeUpIcon from '@mui/icons-material/VolumeUp';
+import CheckIcon from '@mui/icons-material/Check';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
@@ -121,6 +124,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(null);
     const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
+    const [copiedId, setCopiedId] = useState<string | null>(null);
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
@@ -623,6 +627,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
+    const handleCopy = (text: string, messageId: string) => {
+        navigator.clipboard.writeText(text);
+        setCopiedId(messageId);
+        setTimeout(() => setCopiedId(null), 2000);
+    };
+
+    const handleReadAloud = (messageIdx: number) => {
+        const firstSentence = chatSentences.find(s => s.messageIndex === messageIdx);
+        if (firstSentence) onJump(firstSentence.id);
+    };
+
     if (!activeThread) {
         return (
             <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: theme.palette.background.default, color: theme.palette.text.primary }}>
@@ -796,14 +811,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     transition: 'all 0.2s ease',
                                     cursor: 'default',
                                     position: 'relative',
-                                    '&:hover .delete-btn': {
+                                    '&:hover .message-actions': {
                                         opacity: 1
                                     }
-                                }}
-                                onDoubleClick={(e) => {
-                                    const firstSentence = chatSentences.find(s => s.messageIndex === idx);
-                                    if (firstSentence) onJump(firstSentence.id);
-                                    e.stopPropagation();
                                 }}
                             >
                                 {/* Recollection indicator */}
@@ -823,26 +833,75 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     />
                                 )}
 
-                                {/* Delete button */}
-                                <IconButton
-                                    className="delete-btn"
-                                    size="small"
-                                    onClick={(e) => handleDeleteMessage(msg.id, e)}
+
+
+                                {/* Action buttons */}
+                                <Box
+                                    className="message-actions"
                                     sx={{
                                         position: 'absolute',
-                                        top: 4,
-                                        right: 4,
+                                        top: 8,
+                                        right: 8,
+                                        display: 'flex',
+                                        gap: 0.25,
                                         opacity: 0,
-                                        transition: 'opacity 0.2s',
-                                        bgcolor: 'background.paper',
-                                        '&:hover': { bgcolor: 'error.light', color: 'white' }
+                                        transition: 'opacity 0.2s ease',
+                                        bgcolor: isUser
+                                            ? theme.palette.mode === 'dark' ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.2)'
+                                            : theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                                        backdropFilter: 'blur(4px)',
+                                        borderRadius: '20px',
+                                        p: 0.4,
+                                        boxShadow: 1,
+                                        zIndex: 10,
+                                        '&:hover': { opacity: 1 }
                                     }}
                                 >
-                                    <DeleteIcon fontSize="small" />
-                                </IconButton>
+                                    <Tooltip title={copiedId === msg.id ? "Copied!" : "Copy message"}>
+                                        <IconButton
+                                            size="small"
+                                            onClick={() => handleCopy(typeof msg.content === 'string' ? msg.content : String(msg.content ?? ''), msg.id)}
+                                            sx={{
+                                                color: 'inherit',
+                                                p: 0.5,
+                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                            }}
+                                        >
+                                            {copiedId === msg.id ? <CheckIcon fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
+                                        </IconButton>
+                                    </Tooltip>
+                                    <Tooltip title="Read aloud">
+                                        <IconButton
+                                            size="small"
+                                            onClick={() => handleReadAloud(idx)}
+                                            sx={{
+                                                color: isUser ? 'inherit' : (activeMessageIndex === idx ? 'primary.main' : 'inherit'),
+                                                p: 0.5,
+                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                            }}
+                                        >
+                                            <VolumeUpIcon fontSize="small" />
+                                        </IconButton>
+                                    </Tooltip>
+                                    <Tooltip title="Delete message">
+                                        <IconButton
+                                            size="small"
+                                            onClick={(e) => handleDeleteMessage(msg.id, e)}
+                                            sx={{
+                                                color: 'inherit',
+                                                p: 0.5,
+                                                '&:hover': { color: 'error.main' },
+                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                            }}
+                                        >
+                                            <DeleteIcon fontSize="small" />
+                                        </IconButton>
+                                    </Tooltip>
+                                </Box>
 
                                 <Typography variant="body2" component="div" sx={{
                                     cursor: 'text',
+                                    pr: 2, // Add some padding to avoid immediate overlap with icons if possible
                                     '& p': { m: 0, mb: 1 },
                                     '& p:last-child': { mb: 0 },
                                     '& ul, & ol': { pl: 2, m: 0, mb: 1 },

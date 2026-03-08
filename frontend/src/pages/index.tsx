@@ -97,6 +97,7 @@ export default function Home() {
     setCurrentChatId(null);
     setPlayRequestId(null);
     setActiveSource('pdf');
+    setChatSentences([]);
 
     if (thread) {
       try {
@@ -352,7 +353,7 @@ export default function Home() {
               </Button>
 
               {/* Player Controls */}
-              {pdfSentences.length > 0 && pdfUrl && (
+              {(((pdfSentences.length > 0 && pdfUrl) || chatSentences.length > 0) && activeThread && rightPanelTab === 1) && (
                 <PlayerControls
                   sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
                   currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}

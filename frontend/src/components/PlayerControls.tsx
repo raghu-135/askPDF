@@ -38,19 +38,29 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
       try {
         const voicesData = await getVoices();
         setVoices(voicesData);
-          if (voicesData.length > 0 && !selectedVoice) {
-            // Prefer 'af_heart' if available, else use first item
-            if (voicesData.includes('af_heart')) {
-              setSelectedVoice('af_heart');
-            } else {
-              setSelectedVoice(voicesData[0]);
-            }
+        if (voicesData.length > 0 && !selectedVoice) {
+          // Prefer 'af_heart' if available, else use first item
+          if (voicesData.includes('af_heart')) {
+            setSelectedVoice('af_heart');
+          } else {
+            setSelectedVoice(voicesData[0]);
           }
+        }
       } catch (err) {
         console.error("Failed to fetch voices", err);
       }
     }
     fetchVoices();
+  }, []);
+
+  // Cleanup on unmount: stop audio
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
+      }
+    };
   }, []);
 
   // Play a sentence when an external play request is received (e.g., double-click in PDF)
