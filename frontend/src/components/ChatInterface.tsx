@@ -1037,14 +1037,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Typography>
                 )}
 
-                {indexingStatus !== 'ready' && (
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
-                        <CircularProgress size={16} />
-                        <Typography variant="caption" color="info.main">
-                            Indexing document...
-                        </Typography>
-                    </Box>
-                )}
+
 
                 {clarificationOptions && (
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, justifyContent: 'center', p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
@@ -1133,7 +1126,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         onClick={handleSend}
                         disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                     >
-                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null) ? <CircularProgress size={24} /> : <SendIcon />}
+                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || indexingStatus !== 'ready') ? <CircularProgress size={24} /> : <SendIcon />}
                     </IconButton>
                 </Box>
             </Box>
