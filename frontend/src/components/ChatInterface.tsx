@@ -122,7 +122,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     // Model selection
     const [llmModel, setLlmModel] = useState('');
     const [availableModels, setAvailableModels] = useState<string[]>([]);
-    const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(null);
+    const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(true);
     const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -233,6 +233,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             } else {
                 // 'not_ready' means still indexing
                 setIndexingStatus('indexing');
+            }
+            // Update embedding model status from the same endpoint
+            if (status.embed_model_ready !== undefined) {
+                setIsEmbedModelValid(status.embed_model_ready);
             }
         } catch (error) {
             console.error('Failed to check index status:', error);
@@ -391,26 +395,37 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    // Polling for indexing status
+    // Polling for indexing and embedding model status
     useEffect(() => {
-        if (!activeThread || indexingStatus !== 'indexing') return;
+        if (!activeThread) return;
+        // Keep polling if either indexing is in progress OR embed model is not yet valid/checked
+        if (indexingStatus !== 'indexing' && isEmbedModelValid === true) return;
 
         const intervalId = setInterval(async () => {
             try {
                 const status = await getThreadIndexStatus(activeThread.id);
-                // Map rag-service status ('ready' | 'not_ready') to UI status
+
+                // Update indexing status
                 if (status.status === 'ready') {
                     setIndexingStatus('ready');
+                }
+
+                // Update embedding model status
+                if (status.embed_model_ready !== undefined) {
+                    setIsEmbedModelValid(status.embed_model_ready);
+                }
+
+                // If both are resolved, stop polling
+                if (status.status === 'ready' && status.embed_model_ready === true) {
                     clearInterval(intervalId);
                 }
-                // If still 'not_ready', keep polling
             } catch (error) {
-                console.error('Index status check failed:', error);
+                console.error('Status check failed:', error);
             }
         }, 2000);
 
         return () => clearInterval(intervalId);
-    }, [activeThread?.id, indexingStatus]);
+    }, [activeThread?.id, indexingStatus, isEmbedModelValid]);
 
     // Load browser memory settings (last selected LLM and context window) on mount
     useEffect(() => {
@@ -419,6 +434,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const savedLlm = localStorage.getItem('last_llm_model');
         if (savedLlm && !llmModel) {
             setLlmModel(savedLlm);
+            setIsLlmModelValid(null);
             checkLlmModelReady(savedLlm, ragApiUrl).then(setIsLlmModelValid);
         }
 
@@ -682,13 +698,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                     <Tooltip title={
-                        isEmbedModelValid === null ? "Verifying embedding model..." :
+                        isEmbedModelValid === null ? "Checking embedding model status on server..." :
                             isEmbedModelValid ? `Embedding model locked: ${activeThread.embed_model}` :
-                                `Error: Embedding model "${activeThread.embed_model}" is missing from LLM server!`
+                                `Error: Embedding model "${activeThread.embed_model}" is offline or still initializing. Retrying...`
                     }>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            <LockIcon fontSize="medium" color={isEmbedModelValid === false ? "error" : "action"} />
-                            {isEmbedModelValid === null && <CircularProgress size={14} color="inherit" sx={{ opacity: 0.7 }} />}
+                            <LockIcon
+                                fontSize="medium"
+                                color={isEmbedModelValid === false ? "error" : isEmbedModelValid === null ? "warning" : "action"}
+                            />
+                            {isEmbedModelValid === null && (
+                                <Typography variant="caption" color="warning.main" sx={{ ml: 0.5, fontWeight: 'bold' }}>CHECKING...</Typography>
+                            )}
                             {isEmbedModelValid === false && <Typography variant="caption" color="error" sx={{ fontWeight: 'bold' }}>OFFLINE</Typography>}
                         </Box>
                     </Tooltip>
@@ -1104,11 +1125,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             indexingStatus !== 'ready'
                                 ? "Indexing your document. This may take a moment..."
                                 : isEmbedModelValid === null
-                                    ? "Verifying embedding model..."
+                                    ? "Checking embedding model..."
                                     : isEmbedModelValid === false
-                                        ? `Error: Required embedding model "${activeThread.embed_model}" is not available on server.`
+                                        ? "Selected embedding model is missing from server."
                                         : (llmModel && isLlmModelValid === null)
-                                            ? "Verifying chat model..."
+                                            ? "Checking chat model..."
                                             : isLlmModelValid === false
                                                 ? "Selected model is not a valid chat model."
                                                 : !llmModel

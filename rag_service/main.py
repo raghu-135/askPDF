@@ -846,10 +846,14 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         
         stats = await db.get_thread_stats(thread_id)
         
+        # Check embedding model readiness (using cached check)
+        embed_model_ready = await check_embed_model_ready(thread.embed_model)
+        
         return {
             "thread_id": thread_id,
             "status": status,
-            "stats": stats
+            "stats": stats,
+            "embed_model_ready": embed_model_ready
         }
     except HTTPException:
         raise

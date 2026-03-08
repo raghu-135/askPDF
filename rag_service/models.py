@@ -1,13 +1,11 @@
-"""
-Model utilities for LLM API/OpenAI-compatible APIs.
-"""
-
 import os
 from dotenv import load_dotenv
 load_dotenv()
 import httpx
 import asyncio
 import logging
+import time
+from typing import Dict, Tuple
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
@@ -253,130 +251,140 @@ def get_system_prompt(context: str, use_history: bool = False, use_web: bool = F
         f"CONTEXT:\n{context}"
     )
 
+async def _check_model_exists(client: httpx.AsyncClient, base_url: str, model_name: str) -> bool:
+    """Helper to check if a model ID exists in the /models endpoint."""
+    try:
+        resp = await client.get(f"{base_url}/models", timeout=15.0)
+        if resp.status_code != 200:
+            return False
+        data = resp.json()
+        models = data.get('data', []) if isinstance(data, dict) else data
+        model_ids = [m['id'] if isinstance(m, dict) and 'id' in m else m for m in models]
+        return model_name in model_ids
+    except Exception:
+        return False
+
+async def _probe_with_retry(
+    client: httpx.AsyncClient, 
+    url: str, 
+    payload: dict, 
+    validator, 
+    model_name: str, 
+    probe_type: str,
+    max_retries: int = 3
+) -> bool:
+    """Helper to probe an endpoint with retry logic and exponential backoff."""
+    for attempt in range(max_retries):
+        try:
+            resp = await client.post(url, json=payload, timeout=30.0)
+            logger.info(f"{probe_type} probe response status for {model_name}: {resp.status_code}")
+            
+            if validator(resp):
+                return True
+
+            # If not 200, but also not a definitive client error (404, 401, 403), retry
+            if resp.status_code not in [200, 404, 401, 403] and attempt < max_retries - 1:
+                logger.warning(f"{probe_type} model {model_name} returned {resp.status_code}. Retrying...")
+                await asyncio.sleep(2 ** attempt)
+                continue
+            
+            break
+        except (httpx.ReadTimeout, httpx.ConnectError):
+            logger.warning(f"Timeout/Connection error on attempt {attempt + 1} checking {probe_type} model {model_name}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+                continue
+            break
+        except Exception as e:
+            logger.exception(f"Exception during {probe_type} probe for {model_name}: %s", e)
+            break
+    return False
+
+
 async def check_chat_model_ready(model_name: str) -> bool:
     """
     Check if the supplied model is a chat model and is ready in the LLM API/server.
     Returns True if ready, False if not ready or not found.
+    Robustly retries on transient error codes.
     """
     base_url = _get_base_url()
     try:
         async with httpx.AsyncClient() as client:
-            # 1. Check if model exists
-            resp = await client.get(f"{base_url}/models", timeout=5.0)
-            if resp.status_code != 200:
-                return False
-            models = resp.json().get('data', [])
-            model_ids = [m['id'] for m in models]
-            if model_name not in model_ids:
+            if not await _check_model_exists(client, base_url, model_name):
                 return False
 
-            # 2. Probe with Chat Completion
+            def chat_validator(resp: httpx.Response) -> bool:
+                if resp.status_code != 200:
+                    return False
+                try:
+                    data = resp.json()
+                    
+                    # Verify integrity: if the model name in the response same as the requested model name?
+                    resp_model = data.get("model", "")
+                    if resp_model and model_name not in resp_model and resp_model not in model_name:
+                        logger.warning(f"Chat model mismatch! Requested: {model_name}, Got: {resp_model}")
+                        return False
+
+                    # Verify it actually generated a message structure
+                    choices = data.get("choices", [])
+                    return bool(choices and choices[0].get("message", {}).get("content") is not None)
+                except Exception:
+                    return False
+
             payload = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": "hi"}],
                 "max_tokens": 1
             }
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    chat_resp = await client.post(f"{base_url}/chat/completions", json=payload, timeout=30.0)
-                    logger.info(f"Chat completion probe response status: {chat_resp.status_code}")
-                    logger.info(f"Chat completion probe response: {chat_resp.json()}")
-                    if chat_resp.status_code == 200:
-                        try:
-                            # Verify we actually got a chat-like response structure
-                            data = chat_resp.json()
-                            
-                            # Verify model integrity
-                            resp_model = data.get("model", "")
-                            if resp_model and model_name not in resp_model and resp_model not in model_name:
-                                logger.warning(f"Model mismatch in probe! Requested: {model_name}, Got: {resp_model}")
-                                return False
-
-                            # Verify it actually generated a message structure
-                            choices = data.get("choices", [])
-                            if choices and choices[0].get("message", {}).get("content") is not None:
-                                return True
-                        except Exception:
-                            pass # Not valid JSON or missing expected keys
-
-
-                    if chat_resp.status_code == 503 and attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)  # exponential backoff
-                        continue
-                    if chat_resp.status_code == 503:
-                        return False
-                    if chat_resp.status_code == 500:
-                        return False
-                    break
-                except httpx.ReadTimeout:
-                    logger.warning(f"Timeout on attempt {attempt + 1} checking chat model {model_name}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-                    return False
-                except Exception as e:
-                    logging.exception("Exception during chat completion probe : %s", e)
-                    return False
-
-            return False
+            
+            return await _probe_with_retry(
+                client, 
+                f"{base_url}/chat/completions", 
+                payload, 
+                chat_validator, 
+                model_name, 
+                "Chat"
+            )
 
     except Exception:
-        logging.exception("Exception during model readiness check")
+        logging.exception("Exception during chat model readiness check")
         return False
 
 async def check_embed_model_ready(model_name: str) -> bool:
     """
     Check if the supplied model is an embedding model and is ready in the LLM API/server.
     Returns True if ready, False if not ready or not found.
+    Robustly retries on transient error codes.
     """
     base_url = _get_base_url()
     try:
         async with httpx.AsyncClient() as client:
-            # 1. Check if model exists
-            resp = await client.get(f"{base_url}/models", timeout=5.0)
-            if resp.status_code != 200:
-                return False
-            models = resp.json().get('data', [])
-            model_ids = [m['id'] for m in models]
-            if model_name not in model_ids:
+            if not await _check_model_exists(client, base_url, model_name):
                 return False
 
-            # 2. Probe with Embeddings
-            max_retries = 3
-            for attempt in range(max_retries):
+            def embed_validator(resp: httpx.Response) -> bool:
+                if resp.status_code != 200:
+                    return False
                 try:
-                    emb_resp = await client.post(
-                        f"{base_url}/embeddings",
-                        json={"model": model_name, "input": "hi"},
-                        timeout=30.0
-                    )
-                    if emb_resp.status_code == 200:
-                        data = emb_resp.json()
-                        resp_model = data.get("model", "")
-                        # Verify integrity: Did we get embeddings for the right model?
-                        if resp_model and model_name not in resp_model and resp_model not in model_name:
-                            logger.warning(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}")
-                            return False
-                        return True
-
-                    if emb_resp.status_code == 503 and attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)  # exponential backoff
-                        continue
-                    if emb_resp.status_code == 503:
+                    data = resp.json()
+                    resp_model = data.get("model", "")
+                    # Verify integrity: if the model name in the response same as the requested model name?
+                    if resp_model and model_name not in resp_model and resp_model not in model_name:
+                        logger.warning(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}")
                         return False
-                    break
-                except httpx.ReadTimeout:
-                    logger.warning(f"Timeout on attempt {attempt + 1} checking embedding model {model_name}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-                    return False
-                except Exception as e:
-                    logging.exception("Exception during embedding probe : %s", e)
+                    return True
+                except Exception:
                     return False
 
-            return False
+            return await _probe_with_retry(
+                client, 
+                f"{base_url}/embeddings", 
+                {"model": model_name, "input": "hi"}, 
+                embed_validator, 
+                model_name, 
+                "Embedding"
+            )
+
     except Exception:
         logging.exception("Exception during embedding model readiness check")
         return False

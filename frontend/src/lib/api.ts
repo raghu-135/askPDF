@@ -449,6 +449,7 @@ export async function getThreadIndexStatus(threadId: string): Promise<{
   thread_id: string;
   status: 'ready' | 'not_ready';
   stats: any;
+  embed_model_ready?: boolean;
 }> {
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/index-status`);
   if (!res.ok) throw new Error(await res.text());
