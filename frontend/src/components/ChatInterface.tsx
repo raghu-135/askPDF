@@ -49,7 +49,7 @@ import {
     getPromptTools,
     getPromptPreview
 } from '../lib/api';
-import { fetchAvailableLlmModels, checkLlmModelReady } from '../lib/chat-utils';
+import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/chat-utils';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -120,6 +120,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [llmModel, setLlmModel] = useState('');
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(null);
+    const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
@@ -130,6 +131,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             loadMessages();
             checkIndexStatus();
             loadThreadSettings();
+            checkEmbedModelStatus();
         } else {
             setMessages([]);
             setIndexingStatus('ready');
@@ -140,6 +142,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setUseIntentAgent(true);
             setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
             setReasoningMode(defaultReasoningMode);
+            setIsEmbedModelValid(null);
         }
     }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions, defaultReasoningMode]);
 
@@ -230,6 +233,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         } catch (error) {
             console.error('Failed to check index status:', error);
             setIndexingStatus('ready'); // Assume ready if check fails
+        }
+    };
+
+    const checkEmbedModelStatus = async () => {
+        if (!activeThread) return;
+        try {
+            setIsEmbedModelValid(null);
+            const ready = await checkEmbedModelReady(activeThread.embed_model, ragApiUrl);
+            setIsEmbedModelValid(ready);
+        } catch (error) {
+            console.error('Failed to check embed model status:', error);
+            setIsEmbedModelValid(false);
         }
     };
 
@@ -628,8 +643,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             {/* Header */}
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
-                    <Tooltip title={`Embedding model locked: ${activeThread.embed_model}`}>
-                        <LockIcon fontSize="medium" color="action" />
+                    <Tooltip title={
+                        isEmbedModelValid === null ? "Verifying embedding model..." :
+                            isEmbedModelValid ? `Embedding model locked: ${activeThread.embed_model}` :
+                                `Error: Embedding model "${activeThread.embed_model}" is missing from LLM server!`
+                    }>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <LockIcon fontSize="medium" color={isEmbedModelValid === false ? "error" : "action"} />
+                            {isEmbedModelValid === null && <CircularProgress size={14} color="inherit" sx={{ opacity: 0.7 }} />}
+                            {isEmbedModelValid === false && <Typography variant="caption" color="error" sx={{ fontWeight: 'bold' }}>OFFLINE</Typography>}
+                        </Box>
                     </Tooltip>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
@@ -1011,13 +1034,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         placeholder={
                             indexingStatus !== 'ready'
                                 ? "Indexing your document. This may take a moment..."
-                                : (llmModel && isLlmModelValid === null)
-                                    ? "Verifying model..."
-                                    : isLlmModelValid === false
-                                        ? "Selected model is not a valid chat model."
-                                        : !llmModel
-                                            ? "Select LLM model..."
-                                            : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
+                                : isEmbedModelValid === null
+                                    ? "Verifying embedding model..."
+                                    : isEmbedModelValid === false
+                                        ? `Error: Required embedding model "${activeThread.embed_model}" is not available on server.`
+                                        : (llmModel && isLlmModelValid === null)
+                                            ? "Verifying chat model..."
+                                            : isLlmModelValid === false
+                                                ? "Selected model is not a valid chat model."
+                                                : !llmModel
+                                                    ? "Select LLM model..."
+                                                    : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
                         }
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
@@ -1027,7 +1054,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 handleSend();
                             }
                         }}
-                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null)}
+                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                         sx={{
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: theme.palette.background.paper,
@@ -1045,9 +1072,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <IconButton
                         color="primary"
                         onClick={handleSend}
-                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null)}
+                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                     >
-                        {(loading || (llmModel && isLlmModelValid === null)) ? <CircularProgress size={24} /> : <SendIcon />}
+                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null) ? <CircularProgress size={24} /> : <SendIcon />}
                     </IconButton>
                 </Box>
             </Box>
