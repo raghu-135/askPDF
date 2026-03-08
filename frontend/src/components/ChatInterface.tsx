@@ -1037,8 +1037,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Typography>
                 )}
 
-
-
                 {clarificationOptions && (
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, justifyContent: 'center', p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
                         <Typography variant="caption" sx={{ width: '100%', textAlign: 'center', mb: 0.5, color: 'text.secondary', fontWeight: 'bold' }}>
