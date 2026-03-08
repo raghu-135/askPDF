@@ -92,7 +92,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const theme = useTheme();
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
-    const [isModelWarming, setIsModelWarming] = useState(false);
+
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
     const [contextWindow, setContextWindow] = useState<number>(0);
@@ -417,9 +417,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setInput('');
         setClarificationOptions(null);
         setLoading(true);
-        setIsModelWarming(false);
 
-        // Optimistically add user message
         const tempUserMsg: ChatMessage = {
             id: 'temp-user-' + Date.now(),
             role: 'user',
@@ -437,13 +435,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         });
 
         try {
-            // Check model readiness using chat-utils
-            const llmReady = await checkLlmModelReady(llmModel, ragApiUrl);
-            if (!llmReady) {
-                setIsModelWarming(true);
-            }
-
-            // Call thread chat endpoint
+            // Call thread chat endpoint directly without explicit warming probe, retries are handled in api.ts.
             const response = await threadChat(
                 activeThread.id,
                 textToSend,
@@ -523,7 +515,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     onThreadUpdate();
                 }
             }
-
         } catch (err: any) {
             console.error(err);
             // Remove optimistic message and show error
@@ -542,7 +533,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             });
         } finally {
             setLoading(false);
-            setIsModelWarming(false);
         }
     };
 
@@ -1031,11 +1021,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
             {/* Input Area */}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {isModelWarming && (
-                    <Typography variant="caption" sx={{ color: 'info.main', textAlign: 'center', fontStyle: 'italic' }}>
-                        Bringing the AI model online, this may take a moment...
-                    </Typography>
-                )}
+
 
                 {clarificationOptions && (
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, justifyContent: 'center', p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>

@@ -413,13 +413,36 @@ export async function threadChat(
     payload.reasoning_mode = reasoningMode;
   }
 
-  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const maxRetries = 2;
+  let attempt = 0;
+
+  while (true) {
+    try {
+      const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const errorText = await res.text();
+        // Check if error is retryable (503 or transient)
+        if (attempt < maxRetries && (res.status === 503 || res.status === 429)) {
+          throw new Error(`RETRYABLE:${res.status}:${errorText}`);
+        }
+        throw new Error(errorText);
+      }
+      return res.json();
+    } catch (err: any) {
+      if (err.message?.startsWith('RETRYABLE:') || (attempt < maxRetries && (err.message?.includes('timeout') || err.message?.includes('Failed to fetch')))) {
+        attempt++;
+        const delay = attempt * 1000;
+        console.log(`threadChat failed (attempt ${attempt}), retrying in ${delay}ms...`, err.message);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 export async function getThreadIndexStatus(threadId: string): Promise<{
