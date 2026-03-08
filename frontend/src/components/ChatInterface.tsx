@@ -377,6 +377,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (model) {
             setShowContextHighlight(true);
             setTooltipOpen(true);
+            // Persist as last selected LLM in browser memory
+            if (typeof window !== 'undefined') {
+                localStorage.setItem('last_llm_model', model);
+            }
         }
         if (!model) return;
         try {
@@ -407,6 +411,35 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
         return () => clearInterval(intervalId);
     }, [activeThread?.id, indexingStatus]);
+
+    // Load browser memory settings (last selected LLM and context window) on mount
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const savedLlm = localStorage.getItem('last_llm_model');
+        if (savedLlm && !llmModel) {
+            setLlmModel(savedLlm);
+            checkLlmModelReady(savedLlm, ragApiUrl).then(setIsLlmModelValid);
+        }
+
+        const savedCtx = localStorage.getItem('last_context_window');
+        if (savedCtx) {
+            const ctx = parseInt(savedCtx);
+            if (!isNaN(ctx) && ctx > 0) {
+                setContextWindow(ctx);
+            }
+        }
+    }, [ragApiUrl]);
+
+    // Persist context window changes to browser memory
+    useEffect(() => {
+        if (contextWindow > 0 && typeof window !== 'undefined') {
+            const timer = setTimeout(() => {
+                localStorage.setItem('last_context_window', contextWindow.toString());
+            }, 1000);
+            return () => clearTimeout(timer);
+        }
+    }, [contextWindow]);
 
     const handleSend = async (overrideInput?: string | React.SyntheticEvent) => {
         const textToSend = typeof overrideInput === 'string' ? overrideInput : input.trim();
