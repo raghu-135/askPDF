@@ -40,7 +40,7 @@ search_tool = DuckDuckGoSearchResults(output_format="list", num_results=6)
 
 async def invoke_with_retry(func, *args, **kwargs):
     max_retries = 10
-    delay = 5
+    base_delay = 2
     for i in range(max_retries):
         try:
             return await func(*args, **kwargs)
@@ -50,15 +50,23 @@ async def invoke_with_retry(func, *args, **kwargs):
             is_503_loading = "503" in err_str and ("loading" in err_str or "unavailable" in err_str)
             # 400 – LM Studio unloaded the model between requests
             is_model_unloaded = "400" in err_str and "model unloaded" in err_str
+            # 404 - Model not found / not currently loaded in memory
+            is_model_not_found = "404" in err_str and ("not found" in err_str or "model" in err_str)
+            # 500 - Generic load errors or out of memory briefly on LLM server
+            is_500_loading = "500" in err_str and ("load" in err_str or "memory" in err_str)
             # 429 – rate limit / too many requests
             is_rate_limit = "429" in err_str or "rate limit" in err_str or "too many requests" in err_str
 
-            if is_503_loading or is_model_unloaded or is_rate_limit:
+            if is_503_loading or is_model_unloaded or is_rate_limit or is_model_not_found or is_500_loading:
                 reason = (
                     "Model is loading (503)" if is_503_loading
                     else "Model was unloaded (400)" if is_model_unloaded
+                    else "Model not loaded/found (404)" if is_model_not_found
+                    else "Temporary model failure/OOM (500)" if is_500_loading
                     else "Rate limited (429)"
                 )
+                
+                delay = base_delay * (2 ** min(i, 4)) # Exponential backoff up to 32s max delay
                 logger.warning(f"{reason}. Retrying in {delay}s... (Attempt {i+1}/{max_retries})")
                 await asyncio.sleep(delay)
                 continue

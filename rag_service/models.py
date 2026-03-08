@@ -12,6 +12,27 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Cache for model readiness checks
+_model_ready_cache: Dict[str, Tuple[bool, float]] = {}
+CACHE_TTL = 300  # 5 minutes for successful checks
+CACHE_TTL_FAIL = 15  # 15 seconds for failed checks
+
+def _check_model_ready_cache(cache_key: str) -> bool | None:
+    """Returns the cached readiness status if valid, otherwise None."""
+    cached = _model_ready_cache.get(cache_key)
+    if cached:
+        is_ready, timestamp = cached
+        ttl = CACHE_TTL if is_ready else CACHE_TTL_FAIL
+        if time.time() - timestamp < ttl:
+            return is_ready
+    return None
+
+def _update_model_ready_cache(cache_key: str, is_ready: bool) -> bool:
+    """Updates the cache and returns the readiness status."""
+    _model_ready_cache[cache_key] = (is_ready, time.time())
+    return is_ready
+
+
 # Token budget configuration
 def get_default_token_budget():
     budget = os.getenv("DEFAULT_TOKEN_BUDGET")
@@ -307,11 +328,16 @@ async def check_chat_model_ready(model_name: str) -> bool:
     Returns True if ready, False if not ready or not found.
     Robustly retries on transient error codes.
     """
+    cache_key = f"chat:{model_name}"
+    cached_status = _check_model_ready_cache(cache_key)
+    if cached_status is not None:
+        return cached_status
+
     base_url = _get_base_url()
     try:
         async with httpx.AsyncClient() as client:
             if not await _check_model_exists(client, base_url, model_name):
-                return False
+                return _update_model_ready_cache(cache_key, False)
 
             def chat_validator(resp: httpx.Response) -> bool:
                 if resp.status_code != 200:
@@ -337,7 +363,7 @@ async def check_chat_model_ready(model_name: str) -> bool:
                 "max_tokens": 1
             }
             
-            return await _probe_with_retry(
+            result = await _probe_with_retry(
                 client, 
                 f"{base_url}/chat/completions", 
                 payload, 
@@ -345,10 +371,11 @@ async def check_chat_model_ready(model_name: str) -> bool:
                 model_name, 
                 "Chat"
             )
+            return _update_model_ready_cache(cache_key, result)
 
     except Exception:
         logging.exception("Exception during chat model readiness check")
-        return False
+        return _update_model_ready_cache(cache_key, False)
 
 async def check_embed_model_ready(model_name: str) -> bool:
     """
@@ -356,11 +383,16 @@ async def check_embed_model_ready(model_name: str) -> bool:
     Returns True if ready, False if not ready or not found.
     Robustly retries on transient error codes.
     """
+    cache_key = f"embed:{model_name}"
+    cached_status = _check_model_ready_cache(cache_key)
+    if cached_status is not None:
+        return cached_status
+
     base_url = _get_base_url()
     try:
         async with httpx.AsyncClient() as client:
             if not await _check_model_exists(client, base_url, model_name):
-                return False
+                return _update_model_ready_cache(cache_key, False)
 
             def embed_validator(resp: httpx.Response) -> bool:
                 if resp.status_code != 200:
@@ -376,7 +408,7 @@ async def check_embed_model_ready(model_name: str) -> bool:
                 except Exception:
                     return False
 
-            return await _probe_with_retry(
+            result = await _probe_with_retry(
                 client, 
                 f"{base_url}/embeddings", 
                 {"model": model_name, "input": "hi"}, 
@@ -384,7 +416,8 @@ async def check_embed_model_ready(model_name: str) -> bool:
                 model_name, 
                 "Embedding"
             )
+            return _update_model_ready_cache(cache_key, result)
 
     except Exception:
         logging.exception("Exception during embedding model readiness check")
-        return False
+        return _update_model_ready_cache(cache_key, False)
