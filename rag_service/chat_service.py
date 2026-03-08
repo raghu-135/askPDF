@@ -200,6 +200,7 @@ async def handle_thread_chat(
     start_total = time.perf_counter()
     intent_duration = 0.0
     orchestrator_duration = 0.0
+    intent_iterations = 0
     
     try:
         from agent import app as agent_app, intent_app, AgentState
@@ -254,6 +255,7 @@ async def handle_thread_chat(
             )
             intent_duration = time.perf_counter() - intent_start
             
+            intent_iterations = intent_result_state.get("iteration_count", 0)
             if intent_result_state.get("intent_result"):
                 intent = intent_result_state["intent_result"]
         else:
@@ -334,6 +336,7 @@ async def handle_thread_chat(
         logger.info(
             f"CHAT COMPLETED [thread {thread_id}] | "
             f"Intent: {intent_duration:.2f}s | "
+            f"Intent_Iterations: {intent_iterations} | "
             f"Orchestrator: {orchestrator_duration:.2f}s | "
             f"Total: {total_duration:.2f}s | "
             f"LLM: {llm_model} | "

@@ -393,6 +393,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const textToSend = typeof overrideInput === 'string' ? overrideInput : input.trim();
         if (!textToSend || !llmModel || !activeThread) return;
 
+        const isClarificationSelection = typeof overrideInput === 'string';
+
         setInput('');
         setClarificationOptions(null);
         setLoading(true);
@@ -405,7 +407,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             content: textToSend,
             created_at: new Date().toISOString()
         };
-        setMessages(prev => [...prev, tempUserMsg]);
+
+        setMessages(prev => {
+            let updated = prev;
+            // Immediate replacement: If this is a clarification selection, remove the previous "ambiguous" turn
+            if (isClarificationSelection) {
+                updated = updated.filter(m => !m.id.startsWith('clarify-'));
+            }
+            return [...updated, tempUserMsg];
+        });
 
         try {
             // Check model readiness using chat-utils
@@ -433,8 +443,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             // Handle ambiguous query / clarification options
             if (response.clarification_options) {
                 setClarificationOptions(response.clarification_options);
-                // Remove the optimistic user message — nothing was persisted
-                setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id));
+
+                // Add the clarification request to the message list so it's visible in history,
+                // even though it wasn't persisted to the backend database.
+                setMessages(prev => {
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    return [
+                        ...updated,
+                        {
+                            ...tempUserMsg,
+                            id: 'clarify-user-' + Date.now()
+                        },
+                        {
+                            id: 'clarify-asst-' + Date.now(),
+                            role: 'assistant',
+                            content: response.answer || "I need a bit more clarification.",
+                            created_at: new Date().toISOString()
+                        }
+                    ];
+                });
             } else {
                 // Normal flow: update messages with real IDs and add assistant response
                 setMessages(prev => {
@@ -506,7 +533,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
         // Frontend-only messages (error responses and their paired user messages) are never
         // persisted to the backend, so we remove them directly from local state.
-        const isTempId = messageId.startsWith('error-') || messageId.startsWith('temp-user-');
+        const isTempId = messageId.startsWith('error-') ||
+            messageId.startsWith('temp-user-') ||
+            messageId.startsWith('clarify-user-') ||
+            messageId.startsWith('clarify-asst-');
         if (isTempId) {
             setMessages(prev => {
                 const idx = prev.findIndex(m => m.id === messageId);
@@ -954,7 +984,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 size="medium"
                                 sx={{
                                     cursor: 'pointer',
-                                    maxWidth: '300px',
+                                    height: 'auto',
+                                    maxWidth: '100%',
+                                    '& .MuiChip-label': {
+                                        whiteSpace: 'normal',
+                                        display: 'block',
+                                        py: 1,
+                                        px: 2
+                                    },
                                     '&:hover': { bgcolor: 'primary.main', color: 'white' }
                                 }}
                             />
