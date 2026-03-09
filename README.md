@@ -1,12 +1,12 @@
 # askpdf
 
-A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retrieval Augmented Generation)**, **multi-agent AI chat**, and **reasoning trace support**—all designed to run privately and locally on your own machine. Upload a PDF, have it read aloud with synchronized text highlighting, and chat with your document using a LangGraph-powered orchestrator with an optional Intent Agent. Everything works for free using open-source models like Docker Model Runner, Ollama, or LMStudio—no cloud/subscriptions required.
+A full-stack PDF Document and Webpages research assistant with **Text-to-Speech (TTS)**, **RAG (Retrieval Augmented Generation)**, **multi-agent AI chat**, and **reasoning trace support**—all designed to run privately and locally on your own machine. Upload a PDF or capture a live Website, have it read aloud with synchronized text highlighting, and chat with your documents using a LangGraph-powered orchestrator with an optional Intent Agent. Everything works for free using open-source models like Docker Model Runner, Ollama, or LMStudio—no cloud/subscriptions required.
 
 ## 🌟 Features
 
 ### 📄 Reading & TTS
-- **Unified Experience**: Seamlessly switch between reading the PDF and listening to chat responses
-- **Multiple PDF Tabs**: Open and switch between multiple PDFs using a tabbed interface at the top of the viewer
+- **Unified Experience**: Seamlessly switch between reading your PDF documents and listening to chat responses
+- **Multiple Document Tabs**: Open and switch between multiple PDFs or Webpages using a tabbed interface. Hosted webpages can be easily refreshed and re-indexed to ensure up-to-date content.
 - **Intelligent Text Processing**: Robust sentence segmentation with support for Markdown and non-punctuated text
 - **High-Quality TTS**: Local speech synthesis using [Kokoro-82M](https://github.com/hexgrad/kokoro)
 - **Visual Tracking**: Synchronized sentence highlighting in PDF and message highlighting in Chat
@@ -15,7 +15,7 @@ A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retriev
 
 ### 🤖 Multi-Agent AI Architecture
 - **Orchestrator Agent**: A LangGraph-powered agent that plans, selects tools, and synthesizes answers across multiple iterations
-- **Intent Agent** *(optional, per-thread)*: A lightweight pre-processing agent that captures and rewrites the user's question before passing it to the orchestrator — improving query clarity and search precision
+- **Intent Agent** *(optional, per-thread)*: A lightweight pre-processing agent that parses intents, captures, and rewrites the user's question before passing it to the orchestrator — improving query clarity and search precision. Can be dynamically disabled for non-reasoning models via the new "Reasoning Mode" toggle.
 - **Tool-Calling Agents**: The orchestrator selects from a rich catalog of tools each turn, including document search, conversation memory recall, web search, document listing, and clarification requests
 - **Configurable Iterations**: Control how many tool-call steps the agent is allowed to perform, tunable globally and per-thread
 - **Force Final Answer**: When the maximum iteration budget is exhausted the agent is forced to synthesize a final answer from all gathered evidence instead of looping indefinitely
@@ -23,15 +23,16 @@ A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retriev
 ### 🧠 Reasoning / Thinking Trace Support
 - **Multi-Provider Extraction**: Automatically extracts chain-of-thought reasoning from responses, supporting structured blocks (Anthropic Claude, OpenAI `o`-series, Responses API) and `<think>` tags (DeepSeek, QwQ, Qwen3-Thinking)
 - **Stored in Database**: Reasoning traces are persisted in SQLite alongside the answer and can be re-displayed after page reload
-- **Shown in UI**: Expandable reasoning panel in chat bubbles lets you inspect the AI's internal thinking step-by-step
+- **Shown in UI**: Expandable reasoning panel in chat bubbles lets you inspect the AI's internal thinking step-by-step, toggleable via an intuitive "Reasoning Mode" button.
 
 ### 💬 RAG-Powered Chat, Threads & Semantic Memory
 - **Threaded Chat**: Organize conversations into threads with persistent SQLite storage for messages and file associations
 - **Per-Thread Collections**: Each thread has its own isolated vector collection in Qdrant, locked to a specific embedding model
-- **Dual-Search Retrieval**: AI searches both document chunks AND past Q&A pairs (semantic memory) simultaneously
+- **Comprehensive Retrieval**: AI searches context from multiple sources, retrieving PDF chunks, captured web pages, AND past Q&A pairs (semantic memory) simultaneously.
 - **Semantic Recollection**: The UI highlights which past chat messages were "recalled" and used by the AI to answer the current question
+- **Quick Actions**: "Read Aloud" and "Copy" buttons integrated right into each assistant bubble for quick convenience.
 - **Internet Search (DuckDuckGo)**: Optionally augment answers with live web search results for up-to-date or external information; web sources are stored in SQLite and displayed after page reload
-- **Context Management**: Intelligent token budgeting that scales proportionally to the configured context window, ensuring the most relevant PDF chunks, recent history, and semantic memories fit the LLM context window
+- **Context Management**: Intelligent token budgeting that scales proportionally to the configured context window, ensuring the most relevant content chunks (PDFs/Websites), recent history, and semantic memories fit the LLM context window
 
 ### ⚙️ Per-Thread Prompt & Behaviour Settings
 - **Thread Settings Dialog**: A per-thread configuration panel accessible from the chat header lets you tune AI behaviour without touching code
@@ -46,18 +47,18 @@ A full-stack PDF reading assistant with **Text-to-Speech (TTS)**, **RAG (Retriev
 
 You can enable **Internet Search** in the chat panel to let the AI answer questions using both your PDF and live web results (via DuckDuckGo). This is useful for:
 
-- Getting up-to-date facts, news, or background not present in your PDF
+- **Getting up-to-date facts, news, or background not present in your Document**
 - Clarifying ambiguous or missing information
 
 **How it works:**
-- When enabled, the app performs a DuckDuckGo search for your question and injects the top results into the LLM's context window, along with PDF content.
+- When enabled, the app performs a DuckDuckGo search for your question and injects the top results into the LLM's context window, along with your Document content.
 - The LLM then answers using both sources.
 - Web search results (source URLs and snippets) are stored in SQLite and Qdrant, so they are still visible in the chat after a page reload.
 - When a message is deleted, its associated web search results are also removed from SQLite and Qdrant.
 
 **Privacy:**
 - All queries are sent to DuckDuckGo only when Internet Search is enabled.
-- No PDF content is sent to DuckDuckGo—only your question.
+- No Document content is sent to DuckDuckGo—only your question.
 
 **Rate Limits:**
 - DuckDuckGo and other free search APIs may rate limit requests if used too frequently.
@@ -71,13 +72,13 @@ You can enable **Internet Search** in the chat panel to let the AI answer questi
 - **Dynamic Visual Feedback**: PDF sentence highlighting and Chat bubble illumination during playback
 - **Resizable Chat Panel**: Drag to adjust the chat interface width (300-800px)
 - **Auto-Scroll**: Both PDF and Chat automatically keep the active being-read content in view
-- **Model Selection**: Centralized embedding model selection and dynamic LLM discovery
+- **Model Selection & Caching**: Centralized embedding model selection and dynamic, cached LLM discovery that securely persists your preferred models via local storage.
 
 ### 🖥️ Private & Local Design
 All features of this app are designed to run entirely on your own machine or laptop, using only local resources by default. Document processing, AI chat, TTS, and chat/thread management all happen locally—no data is sent to external servers unless you explicitly enable Internet Search.
 
 **Privacy Note:**
-- When Internet Search is enabled, *only your question* (not your PDF content or chat history) is sent to DuckDuckGo for web search. All other processing, including PDF parsing, vector search, LLM inference, and chat/thread/message storage, remains local and private.
+- When Internet Search is enabled, *only your question* (not your Document content or chat history) is sent to DuckDuckGo for web search. All other processing, including parsing, vector search, LLM inference, and chat/thread/message storage, remains local and private.
 - If Internet Search is disabled, no data ever leaves your machine.
 
 You can use free, open-source models with Docker Model Runner, Ollama, or LMStudio, so there are no required cloud costs or subscriptions.
@@ -137,7 +138,7 @@ You select both models inside the app after it starts — no hardcoding required
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/raghu13590/askpdf.git
+git clone https://github.com/raghu-135/askpdf.git
 cd askpdf
 ```
 
@@ -213,13 +214,13 @@ docker-compose up --build
 
 ## 📖 Usage
 
-### Using Threads & PDFs
+### Using Threads & Documents
 
 1. **Manage Threads**: Use the Sidebar to create new threads or select existing ones.
 2. **Select Embedding Model**: When creating a new thread, choose the embedding model. This model is locked to the thread for consistency.
-3. **Upload PDFs**: Within a thread, click "Upload PDF". You can upload multiple PDFs to the same thread.
-4. **Switch Tabs**: Different PDFs in the same thread appear as tabs at the top of the viewer.
-5. **PDF Processing**: Each uploaded PDF is parsed, sentences extracted, and indexed for RAG within that thread's collection.
+3. **Add Documents/Webpages**: Within a thread, click "Upload PDF" or input a Website URL via "Add Website". You can add multiple documents to the same thread.
+4. **Switch Tabs**: Different documents in the same thread appear as tabs at the top of the viewer.
+5. **Document Processing**: Each uploaded PDF or captured webpage is parsed, sentences extracted, and fully indexed for RAG within that thread's collection.
 
 ### Reading & TTS
 
@@ -289,6 +290,7 @@ askpdf/
 │   └── app/
 │       ├── main.py             # FastAPI app, upload & TTS endpoints
 │       ├── pdf_parser.py       # PyMuPDF text extraction with coordinates
+│       ├── web_capture_service.py # Fetches and captures text from live websites
 │       ├── nlp.py              # spaCy sentence segmentation
 │       └── tts.py              # Kokoro TTS synthesis
 ├── rag_service/
@@ -312,6 +314,8 @@ askpdf/
     ├── components/
     │   ├── PdfUploader.tsx     # File upload with model selection
     │   ├── PdfViewer.tsx       # PDF rendering with overlays
+    │   ├── WebUploader.tsx     # Webpage URL uploader
+    │   ├── WebViewer.tsx       # Webpage reader
     │   ├── PlayerControls.tsx  # Audio playback controls
     │   ├── ChatInterface.tsx   # RAG chat UI (thread-aware, settings dialog, reasoning panel)
     │   ├── ThreadSidebar.tsx   # Thread management UI
@@ -538,7 +542,7 @@ RAG Service: Orchestrator Agent begins tool-call loop (up to max_iterations)
   ├── search_documents          → Qdrant: top-K PDF chunks for thread
   ├── search_conversation_history → Qdrant: semantic memory recall
   ├── search_web                → DuckDuckGo (if enabled); stored in SQLite + Qdrant
-  ├── search_pdf_by_document    → targeted per-document search
+  ├── search_document_by_id     → targeted per-document search
   ├── list_uploaded_documents   → enumerate PDFs in thread
   └── ask_for_clarification     → present choices to user
   ↓

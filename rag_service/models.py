@@ -1,18 +1,37 @@
-"""
-Model utilities for LLM API/OpenAI-compatible APIs.
-"""
-
 import os
 from dotenv import load_dotenv
 load_dotenv()
 import httpx
 import asyncio
 import logging
+import time
+from typing import Dict, Tuple
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Cache for model readiness checks
+_model_ready_cache: Dict[str, Tuple[bool, float]] = {}
+CACHE_TTL = 300  # 5 minutes for successful checks
+CACHE_TTL_FAIL = 15  # 15 seconds for failed checks
+
+def _check_model_ready_cache(cache_key: str) -> bool | None:
+    """Returns the cached readiness status if valid, otherwise None."""
+    cached = _model_ready_cache.get(cache_key)
+    if cached:
+        is_ready, timestamp = cached
+        ttl = CACHE_TTL if is_ready else CACHE_TTL_FAIL
+        if time.time() - timestamp < ttl:
+            return is_ready
+    return None
+
+def _update_model_ready_cache(cache_key: str, is_ready: bool) -> bool:
+    """Updates the cache and returns the readiness status."""
+    _model_ready_cache[cache_key] = (is_ready, time.time())
+    return is_ready
+
 
 # Token budget configuration
 def get_default_token_budget():
@@ -63,7 +82,7 @@ WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS", default=2
 
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
-RATIO_PDF_CONTEXT = 0.45       # 45% for PDF chunks
+RATIO_DOCUMENT_CONTEXT = 0.45       # 45% for document chunks (PDF + webpage)
 RATIO_SEMANTIC_MEMORY = 0.30   # 30% for recalled semantic memories
 
 # Individual item limits
@@ -78,7 +97,7 @@ CHARS_PER_TOKEN = 4
 # system prompt overhead (tool schemas, locked sections, etc.)
 RATIO_PREFETCH_RECENT = 0.22    # Recent verbatim conversation turns injected inline
 RATIO_PREFETCH_SEMANTIC = 0.18  # Semantic chat-memory recall from all past QA pairs
-RATIO_PREFETCH_PDF = 0.28       # PDF document evidence (top-K chunks, raw question query)
+RATIO_PREFETCH_DOCUMENT = 0.28       # Document evidence (top-K chunks, raw question query)
 
 # Average char estimates used to derive item-count limits from char budgets
 AVG_CHUNK_CHARS = 500   # Typical PDF or chat-memory chunk
@@ -101,9 +120,9 @@ def compute_prefetch_budget(context_window: int) -> dict:
         # Character budgets
         "recent_history_chars":   int(usable * RATIO_PREFETCH_RECENT),
         "semantic_history_chars": int(usable * RATIO_PREFETCH_SEMANTIC),
-        "pdf_context_chars":      int(usable * RATIO_PREFETCH_PDF),
+        "document_context_chars":      int(usable * RATIO_PREFETCH_DOCUMENT),
         # Derived item-count limits
-        "pdf_limit":              max(3, int(usable * RATIO_PREFETCH_PDF)      // AVG_CHUNK_CHARS),
+        "document_limit":              max(3, int(usable * RATIO_PREFETCH_DOCUMENT)      // AVG_CHUNK_CHARS),
         "semantic_limit":         max(3, int(usable * RATIO_PREFETCH_SEMANTIC) // AVG_CHUNK_CHARS),
         "recent_turn_limit":      max(4, int(usable * RATIO_PREFETCH_RECENT)   // AVG_TURN_CHARS),
     }
@@ -121,6 +140,7 @@ def default_thread_settings():
         "custom_instructions": "",
         "use_intent_agent": True,
         "intent_agent_max_iterations": INTENT_AGENT_MAX_ITERATIONS,
+        "reasoning_mode": True,
     }
 
 
@@ -224,7 +244,7 @@ def get_system_prompt(context: str, use_history: bool = False, use_web: bool = F
     """
     Constructs a consistent system prompt for the AI assistant across different service nodes.
     """
-    sources = ["PDF context"]
+    sources = ["document context"]
     if use_web:
         sources.append("Web Search results")
     if use_history:
@@ -240,7 +260,7 @@ def get_system_prompt(context: str, use_history: bool = False, use_web: bool = F
         instructions.append("If the context contains relevant information from past conversations, incorporate it into your answer and acknowledge it naturally (e.g., 'As we discussed before...').")
     
     if use_web:
-        instructions.append("If the web search failed, rely on the PDF context.")
+        instructions.append("If the web search failed, rely on the document context.")
         
     instructions.append("If the answer is not in the context and you cannot answer it, state that you don't know based on the provided information.")
     
@@ -252,107 +272,152 @@ def get_system_prompt(context: str, use_history: bool = False, use_web: bool = F
         f"CONTEXT:\n{context}"
     )
 
+async def _check_model_exists(client: httpx.AsyncClient, base_url: str, model_name: str) -> bool:
+    """Helper to check if a model ID exists in the /models endpoint."""
+    try:
+        resp = await client.get(f"{base_url}/models", timeout=15.0)
+        if resp.status_code != 200:
+            return False
+        data = resp.json()
+        models = data.get('data', []) if isinstance(data, dict) else data
+        model_ids = [m['id'] if isinstance(m, dict) and 'id' in m else m for m in models]
+        return model_name in model_ids
+    except Exception:
+        return False
+
+async def _probe_with_retry(
+    client: httpx.AsyncClient, 
+    url: str, 
+    payload: dict, 
+    validator, 
+    model_name: str, 
+    probe_type: str,
+    max_retries: int = 3
+) -> bool:
+    """Helper to probe an endpoint with retry logic and exponential backoff."""
+    for attempt in range(max_retries):
+        try:
+            resp = await client.post(url, json=payload, timeout=30.0)
+            logger.info(f"{probe_type} probe response status for {model_name}: {resp.status_code}")
+            
+            if validator(resp):
+                return True
+
+            # If not 200, but also not a definitive client error (404, 401, 403), retry
+            if resp.status_code not in [200, 404, 401, 403] and attempt < max_retries - 1:
+                logger.warning(f"{probe_type} model {model_name} returned {resp.status_code}. Retrying...")
+                await asyncio.sleep(2 ** attempt)
+                continue
+            
+            break
+        except (httpx.ReadTimeout, httpx.ConnectError):
+            logger.warning(f"Timeout/Connection error on attempt {attempt + 1} checking {probe_type} model {model_name}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+                continue
+            break
+        except Exception as e:
+            logger.exception(f"Exception during {probe_type} probe for {model_name}: %s", e)
+            break
+    return False
+
+
 async def check_chat_model_ready(model_name: str) -> bool:
     """
     Check if the supplied model is a chat model and is ready in the LLM API/server.
     Returns True if ready, False if not ready or not found.
+    Robustly retries on transient error codes.
     """
+    cache_key = f"chat:{model_name}"
+    cached_status = _check_model_ready_cache(cache_key)
+    if cached_status is not None:
+        return cached_status
+
     base_url = _get_base_url()
     try:
         async with httpx.AsyncClient() as client:
-            # 1. Check if model exists
-            resp = await client.get(f"{base_url}/models", timeout=5.0)
-            if resp.status_code != 200:
-                return False
-            models = resp.json().get('data', [])
-            model_ids = [m['id'] for m in models]
-            if model_name not in model_ids:
-                return False
+            if not await _check_model_exists(client, base_url, model_name):
+                return _update_model_ready_cache(cache_key, False)
 
-            # 2. Probe with Chat Completion
+            def chat_validator(resp: httpx.Response) -> bool:
+                if resp.status_code != 200:
+                    return False
+                try:
+                    data = resp.json()
+                    
+                    # Verify integrity: if the model name in the response same as the requested model name?
+                    resp_model = data.get("model", "")
+                    if resp_model and model_name not in resp_model and resp_model not in model_name:
+                        logger.warning(f"Chat model mismatch! Requested: {model_name}, Got: {resp_model}")
+                        return False
+
+                    # Verify it actually generated a message structure
+                    choices = data.get("choices", [])
+                    return bool(choices and choices[0].get("message", {}).get("content") is not None)
+                except Exception:
+                    return False
+
             payload = {
                 "model": model_name,
                 "messages": [{"role": "user", "content": "hi"}],
                 "max_tokens": 1
             }
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    chat_resp = await client.post(f"{base_url}/chat/completions", json=payload, timeout=30.0)
-                    logger.info(f"Chat completion probe response status: {chat_resp.status_code}")
-                    if chat_resp.status_code == 200:
-                        return True
-                    if chat_resp.status_code == 503 and attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)  # exponential backoff
-                        continue
-                    if chat_resp.status_code == 503:
-                        return True
-                    if chat_resp.status_code == 500:
-                        return False
-                    break
-                except httpx.ReadTimeout:
-                    logger.warning(f"Timeout on attempt {attempt + 1} checking chat model {model_name}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-                    return False
-                except Exception as e:
-                    logging.exception("Exception during chat completion probe : %s", e)
-                    return False
-                
-            # 3. Fallback: If model is listed and not 503, assume reachable
-            return True
+            
+            result = await _probe_with_retry(
+                client, 
+                f"{base_url}/chat/completions", 
+                payload, 
+                chat_validator, 
+                model_name, 
+                "Chat"
+            )
+            return _update_model_ready_cache(cache_key, result)
 
     except Exception:
-        logging.exception("Exception during model readiness check")
-        return False
+        logging.exception("Exception during chat model readiness check")
+        return _update_model_ready_cache(cache_key, False)
 
 async def check_embed_model_ready(model_name: str) -> bool:
     """
     Check if the supplied model is an embedding model and is ready in the LLM API/server.
     Returns True if ready, False if not ready or not found.
+    Robustly retries on transient error codes.
     """
+    cache_key = f"embed:{model_name}"
+    cached_status = _check_model_ready_cache(cache_key)
+    if cached_status is not None:
+        return cached_status
+
     base_url = _get_base_url()
     try:
         async with httpx.AsyncClient() as client:
-            # 1. Check if model exists
-            resp = await client.get(f"{base_url}/models", timeout=5.0)
-            if resp.status_code != 200:
-                return False
-            models = resp.json().get('data', [])
-            model_ids = [m['id'] for m in models]
-            if model_name not in model_ids:
-                return False
+            if not await _check_model_exists(client, base_url, model_name):
+                return _update_model_ready_cache(cache_key, False)
 
-            # 2. Probe with Embeddings
-            max_retries = 3
-            for attempt in range(max_retries):
+            def embed_validator(resp: httpx.Response) -> bool:
+                if resp.status_code != 200:
+                    return False
                 try:
-                    emb_resp = await client.post(
-                        f"{base_url}/embeddings",
-                        json={"model": model_name, "input": "hi"},
-                        timeout=30.0
-                    )
-                    if emb_resp.status_code == 200:
-                        return True
-                    if emb_resp.status_code == 503 and attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)  # exponential backoff
-                        continue
-                    if emb_resp.status_code == 503:
+                    data = resp.json()
+                    resp_model = data.get("model", "")
+                    # Verify integrity: if the model name in the response same as the requested model name?
+                    if resp_model and model_name not in resp_model and resp_model not in model_name:
+                        logger.warning(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}")
                         return False
-                    break
-                except httpx.ReadTimeout:
-                    logger.warning(f"Timeout on attempt {attempt + 1} checking embedding model {model_name}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-                    return False
-                except Exception as e:
-                    logging.exception("Exception during embedding probe : %s", e)
+                    return True
+                except Exception:
                     return False
 
-            # 3. Fallback: If model is listed and not 200 or 503, assume not reachable
-            return False
+            result = await _probe_with_retry(
+                client, 
+                f"{base_url}/embeddings", 
+                {"model": model_name, "input": "hi"}, 
+                embed_validator, 
+                model_name, 
+                "Embedding"
+            )
+            return _update_model_ready_cache(cache_key, result)
+
     except Exception:
         logging.exception("Exception during embedding model readiness check")
-        return False
+        return _update_model_ready_cache(cache_key, False)

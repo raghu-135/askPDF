@@ -1,5 +1,7 @@
 import VerticalAlignCenterIcon from '@mui/icons-material/VerticalAlignCenter';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
+import SpeakerNotesIcon from '@mui/icons-material/SpeakerNotes';
+import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff';
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
@@ -12,13 +14,15 @@ declare const process: {
   env: Record<string, string | undefined>;
 };
 import PdfUploader from "../components/PdfUploader";
+import WebUploader from "../components/WebUploader";
 import PdfViewer from "../components/PdfViewer";
+import WebViewer from "../components/WebViewer";
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
-import { Thread, addFileToThread } from "../lib/api";
-import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
+import { Thread, addFileToThread, removeSourceFromThread } from "../lib/api";
+import { loadThreadTabs, createPdfTabFromUpload, createWebTabFromIndexed, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 
 type Sentence = { id: number; text: string; bboxes: any[] };
@@ -67,7 +71,7 @@ export default function Home() {
 
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
-  
+
   // Right panel tab state (0 = Threads, 1 = Chat)
   const [rightPanelTab, setRightPanelTab] = useState(0);
 
@@ -95,7 +99,8 @@ export default function Home() {
     setCurrentChatId(null);
     setPlayRequestId(null);
     setActiveSource('pdf');
-    
+    setChatSentences([]);
+
     if (thread) {
       try {
         setIsPdfLoading(true);
@@ -103,7 +108,7 @@ export default function Home() {
         const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
         const detailedThread = await import("../lib/api").then(m => m.getThread(thread.id));
         setActiveThread(detailedThread);
-        
+
         const loadedTabs = await loadThreadTabs(detailedThread, apiBase);
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
@@ -153,6 +158,56 @@ export default function Home() {
     setCurrentChatId(null);
     setPlayRequestId(null);
     setActiveSource('pdf');
+  };
+
+  // Handle web source indexed
+  const handleWebIndexed = async (data: { fileHash: string; url: string; status: string; message?: string }) => {
+    if (data.status !== 'accepted' || !activeThread || !data.fileHash) return;
+
+    const newTab = createWebTabFromIndexed(data.fileHash, data.url);
+
+    // Only add if not already present
+    setPdfTabs(prev => {
+      if (prev.some(t => t.id === newTab.id)) return prev;
+      return [...prev, newTab];
+    });
+    setActiveTabId(newTab.id);
+
+    try {
+      const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
+      setActiveThread(updatedThread);
+      setSidebarVersion(v => v + 1);
+    } catch (error) {
+      console.error('Failed to refresh thread after web source:', error);
+    }
+
+    setCurrentPdfId(null);
+    setCurrentChatId(null);
+    setPlayRequestId(null);
+    setActiveSource('pdf');
+  };
+
+  // Handle remove source from thread (deletes from DB + Qdrant, closes tab)
+  const handleTabRemove = async (tabId: string) => {
+    if (!activeThread) return;
+    const tab = pdfTabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    try {
+      await removeSourceFromThread(activeThread.id, tab.fileHash);
+    } catch (error) {
+      console.error('Failed to remove source from thread:', error);
+    }
+
+    // Close the tab and refresh sidebar
+    handleTabClose(tabId);
+    try {
+      const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
+      setActiveThread(updatedThread);
+      setSidebarVersion(v => v + 1);
+    } catch (error) {
+      console.error('Failed to refresh thread after source removal:', error);
+    }
   };
 
   // Handle tab change
@@ -246,6 +301,14 @@ export default function Home() {
                 tooltipText={!activeThread ? "Select or create a thread first" : undefined}
               />
 
+              {/* Web Uploader */}
+              <WebUploader
+                threadId={activeThread?.id ?? null}
+                onIndexed={handleWebIndexed}
+                disabled={!activeThread}
+                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
+              />
+
               {/* Auto-scroll Toggle */}
               <Tooltip title={autoScroll ? "Disable Auto-Scroll" : "Enable Auto-Scroll"}>
                 <IconButton
@@ -270,29 +333,32 @@ export default function Home() {
                 </IconButton>
               </Tooltip>
 
-                {/* PDF Dark Mode Toggle */}
-                <Tooltip title={pdfDarkMode ? "Disable PDF Dark Mode" : "Enable PDF Dark Mode"}>
-                  <IconButton
-                    color={pdfDarkMode ? "primary" : "default"}
-                    onClick={() => setPdfDarkMode(d => !d)}
-                    sx={{ border: pdfDarkMode ? 1 : 0, borderColor: pdfDarkMode ? 'primary.main' : 'transparent' }}
-                    size="small"
-                  >
-                    <DarkModeIcon />
-                  </IconButton>
-                </Tooltip>
+              {/* PDF Dark Mode Toggle */}
+              <Tooltip title={pdfDarkMode ? "Disable PDF Dark Mode" : "Enable PDF Dark Mode"}>
+                <IconButton
+                  color={pdfDarkMode ? "primary" : "default"}
+                  onClick={() => setPdfDarkMode(d => !d)}
+                  sx={{ border: pdfDarkMode ? 1 : 0, borderColor: pdfDarkMode ? 'primary.main' : 'transparent' }}
+                  size="small"
+                >
+                  <DarkModeIcon />
+                </IconButton>
+              </Tooltip>
 
               {/* Right Panel Toggle */}
-              <Button
-                variant="outlined"
-                size="small"
-                onClick={() => setIsRightPanelOpen(open => !open)}
-              >
-                {isRightPanelOpen ? "Hide Threads" : "Show Threads"}
-              </Button>
+              <Tooltip title={isRightPanelOpen ? "Hide Threads" : "Show Threads"}>
+                <IconButton
+                  color="primary"
+                  size="small"
+                  onClick={() => setIsRightPanelOpen(open => !open)}
+                  sx={{ border: 1, borderColor: 'primary.main' }}
+                >
+                  {isRightPanelOpen ? <SpeakerNotesOffIcon fontSize="small" /> : <SpeakerNotesIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
 
               {/* Player Controls */}
-              {pdfSentences.length > 0 && pdfUrl && (
+              {(((pdfSentences.length > 0 && pdfUrl) || chatSentences.length > 0) && activeThread && rightPanelTab === 1) && (
                 <PlayerControls
                   sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
                   currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
@@ -317,17 +383,27 @@ export default function Home() {
               activeTabId={activeTabId}
               onTabChange={handleTabChange}
               onTabClose={handleTabClose}
+              onTabRemove={activeThread ? handleTabRemove : undefined}
               darkMode={pdfDarkMode}
             />
           )}
 
-          {/* PDF Viewer Area */}
+          {/* PDF / Web Viewer Area */}
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
             {isPdfLoading ? (
               <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
                 <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
-                <Typography sx={{ ml: 2 }}>Loading PDF documents...</Typography>
+                <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
               </Box>
+            ) : activeTab?.sourceType === 'web' && activeTab.sourceUrl && activeTab.fileHash ? (
+              /* Web source view — rendered as a self-contained saved HTML page */
+              <WebViewer
+                url={activeTab.sourceUrl}
+                fileHash={activeTab.fileHash}
+                threadId={activeThread?.id}
+                darkMode={pdfDarkMode}
+                isResizing={isResizing}
+              />
             ) : (pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
               <PdfViewer
                 pdfUrl={pdfUrl}
@@ -354,8 +430,9 @@ export default function Home() {
                   </Typography>
                   <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
                     <li>Use the <b>Threads</b> tab on the right to create a new thread with an embedding model.</li>
-                    <li>Click <b>Upload PDF</b> to add documents to your thread.</li>
-                    <li>Switch to the <b>Chat</b> tab to ask questions about your PDFs using AI.</li>
+                    <li>Click <b>Upload PDF</b> to add PDF documents to your thread.</li>
+                    <li>Enter a URL and click <b>Add Webpage</b> to index a website.</li>
+                    <li>Switch to the <b>Chat</b> tab to ask questions about your sources using AI.</li>
                     <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
                     <li>Double-click any text to start audio playback from that point.</li>
                   </ul>
@@ -411,21 +488,27 @@ export default function Home() {
           }}>
             {/* Tabs Header */}
             <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-              <Tabs 
-                value={rightPanelTab} 
-                onChange={(_, newValue) => setRightPanelTab(newValue)}
+              <Tabs
+                value={rightPanelTab}
+                onChange={(_, newValue) => {
+                  setRightPanelTab(newValue);
+                  if (newValue === 0) {
+                    handleThreadSelect(null);
+                  }
+                }}
                 variant="fullWidth"
               >
-                <Tab 
-                  icon={<ForumIcon fontSize="small" />} 
-                  iconPosition="start" 
-                  label="Threads" 
+                <Tab
+                  icon={<ForumIcon fontSize="small" />}
+                  iconPosition="start"
+                  label="Threads"
                   sx={{ minHeight: 56, textTransform: 'none', flex: 2 }}
+                  onClick={() => handleThreadSelect(null)}
                 />
-                <Tab 
-                  icon={<ChatIcon fontSize="small" />} 
-                  iconPosition="start" 
-                  label={activeThread ? activeThread.name : "Chat"} 
+                <Tab
+                  icon={<ChatIcon fontSize="small" />}
+                  iconPosition="start"
+                  label={activeThread ? activeThread.name : "Chat"}
                   disabled={!activeThread}
                   sx={{ minHeight: 56, textTransform: 'none', flex: 8 }}
                 />
@@ -435,8 +518,8 @@ export default function Home() {
             {/* Tab Content */}
             <Box sx={{ flex: 1, overflow: 'hidden' }}>
               {/* Threads Tab */}
-              <Box sx={{ 
-                height: '100%', 
+              <Box sx={{
+                height: '100%',
                 display: rightPanelTab === 0 ? 'block' : 'none',
                 overflow: 'auto'
               }}>
@@ -455,8 +538,8 @@ export default function Home() {
               </Box>
 
               {/* Chat Tab */}
-              <Box sx={{ 
-                height: '100%', 
+              <Box sx={{
+                height: '100%',
                 display: rightPanelTab === 1 ? 'flex' : 'none',
                 flexDirection: 'column'
               }}>
@@ -479,10 +562,10 @@ export default function Home() {
                     darkMode={pdfDarkMode}
                   />
                 ) : (
-                  <Box sx={{ 
-                    flex: 1, 
-                    display: 'flex', 
-                    alignItems: 'center', 
+                  <Box sx={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
                     justifyContent: 'center',
                     p: 3
                   }}>

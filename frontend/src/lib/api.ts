@@ -80,6 +80,7 @@ export interface ThreadSettings {
   custom_instructions: string;
   use_intent_agent: boolean;
   intent_agent_max_iterations: number;
+  reasoning_mode: boolean;
 }
 
 export interface PromptToolDefinition {
@@ -99,12 +100,14 @@ export interface PromptDefaults {
   custom_instructions: string;
   use_intent_agent: boolean;
   intent_agent_max_iterations: number;
+  reasoning_mode: boolean;
 }
 
 export interface ThreadFile {
   file_hash: string;
   file_name: string;
   file_path?: string;
+  source_type?: 'pdf' | 'web';
 }
 
 export interface WebSource {
@@ -191,6 +194,7 @@ export async function getPromptPreview(payload: {
   custom_instructions: string;
   use_web_search?: boolean;
   intent_agent_ran?: boolean;
+  reasoning_mode?: boolean;
 }): Promise<{ prompt: string }> {
   const res = await fetch(`${RAG_API_BASE}/prompt-preview`, {
     method: "POST",
@@ -209,18 +213,18 @@ export async function deleteThread(threadId: string): Promise<void> {
 }
 
 export async function addFileToThread(
-  threadId: string, 
-  fileHash: string, 
-  fileName: string, 
+  threadId: string,
+  fileHash: string,
+  fileName: string,
   text?: string
 ): Promise<any> {
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/files`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ 
-      file_hash: fileHash, 
+    body: JSON.stringify({
+      file_hash: fileHash,
       file_name: fileName,
-      text 
+      text
     })
   });
   if (!res.ok) throw new Error(await res.text());
@@ -233,9 +237,112 @@ export async function getThreadFiles(threadId: string): Promise<{ files: ThreadF
   return res.json();
 }
 
+export async function addWebSourceToThread(
+  threadId: string,
+  url: string
+): Promise<{ status: string; file_hash: string; url: string; indexing: string }> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/web-sources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export type RefreshStatus = 'unchanged' | 'confirmation_required' | 'accepted';
+
+export interface RefreshWebSourceResult {
+  status: RefreshStatus;
+  message?: string;
+  thread_id: string;
+  file_hash: string;
+  url?: string;
+  indexing?: string;
+  new_content_hash?: string;
+}
+
+/**
+ * Re-index a web source after a forced recapture.
+ *
+ * Phase 1 (confirmed=false): compares content_hash with the stored one.
+ *   - "unchanged"            → page content hasn't changed, skip re-indexing.
+ *   - "confirmation_required" → content changed, show dialog before proceeding.
+ *
+ * Phase 2 (confirmed=true): purges old Qdrant chunks and re-indexes fresh content.
+ *   - "accepted"             → re-indexing kicked off in the background.
+ */
+export async function refreshWebSource(
+  threadId: string,
+  fileHash: string,
+  contentHash: string | null,
+  confirmed: boolean,
+): Promise<RefreshWebSourceResult> {
+  const res = await fetch(
+    `${RAG_API_BASE}/threads/${threadId}/web-sources/${fileHash}/refresh`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content_hash: contentHash, confirmed }),
+    }
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ============ Web Capture ============
+
+export interface WebCaptureResult {
+  file_hash: string;
+  title: string;
+  cached: boolean;
+  /** MD5 hash of the page's extracted text content — changes when the page content changes. */
+  content_hash: string | null;
+}
+
+/**
+ * Ask the backend to fetch a URL, inline its assets, and save a self-contained
+ * HTML file.  Returns the file_hash you can pass to fetchWebPageHtml().
+ */
+export async function captureWebPage(url: string, force = false): Promise<WebCaptureResult> {
+  const res = await fetch(`${API_BASE}/api/web-capture`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, force }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/**
+ * Fetch the saved HTML for a captured page as raw text.
+ * The caller can wrap it in a Blob URL for use as an iframe src.
+ */
+export async function fetchWebPageHtml(fileHash: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/api/web-page/${fileHash}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.text();
+}
+
+/** Convenience: return the direct URL to the saved HTML (for FileResponse). */
+export function webPageUrl(fileHash: string): string {
+  return `${API_BASE}/api/web-page/${fileHash}`;
+}
+
+export async function removeSourceFromThread(
+  threadId: string,
+  fileHash: string
+): Promise<{ status: string; removed_from_db: boolean }> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/files/${fileHash}`, {
+    method: "DELETE"
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function getThreadMessages(
-  threadId: string, 
-  limit: number = 100, 
+  threadId: string,
+  limit: number = 100,
   offset: number = 0
 ): Promise<{ messages: Message[] }> {
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/messages?limit=${limit}&offset=${offset}`);
@@ -262,13 +369,14 @@ export async function threadChat(
   toolInstructionsOverride?: Record<string, string>,
   customInstructionsOverride?: string,
   useIntentAgent?: boolean,
-  intentAgentMaxIterations?: number
+  intentAgentMaxIterations?: number,
+  reasoningMode?: boolean
 ): Promise<{
   answer: string;
   user_message_id: string | null;
   assistant_message_id: string | null;
   used_chat_ids: string[];
-  pdf_sources: { text: string; file_hash: string; score: number }[];
+  document_sources: { text: string; file_hash: string; score: number; source_type?: 'pdf' | 'webpage'; title?: string; url?: string }[];
   web_sources?: WebSource[];
   reasoning?: string;
   reasoning_available?: boolean;
@@ -301,20 +409,47 @@ export async function threadChat(
   if (typeof intentAgentMaxIterations === "number") {
     payload.intent_agent_max_iterations = intentAgentMaxIterations;
   }
+  if (typeof reasoningMode === "boolean") {
+    payload.reasoning_mode = reasoningMode;
+  }
 
-  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const maxRetries = 2;
+  let attempt = 0;
+
+  while (true) {
+    try {
+      const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const errorText = await res.text();
+        // Check if error is retryable (503 or transient)
+        if (attempt < maxRetries && (res.status === 503 || res.status === 429)) {
+          throw new Error(`RETRYABLE:${res.status}:${errorText}`);
+        }
+        throw new Error(errorText);
+      }
+      return res.json();
+    } catch (err: any) {
+      if (err.message?.startsWith('RETRYABLE:') || (attempt < maxRetries && (err.message?.includes('timeout') || err.message?.includes('Failed to fetch')))) {
+        attempt++;
+        const delay = attempt * 1000;
+        console.log(`threadChat failed (attempt ${attempt}), retrying in ${delay}ms...`, err.message);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 export async function getThreadIndexStatus(threadId: string): Promise<{
   thread_id: string;
   status: 'ready' | 'not_ready';
   stats: any;
+  embed_model_ready?: boolean;
 }> {
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/index-status`);
   if (!res.ok) throw new Error(await res.text());

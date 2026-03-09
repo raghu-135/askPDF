@@ -5,6 +5,8 @@ langchain-text-splitters
 httpx
 pydantic
 unstructured[pdf]
+beautifulsoup4
+lxml
 opencv-python-headless
 langchain-openai
 aiosqlite

@@ -65,7 +65,7 @@ services:
       - QDRANT_PORT=6333
       - DATA_DIR=/data
       - BACKEND_URL=http://backend:8000
-      - DEFAULT_TOKEN_BUDGET=128000
+      - DEFAULT_TOKEN_BUDGET=8192
       - DEFAULT_MAX_ITERATIONS=10
       - MIN_MAX_ITERATIONS=1
       - MAX_MAX_ITERATIONS=30
@@ -82,7 +82,7 @@ services:
       - qdrant
     volumes:
       - ./rag_service:/app
-      - rag_data:/data
+      - ./data:/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -100,5 +100,4 @@ services:
 
 volumes:
   qdrant_data:
-  rag_data:
   pdf_data:

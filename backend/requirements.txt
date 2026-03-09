@@ -13,3 +13,5 @@ pydub
 python-multipart
 httpx
 huggingface_hub
+beautifulsoup4
+lxml

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import json
 from typing import TypedDict, List, Annotated, Dict, Any, Optional
+from pydantic import BaseModel, Field
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -13,7 +14,23 @@ from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 
 from models import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
-from vectordb.qdrant import QdrantAdapter
+from prompt_loaders import (
+    get_orchestrator_prompt,
+    get_orchestrator_prompt_compact,
+    get_orchestrator_phase0_prompt,
+    get_orchestrator_phase0_prompt_compact,
+    get_intent_agent_prompt,
+    get_web_search_mandate,
+)
+from agent_helpers import (
+    build_chat_prompt,
+    parse_intent_response,
+    evidence_insufficient,
+    collect_tool_sources,
+)
+from prompt_defaults import DEFAULT_SYSTEM_ROLE
+from vectordb.qdrant import get_qdrant
+from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +38,7 @@ search_tool = DuckDuckGoSearchResults(output_format="list", num_results=6)
 
 async def invoke_with_retry(func, *args, **kwargs):
     max_retries = 10
-    delay = 5
+    base_delay = 2
     for i in range(max_retries):
         try:
             return await func(*args, **kwargs)
@@ -31,15 +48,23 @@ async def invoke_with_retry(func, *args, **kwargs):
             is_503_loading = "503" in err_str and ("loading" in err_str or "unavailable" in err_str)
             # 400 – LM Studio unloaded the model between requests
             is_model_unloaded = "400" in err_str and "model unloaded" in err_str
+            # 404 - Model not found / not currently loaded in memory
+            is_model_not_found = "404" in err_str and ("not found" in err_str or "model" in err_str)
+            # 500 - Generic load errors or out of memory briefly on LLM server
+            is_500_loading = "500" in err_str and ("load" in err_str or "memory" in err_str)
             # 429 – rate limit / too many requests
             is_rate_limit = "429" in err_str or "rate limit" in err_str or "too many requests" in err_str
 
-            if is_503_loading or is_model_unloaded or is_rate_limit:
+            if is_503_loading or is_model_unloaded or is_rate_limit or is_model_not_found or is_500_loading:
                 reason = (
                     "Model is loading (503)" if is_503_loading
                     else "Model was unloaded (400)" if is_model_unloaded
+                    else "Model not loaded/found (404)" if is_model_not_found
+                    else "Temporary model failure/OOM (500)" if is_500_loading
                     else "Rate limited (429)"
                 )
+                
+                delay = base_delay * (2 ** min(i, 4)) # Exponential backoff up to 32s max delay
                 logger.warning(f"{reason}. Retrying in {delay}s... (Attempt {i+1}/{max_retries})")
                 await asyncio.sleep(delay)
                 continue
@@ -53,7 +78,7 @@ class AgentState(TypedDict):
     embedding_model: str
     context_window: int
     use_web_search: bool
-    pdf_sources: List[Dict[str, Any]]
+    document_sources: List[Dict[str, Any]]
     web_sources: List[Dict[str, Any]]
     used_chat_ids: List[str]
     clarification_options: Optional[List[str]]
@@ -64,12 +89,17 @@ class AgentState(TypedDict):
     custom_instructions: str
     pre_fetch_bundle: Optional[Dict[str, Any]]
     intent_agent_ran: bool  # True when Intent Agent preprocessed the query; False = Orchestrator self-preprocesses
+    reasoning_mode: bool
+    working_query: str
+    intent_reference_type: str
+
+
 
 
 @tool
 async def search_documents(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """
-    Perform a semantic vector search over all uploaded PDF documents AND previously cached
+    Perform a semantic vector search over all uploaded documents (PDFs + webpages) AND previously cached
     internet search results for this thread.
     Returns the most relevant chunks along with neighboring context passages for continuity.
 
@@ -78,7 +108,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
     retry with a rephrased or more specific query before concluding the information is absent.
 
     Each returned passage is prefixed with its source so you can cite it accurately:
-      - PDF passages: [Source: Document "<filename>"]
+      - Document passages: [Source: PDF: <filename>] or [Source: Webpage: <title> | <url>]
       - Cached web results: [Source: Internet Search — "<title>" | <url>]
 
     Args:
@@ -97,18 +127,13 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
 
-        db = QdrantAdapter()
+        db = get_qdrant()
 
-        # ── Build a file_hash → file_name lookup from the thread's document list ──
-        from database import get_thread_files
-        try:
-            thread_files = await get_thread_files(thread_id)
-            hash_to_name = {f.file_hash: f.file_name for f in thread_files}
-        except Exception:
-            hash_to_name = {}
+        # ── Build a file_hash → file_name lookup from thread_stats (no DB join) ──
+        hash_to_name = await get_document_name_lookup(thread_id)
 
-        # ── PDF chunk search with neighbor expansion ──
-        raw_pdf_chunks = await db.search_pdf_chunks(
+        # ── Document chunk search with neighbor expansion ──
+        raw_doc_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
             limit=max_results
@@ -116,7 +141,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
 
         expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
         file_chunk_map = {}
-        for hit in raw_pdf_chunks:
+        for hit in raw_doc_chunks:
             file_hash = hit.get("file_hash")
             chunk_id = hit.get("chunk_id")
             if file_hash is not None and chunk_id is not None:
@@ -126,16 +151,16 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                     if neighbor_id >= 0:
                         file_chunk_map[file_hash].add(neighbor_id)
 
-        expanded_pdf_chunks = []
+        expanded_doc_chunks = []
         for file_hash, id_set in file_chunk_map.items():
-            expanded_batch = await db.get_chunks_by_ids(
+            expanded_batch = await db.get_knowledge_source_chunks_by_ids(
                 thread_id=thread_id,
                 file_hash=file_hash,
                 chunk_ids=list(id_set)
             )
-            expanded_pdf_chunks.extend(expanded_batch)
+            expanded_doc_chunks.extend(expanded_batch)
 
-        expanded_pdf_chunks.sort(key=lambda x: (x.get("file_hash", ""), x.get("chunk_id", 0)))
+        expanded_doc_chunks.sort(key=lambda x: (x.get("file_hash", ""), x.get("chunk_id", 0)))
 
         # ── Cached web search results ──
         web_chunks = await db.search_web_chunks(
@@ -144,42 +169,40 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             limit=max(3, max_results // 3),
         )
 
-        if not expanded_pdf_chunks and not web_chunks:
+        if not expanded_doc_chunks and not web_chunks:
             return "No relevant content found in documents or cached web results."
 
-        pdf_sources = []
+        document_sources = []
         web_sources = []
         context_parts = []
 
-        for chunk in expanded_pdf_chunks:
-            text = chunk.get("text", "")
-            fh = chunk.get("file_hash", "")
-            fname = hash_to_name.get(fh, fh)
-            labeled = f'[Source: Document "{fname}"]\n{text}'
-            context_parts.append(labeled)
-            pdf_sources.append({
-                "text": text[:200] + "..." if len(text) > 200 else text,
-                "file_hash": fh,
-                "file_name": fname,
-                "score": chunk.get("score", 0.0),
-            })
+        # Group document chunks by file to reduce context window bloat
+        document_context, document_sources = group_document_chunks(expanded_doc_chunks, hash_to_name)
+        if document_context:
+            context_parts.append(document_context)
 
+        # Group cached web chunks by URL
+        web_groups = {}
         for wchunk in web_chunks:
-            text = wchunk.get("text", "")
             url = wchunk.get("url", "")
-            title = wchunk.get("title", url)
-            labeled = f'[Source: Internet Search — "{title}" | {url}]\n{text}'
-            context_parts.append(labeled)
+            if url not in web_groups:
+                web_groups[url] = {"title": wchunk.get("title", url), "texts": []}
+            web_groups[url]["texts"].append(wchunk.get("text", ""))
+
             web_sources.append({
-                "text": text[:200] + "..." if len(text) > 200 else text,
+                "text": wchunk.get("text", "")[:200] + "...",
                 "url": url,
-                "title": title,
+                "title": wchunk.get("title", url),
                 "score": wchunk.get("score", 0.0),
             })
 
+        for url, group in web_groups.items():
+            combined_text = "\n".join(group["texts"])
+            context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
+
         result: Dict[str, Any] = {"content": "\n\n".join(context_parts)}
-        if pdf_sources:
-            result["__pdf_sources__"] = pdf_sources
+        if document_sources:
+            result["__document_sources__"] = document_sources
         if web_sources:
             result["__web_sources__"] = web_sources
         return json.dumps(result)
@@ -215,28 +238,83 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
         
-        db = QdrantAdapter()
-        recalled_memories = await db.search_chat_memory(
+        db = get_qdrant()
+        history, used_ids = await fetch_semantic_history(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=max_results
+            limit=max_results,
         )
 
-        if not recalled_memories:
+        if not history:
             return "No relevant past conversations found."
 
-        used_ids = [mem["message_id"] for mem in recalled_memories if mem.get("message_id")]
-        
-        context_parts = []
-        for mem in recalled_memories:
-            context_parts.append(mem.get("text", ""))
-
         return json.dumps({
-            "content": "\n\n---\n\n".join(context_parts),
+            "content": history,
             "__used_chat_ids__": used_ids
         })
     except Exception as e:
         return f"Error retrieving chat memory: {e}"
+
+
+def _normalize_web_results(raw: Any, query: str) -> List[Dict[str, str]]:
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return [{"snippet": raw, "title": query, "link": ""}]
+    return []
+
+
+async def _run_web_search(query: str, max_results: Optional[int]) -> Optional[Dict[str, List[str]]]:
+    raw = await asyncio.to_thread(search_tool.invoke, query)
+    logger.info(f"Raw search results for '{query}': {raw}")
+    results_list = _normalize_web_results(raw, query)
+    if not results_list:
+        return None
+
+    texts = [r.get("snippet", r.get("body", "")) for r in results_list]
+    urls = [r.get("link", r.get("href", "")) for r in results_list]
+    titles = [r.get("title", "") for r in results_list]
+
+    valid = [(t, u, ti) for t, u, ti in zip(texts, urls, titles) if t.strip()]
+    if not valid:
+        return None
+
+    texts, urls, titles = zip(*valid)
+    texts = list(texts)
+    urls = list(urls)
+    titles = list(titles)
+    if max_results is not None:
+        texts = texts[:max_results]
+        urls = urls[:max_results]
+        titles = titles[:max_results]
+    return {"texts": texts, "urls": urls, "titles": titles}
+
+
+def _format_web_context(texts: List[str], urls: List[str], titles: List[str]) -> Dict[str, Any]:
+    web_groups: Dict[str, Dict[str, Any]] = {}
+    web_sources: List[Dict[str, str]] = []
+    for text, url, title in zip(texts, urls, titles):
+        if url not in web_groups:
+            web_groups[url] = {"title": title or url or "Internet Search", "texts": []}
+        web_groups[url]["texts"].append(text)
+        web_sources.append({
+            "text": text[:200] + "...",
+            "url": url,
+            "title": title or "Internet Search",
+        })
+
+    context_parts = []
+    for url, group in web_groups.items():
+        combined_text = "\n".join(group["texts"])
+        context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
+
+    return {
+        "content": "\n\n".join(context_parts),
+        "__web_sources__": web_sources,
+    }
 
 
 @tool
@@ -249,7 +327,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
 
     Use this along with search_documents when you need to augment the knowledge from
     uploaded documents with the latest information from the internet. This helps
-    provide a more comprehensive answer by checking both internal PDFs and external
+    provide a more comprehensive answer by checking both internal documents and external
     web resources in parallel.
 
     If internet search is not enabled for this session, this tool will return a
@@ -271,39 +349,16 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
 
-        raw = await asyncio.to_thread(search_tool.invoke, query)
-        logger.info(f"Raw search results for '{query}': {raw}")
-
-        # DuckDuckGoSearchResults returns a list of dicts; fall back to string if not.
-        if isinstance(raw, list):
-            results_list = raw
-        elif isinstance(raw, str):
-            try:
-                results_list = json.loads(raw)
-            except Exception:
-                # Plain-text fallback — wrap as a single result without URL
-                results_list = [{"snippet": raw, "title": query, "link": ""}]
-        else:
-            results_list = []
-
-        if not results_list:
-            return "Web search returned no results."
-
-        texts = [r.get("snippet", r.get("body", "")) for r in results_list]
-        urls  = [r.get("link",    r.get("href",  "")) for r in results_list]
-        titles = [r.get("title", "") for r in results_list]
-
-        # Remove empty snippets
-        valid = [(t, u, ti) for t, u, ti in zip(texts, urls, titles) if t.strip()]
-        if not valid:
+        result = await _run_web_search(query, max_results=6)
+        if not result:
             return "Web search returned no usable text."
-        texts, urls, titles = zip(*valid)
-        texts  = list(texts)
-        urls   = list(urls)
-        titles = list(titles)
+
+        texts = result["texts"]
+        urls = result["urls"]
+        titles = result["titles"]
 
         # ── Persist results in Qdrant for future retrieval ──
-        if thread_id and embedding_model:
+        if thread_id and embedding_model and conf.get("web_search_index", True):
             try:
                 from rag import index_web_search_for_thread
                 asyncio.create_task(
@@ -319,25 +374,42 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
             except Exception as idx_err:
                 logger.warning(f"Web search indexing skipped: {idx_err}")
 
-        # ── Build source-labeled content for the LLM ──
-        context_parts = []
-        web_sources = []
-        for text, url, title in zip(texts, urls, titles):
-            label = title or url or "Internet Search"
-            labeled = f'[Source: Internet Search — "{label}" | {url}]\n{text}'
-            context_parts.append(labeled)
-            web_sources.append({
-                "text": text[:200] + "..." if len(text) > 200 else text,
-                "url": url,
-                "title": title,
-            })
-
-        return json.dumps({
-            "content": "\n\n".join(context_parts),
-            "__web_sources__": web_sources,
-        })
+        return json.dumps(_format_web_context(texts, urls, titles))
     except Exception as e:
         logger.error(f"Web search failed: {e}", exc_info=True)
+        return f"Web search failed: {str(e)}"
+
+
+@tool
+async def search_web_intent(query: str, config: RunnableConfig = None) -> str:
+    """
+    Lightweight web lookup for query rewriting, intent disambiguation, and
+    time-sensitivity detection.
+
+    Use ONLY to identify unknown terms/entities or determine if the question is about
+    current events, prices, or other time-sensitive facts. Use results only to
+    clarify user intent and improve the rewritten query. Do NOT use this as evidence
+    in the final answer.
+
+    If internet search is not enabled for this session, this tool will return a
+    message indicating that and no search will be performed.
+
+    Args:
+        query: A concise query aimed at identifying the term or entity in question.
+    """
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        if not conf.get("use_web_search", False):
+            return "Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available."
+
+        logger.info(f"--- INTENT WEB SEARCH INITIATED --- Query: '{query}'")
+        result = await _run_web_search(query, max_results=None)
+        if not result:
+            return "Web search returned no usable text."
+
+        return json.dumps(_format_web_context(result["texts"], result["urls"], result["titles"]))
+    except Exception as e:
+        logger.error(f"Intent web search failed: {e}", exc_info=True)
         return f"Web search failed: {str(e)}"
 
 
@@ -364,12 +436,12 @@ async def ask_for_clarification(options: List[str]) -> str:
 @tool
 async def list_uploaded_documents(config: RunnableConfig = None) -> str:
     """
-    Return metadata for all PDF documents indexed in this thread:
+    Return metadata for all documents indexed in this thread:
     file name, file hash, and upload order (most recent first).
 
-    Use when the user references "the document", "the PDF", "the first file",
+    Use when the user references "the document", "the PDF", "the webpage", "the first file",
     "the report", or any document by name or topic — to identify the correct
-    file_hash before calling search_pdf_by_document. Do NOT call this on every
+    file_hash before calling search_document_by_id. Do NOT call this on every
     request; only invoke it when you genuinely need to resolve a document reference.
     """
     try:
@@ -378,15 +450,23 @@ async def list_uploaded_documents(config: RunnableConfig = None) -> str:
         if not thread_id:
             return "No thread context found."
 
-        from database import get_thread_files
-        files = await get_thread_files(thread_id)
+        from database import get_thread_shape as _get_shape
+        shape = await _get_shape(thread_id)
+        docs = shape["documents"]
 
-        if not files:
+        if not docs:
             return "No documents are uploaded to this thread."
 
         doc_list = [
-            {"index": i + 1, "file_name": f.file_name, "file_hash": f.file_hash}
-            for i, f in enumerate(files)
+            {
+                "index": i + 1,
+                "file_name": meta["file_name"],
+                "file_hash": fh,
+                "source_type": meta.get("source_type", "pdf"),
+                "chunks": meta.get("chunk_count", 0),
+                "status": meta.get("indexing_status", "unknown"),
+            }
+            for i, (fh, meta) in enumerate(docs.items())
         ]
         return json.dumps(doc_list, indent=2)
     except Exception as e:
@@ -394,7 +474,7 @@ async def list_uploaded_documents(config: RunnableConfig = None) -> str:
 
 
 @tool
-async def search_pdf_by_document(
+async def search_document_by_id(
     query: str,
     file_hash: str,
     max_results: int = 8,
@@ -425,8 +505,8 @@ async def search_pdf_by_document(
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
 
-        db = QdrantAdapter()
-        raw_chunks = await db.search_pdf_chunks(
+        db = get_qdrant()
+        raw_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
             limit=max_results,
@@ -445,41 +525,27 @@ async def search_pdf_by_document(
                     if neighbor_id >= 0:
                         chunk_ids_to_fetch.add(neighbor_id)
 
-        expanded_chunks = await db.get_chunks_by_ids(
+        expanded_chunks = await db.get_knowledge_source_chunks_by_ids(
             thread_id=thread_id,
             file_hash=file_hash,
             chunk_ids=list(chunk_ids_to_fetch),
         )
         expanded_chunks.sort(key=lambda x: x.get("chunk_id", 0))
 
-        # Resolve file name for source attribution
-        from database import get_thread_files
-        try:
-            thread_files = await get_thread_files(thread_id)
-            hash_to_name = {f.file_hash: f.file_name for f in thread_files}
-            fname = hash_to_name.get(file_hash, file_hash)
-        except Exception:
-            fname = file_hash
+        # Resolve file name for source attribution from thread_stats (no DB join)
+        hash_to_name = await get_document_name_lookup(thread_id)
+        fname = hash_to_name.get(file_hash, file_hash)
 
-        sources = []
-        context_parts = []
-        for chunk in expanded_chunks:
-            text = chunk.get("text", "")
-            labeled = f'[Source: Document "{fname}"]\n{text}'
-            context_parts.append(labeled)
-            sources.append({
-                "text": text[:200] + "..." if len(text) > 200 else text,
-                "file_hash": file_hash,
-                "file_name": fname,
-                "score": chunk.get("score", 0.0),
-            })
+        document_context, sources = group_document_chunks(expanded_chunks, {file_hash: fname})
+        if not document_context:
+            document_context = ""
 
         return json.dumps({
-            "content": "\n\n".join(context_parts),
-            "__pdf_sources__": sources,
+            "content": document_context,
+            "__document_sources__": sources,
         })
     except Exception as e:
-        logger.error(f"Error in search_pdf_by_document: {e}", exc_info=True)
+        logger.error(f"Error in search_document_by_id: {e}", exc_info=True)
         return f"Error searching document: {e}"
 
 
@@ -510,7 +576,7 @@ async def find_topic_anchor_in_history(
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, topic)
 
-        db = QdrantAdapter()
+        db = get_qdrant()
         recalled = await db.search_chat_memory(
             thread_id=thread_id,
             query_vector=query_vector,
@@ -581,21 +647,25 @@ def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
     if semantic:
         parts.append(f"[SEMANTICALLY RELEVANT PAST QA PAIRS]\n{semantic}")
 
-    pdf = bundle.get("pdf_evidence_text", "")
-    if pdf:
-        parts.append(f"[PDF DOCUMENT EVIDENCE  (queried with raw/un-rewritten question)]\n{pdf}")
+    documents = bundle.get("document_evidence_text", "")
+    if documents:
+        parts.append(f"[DOCUMENT EVIDENCE (PDF + WEBPAGE)  (queried with raw/un-rewritten question)]\n{documents}")
+
+    web = bundle.get("web_evidence_text", "")
+    if web:
+        parts.append(f"[WEB SEARCH EVIDENCE]\n{web}")
 
     if not parts:
         return ""
 
-    sep = "═" * 64
+    sep = "=" * 64
     return (
         f"\n\n{sep}\n"
         "PRE-FETCHED CONTEXT  (assembled before this call — no tool calls needed for this data):\n"
         f"{sep}\n"
         + "\n\n".join(parts)
         + f"\n{sep}\n"
-        "NOTE: PDF Evidence and Semantic History were retrieved with the raw question.\n"
+        "NOTE: Document Evidence and Semantic History were retrieved with the raw question.\n"
         "A better-rewritten query will improve precision — call tools ONLY when this\n"
         "pre-fetched context is genuinely insufficient to answer the user's request.\n"
         f"{sep}"
@@ -612,6 +682,10 @@ class IntentAgentState(TypedDict):
     max_iterations: int
     intent_result: Optional[Dict[str, Any]]
     pre_fetch_bundle: Optional[Dict[str, Any]]
+    reasoning_mode: bool
+    intent_tools_used: bool
+    use_web_search: bool
+
 
 
 async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
@@ -621,183 +695,206 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     """
     messages = state["messages"]
     llm = get_llm(state["llm_model"], temperature=0.0)
+    allow_intent_web_search = bool(state.get("use_web_search"))
+    
+    tools_to_bind = intent_tools.copy() if allow_intent_web_search else []
+    
+    if tools_to_bind:
+        llm_with_tools = llm.bind_tools(tools_to_bind)
+    else:
+        llm_with_tools = llm
+    iteration = state.get("iteration_count", 0) + 1
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
+    reasoning_mode = state.get("reasoning_mode", True)
 
-    system_prompt = (
-        f"""You are the Query Preprocessor — a single-pass retrieval optimizer that runs before the Orchestrator Agent.
-        Your output is a JSON routing signal consumed by the Orchestrator; it is NEVER shown to the user.
+    # Load and format the Intent Agent prompt
+    bundle = state.get("pre_fetch_bundle")
+    prefetch_text = _format_prefetch_for_prompt(bundle) if bundle else ""
 
-        YOUR ROLE (production RAG pattern):
-        This is the "Rewrite-Retrieve-Read" step (arXiv:2305.14283) combined with Standalone Question
-        Generation. You transform the user's raw message into an optimal search query before it is
-        embedded as a vector for semantic similarity search.
-        The rewritten_query you produce is embedded once and searched across all retrieval tools.
-
-        WHY MINIMAL, FAITHFUL REWRITING MATTERS:
-        The rewritten_query is passed directly to a cosine-similarity vector search.
-        Adding topics, subtopics, or angles the user never mentioned DILUTES the query embedding —
-        it shifts the vector away from the user's actual intent and returns chunks ranked for the
-        wrong topics, burying the real answer. Your job is coreference resolution + standalone-ification,
-        NOT academic elaboration or question enhancement.
-
-        ORCHESTRATOR'S TOOLS (your rewrite optimizes for all of these):
-        - search_documents       → semantic search across ALL uploaded PDFs + cached web chunks
-        - search_pdf_by_document → same, scoped to a single file by hash (for named-document questions)
-        - search_conversation_history → semantic search over all prior Q&A pairs in this thread
-        - search_web             → live web search; results cached back into the vector store
-        - ask_for_clarification  → surfaces disambiguation options to the user (genuine ambiguity only)
-
-        CONTEXT AVAILABLE NOW:
-        - Conversation history: in the messages below (oldest → newest)
-        - Pre-fetched bundle: recent turns, semantic memory, PDF evidence, document list — appended below
-
-        RUNTIME: {context_window} tokens. No tool calls. No preamble. Respond with JSON only.
-
-        ════════════════════════════════════════════════════
-        OUTPUT — valid JSON only, no markdown fences, no extra text:
-        {{
-          "status": "CLEAR_STANDALONE" | "CLEAR_FOLLOWUP" | "AMBIGUOUS",
-          "rewritten_query": "<the optimized search query>",
-          "reference_type": "NONE" | "SEMANTIC" | "TEMPORAL" | "ENTITY",
-          "context_coverage": "SUFFICIENT" | "PROBABLY_SUFFICIENT" | "INSUFFICIENT",
-          "clarification_options": ["Full question A", "Full question B"] | null
-        }}
-        ════════════════════════════════════════════════════
-
-        REWRITING ALGORITHM — apply these steps in order:
-
-        STEP 1 — COREFERENCE RESOLUTION (critical for follow-ups)
-        Replace every pronoun, "it", "this", "that", "they", "the method", "the document" etc.
-        with its explicit referent from the conversation history.
-          "How does it work?" (after discussing BERT) → "How does BERT work?"
-          "What were the main findings?" (after uploading a paper) → "What are the main findings in [paper title or 'the uploaded document']?"
-          "Tell me more about that" (after discussing attention mechanisms) → "Explain attention mechanisms in more detail"
-
-        STEP 2 — STANDALONE-IFY (minimum context for cold retrieval)
-        Add only enough subject/domain context so a cold vector search with no conversation history
-        would retrieve the right chunks. Nothing more.
-          "What variants exist?" (after discussing glioblastoma) → "What variants of glioblastoma have been discovered?"
-          NOT: "What variants of glioblastoma exist, including subtypes, IDH mutations, and WHO classification?"
-
-        STEP 3 — PRESERVE SCOPE EXACTLY
-        The user's question has a scope. Do NOT widen or narrow it.
-
-        FORBIDDEN — SCOPE WIDENING (adding topics the user never mentioned):
-          "what is glioblastoma, are there new variants?" → "What are the characteristics, causes, and new variants of glioblastoma?"
-          ↑ BAD: "characteristics" and "causes" were never asked for
-
-          "Explain transformers" → "Explain the transformer architecture including self-attention, positional encoding, and feed-forward layers"
-          ↑ BAD: user asked to explain it, not enumerate every sub-component
-
-        FORBIDDEN — SCOPE NARROWING (collapsing a broad question to one aspect):
-          "What are the main findings?" → "What are the statistical findings in the results section?"
-          ↑ BAD: user didn't specify results section or statistics
-
-        CORRECT:
-          "what is glioblastoma, are there new variants?" → "What is glioblastoma, and have any new variants been discovered?"
-          "Explain transformers" → "Explain the transformer architecture in machine learning"
-          "What are the main findings?" → "What are the main findings or conclusions in the uploaded document?"
-          "How does RAG work?" → "How does Retrieval-Augmented Generation (RAG) work?"
-          "Summarize it" (after PDF upload) → "Provide a summary of the uploaded document"
-
-        STEP 4 — ONE CLEAN QUESTION
-        Output a single natural question. No "Q:" prefix, no bullet lists, no semicolon-joined sub-questions.
-        If the user asked multiple related things (as in glioblastoma above), preserve them as a single
-        compound question using natural conjunctions.
-
-        ════════════════════════════════════════════════════
-        CLASSIFICATION:
-
-        CLEAR_STANDALONE — Self-contained, no prior-context references. All first messages in a thread are this.
-        CLEAR_FOLLOWUP   — References prior context, but the referent is unambiguously resolved from history.
-        AMBIGUOUS        — Multiple genuinely different interpretations AND history cannot resolve which one.
-                           HIGH BAR: Only use this if guessing would answer an entirely different question.
-                           "Tell me more" is NOT ambiguous — it continues the last topic.
-                           A pronoun with one clear referent is NOT ambiguous.
-
-        CONTEXT_COVERAGE — controls how many tool calls the Orchestrator is budgeted:
-        SUFFICIENT          — Pre-fetched bundle directly and fully answers the rewritten query.
-                              The Orchestrator should synthesize from pre-fetch, no extra retrieval needed.
-                              Use for: well-known factual questions, greetings, questions fully answered in pre-fetch.
-        PROBABLY_SUFFICIENT — Pre-fetched bundle has partial or adjacent content. One targeted tool call may sharpen the answer.
-        INSUFFICIENT        — Pre-fetched content clearly lacks what's needed. Orchestrator must retrieve.
-                              Use for: first messages (nothing pre-fetched), deep history questions,
-                              questions about specific doc sections not visible in pre-fetch.
-
-        REFERENCE_TYPE:
-          NONE     — No dependency on prior conversation
-          SEMANTIC — References a topic/concept discussed earlier ("what did we say about X?")
-          TEMPORAL — References a chronological position ("your first answer", "earlier you mentioned")
-          ENTITY   — References a specific named thing from earlier ("that figure", "the equation", "that method")"""
+    base_prompt = get_intent_agent_prompt()
+    system_prompt = base_prompt.replace("{PREFETCH_CONTEXT}", prefetch_text)
+    if not allow_intent_web_search:
+        system_prompt += "\n\nWeb search is disabled for this session. Do NOT call any web search tools."
+    prompt_template = build_chat_prompt()
+    input_messages = prompt_template.format_messages(
+        system_prompt=system_prompt,
+        messages=messages if not (messages and isinstance(messages[0], SystemMessage)) else messages[1:],
     )
 
-    # Inject pre-fetched context bundle
-    bundle = state.get("pre_fetch_bundle")
-    if bundle:
-        system_prompt += _format_prefetch_for_prompt(bundle)
+    # Log complete prompt for Intent Agent in OpenAI-like format
+    logger.info(f"--- INTENT AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}] ---")
+    payload = []
+    for msg in input_messages:
+        role = "system" if isinstance(msg, SystemMessage) else "user" if isinstance(msg, HumanMessage) else "assistant"
+        entry = {"role": role, "content": msg.content}
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            entry["tool_calls"] = msg.tool_calls
+        if isinstance(msg, ToolMessage):
+            entry["role"] = "tool"
+            entry["tool_call_id"] = msg.tool_call_id
+        payload.append(entry)
+    logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
+    logger.info(f"--- INTENT AGENT PROMPT END ---")
 
-    if not messages or not isinstance(messages[0], SystemMessage):
-        input_messages = [SystemMessage(content=system_prompt)] + messages
-    else:
-        input_messages = [SystemMessage(content=system_prompt)] + messages[1:]
-
-    # Single direct call — no tools, no retries
+    # Single direct call — no tools, minimal retries
     try:
-        response = await invoke_with_retry(llm.ainvoke, input_messages)
+        response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
     except Exception as e:
         logger.error(f"Intent Agent LLM call failed: {e}")
         original_question = next(
             (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
         )
         intent_result = {
-            "status": "CLEAR_STANDALONE",
+            "route": "ANSWER",
             "rewritten_query": original_question,
             "reference_type": "NONE",
-            "context_coverage": "PROBABLY_SUFFICIENT",
+            "context_coverage": "PARTIAL",
             "clarification_options": None,
         }
-        return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": 1, "intent_result": intent_result}
+        return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": iteration, "intent_result": intent_result}
 
-    # Parse the JSON response
-    intent_result = None
-    content = response.content.strip()
-    try:
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        intent_result = json.loads(content)
-    except Exception as e:
-        logger.error(f"Failed to parse intent JSON: {e}")
+    if getattr(response, "tool_calls", None):
+        # If it reaches here, it's calling search_web_intent
+        return {
+            "messages": [response],
+            "iteration_count": iteration,
+            "intent_result": None,
+        }
+
+    intent_result = parse_intent_response(response.content, logger=logger)
+    if intent_result is None:
+        logger.warning("Intent XML invalid; retrying once with strict XML instruction.")
+        retry_msg = HumanMessage(
+            content="Your previous output was invalid or missing required XML tags. Output the required XML tags: <route>, <rewritten_query>, <reference_type>, <context_coverage>."
+        )
+        retry_messages = input_messages + [retry_msg]
+        try:
+            retry_response = await invoke_with_retry(llm_with_tools.ainvoke, retry_messages)
+            intent_result = parse_intent_response(retry_response.content, logger=logger)
+            response = retry_response
+        except Exception as e:
+            logger.error(f"Intent Agent retry failed: {e}")
+
+    if intent_result is None:
         original_question = next(
             (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
         )
         intent_result = {
-            "status": "CLEAR_STANDALONE",
+            "route": "ANSWER",
             "rewritten_query": original_question,
             "reference_type": "NONE",
-            "context_coverage": "PROBABLY_SUFFICIENT",
+            "context_coverage": "INSUFFICIENT",
             "clarification_options": None,
         }
+        logger.warning("Intent XML invalid after retry; falling back to original question.")
 
     return {
         "messages": [response],
-        "iteration_count": 1,
+        "iteration_count": iteration,
         "intent_result": intent_result,
     }
 
 
+
+
+class IntentToolNode(ToolNode):
+    async def ainvoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
+        res = await super().ainvoke(input, config, **kwargs)
+        return {
+            "messages": res.get("messages", []),
+            "intent_tools_used": True,
+        }
+
+
+def intent_should_continue(state: IntentAgentState):
+    messages = state["messages"]
+    last_message = messages[-1]
+    iteration_count = state.get("iteration_count", 0)
+    max_iterations = state.get("max_iterations", 1)
+    tools_used = state.get("intent_tools_used", False)
+
+    if getattr(last_message, "tool_calls", None):
+        if tools_used and iteration_count >= max_iterations:
+            return END
+        return "tools"
+    return END
+
+
+intent_tools = [
+    search_web_intent,
+]
+
 intent_workflow = StateGraph(IntentAgentState)
 intent_workflow.add_node("agent", call_intent_model)
+intent_workflow.add_node("tools", IntentToolNode(intent_tools))
 intent_workflow.add_edge(START, "agent")
-intent_workflow.add_edge("agent", END)
+intent_workflow.add_conditional_edges(
+    "agent",
+    intent_should_continue,
+    {"tools": "tools", END: END},
+)
+intent_workflow.add_edge("tools", "agent")
 
 intent_app = intent_workflow.compile()
 # --- End Intent Agent ---
 
+@tool
+async def get_thread_shape(config: RunnableConfig = None) -> str:
+    """
+    Return a compact snapshot of this thread's content inventory: number of
+    uploaded documents/websites with their chunk counts and indexing status,
+    plus QA history volume (total pairs and average size).
+
+    Use this to calibrate your retrieval strategy BEFORE making tool calls:
+    - Documents with large chunk_count → deep retrieval likely needed
+    - Many QA pairs with high avg_qa_chars → rich semantic memory available
+    - Documents with status 'pending' or 'failed' → indexing incomplete, warn user
+
+    This reads from a pre-maintained stats table — it is very fast and does NOT
+    perform any vector search or scan the messages table.
+    """
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("thread_id")
+        if not thread_id:
+            return "No thread context found."
+
+        from database import get_thread_shape as _get_shape
+        shape = await _get_shape(thread_id)
+
+        qa_pairs = shape["total_qa_pairs"]
+        avg_qa = shape["avg_qa_chars"]
+        total_qa = shape["total_qa_chars"]
+        docs = shape["documents"]
+
+        lines = ["[THREAD SHAPE]"]
+        lines.append(
+            f"QA History  : {qa_pairs} pair(s) | {avg_qa:,.0f} avg chars/pair | {total_qa:,} total chars"
+        )
+        if docs:
+            lines.append(f"Documents   : {len(docs)} source(s)")
+            for i, (fh, meta) in enumerate(docs.items(), start=1):
+                status = meta.get("indexing_status", "unknown")
+                chunks = meta.get("chunk_count", 0)
+                chars = meta.get("total_chars", 0)
+                name = meta.get("file_name", fh)
+                stype = meta.get("source_type", "pdf")
+                tag = f"[{stype}]" if stype != "pdf" else ""
+                lines.append(
+                    f"  {i}. {name} {tag}  →  {chunks} chunks | {chars:,} chars | {status}"
+                )
+        else:
+            lines.append("Documents   : none uploaded yet")
+
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error reading thread shape: {e}"
+
+
 tools_list = [
+    get_thread_shape,
     search_documents,
-    search_pdf_by_document,
+    search_document_by_id,
     search_conversation_history,
     find_topic_anchor_in_history,
     search_web,
@@ -809,10 +906,10 @@ TOOL_FRIENDLY_CONFIG = {
     "search_documents": {
         "id": "document_evidence",
         "display_name": "Document Evidence",
-        "description": "Semantic vector search across ALL uploaded PDF documents — returns matching chunks with surrounding context.",
-        "default_prompt": "Use when the question spans multiple documents or the target document is unknown. If results are weak, retry with a rephrased or more specific query. When the document is known, prefer search_pdf_by_document instead.",
+        "description": "Semantic vector search across ALL uploaded documents (PDFs + webpages) — returns matching chunks with surrounding context.",
+        "default_prompt": "Use when the question spans multiple documents or the target document is unknown. If results are weak, retry with a rephrased or more specific query. When the document is known, prefer search_document_by_id instead.",
     },
-    "search_pdf_by_document": {
+    "search_document_by_id": {
         "id": "focused_document_evidence",
         "display_name": "Focused Document Evidence",
         "description": "Semantic search scoped to a SINGLE document by file_hash — avoids contamination from unrelated files.",
@@ -834,13 +931,19 @@ TOOL_FRIENDLY_CONFIG = {
         "id": "live_web_recon",
         "display_name": "Internet Search",
         "description": "Search the web for external, real-time, or post-training knowledge. Results are automatically cached in the thread knowledge base for future retrieval.",
-        "default_prompt": "MANDATORY when web search is enabled: call search_web for virtually every factual question to supplement PDF content with current, external knowledge. Run it IN PARALLEL with document searches — do not wait for PDF results first. Never skip it based on pre-fetched PDF evidence alone. Always cite the URL and title of web results in your answer.",
+        "default_prompt": "MANDATORY when web search is enabled: call search_web for virtually every factual question to supplement document content with current, external knowledge. Run it IN PARALLEL with document searches — do not wait for document results first. Never skip it based on pre-fetched document evidence alone. Always cite the URL and title of web results in your answer.",
     },
     "ask_for_clarification": {
         "id": "clarify_intent",
         "display_name": "Clarify Intent",
         "description": "Present the user with distinct interpretations of an ambiguous question.",
         "default_prompt": "Use only when the question has multiple plausible interpretations and making an assumption risks answering the wrong question entirely. Each option must be a complete, self-contained question.",
+    },
+    "get_thread_shape": {
+        "id": "thread_shape",
+        "display_name": "Thread Shape",
+        "description": "Returns a snapshot of the thread's content inventory: document list with chunk counts and indexing status, plus QA history volume metrics.",
+        "default_prompt": "Use to calibrate retrieval strategy: check document chunk counts to decide between search_documents vs. search_document_by_id, and check QA history volume to decide whether semantic memory search is worthwhile. Only call once — the snapshot is current at the time of the call.",
     },
 }
 
@@ -850,7 +953,7 @@ class OrchestratorToolNode(ToolNode):
         # Intercept tool calls to extract special JSON state updates
         res = await super().ainvoke(input, config, **kwargs)
 
-        pdf_sources = list(input.get("pdf_sources", []))
+        document_sources = list(input.get("document_sources", []))
         web_sources = list(input.get("web_sources", []))
         used_chat_ids = list(input.get("used_chat_ids", []))
         clarification_options = None
@@ -863,8 +966,8 @@ class OrchestratorToolNode(ToolNode):
                     # Replace the raw message content with the clean text
                     if "content" in data:
                         messages[i].content = data["content"]
-                    if "__pdf_sources__" in data:
-                        pdf_sources.extend(data["__pdf_sources__"])
+                    if "__document_sources__" in data:
+                        document_sources.extend(data["__document_sources__"])
                     if "__web_sources__" in data:
                         web_sources.extend(data["__web_sources__"])
                     if "__used_chat_ids__" in data:
@@ -877,7 +980,7 @@ class OrchestratorToolNode(ToolNode):
 
         return {
             "messages": messages,
-            "pdf_sources": pdf_sources,
+            "document_sources": document_sources,
             "web_sources": web_sources,
             "used_chat_ids": used_chat_ids,
             "clarification_options": clarification_options,
@@ -888,15 +991,16 @@ async def call_model(state: AgentState, config: RunnableConfig):
     llm = get_llm(state["llm_model"])
     iteration = state.get("iteration_count", 0) + 1
     
-    llm_with_tools = llm.bind_tools(tools_list)
-    
     context_window = state.get('context_window', DEFAULT_TOKEN_BUDGET)
     system_role = sanitize_system_role(state.get("system_role", ""))
     tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
+    reasoning_mode = state.get("reasoning_mode", True)
+    reasoning_mode = state.get("reasoning_mode", True)
 
     use_web_search = state.get("use_web_search", False)
     intent_agent_ran = state.get("intent_agent_ran", True)
+    reasoning_mode = state.get("reasoning_mode", True)
     prompt_content = build_system_prompt(
         context_window=context_window,
         system_role=system_role,
@@ -904,6 +1008,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
         custom_instructions=custom_instructions,
         use_web_search=use_web_search,
         intent_agent_ran=intent_agent_ran,
+        reasoning_mode=reasoning_mode,
     )
 
     # Inject pre-fetched context bundle + pre-fetch-first retrieval policy
@@ -913,30 +1018,67 @@ async def call_model(state: AgentState, config: RunnableConfig):
         if bundle_text:
             prompt_content += (
                 "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
-                "Pre-fetched context (recent turns, semantic history, PDF evidence, document list) is\n"
+                "Pre-fetched context (recent turns, semantic history, document evidence, document list) is\n"
                 "already present in the PRE-FETCHED CONTEXT block below. Before calling any tool:\n"
                 "1. Assess whether the pre-fetched content answers the rewritten query with confidence.\n"
-                "   If YES, skip PDF/history tool calls — but NEVER skip search_web when it is available.\n"
-                "2. If PDF evidence is present but the rewritten query is more specific than the raw question:\n"
-                "   call search_documents or search_pdf_by_document ONCE with the rewritten query.\n"
+                "   If YES, skip document/history tool calls — but NEVER skip search_web when it is available.\n"
+                "2. If document evidence is present but the rewritten query is more specific than the raw question:\n"
+                "   call search_documents or search_document_by_id ONCE with the rewritten query.\n"
                 "3. If the question targets a specific document and its file_hash is in the document list:\n"
-                "   prefer search_pdf_by_document (scoped) over search_documents (all documents).\n"
+                "   prefer search_document_by_id (scoped) over search_documents (all documents).\n"
                 "4. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
                 "   conversation and semantic history are already in the pre-fetched block.\n"
                 + (
                     "5. WEB SEARCH IS ENABLED AND MANDATORY: call search_web for this question IN PARALLEL\n"
-                    "   with any document search. Pre-fetched PDF evidence does NOT replace a web search.\n"
+                    "   with any document search. Pre-fetched document evidence does NOT replace a web search.\n"
                     "   Do not skip search_web regardless of how complete the pre-fetched content appears.\n"
                     if use_web_search else ""
                 )
             ) + bundle_text
 
-    sys_prompt = SystemMessage(content=prompt_content)
+    prompt_template = build_chat_prompt()
+    input_messages = prompt_template.format_messages(
+        system_prompt=prompt_content,
+        messages=messages,
+    )
 
-    # Langchain expects SystemMessage at the start
-    input_messages = [sys_prompt] + messages
+    llm_with_tools = llm.bind_tools(tools_list) if reasoning_mode else llm
+
+    # Log complete prompt for Orchestrator Agent in OpenAI-like format
+    logger.info(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
+    payload = []
+    for msg in input_messages:
+        role = "system" if isinstance(msg, SystemMessage) else "user" if isinstance(msg, HumanMessage) else "assistant"
+        entry = {"role": role, "content": msg.content}
+        if hasattr(msg, "tool_calls") and msg.tool_calls:
+            entry["tool_calls"] = msg.tool_calls
+        if isinstance(msg, ToolMessage):
+            entry["role"] = "tool"
+            entry["tool_call_id"] = msg.tool_call_id
+        payload.append(entry)
+    logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
+    logger.info(f"--- ORCHESTRATOR AGENT PROMPT END ---")
+
     response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
     return {"messages": [response], "iteration_count": iteration}
+
+
+def _looks_like_tool_call_text(text: str) -> bool:
+    if not text:
+        return False
+    try:
+        data = json.loads(text)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    if data.get("type") == "function":
+        return True
+    if "function" in data and "parameters" in data:
+        return True
+    if "tool" in data and "tool_input" in data:
+        return True
+    return False
 
 
 async def force_final_answer(state: AgentState, config: RunnableConfig):
@@ -986,12 +1128,13 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
                 prior_ai_parts.append(txt.strip())
 
     # ── Build a direct synthesis prompt ──
-    sys_prompt = SystemMessage(content=build_system_prompt(
+    sys_prompt = build_system_prompt(
         context_window=context_window,
         system_role=system_role,
         tool_instructions=tool_instructions,
-        custom_instructions=custom_instructions
-    ))
+        custom_instructions=custom_instructions,
+        reasoning_mode=reasoning_mode,
+    )
 
     parts = []
     if tool_context_parts:
@@ -1008,7 +1151,12 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
     )
     force_msg = HumanMessage(content=force_content)
 
-    response = await invoke_with_retry(llm.ainvoke, [sys_prompt, force_msg])
+    prompt_template = build_chat_prompt()
+    input_messages = prompt_template.format_messages(
+        system_prompt=sys_prompt,
+        messages=[force_msg],
+    )
+    response = await invoke_with_retry(llm.ainvoke, input_messages)
     return {"messages": [response], "iteration_count": iteration}
 
 
@@ -1017,6 +1165,7 @@ def should_continue(state: AgentState):
     last_message = messages[-1]
     iteration_count = state.get("iteration_count", 0)
     max_iterations = state.get("max_iterations", DEFAULT_MAX_ITERATIONS)
+    reasoning_mode = state.get("reasoning_mode", True)
 
     if getattr(last_message, "tool_calls", None):
         if iteration_count >= max_iterations:
@@ -1030,6 +1179,13 @@ def should_continue(state: AgentState):
             logger.warning(f"Reaching max agent iterations ({iteration_count}/{max_iterations}). Forcing termination.")
             return "force_final_answer"
         return "tools"
+
+    if not reasoning_mode and evidence_insufficient(state):
+        if iteration_count >= max_iterations:
+            logger.warning(f"Reaching max agent iterations ({iteration_count}/{max_iterations}). Forcing termination.")
+            return "force_final_answer"
+        logger.info("Non-reasoning mode: auto-tools pass triggered (no tool calls, insufficient evidence).")
+        return "auto_tools"
 
     # Detect empty-content response after tool execution (e.g. model outputs nothing after
     # receiving tool results). Force a final answer instead of silently ending with blank text.
@@ -1045,7 +1201,65 @@ def should_continue(state: AgentState):
             logger.warning("LLM returned empty response after tool execution. Triggering force_final_answer.")
             return "force_final_answer"
 
+    if not reasoning_mode:
+        content = getattr(last_message, "content", "")
+        if isinstance(content, list):
+            from reasoning import _text_from_content_item
+            content = "\n".join([_text_from_content_item(i) for i in content if i]).strip()
+        if isinstance(content, str) and _looks_like_tool_call_text(content.strip()):
+            logger.warning("Non-reasoning mode: model returned tool-call-like JSON. Forcing final answer.")
+            return "force_final_answer"
+
     return END
+
+
+async def auto_tools(state: AgentState, config: RunnableConfig):
+    """
+    Non-reasoning fallback: run required tools when the model fails to call any.
+    """
+    tool_messages: list[ToolMessage] = []
+    document_sources: list[Dict[str, Any]] = []
+    web_sources: list[Dict[str, Any]] = []
+    used_chat_ids: list[str] = []
+
+    working_query = state.get("working_query", "")
+    use_web_search = state.get("use_web_search", False)
+    intent_ref = state.get("intent_reference_type", "NONE")
+    prefetch = state.get("pre_fetch_bundle") or {}
+    documents = prefetch.get("documents") or []
+
+    async def _run_tool(tool_name: str, result: str):
+        tool_messages.append(ToolMessage(content=result, tool_call_id=f"auto_{tool_name}"))
+        collect_tool_sources(result, document_sources, web_sources, used_chat_ids)
+
+    if use_web_search and not state.get("web_sources"):
+        logger.info("Auto-tools: running search_web.")
+        result = await search_web(working_query, config=config)
+        await _run_tool("search_web", result)
+
+    if documents and not state.get("document_sources"):
+        if intent_ref == "ENTITY" and len(documents) == 1:
+            file_hash = documents[0].get("file_hash")
+            if file_hash:
+                logger.info("Auto-tools: running search_document_by_id.")
+                result = await search_document_by_id(working_query, file_hash, config=config)
+                await _run_tool("search_document_by_id", result)
+        else:
+            logger.info("Auto-tools: running search_documents.")
+            result = await search_documents(working_query, config=config)
+            await _run_tool("search_documents", result)
+
+    if intent_ref == "SEMANTIC":
+        logger.info("Auto-tools: running search_conversation_history.")
+        result = await search_conversation_history(working_query, config=config)
+        await _run_tool("search_conversation_history", result)
+
+    return {
+        "messages": tool_messages,
+        "document_sources": document_sources,
+        "web_sources": web_sources,
+        "used_chat_ids": used_chat_ids,
+    }
 
 def clarification_router(state: AgentState):
     if state.get("clarification_options"):
@@ -1058,9 +1272,15 @@ workflow = StateGraph(AgentState)
 workflow.add_node("agent", call_model)
 workflow.add_node("tools", OrchestratorToolNode(tools_list))
 workflow.add_node("force_final_answer", force_final_answer)
+workflow.add_node("auto_tools", auto_tools)
 
 workflow.add_edge(START, "agent")
-workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", "force_final_answer": "force_final_answer", END: END})
+workflow.add_conditional_edges(
+    "agent",
+    should_continue,
+    {"tools": "tools", "auto_tools": "auto_tools", "force_final_answer": "force_final_answer", END: END},
+)
+workflow.add_edge("auto_tools", "agent")
 
 workflow.add_conditional_edges("tools", clarification_router, {END: END, "agent": "agent"})
 workflow.add_edge("force_final_answer", END)
@@ -1147,317 +1367,94 @@ def build_system_prompt(
     custom_instructions: str = "",
     use_web_search: bool = False,
     intent_agent_ran: bool = True,
+    reasoning_mode: bool = True,
 ) -> str:
+    """Build the Orchestrator Agent system prompt."""
     role = system_role or "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers."
     catalog = get_tool_catalog()
     playbook = normalize_tool_instructions(tool_instructions or {})
-
-    # ── Section helpers ──────────────────────────────────────────────────────
-    LOCK  = "(LOCKED — not overridable)"
-    EDIT  = "(USER-CONFIGURABLE)"
-    sep   = "─" * 60
-
-    # ── Mode-dependent prompt blocks (adapt when Intent Agent is disabled) ───
-    _temporal_branch = (
-        "  ├─ Does the question reference a chronological position in this conversation\n"
-        "  │    (\"your first answer\", \"what you said in the beginning\", \"earlier you mentioned\")\n"
-        "  │    YES → call find_topic_anchor_in_history IN PARALLEL with document searches to locate\n"
-        "  │           the precise turn; use the anchor to refine search_conversation_history\n"
-        "  │    NO  ↓\n"
-        "  │\n"
-    )
-    if not intent_agent_ran:
-        _phase0 = (
-            f"{sep}\n"
-            "PHASE 0 — PREPROCESS  (internal only — no output visible to user)\n"
-            f"{sep}\n"
-            "No upstream query rewriter ran for this request. Execute these four micro-steps\n"
-            "internally before calling any tool or writing the Phase 2 plan:\n\n"
-            "STEP 1 — COREFERENCE RESOLUTION\n"
-            "Replace every pronoun (\"it\", \"this\", \"that\", \"they\", \"the document\", \"the method\")\n"
-            "with its explicit referent resolved from the conversation messages above.\n"
-            "  \"How does it work?\" (after discussing BERT) → working query: \"How does BERT work?\"\n"
-            "  \"What were the main findings?\" → \"What are the main findings in [document title or topic]?\"\n"
-            "  \"Tell me more about that\" → \"Explain [last discussed topic] in more detail\"\n"
-            "  \"Summarize it\" (after PDF upload) → \"Provide a summary of the uploaded document\"\n\n"
-            "STEP 2 — STANDALONE-IFY\n"
-            "Add only the minimum subject/domain context so a cold vector search retrieves the right\n"
-            "chunks. Do NOT add subtopics or angles the user never mentioned — extra terms dilute the\n"
-            "embedding vector and return wrong chunks.\n"
-            "  \"What variants exist?\" (after glioblastoma) → \"What variants of glioblastoma exist?\"\n"
-            "  NOT: \"What variants of glioblastoma exist, including WHO classification, IDH mutations?\"\n\n"
-            "STEP 3 — SCOPE & COVERAGE ASSESSMENT\n"
-            "  a) Preserve the user's question scope exactly — do not widen or narrow it.\n"
-            "  b) Review the PRE-FETCHED CONTEXT block (if present) and internally classify coverage:\n"
-            "       SUFFICIENT          → pre-fetch directly answers the working query; skip retrieval\n"
-            "                             tools (except search_web if enabled).\n"
-            "       PROBABLY_SUFFICIENT → partial content present; one targeted call may sharpen it.\n"
-            "       INSUFFICIENT        → pre-fetch lacks the specific detail; full retrieval needed.\n"
-            "  c) IMPORTANT: pre-fetched PDF evidence was retrieved with the raw, unprocessed question.\n"
-            "     If your working query is more specific than the original, the pre-fetch may have\n"
-            "     missed relevant chunks — call search tools with the working query to compensate.\n\n"
-            "STEP 4 — AMBIGUITY CHECK  (high bar)\n"
-            "Does the working query still have 2+ genuinely different interpretations that conversation\n"
-            "history cannot resolve?\n"
-            "  YES → your first (and only) tool call MUST be ask_for_clarification.\n"
-            "  NO  → proceed to Phase 1.\n"
-            "\"Tell me more\" is NEVER ambiguous. A pronoun with one clear referent is NEVER ambiguous.\n\n"
-            "▶ Store the preprocessed result as your WORKING QUERY. Every tool call argument\n"
-            "  in Phase 3 and the retrieval plan in Phase 2 MUST use the working query.\n\n"
-        )
-        _phase_count     = "six"
-        _phase_start     = " Begin with Phase 0 — Preprocess."
-        _orient_word     = "working"
-        _orient_extra    = (
-            "\n  e) Does the raw message contain unresolved pronouns or references? → your Phase 0\n"
-            "     WORKING QUERY replaces the raw message for all retrieval operations below."
-        )
-        _plan_query_note = (
-            "\n  • Use the WORKING QUERY from Phase 0 — not the raw user message — for all tool arguments."
-        )
+    
+    # Load base template
+    template = get_orchestrator_prompt() if reasoning_mode else get_orchestrator_prompt_compact()
+    
+    # Setup variables for template substitution
+    if intent_agent_ran:
+        intent_agent_note = "The Intent Agent upstream has already rewritten the user's query and classified its coverage; your job is to:"
+        preprocessing_phase_note = ""
+        phase0 = ""
+        phase_count = "five"
+        phase_start = ""
+        orient_word = "rewritten"
+        orient_extra = ""
+        plan_query_note = ""
     else:
-        _phase0          = ""
-        _phase_count     = "five"
-        _phase_start     = ""
-        _orient_word     = "rewritten"
-        _orient_extra    = ""
-        _plan_query_note = ""
-
-    sections = [
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"IDENTITY & MISSION {EDIT}",
-            (
-                f"You are {role}\n\n"
-                "Your architectural role is the Orchestrator in a production Retrieval-Augmented Generation (RAG)\n"
-                "system. "
-                + ("The Intent Agent upstream has already rewritten the user's query and classified its coverage; your job is to:\n" if intent_agent_ran else "No upstream query preprocessor ran for this turn — you are responsible for both query preprocessing AND orchestration. Your job is to:\n")
-                + ("  0. Preprocess the raw user query: resolve coreferences, standalone-ify, assess coverage (Phase 0).\n" if not intent_agent_ran else "")
-                + "  1. Orient on what is already known (pre-fetched context).\n"
-                  "  2. Plan which tools to call — and in what parallel groupings — to fill evidence gaps.\n"
-                  "  3. Retrieve evidence by dispatching tools.\n"
-                  "  4. Assess quality: decide whether evidence is sufficient or a retry is warranted.\n"
-                  "  5. Synthesize a grounded, well-cited final answer."
-            )
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"RUNTIME CONSTRAINTS {LOCK}",
-            f"""Context window: {context_window} tokens. You share this budget with the conversation history,
-pre-fetched context, tool results, and your final answer. Manage it actively:
-  • Prefer targeted queries over broad ones to keep tool results concise.
-  • Do not repeat identical or near-identical tool calls — variation must be meaningful.
-  • If iteration budget is low (visible from iteration_count nearing max_iterations), skip
-    optional confirmatory searches and move directly to synthesis."""
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"REASONING PROTOCOL {LOCK}",
-            f"""{_phase0}Execute every response in these {_phase_count} ordered phases.{_phase_start} Do NOT skip phases.
-
-{sep}
-PHASE 1 — ORIENT  (silent, no output)
-{sep}
-Read the PRE-FETCHED CONTEXT block (if present). Ask yourself:
-  a) Does it directly answer the {_orient_word} question with enough specificity?
-  b) Are there named documents in the document list that are clearly relevant?
-  c) Is the question asking about something that happened after the documents were written
-     (current events, real-time data)? → web search may be mandatory.
-  d) Does the question reference a prior exchange? → semantic history may be needed.{_orient_extra}
-Record your answers internally; they drive Phase 2.
-
-{sep}
-PHASE 2 — PLAN  (concise, visible: 1-3 lines)
-{sep}
-Output a brief retrieval plan before calling any tools, e.g.:
-  "Calling search_documents with [query] and search_web with [query] in parallel."
-  "Pre-fetch content is sufficient for this factual question — no extra retrieval needed."
-  "Will call search_pdf_by_document scoped to [filename] (hash known from document list)."{_plan_query_note}
-
-Rules:
-  • Group every independent tool call into a SINGLE parallel batch — dispatch them together.
-  • Never call tool B only after tool A returns if they are independent of each other.
-  • Avoid calling more than {3 if not use_web_search else 4} tools in one batch (context budget).
-  • State what you expect each tool to return — this prevents redundant follow-up calls.
-
-{sep}
-PHASE 3 — RETRIEVE  (tool calls)
-{sep}
-Execute the plan from Phase 2. Apply these dispatch rules:
-  PARALLEL FIRST — independent searches MUST be batched together in one response turn,
-  never issued sequentially.
-
-  TOOL SELECTION DECISION TREE:
-  ┌─ Is the question answerable from pre-fetched context alone?
-  │    YES → set context_coverage = SUFFICIENT; skip all retrieval tools except search_web
-  │    NO  ↓
-  ├─ Does the question name a specific document?
-  │    YES → use search_pdf_by_document (scoped, avoids noise from other files)
-  │    NO  → use search_documents (all-document semantic search)
-  │
-  ├─ Does the question reference a past topic discussed in this thread?
-  │    YES → use search_conversation_history IN PARALLEL with the document search
-  │    NO  → skip search_conversation_history (recent history is in pre-fetch)
-  │
-  ├─ Is web search enabled AND is this a factual/informational question?
-  │    YES → call search_web IN PARALLEL with document searches — MANDATORY, not optional
-  │    NO  → skip search_web
-  │
-  {_temporal_branch}└─ Is the question genuinely ambiguous with multiple distinct interpretations?
-       YES → call ask_for_clarification — stop all other retrieval
-       NO  → never call ask_for_clarification
-
-  RETRY LOGIC — if a tool returns insufficient or off-topic results:
-    1st retry: rephrase the query (more specific, different vocabulary, drop stop words).
-    2nd retry: decompose the question and search for sub-components separately.
-    After 2 retries with no improvement: accept partial evidence and note the gap in synthesis.
-
-{sep}
-PHASE 4 — ASSESS  (silent self-check)
-{sep}
-Before writing a single word of the final answer, evaluate:
-  ✓ Coverage: Does retrieved evidence directly address the user's question?
-  ✓ Confidence: Are the key claims backed by at least one retrievable source?
-  ✓ Conflicts: Do sources contradict each other? → must be flagged in the answer.
-  ✓ Gaps: Is there a material gap in evidence? → either retry (if budget remains) or
-          disclose the gap explicitly in the answer; never fill gaps with guesses.
-
-SUFFICIENCY CRITERIA — stop retrieving when ANY of these is true:
-  • Retrieved passages directly answer the question with specific supporting detail.
-  • Two independent tool calls with varied queries both return the same result (convergence).
-  • Iteration count has reached max_iterations — synthesize from whatever is available.
-  • Query is a greeting, meta-question, or does not require factual retrieval.
-
-INSUFFICIENCY SIGNALS — retrieve more when ALL of these are true:
-  • No passage contains the specific fact the question asks for.
-  • A rephrased query has not been tried yet.
-  • Iteration budget has not been exhausted.
-
-{sep}
-PHASE 5 — SYNTHESIZE  (final answer)
-{sep}
-Write the final answer only after completing Phase 4. Quality bar:
-  • Lead with the most directly relevant finding — do not bury the answer in preamble.
-  • Integrate evidence from multiple sources into a unified narrative; do not dump chunks.
-  • Use Markdown formatting (headers, bullets, bold) when the answer is multi-part or complex.
-  • Match answer depth to question complexity: short factual questions get concise answers;
-    analytical questions get structured, multi-paragraph answers.
-  • Proactively note uncertainty, limitations, or conflicting evidence.
-  • NEVER output a final answer that consists solely of tool output verbatim — always
-    add synthesis, context, and explanation."""
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"TOOL REGISTRY {EDIT}",
-            "\n".join([
-                f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n"
-                f"    {item['description']}"
+        intent_agent_note = "No upstream query preprocessor ran for this turn — you are responsible for both query preprocessing AND orchestration. Your job is to:"
+        preprocessing_phase_note = "  0. Preprocess the raw user query: resolve coreferences, standalone-ify, assess coverage (Phase 0)."
+        phase0 = get_orchestrator_phase0_prompt() if reasoning_mode else get_orchestrator_phase0_prompt_compact()
+        phase_count = "six"
+        phase_start = " Begin with Phase 0 — Preprocess."
+        orient_word = "working"
+        orient_extra = "\n  e) Does the raw message contain unresolved pronouns or references? → your Phase 0\n     WORKING QUERY replaces the raw message for all retrieval operations below."
+        plan_query_note = "\n  - Use the WORKING QUERY from Phase 0 — not the raw user message — for all tool arguments."
+    
+    max_parallel_tools = 4 if use_web_search else 3
+    
+    # Build tool registry/playbook sections
+    EDIT = "(USER-CONFIGURABLE)"
+    tool_registry_section = (
+        f"\n\n{'=' * 64}\nTOOL REGISTRY {EDIT}:\n{'=' * 64}\n"
+        + "\n".join(
+            [
+                f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n    {item['description']}"
                 for item in catalog
-            ])
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"TOOL PLAYBOOK {EDIT}",
-            "\n".join([
+            ]
+        )
+    )
+    tool_playbook_section = (
+        f"\n\n{'=' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'=' * 64}\n"
+        + "\n".join(
+            [
                 f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
                 for item in catalog
-            ])
-        ),
+            ]
+        )
+    )
 
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"CITATION STANDARDS {LOCK}",
-            """Every factual claim in your final answer MUST be traceable to a source. Apply these rules:
-
-  PDF documents:
-    Inline: 'According to [filename], ...' or '([filename], p. N if page-numbered)'
-    When multiple PDFs corroborate: 'Both [file-a] and [file-b] state that ...'
-    Never invent filenames — use only names returned by search tools or list_uploaded_documents.
-
-  Internet search results:
-    Inline: 'According to [Page Title] (source: <url>), ...'
-    Always include both title and URL if both are available in the search result.
-    Never cite a web result without a URL — if the URL is missing, say 'a web source found that'.
-
-  Conversation history / semantic memory:
-    Inline: 'As we discussed earlier, ...' or 'Based on a prior exchange in this thread, ...'
-
-  Internal knowledge (no retrieved source):
-    Clearly mark: 'Based on general knowledge (not from your documents), ...'
-    Use sparingly — prefer retrieved evidence over internal knowledge for factual claims.
-
-  Conflicting sources:
-    'According to [source-A], X; however, [source-B] states Y — these sources disagree.'
-    Do NOT silently pick one side; surface the disagreement.
-
-  Evidence gaps:
-    'The uploaded documents do not contain specific information about X.'
-    'A web search did not return relevant results for this query.'
-    Never fabricate a citation or fill a gap with plausible-sounding but unchecked facts."""
-        ),
-
-        # ────────────────────────────────────────────────────────────────────
-        (
-            f"ANTI-PATTERNS {LOCK}",
-            """Avoid these failure modes that degrade answer quality:
-
-  ✗ Answering before retrieving  — do not synthesize from internal knowledge when tools
-      would return better evidence. Tools exist for a reason; use them first.
-
-  ✗ Skipping parallel execution  — calling search_documents and then search_web in
-      separate sequential turns when they are independent wastes the iteration budget.
-
-  ✗ Redundant tool calls  — retrying with an identical or trivially paraphrased query
-      wastes tokens without improving evidence quality. Materially rephrase or decompose.
-
-  ✗ Pre-fetch over-reliance  — treating pre-fetched PDF evidence as equivalent to a
-      freshly targeted search when the rewritten query is more specific than the raw question.
-      When the rewritten query is significantly more specific, re-query with the precise terms.
-
-  ✗ Evidence laundering  — presenting internal knowledge as if it came from a tool result.
-      Only cite sources that actually appeared in tool output.
-
-  ✗ Premature clarification  — asking the user to clarify when the question's intent is
-      recoverable from conversation history. ask_for_clarification is a last resort.
-
-  ✗ Verbatim chunk dumping  — pasting raw retrieved passages as the final answer without
-      synthesis. Always transform evidence into a coherent, user-facing response.
-
-  ✗ Ignoring conflicts  — blending contradictory claims from different sources into a
-      single coherent-sounding statement that misrepresents both sources.
-
-  ✗ Fabricating detail to fill gaps  — if evidence is absent, say so. Never invent
-      specific facts, statistics, dates, or names that were not returned by tools."""
-        ),
-    ]
-
-    # ── Conditional: web search mandate ─────────────────────────────────────
+    # Build web search mandate section if enabled
+    web_search_mandate_section = ""
     if use_web_search:
-        sections.append((
-            f"WEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency",
-            f"""Internet Search (search_web) is ENABLED for this session.
+        LOCK = "(LOCKED — not overridable)"
+        web_search_mandate_section = (
+            f"\n\n{'=' * 64}\nWEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency\n"
+            f"{'=' * 64}\n"
+            + get_web_search_mandate()
+        )
 
-MANDATORY INVOCATION — call search_web for every factual or informational question:
-  • Run search_web IN PARALLEL with search_documents / search_pdf_by_document in Phase 3.
-  • Pre-fetched PDF evidence does NOT satisfy this mandate — PDF and web are complementary.
-  • Do not defer web search to a second iteration after checking PDF results — batch them.
-
-SOLE EXCEPTIONS (the only cases where search_web may be skipped):
-  • Pure conversation meta-questions: 'how many messages have we had?', 'can you summarize our chat?'
-  • The user's question is entirely answered by their own just-provided context (e.g., 'fix this text I pasted').
-  • Clarification exchanges where no factual retrieval is needed.
-
-When query rephrasing is needed for web search, use a concise keyword-rich query rather
-than a full natural-language question — web search engines rank keyword density differently
-from embedding-based vector search."""
-        ))
-
-    # ── Conditional: custom user instructions ────────────────────────────────
+    # Build custom instructions section if provided
+    custom_instructions_section = ""
     if custom_instructions:
-        sections.append((f"USER CUSTOM INSTRUCTIONS {EDIT}", custom_instructions))
+        custom_instructions_section = (
+            f"\n\n{'=' * 64}\nUSER CUSTOM INSTRUCTIONS {EDIT}\n{'=' * 64}\n"
+            + custom_instructions
+        )
 
-    return "\n\n".join([f"{'═' * 64}\n{title}:\n{'═' * 64}\n{body}" for title, body in sections])
+    # Substitute placeholders in template
+    prompt = template.format(
+        SYSTEM_ROLE=role,
+        CONTEXT_WINDOW=context_window,
+        INTENT_AGENT_NOTE=intent_agent_note,
+        PREPROCESSING_PHASE_NOTE=preprocessing_phase_note,
+        PREPROCESSING_SECTION=phase0,
+        PHASE_COUNT=phase_count,
+        PHASE_START=phase_start,
+        ORIENT_WORD=orient_word,
+        ORIENT_EXTRA=orient_extra,
+        PLAN_QUERY_NOTE=plan_query_note,
+        MAX_PARALLEL_TOOLS=max_parallel_tools,
+        TOOL_REGISTRY_SECTION=tool_registry_section,
+        TOOL_PLAYBOOK_SECTION=tool_playbook_section,
+        WEB_SEARCH_MANDATE_SECTION=web_search_mandate_section,
+        CUSTOM_INSTRUCTIONS_SECTION=custom_instructions_section,
+    )
+
+    return prompt

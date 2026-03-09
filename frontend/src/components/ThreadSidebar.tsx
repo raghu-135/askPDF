@@ -35,8 +35,8 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import ChatIcon from '@mui/icons-material/Chat';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import SpeakerNotesIcon from '@mui/icons-material/SpeakerNotes';
+import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff';
 import DescriptionIcon from '@mui/icons-material/Description';
 import LockIcon from '@mui/icons-material/Lock';
 
@@ -135,7 +135,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const handleDeleteThread = async (threadId: string, event: React.MouseEvent) => {
     event.stopPropagation();
     if (!confirm('Delete this thread and all its messages?')) return;
-    
+
     try {
       await deleteThread(threadId);
       setThreads(prev => prev.filter(t => t.id !== threadId));
@@ -149,7 +149,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
   const handleEditThread = async (threadId: string) => {
     if (!editingName.trim()) return;
-    
+
     try {
       const updated = await updateThread(threadId, editingName.trim());
       setThreads(prev => prev.map(t => t.id === threadId ? { ...t, name: updated.name } : t));
@@ -201,21 +201,21 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   };
 
   return (
-    <Paper 
-      elevation={0} 
-      sx={{ 
-        height: '100%', 
-        display: 'flex', 
+    <Paper
+      elevation={0}
+      sx={{
+        height: '100%',
+        display: 'flex',
         flexDirection: 'column',
         bgcolor: theme.palette.background.default,
         color: theme.palette.text.primary
       }}
     >
       {/* Header */}
-      <Box sx={{ 
-        p: 1.5, 
-        display: 'flex', 
-        alignItems: 'center', 
+      <Box sx={{
+        p: 1.5,
+        display: 'flex',
+        alignItems: 'center',
         justifyContent: 'space-between',
         borderBottom: 1,
         borderColor: 'divider',
@@ -223,7 +223,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <IconButton size="small" onClick={() => setExpanded(!expanded)}>
-            {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+            {expanded ? <SpeakerNotesIcon fontSize="small" /> : <SpeakerNotesOffIcon fontSize="small" />}
           </IconButton>
           <Typography variant="subtitle2" fontWeight="bold">
             Threads
@@ -231,12 +231,12 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           <Chip label={threads.length} size="small" />
         </Box>
         <Tooltip title="Create new thread">
-          <IconButton 
-            size="small" 
-            color="primary" 
+          <IconButton
+            size="small"
+            color="primary"
             onClick={handleOpenCreateDialog}
           >
-            <AddIcon />
+            <AddIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       </Box>
@@ -252,10 +252,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             <Typography variant="body2" color="text.secondary">
               No threads yet
             </Typography>
-            <Button 
-              size="small" 
-              startIcon={<AddIcon />} 
-              onClick={handleOpenCreateDialog} 
+            <Button
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={handleOpenCreateDialog}
               sx={{ mt: 1 }}
             >
               Create Thread
@@ -284,7 +284,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   }
                 }}
               >
-                <ListItemButton 
+                <ListItemButton
                   onClick={() => onThreadSelect(thread)}
                   selected={activeThreadId === thread.id}
                   sx={{ py: 1 }}
@@ -292,7 +292,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   <ListItemIcon sx={{ minWidth: 36 }}>
                     <ChatIcon fontSize="small" color={activeThreadId === thread.id ? 'primary' : 'action'} />
                   </ListItemIcon>
-                  
+
                   {editingThreadId === thread.id ? (
                     <TextField
                       size="small"
@@ -310,8 +310,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   ) : (
                     <ListItemText
                       primary={
-                        <Typography 
-                          variant="body2" 
+                        <Typography
+                          variant="body2"
                           fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'}
                           noWrap
                         >
@@ -325,17 +325,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                             {formatDate(thread.created_at)}
                           </Typography>
                           {thread.message_count !== undefined && thread.message_count > 0 && (
-                            <Chip 
-                              label={`${thread.message_count} msgs`} 
-                              size="small" 
+                            <Chip
+                              label={`${thread.message_count} msgs`}
+                              size="small"
                               sx={{ height: 16, fontSize: '0.65rem' }}
                             />
                           )}
                           {thread.file_count !== undefined && thread.file_count > 0 && (
-                            <Chip 
+                            <Chip
                               icon={<DescriptionIcon sx={{ fontSize: '0.7rem !important' }} />}
-                              label={thread.file_count} 
-                              size="small" 
+                              label={thread.file_count}
+                              size="small"
                               sx={{ height: 16, fontSize: '0.65rem' }}
                             />
                           )}
@@ -344,17 +344,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                     />
                   )}
                 </ListItemButton>
-                
+
                 <ListItemSecondaryAction>
-                  <IconButton 
-                    size="small" 
+                  <IconButton
+                    size="small"
                     onClick={(e) => startEditing(thread, e)}
                     sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
                   >
                     <EditIcon fontSize="small" />
                   </IconButton>
-                  <IconButton 
-                    size="small" 
+                  <IconButton
+                    size="small"
                     onClick={(e) => handleDeleteThread(thread.id, e)}
                     sx={{ opacity: 0.6, '&:hover': { opacity: 1, color: 'error.main' } }}
                   >
@@ -368,8 +368,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       </Collapse>
 
       {/* Create Thread Dialog */}
-      <Dialog 
-        open={createDialogOpen} 
+      <Dialog
+        open={createDialogOpen}
         onClose={() => setCreateDialogOpen(false)}
         maxWidth="xs"
         fullWidth
@@ -414,7 +414,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <LockIcon fontSize="small" />
               <Typography variant="caption" color="text.secondary">
-                The embedding model is locked once a thread is created. 
+                The embedding model is locked once a thread is created.
                 To use a different model, create a new thread.
               </Typography>
             </Box>

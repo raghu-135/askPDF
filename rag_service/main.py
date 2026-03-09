@@ -26,8 +26,8 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent import app as agent_app, get_tool_catalog, normalize_tool_instructions, build_system_prompt
-from rag import index_document, index_document_for_thread
-from vectordb.qdrant import QdrantAdapter
+from rag import index_document_for_thread, index_webpage_for_thread
+from vectordb.qdrant import get_qdrant
 from models import (
     check_chat_model_ready,
     check_embed_model_ready,
@@ -41,14 +41,16 @@ from models import (
     INTENT_AGENT_MAX_ITERATIONS,
     merge_thread_settings,
 )
-from chat_service import handle_chat, handle_thread_chat
+from chat_service import handle_thread_chat
 from database import (
     init_db, 
     create_thread, get_thread, list_threads, update_thread, delete_thread,
     get_thread_settings, update_thread_settings,
     create_or_get_file, get_file, add_file_to_thread, get_thread_files, is_file_in_thread,
+    remove_file_from_thread,
     create_message, get_message, get_thread_messages, delete_message, delete_message_pair, get_recent_messages,
-    MessageRole
+    MessageRole,
+    upsert_thread_stats_document, remove_document_from_stats, recompute_qa_stats,
 )
 
 # Load environment variables from .env file
@@ -75,12 +77,6 @@ app.add_middleware(
 
 # ============ Request/Response Models ============
 
-class IndexRequest(BaseModel):
-    """Request body for /index endpoint."""
-    embedding_model: str
-    metadata: Optional[Dict[str, Any]] = None
-
-
 class ThreadCreateRequest(BaseModel):
     """Request body for creating a thread."""
     name: str
@@ -99,15 +95,9 @@ class ThreadFileRequest(BaseModel):
     file_path: Optional[str] = None
 
 
-class ChatRequest(BaseModel):
-    """Request body for /chat endpoint (legacy)."""
-    question: str
-    llm_model: str
-    embedding_model: str
-    collection_name: Optional[str] = None
-    use_web_search: bool = False
-    max_iterations: int = DEFAULT_MAX_ITERATIONS
-    history: List[Dict[str, str]] = []  # list of {role: "user"|"assistant", content: "..."}
+class WebSourceRequest(BaseModel):
+    """Request body for indexing a webpage into a thread."""
+    url: str
 
 
 class ThreadChatRequest(BaseModel):
@@ -123,6 +113,7 @@ class ThreadChatRequest(BaseModel):
     custom_instructions_override: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
+    reasoning_mode: Optional[bool] = None
 
 
 class ThreadSettingsResponse(BaseModel):
@@ -132,6 +123,7 @@ class ThreadSettingsResponse(BaseModel):
     custom_instructions: str = Field(default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
     use_intent_agent: bool = True
     intent_agent_max_iterations: int = Field(default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10)
+    reasoning_mode: bool = True
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -141,6 +133,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     custom_instructions: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
+    reasoning_mode: Optional[bool] = None
 
 
 class ToolCatalogEntry(BaseModel):
@@ -160,6 +153,7 @@ class PromptDefaults(BaseModel):
     custom_instructions: str
     use_intent_agent: bool = True
     intent_agent_max_iterations: int = INTENT_AGENT_MAX_ITERATIONS
+    reasoning_mode: bool = True
 
 
 class PromptPreviewRequest(BaseModel):
@@ -169,6 +163,7 @@ class PromptPreviewRequest(BaseModel):
     custom_instructions: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
     use_web_search: bool = False
     intent_agent_ran: bool = True
+    reasoning_mode: bool = True
 
 
 # ============ Thread Endpoints ============
@@ -202,6 +197,7 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
             custom_instructions=req.custom_instructions or "",
             use_web_search=req.use_web_search,
             intent_agent_ran=req.intent_agent_ran,
+            reasoning_mode=req.reasoning_mode,
         )
         return {"prompt": prompt}
     except Exception as e:
@@ -220,7 +216,7 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
         thread = await create_thread(req.name, req.embed_model)
         
         # Create Qdrant collection for the thread
-        db = QdrantAdapter()
+        db = get_qdrant()
         # Default vector size will be determined when first embeddings are added
         # For now, we'll create it on first index
         
@@ -262,16 +258,15 @@ async def get_thread_endpoint(thread_id: str):
             raise HTTPException(status_code=404, detail="Thread not found")
         
         files = await get_thread_files(thread_id)
-        db = QdrantAdapter()
+        db = get_qdrant()
         stats = await db.get_thread_stats(thread_id)
-        
         return {
             "id": thread.id,
             "name": thread.name,
             "embed_model": thread.embed_model,
             "settings": thread.settings,
             "created_at": thread.created_at.isoformat(),
-            "files": [{"file_hash": f.file_hash, "file_name": f.file_name} for f in files],
+            "files": [{"file_hash": f.file_hash, "file_name": f.file_name, "source_type": f.source_type} for f in files],
             "stats": stats,
             "file_count": len(files)
         }
@@ -359,7 +354,7 @@ async def delete_thread_endpoint(thread_id: str):
     """
     try:
         # Delete Qdrant collection first
-        db = QdrantAdapter()
+        db = get_qdrant()
         await db.delete_thread_collection(thread_id)
         
         # Delete from SQLite
@@ -398,9 +393,17 @@ async def add_file_to_thread_endpoint(
         
         # Associate file with thread
         await add_file_to_thread(thread_id, req.file_hash)
-        
+
+        # Seed stats row with pending status immediately
+        await upsert_thread_stats_document(
+            thread_id=thread_id,
+            file_hash=req.file_hash,
+            file_name=req.file_name,
+            source_type="pdf",
+        )
+
         # Check if already indexed in this thread's collection
-        db = QdrantAdapter()
+        db = get_qdrant()
         collection_exists = await db.thread_collection_exists(thread_id)
         
         # Trigger background indexing
@@ -439,7 +442,202 @@ async def get_thread_files_endpoint(thread_id: str):
         files = await get_thread_files(thread_id)
         return {
             "thread_id": thread_id,
-            "files": [{"file_hash": f.file_hash, "file_name": f.file_name, "file_path": f.file_path} for f in files]
+            "files": [{"file_hash": f.file_hash, "file_name": f.file_name, "file_path": f.file_path, "source_type": f.source_type} for f in files]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/threads/{thread_id}/web-sources")
+async def add_web_source_to_thread_endpoint(
+    thread_id: str,
+    req: WebSourceRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Add a webpage URL to a thread: record it in the DB and trigger background indexing.
+    """
+    import hashlib
+
+    try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        if not req.url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+
+        # Stable hash for this URL
+        file_hash = hashlib.md5(req.url.encode()).hexdigest()
+
+        # Record in files table with source_type='web'
+        await create_or_get_file(
+            file_hash=file_hash,
+            file_name=req.url,
+            file_path=req.url,
+            source_type="web",
+        )
+        await add_file_to_thread(thread_id, file_hash)
+
+        # Seed stats row with pending status immediately
+        await upsert_thread_stats_document(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            file_name=req.url,
+            source_type="web",
+        )
+
+        # Background indexing
+        background_tasks.add_task(
+            index_webpage_for_thread,
+            thread_id=thread_id,
+            url=req.url,
+            file_hash=file_hash,
+            embedding_model_name=thread.embed_model,
+        )
+
+        return {
+            "status": "accepted",
+            "thread_id": thread_id,
+            "file_hash": file_hash,
+            "url": req.url,
+            "indexing": "in_progress",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/threads/{thread_id}/files/{file_hash}")
+async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
+    """
+    Remove a PDF or web source from a thread.
+    Deletes vectors from Qdrant and removes the file-thread association from the DB.
+    """
+    try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Delete vectors from Qdrant
+        qdrant = get_qdrant()
+        await qdrant.delete_source_chunks_by_file_hash(thread_id, file_hash)
+
+        # Remove from SQLite
+        removed = await remove_file_from_thread(thread_id, file_hash)
+
+        # Remove from thread stats
+        await remove_document_from_stats(thread_id, file_hash)
+
+        return {
+            "status": "deleted",
+            "thread_id": thread_id,
+            "file_hash": file_hash,
+            "removed_from_db": removed,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RefreshWebSourceRequest(BaseModel):
+    content_hash: Optional[str] = None
+    confirmed: bool = False
+
+
+@app.post("/threads/{thread_id}/web-sources/{file_hash}/refresh")
+async def refresh_web_source_endpoint(
+    thread_id: str,
+    file_hash: str,
+    req: RefreshWebSourceRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Smart re-index for a web source after a forced visual recapture.
+
+    Phase 1 (confirmed=False): compare new content_hash against the stored one.
+      - If unchanged → return status="unchanged" (caller should skip re-indexing).
+      - If changed  → return status="confirmation_required" so the caller can show
+                       a dialog warning about data replacement.
+
+    Phase 2 (confirmed=True): purge stale Qdrant vectors and re-index fresh content.
+
+    This ensures resources are only spent when page content actually changed, and
+    the user gets a chance to acknowledge that old indexed data will be replaced.
+    """
+    try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        file = await get_file(file_hash)
+        if not file:
+            raise HTTPException(status_code=404, detail="Web source not found")
+
+        url = file.file_path or file.file_name  # file_path holds the URL for web sources
+
+        # ── Phase 1: content-change check ──────────────────────────────────
+        if req.content_hash and not req.confirmed:
+            # Read stored content_hash from thread_stats
+            from database import get_thread_shape as _get_shape
+            shape = await _get_shape(thread_id)
+            stored_meta = shape["documents"].get(file_hash, {})
+            stored_hash = stored_meta.get("content_hash")
+
+            if stored_hash and stored_hash == req.content_hash:
+                return {
+                    "status": "unchanged",
+                    "message": "Page content has not changed since last index. No re-indexing needed.",
+                    "thread_id": thread_id,
+                    "file_hash": file_hash,
+                }
+
+            # Content changed (or no stored hash yet) → ask for confirmation
+            return {
+                "status": "confirmation_required",
+                "message": "Page content has changed. Re-indexing will remove the current indexed data for this page and replace it with the new content.",
+                "thread_id": thread_id,
+                "file_hash": file_hash,
+                "new_content_hash": req.content_hash,
+            }
+
+        # ── Phase 2: confirmed — purge and re-index ────────────────────────
+        qdrant = get_qdrant()
+        await qdrant.delete_source_chunks_by_file_hash(thread_id, file_hash)
+
+        # Reset thread_stats to pending; store new content_hash immediately
+        await upsert_thread_stats_document(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            file_name=file.file_name,
+            source_type="web",
+            content_hash=req.content_hash,
+        )
+
+        background_tasks.add_task(
+            index_webpage_for_thread,
+            thread_id=thread_id,
+            url=url,
+            file_hash=file_hash,
+            embedding_model_name=thread.embed_model,
+        )
+
+        return {
+            "status": "accepted",
+            "thread_id": thread_id,
+            "file_hash": file_hash,
+            "url": url,
+            "indexing": "in_progress",
         }
     except HTTPException:
         raise
@@ -534,7 +732,7 @@ async def delete_message_endpoint(message_id: str):
                     if url:
                         urls_to_check.add(url)
 
-        db = QdrantAdapter()
+        db = get_qdrant()
 
         # ── Delete chat-memory vector ──
         qdrant_msg_id = assistant_msg_id or message_id
@@ -557,6 +755,12 @@ async def delete_message_endpoint(message_id: str):
         # ── Delete from SQLite (pair-aware) ──
         deleted_ids = await delete_message_pair(message_id)
 
+        # ── Recompute QA stats to reflect the deletion ──
+        try:
+            await recompute_qa_stats(message.thread_id)
+        except Exception as stats_err:
+            logger.warning(f"thread_stats recompute skipped after delete: {stats_err}")
+
         return {"status": "deleted", "deleted_ids": deleted_ids}
     except HTTPException:
         raise
@@ -568,26 +772,11 @@ async def delete_message_endpoint(message_id: str):
 
 # ============ Chat Endpoints ============
 
-@app.post("/chat")
-async def chat_endpoint(req: ChatRequest):
-    """
-    Legacy chat endpoint for retrieval-augmented generation.
-    Use /threads/{thread_id}/chat for thread-based chat.
-    """
-    try:
-        result = await handle_chat(req)
-        return result
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.post("/threads/{thread_id}/chat")
 async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
     """
     Thread-based chat with semantic memory.
-    Returns answer, used_chat_ids (recollected messages), and pdf_sources.
+    Returns answer, used_chat_ids (recollected messages), and document_sources.
     """
     try:
         # Verify thread exists
@@ -610,6 +799,8 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
             req.use_intent_agent = thread_settings.get("use_intent_agent", True)
         if req.intent_agent_max_iterations is None:
             req.intent_agent_max_iterations = thread_settings.get("intent_agent_max_iterations", INTENT_AGENT_MAX_ITERATIONS)
+        if req.reasoning_mode is None:
+            req.reasoning_mode = thread_settings.get("reasoning_mode", True)
         
         result = await handle_thread_chat(thread_id, req, thread.embed_model)
         return result
@@ -623,24 +814,6 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
 
 # ============ Indexing Endpoints ============
 
-@app.post("/index")
-async def index_endpoint(req: IndexRequest):
-    """
-    Legacy index endpoint for document indexing.
-    For thread-based indexing, use POST /threads/{thread_id}/files.
-    """
-    try:
-        result = await index_document(
-            embedding_model_name=req.embedding_model,
-            metadata=req.metadata,
-        )
-        return result
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/threads/{thread_id}/index-status")
 async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = None):
     """
@@ -651,7 +824,7 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
         
-        db = QdrantAdapter()
+        db = get_qdrant()
         
         if file_hash:
             # Check specific file
@@ -673,10 +846,14 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         
         stats = await db.get_thread_stats(thread_id)
         
+        # Check embedding model readiness (using cached check)
+        embed_model_ready = await check_embed_model_ready(thread.embed_model)
+        
         return {
             "thread_id": thread_id,
             "status": status,
-            "stats": stats
+            "stats": stats,
+            "embed_model_ready": embed_model_ready
         }
     except HTTPException:
         raise
@@ -684,19 +861,6 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/status")
-async def status_endpoint(collection_name: str):
-    """
-    Legacy: Check if a collection exists and is ready in the vector database.
-    """
-    try:
-        db = QdrantAdapter()
-        exists = await db.collection_exists(collection_name)
-        return {"status": "ready" if exists else "not_ready", "collection": collection_name}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 
 # ============ Model Endpoints ============

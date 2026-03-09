@@ -3,7 +3,6 @@ rag.py - Document indexing for RAG Service
 
 This module handles:
 - Text chunking and embedding generation
-- Legacy collection-based indexing
 - Per-thread collection indexing
 - PDF download and parsing
 """
@@ -23,23 +22,12 @@ from models import (
     DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
 )
-from vectordb.qdrant import QdrantAdapter
+from vectordb.qdrant import get_qdrant
 
 logger = logging.getLogger(__name__)
 
 TEMP_PDF_DIR = "/tmp/pdfs"
 os.makedirs(TEMP_PDF_DIR, exist_ok=True)
-
-
-def get_collection_name(embedding_model_name: str, file_hash: Optional[str] = None) -> str:
-    """
-    Generate a safe collection name for legacy vector database indexing.
-    """
-    base_model_name = embedding_model_name.split(":")[0]
-    safe_model_name = base_model_name.replace("-", "_").replace(".", "_").replace("/", "_")
-    if file_hash:
-        return f"rag_{safe_model_name}_{file_hash}"
-    return f"rag_{safe_model_name}"
 
 
 async def summarize_qa(
@@ -192,56 +180,6 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     return vectors
 
 
-async def index_chunks_to_db(
-    collection_name: str, 
-    chunks: List[str], 
-    metadatas_list: List[Dict[str, Any]], 
-    vectors: List[List[float]], 
-    db_client: QdrantAdapter
-) -> None:
-    """
-    Index the chunks and their embeddings into the vector database.
-    """
-    await db_client.index_documents(collection_name, chunks, metadatas_list, vectors)
-
-
-async def index_document(embedding_model_name: str, metadata: Optional[Dict[str, Any]] = None):
-    """
-    Legacy: Indexes a document into the vector database.
-    Creates a collection based on embedding model and file hash.
-    """
-    metadata = metadata or {}
-    file_hash = metadata.get("file_hash")
-    
-    if not file_hash:
-        return {"status": "error", "message": "file_hash is required for indexing"}
-
-    # 1. Determine Collection Name
-    collection_name = get_collection_name(embedding_model_name, file_hash)
-    db_client = QdrantAdapter()
-
-    # 2. Check if collection exists
-    if await db_client.collection_exists(collection_name):
-        logger.info(f"Collection {collection_name} already exists. Skipping indexing.")
-        return {"status": "skipped", "reason": "exists", "collection": collection_name}
-
-    # 3. Parsing & Chunking
-    chunks = await get_chunks(file_hash)
-    if not chunks:
-        return {"status": "error", "message": "No text extracted from PDF"}
-
-    # 4. Embeddings
-    try:
-        vectors = await generate_embeddings(chunks, embedding_model_name)
-        # 5. Storage
-        metadatas_list = [metadata for _ in chunks]
-        await index_chunks_to_db(collection_name, chunks, metadatas_list, vectors, db_client)
-        return {"status": "success", "chunks_count": len(chunks), "collection": collection_name}
-    except Exception as e:
-        logger.error(f"Error indexing: {e}")
-        return {"status": "error", "message": str(e)}
-
-
 async def index_document_for_thread(
     thread_id: str,
     file_hash: str,
@@ -261,7 +199,7 @@ async def index_document_for_thread(
     Returns:
         Status dict with indexing results
     """
-    db_client = QdrantAdapter()
+    db_client = get_qdrant()
     metadata = metadata or {}
     
     try:
@@ -296,16 +234,34 @@ async def index_document_for_thread(
         )
         
         logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
-        
+
+        # Update thread stats snapshot
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(
+                thread_id=thread_id,
+                file_hash=file_hash,
+                status="indexed",
+                chunk_count=indexed_count,
+                total_chars=sum(len(c) for c in chunks),
+            )
+        except Exception as stats_err:
+            logger.warning(f"thread_stats update skipped after indexing: {stats_err}")
+
         return {
             "status": "success",
             "thread_id": thread_id,
             "file_hash": file_hash,
             "chunks_count": indexed_count
         }
-        
+
     except Exception as e:
         logger.error(f"Error indexing document for thread {thread_id}: {e}", exc_info=True)
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
+        except Exception:
+            pass
         return {"status": "error", "message": str(e)}
 
 
@@ -322,7 +278,7 @@ async def index_chat_memory_for_thread(
     Process, chunk, and index a chat message as semantic memory.
     Uses LangChain splitters and optional LLM summarization with dynamic budgets.
     """
-    db_client = QdrantAdapter()
+    db_client = get_qdrant()
     
     try:
         # 1. Build compact memory text and chunk for indexing.
@@ -358,6 +314,119 @@ async def index_chat_memory_for_thread(
         return {"status": "error", "message": str(e)}
 
 
+async def index_webpage_for_thread(
+    thread_id: str,
+    url: str,
+    file_hash: str,
+    embedding_model_name: str,
+) -> Dict[str, Any]:
+    """
+    Fetch a webpage, extract its text, chunk it, generate embeddings,
+    and index into the thread's Qdrant collection as knowledge_source (webpage) chunks.
+
+    Args:
+        thread_id: The thread to index into.
+        url: The full URL of the page to fetch.
+        file_hash: MD5 hash of the URL (used as the stable identifier).
+        embedding_model_name: Embedding model to use.
+
+    Returns:
+        Status dict with indexed chunk count, page title, and any error.
+    """
+    from bs4 import BeautifulSoup
+
+    db_client = get_qdrant()
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AskPDF bot)"})
+            resp.raise_for_status()
+            html = resp.text
+
+        soup = BeautifulSoup(html, "lxml")
+
+        # Remove non-content tags
+        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
+            tag.decompose()
+
+        title = soup.title.get_text(strip=True) if soup.title else url
+
+        # Prefer main/article content, fall back to body
+        content_tag = soup.find("main") or soup.find("article") or soup.body or soup
+        raw_text = content_tag.get_text(separator="\n", strip=True)
+
+        # Collapse excessive blank lines
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        text = "\n".join(lines)
+
+        if not text:
+            return {"status": "error", "message": "No text content found on page"}
+
+        # Chunk the text
+        doc = Document(page_content=text)
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=500,
+            chunk_overlap=50,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+        chunks = [c.page_content for c in splitter.split_documents([doc])]
+
+        if not chunks:
+            return {"status": "error", "message": "No chunks produced from page text"}
+
+        vectors = await generate_embeddings(chunks, embedding_model_name)
+
+        indexed_count = await db_client.index_web_source_chunks(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            url=url,
+            title=title,
+            texts=chunks,
+            embeddings=vectors,
+        )
+
+        logger.info(f"Indexed {indexed_count} web source chunks for thread {thread_id}, url {url}")
+
+        # Update thread stats snapshot
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(
+                thread_id=thread_id,
+                file_hash=file_hash,
+                status="indexed",
+                chunk_count=indexed_count,
+                total_chars=sum(len(c) for c in chunks),
+            )
+        except Exception as stats_err:
+            logger.warning(f"thread_stats update skipped after web indexing: {stats_err}")
+
+        return {
+            "status": "success",
+            "thread_id": thread_id,
+            "file_hash": file_hash,
+            "url": url,
+            "title": title,
+            "chunks_count": indexed_count,
+        }
+
+    except httpx.HTTPStatusError as e:
+        msg = f"HTTP error fetching {url}: {e.response.status_code}"
+        logger.error(msg)
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
+        except Exception:
+            pass
+        return {"status": "error", "message": msg}
+    except Exception as e:
+        logger.error(f"Error indexing webpage for thread {thread_id}: {e}", exc_info=True)
+        try:
+            from database import update_document_indexing_status
+            await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
+        except Exception:
+            pass
+        return {"status": "error", "message": str(e)}
+
+
 async def index_web_search_for_thread(
     thread_id: str,
     query: str,
@@ -381,7 +450,7 @@ async def index_web_search_for_thread(
     Returns:
         Status dict with indexed chunk count.
     """
-    db_client = QdrantAdapter()
+    db_client = get_qdrant()
     try:
         vectors = await generate_embeddings(texts, embedding_model_name)
         indexed_count = await db_client.index_web_search_chunks(

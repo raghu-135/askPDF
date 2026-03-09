@@ -32,16 +32,19 @@ import MemoryIcon from '@mui/icons-material/Memory';
 import LockIcon from '@mui/icons-material/Lock';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ReplayIcon from '@mui/icons-material/Replay';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import VolumeUpIcon from '@mui/icons-material/VolumeUp';
+import CheckIcon from '@mui/icons-material/Check';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
-import { 
-    Thread, 
+import {
+    Thread,
     Message,
     WebSource,
     PromptToolDefinition,
-    threadChat, 
-    getThreadMessages, 
+    threadChat,
+    getThreadMessages,
     deleteMessage,
     getThreadIndexStatus,
     getThreadSettings,
@@ -49,7 +52,7 @@ import {
     getPromptTools,
     getPromptPreview
 } from '../lib/api';
-import { fetchAvailableLlmModels, checkLlmModelReady } from '../lib/chat-utils';
+import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/chat-utils';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -89,7 +92,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const theme = useTheme();
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
-    const [isModelWarming, setIsModelWarming] = useState(false);
+
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
     const [contextWindow, setContextWindow] = useState<number>(0);
@@ -113,11 +116,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [useIntentAgent, setUseIntentAgent] = useState(true);
     const [intentAgentMaxIterations, setIntentAgentMaxIterations] = useState(1);
     const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
+    const [reasoningMode, setReasoningMode] = useState(true);
+    const [defaultReasoningMode, setDefaultReasoningMode] = useState(true);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
     const [availableModels, setAvailableModels] = useState<string[]>([]);
-    const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(null);
+    const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(true);
+    const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
+    const [copiedId, setCopiedId] = useState<string | null>(null);
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
@@ -128,6 +135,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             loadMessages();
             checkIndexStatus();
             loadThreadSettings();
+            checkEmbedModelStatus();
         } else {
             setMessages([]);
             setIndexingStatus('ready');
@@ -137,8 +145,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(defaultCustomInstructions);
             setUseIntentAgent(true);
             setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
+            setReasoningMode(defaultReasoningMode);
+            setIsEmbedModelValid(null);
         }
-    }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions]);
+    }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions, defaultReasoningMode]);
 
     useEffect(() => {
         const loadTools = async () => {
@@ -152,6 +162,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
+                    setDefaultReasoningMode(res.defaults.reasoning_mode ?? true);
                     if (res.defaults.context_window) {
                         setContextWindow(res.defaults.context_window);
                     }
@@ -161,6 +172,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
                         setUseIntentAgent(res.defaults.use_intent_agent ?? true);
                         setIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
+                        setReasoningMode(res.defaults.reasoning_mode ?? true);
                     }
                 }
             } catch (error) {
@@ -181,6 +193,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(settings.custom_instructions ?? defaultCustomInstructions);
             setUseIntentAgent(settings.use_intent_agent ?? true);
             setIntentAgentMaxIterations(settings.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
+            setReasoningMode(settings.reasoning_mode ?? defaultReasoningMode);
         } catch (error) {
             console.error('Failed to load thread settings:', error);
             setMaxIterations(defaultMaxIterations);
@@ -189,6 +202,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(defaultCustomInstructions);
             setUseIntentAgent(true);
             setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
+            setReasoningMode(defaultReasoningMode);
         }
     };
 
@@ -196,7 +210,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!activeThread) return;
         try {
             const response = await getThreadMessages(activeThread.id);
-            setMessages(response.messages.map(m => ({ 
+            setMessages(response.messages.map(m => ({
                 ...m,
                 content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
                 isRecollected: false,
@@ -220,9 +234,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 // 'not_ready' means still indexing
                 setIndexingStatus('indexing');
             }
+            // Update embedding model status from the same endpoint
+            if (status.embed_model_ready !== undefined) {
+                setIsEmbedModelValid(status.embed_model_ready);
+            }
         } catch (error) {
             console.error('Failed to check index status:', error);
             setIndexingStatus('ready'); // Assume ready if check fails
+        }
+    };
+
+    const checkEmbedModelStatus = async () => {
+        if (!activeThread) return;
+        try {
+            setIsEmbedModelValid(null);
+            const ready = await checkEmbedModelReady(activeThread.embed_model, ragApiUrl);
+            setIsEmbedModelValid(ready);
+        } catch (error) {
+            console.error('Failed to check embed model status:', error);
+            setIsEmbedModelValid(false);
         }
     };
 
@@ -269,6 +299,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     custom_instructions: customInstructions,
                     use_web_search: useWebSearch,
                     intent_agent_ran: useIntentAgent,
+                    reasoning_mode: reasoningMode,
                 });
                 if (!cancelled) {
                     setPromptPreview(res.prompt || '');
@@ -283,7 +314,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             cancelled = true;
             clearTimeout(timeoutId);
         };
-    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, useIntentAgent]);
+    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, useIntentAgent, reasoningMode]);
 
     const resetAllSettingsToDefault = () => {
         const defaults: Record<string, string> = {};
@@ -296,6 +327,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setCustomInstructions(defaultCustomInstructions);
         setUseIntentAgent(true);
         setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
+        setReasoningMode(defaultReasoningMode);
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -349,6 +381,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (model) {
             setShowContextHighlight(true);
             setTooltipOpen(true);
+            // Persist as last selected LLM in browser memory
+            if (typeof window !== 'undefined') {
+                localStorage.setItem('last_llm_model', model);
+            }
         }
         if (!model) return;
         try {
@@ -359,53 +395,96 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    // Polling for indexing status
+    // Polling for indexing and embedding model status
     useEffect(() => {
-        if (!activeThread || indexingStatus !== 'indexing') return;
+        if (!activeThread) return;
+        // Keep polling if either indexing is in progress OR embed model is not yet valid/checked
+        if (indexingStatus !== 'indexing' && isEmbedModelValid === true) return;
 
         const intervalId = setInterval(async () => {
             try {
                 const status = await getThreadIndexStatus(activeThread.id);
-                // Map rag-service status ('ready' | 'not_ready') to UI status
+
+                // Update indexing status
                 if (status.status === 'ready') {
                     setIndexingStatus('ready');
+                }
+
+                // Update embedding model status
+                if (status.embed_model_ready !== undefined) {
+                    setIsEmbedModelValid(status.embed_model_ready);
+                }
+
+                // If both are resolved, stop polling
+                if (status.status === 'ready' && status.embed_model_ready === true) {
                     clearInterval(intervalId);
                 }
-                // If still 'not_ready', keep polling
             } catch (error) {
-                console.error('Index status check failed:', error);
+                console.error('Status check failed:', error);
             }
         }, 2000);
 
         return () => clearInterval(intervalId);
-    }, [activeThread?.id, indexingStatus]);
+    }, [activeThread?.id, indexingStatus, isEmbedModelValid]);
 
-    const handleSend = async (overrideInput?: string) => {
-        const textToSend = overrideInput || input.trim();
+    // Load browser memory settings (last selected LLM and context window) on mount
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const savedLlm = localStorage.getItem('last_llm_model');
+        if (savedLlm && !llmModel) {
+            setLlmModel(savedLlm);
+            setIsLlmModelValid(null);
+            checkLlmModelReady(savedLlm, ragApiUrl).then(setIsLlmModelValid);
+        }
+
+        const savedCtx = localStorage.getItem('last_context_window');
+        if (savedCtx) {
+            const ctx = parseInt(savedCtx);
+            if (!isNaN(ctx) && ctx > 0) {
+                setContextWindow(ctx);
+            }
+        }
+    }, [ragApiUrl]);
+
+    // Persist context window changes to browser memory
+    useEffect(() => {
+        if (contextWindow > 0 && typeof window !== 'undefined') {
+            const timer = setTimeout(() => {
+                localStorage.setItem('last_context_window', contextWindow.toString());
+            }, 1000);
+            return () => clearTimeout(timer);
+        }
+    }, [contextWindow]);
+
+    const handleSend = async (overrideInput?: string | React.SyntheticEvent) => {
+        const textToSend = typeof overrideInput === 'string' ? overrideInput : input.trim();
         if (!textToSend || !llmModel || !activeThread) return;
+
+        const isClarificationSelection = typeof overrideInput === 'string';
 
         setInput('');
         setClarificationOptions(null);
         setLoading(true);
-        setIsModelWarming(false);
 
-        // Optimistically add user message
-        const tempUserMsg: ChatMessage = { 
-            id: 'temp-user-' + Date.now(), 
-            role: 'user', 
+        const tempUserMsg: ChatMessage = {
+            id: 'temp-user-' + Date.now(),
+            role: 'user',
             content: textToSend,
             created_at: new Date().toISOString()
         };
-        setMessages(prev => [...prev, tempUserMsg]);
+
+        setMessages(prev => {
+            let updated = prev;
+            // Immediate replacement: If this is a clarification selection, remove the previous "ambiguous" turn
+            if (isClarificationSelection) {
+                updated = updated.filter(m => !m.id.startsWith('clarify-'));
+            }
+            return [...updated, tempUserMsg];
+        });
 
         try {
-            // Check model readiness using chat-utils
-            const llmReady = await checkLlmModelReady(llmModel, ragApiUrl);
-            if (!llmReady) {
-                setIsModelWarming(true);
-            }
-
-            // Call thread chat endpoint
+            // Call thread chat endpoint directly without explicit warming probe, retries are handled in api.ts.
             const response = await threadChat(
                 activeThread.id,
                 textToSend,
@@ -417,32 +496,50 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions,
                 customInstructions,
                 useIntentAgent,
-                useIntentAgent ? intentAgentMaxIterations : undefined
+                useIntentAgent ? intentAgentMaxIterations : undefined,
+                reasoningMode
             );
 
             // Handle ambiguous query / clarification options
             if (response.clarification_options) {
                 setClarificationOptions(response.clarification_options);
-                // Remove the optimistic user message — nothing was persisted
-                setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id));
+
+                // Add the clarification request to the message list so it's visible in history,
+                // even though it wasn't persisted to the backend database.
+                setMessages(prev => {
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    return [
+                        ...updated,
+                        {
+                            ...tempUserMsg,
+                            id: 'clarify-user-' + Date.now()
+                        },
+                        {
+                            id: 'clarify-asst-' + Date.now(),
+                            role: 'assistant',
+                            content: response.answer || "I need a bit more clarification.",
+                            created_at: new Date().toISOString()
+                        }
+                    ];
+                });
             } else {
                 // Normal flow: update messages with real IDs and add assistant response
                 setMessages(prev => {
                     const updated = prev.filter(m => m.id !== tempUserMsg.id);
                     const finalMessages = [...updated];
-                    
-                    finalMessages.push({ 
-                        id: response.user_message_id || ('final-user-' + Date.now()), 
-                        role: 'user', 
+
+                    finalMessages.push({
+                        id: response.user_message_id || ('final-user-' + Date.now()),
+                        role: 'user',
                         content: textToSend, // Keep original input
                         rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
                         created_at: new Date().toISOString()
                     });
 
                     if (response.assistant_message_id || response.answer) {
-                        finalMessages.push({ 
-                            id: response.assistant_message_id || ('assistant-' + Date.now()), 
-                            role: 'assistant', 
+                        finalMessages.push({
+                            id: response.assistant_message_id || ('assistant-' + Date.now()),
+                            role: 'assistant',
                             content: typeof response.answer === 'string' ? response.answer : String(response.answer ?? ''),
                             reasoning: response.reasoning || '',
                             reasoning_available: !!response.reasoning_available,
@@ -451,7 +548,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             created_at: new Date().toISOString()
                         });
                     }
-                    
+
                     return finalMessages;
                 });
 
@@ -467,7 +564,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     onThreadUpdate();
                 }
             }
-
         } catch (err: any) {
             console.error(err);
             // Remove optimistic message and show error
@@ -476,9 +572,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 return [
                     ...updated,
                     tempUserMsg,
-                    { 
-                        id: 'error-' + Date.now(), 
-                        role: 'assistant', 
+                    {
+                        id: 'error-' + Date.now(),
+                        role: 'assistant',
                         content: `Error: ${err.message || "Failed to get response."}`,
                         created_at: new Date().toISOString()
                     }
@@ -486,7 +582,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             });
         } finally {
             setLoading(false);
-            setIsModelWarming(false);
         }
     };
 
@@ -496,7 +591,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
         // Frontend-only messages (error responses and their paired user messages) are never
         // persisted to the backend, so we remove them directly from local state.
-        const isTempId = messageId.startsWith('error-') || messageId.startsWith('temp-user-');
+        const isTempId = messageId.startsWith('error-') ||
+            messageId.startsWith('temp-user-') ||
+            messageId.startsWith('clarify-user-') ||
+            messageId.startsWith('clarify-asst-');
         if (isTempId) {
             setMessages(prev => {
                 const idx = prev.findIndex(m => m.id === messageId);
@@ -525,7 +623,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             const { deleted_ids } = await deleteMessage(messageId);
             setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
-            
+
             // Critical: If the current active chat sentence belongs to a deleted message, 
             // reset the chat ID selection to prevent out-of-bounds access.
             if (onResetChatId) {
@@ -551,6 +649,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 custom_instructions: customInstructions,
                 use_intent_agent: useIntentAgent,
                 intent_agent_max_iterations: Math.max(1, Math.min(10, intentAgentMaxIterations)),
+                reasoning_mode: reasoningMode,
             });
             setMaxIterations(saved.max_iterations);
             setSystemRole(saved.system_role);
@@ -558,12 +657,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(saved.custom_instructions);
             setUseIntentAgent(saved.use_intent_agent ?? true);
             setIntentAgentMaxIterations(saved.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
+            setReasoningMode(saved.reasoning_mode ?? defaultReasoningMode);
             setSettingsDialogOpen(false);
         } catch (error) {
             console.error('Failed to save thread settings:', error);
         } finally {
             setSavingSettings(false);
         }
+    };
+
+    const handleCopy = (text: string, messageId: string) => {
+        navigator.clipboard.writeText(text);
+        setCopiedId(messageId);
+        setTimeout(() => setCopiedId(null), 2000);
+    };
+
+    const handleReadAloud = (messageIdx: number) => {
+        const firstSentence = chatSentences.find(s => s.messageIndex === messageIdx);
+        if (firstSentence) onJump(firstSentence.id);
     };
 
     if (!activeThread) {
@@ -585,14 +696,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
             {/* Header */}
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Tooltip title={`Embedding model locked: ${activeThread.embed_model}`}>
-                        <Chip 
-                            icon={<LockIcon fontSize="small" />}
-                            label={activeThread.embed_model.split('/').pop()?.split(':')[0] || activeThread.embed_model}
-                            size="small"
-                            variant="outlined"
-                        />
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                    <Tooltip title={
+                        isEmbedModelValid === null ? "Checking embedding model status on server..." :
+                            isEmbedModelValid ? `Embedding model locked: ${activeThread.embed_model}` :
+                                `Error: Embedding model "${activeThread.embed_model}" is offline or still initializing. Retrying...`
+                    }>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <LockIcon
+                                fontSize="medium"
+                                color={isEmbedModelValid === false ? "error" : isEmbedModelValid === null ? "warning" : "action"}
+                            />
+                            {isEmbedModelValid === null && (
+                                <Typography variant="caption" color="warning.main" sx={{ ml: 0.5, fontWeight: 'bold' }}>CHECKING...</Typography>
+                            )}
+                            {isEmbedModelValid === false && <Typography variant="caption" color="error" sx={{ fontWeight: 'bold' }}>OFFLINE</Typography>}
+                        </Box>
                     </Tooltip>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
@@ -615,17 +734,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
                         </IconButton>
                     </Tooltip>
-                    <Tooltip 
+                    <Tooltip
                         title={
                             <Box sx={{ p: 0.5 }}>
                                 <Typography variant="caption" display="block">
-                                    Set context window size for the LLM. 
+                                    Set context window size for the LLM.
                                 </Typography>
                                 <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
                                     Search for your model here and plug in numbers only from column "Context Len" e.g. 8000 for 8k, 128000 for 128k: <br />
-                                    <a 
-                                        href="https://llm-explorer.com/list/" 
-                                        target="_blank" 
+                                    <a
+                                        href="https://llm-explorer.com/list/"
+                                        target="_blank"
                                         rel="noopener noreferrer"
                                         style={{ color: '#90caf9', marginLeft: '4px', textDecoration: 'underline' }}
                                     >
@@ -658,9 +777,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 setShowContextHighlight(false);
                                 setTooltipOpen(false);
                             }}
-                            sx={{ 
-                                width: 'auto', 
-                                minWidth: 60, 
+                            sx={{
+                                width: 'auto',
+                                minWidth: 100,
                                 maxWidth: 100,
                                 '& .MuiOutlinedInput-root': {
                                     transition: 'all 0.3s ease',
@@ -690,11 +809,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 <MenuItem key={m} value={m}>{m}</MenuItem>
                             ))}
                         </Select>
-                        {isLlmModelValid === false && (
-                            <Typography color="error" variant="caption" sx={{ ml: 2 }}>
-                                Selected model is not a valid chat model.
-                            </Typography>
-                        )}
                     </FormControl>
                 </Box>
             </Box>
@@ -705,10 +819,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     const isRecollected = recollectedIds.has(msg.id);
                     const isUser = msg.role === 'user';
                     return (
-                        <ListItem 
-                            key={msg.id} 
-                            ref={el => messageRefs.current[idx] = el} 
-                            alignItems="flex-start" 
+                        <ListItem
+                            key={msg.id}
+                            ref={el => messageRefs.current[idx] = el}
+                            alignItems="flex-start"
                             sx={{
                                 flexDirection: 'column',
                                 alignItems: isUser ? 'flex-end' : 'flex-start',
@@ -730,10 +844,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         ? theme.palette.getContrastText(theme.palette.primary.main)
                                         : theme.palette.text.primary,
                                     maxWidth: '90%',
-                                    boxShadow: activeMessageIndex === idx 
-                                        ? '0 0 10px rgba(255, 255, 0, 0.4)' 
-                                        : isRecollected 
-                                            ? '0 0 10px rgba(156, 39, 176, 0.5)' 
+                                    boxShadow: activeMessageIndex === idx
+                                        ? '0 0 10px rgba(255, 255, 0, 0.4)'
+                                        : isRecollected
+                                            ? '0 0 10px rgba(156, 39, 176, 0.5)'
                                             : 'none',
                                     border: isRecollected ? '2px solid' : 'none',
                                     borderColor: isRecollected ? 'secondary.main' : 'transparent',
@@ -741,14 +855,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     transition: 'all 0.2s ease',
                                     cursor: 'default',
                                     position: 'relative',
-                                    '&:hover .delete-btn': {
+                                    '&:hover .message-actions': {
                                         opacity: 1
                                     }
-                                }}
-                                onDoubleClick={(e) => {
-                                    const firstSentence = chatSentences.find(s => s.messageIndex === idx);
-                                    if (firstSentence) onJump(firstSentence.id);
-                                    e.stopPropagation();
                                 }}
                             >
                                 {/* Recollection indicator */}
@@ -758,36 +867,85 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         label="Used as context"
                                         size="small"
                                         color="secondary"
-                                        sx={{ 
-                                            position: 'absolute', 
-                                            top: -10, 
+                                        sx={{
+                                            position: 'absolute',
+                                            top: -10,
                                             left: 10,
                                             height: 20,
                                             fontSize: '0.65rem'
                                         }}
                                     />
                                 )}
-                                
-                                {/* Delete button */}
-                                <IconButton
-                                    className="delete-btn"
-                                    size="small"
-                                    onClick={(e) => handleDeleteMessage(msg.id, e)}
+
+
+
+                                {/* Action buttons */}
+                                <Box
+                                    className="message-actions"
                                     sx={{
                                         position: 'absolute',
-                                        top: 4,
-                                        right: 4,
+                                        top: 8,
+                                        right: 8,
+                                        display: 'flex',
+                                        gap: 0.25,
                                         opacity: 0,
-                                        transition: 'opacity 0.2s',
-                                        bgcolor: 'background.paper',
-                                        '&:hover': { bgcolor: 'error.light', color: 'white' }
+                                        transition: 'opacity 0.2s ease',
+                                        bgcolor: isUser
+                                            ? theme.palette.mode === 'dark' ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.2)'
+                                            : theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                                        backdropFilter: 'blur(4px)',
+                                        borderRadius: '20px',
+                                        p: 0.4,
+                                        boxShadow: 1,
+                                        zIndex: 10,
+                                        '&:hover': { opacity: 1 }
                                     }}
                                 >
-                                    <DeleteIcon fontSize="small" />
-                                </IconButton>
+                                    <Tooltip title={copiedId === msg.id ? "Copied!" : "Copy message"}>
+                                        <IconButton
+                                            size="small"
+                                            onClick={() => handleCopy(typeof msg.content === 'string' ? msg.content : String(msg.content ?? ''), msg.id)}
+                                            sx={{
+                                                color: 'inherit',
+                                                p: 0.5,
+                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                            }}
+                                        >
+                                            {copiedId === msg.id ? <CheckIcon fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
+                                        </IconButton>
+                                    </Tooltip>
+                                    <Tooltip title="Read aloud">
+                                        <IconButton
+                                            size="small"
+                                            onClick={() => handleReadAloud(idx)}
+                                            sx={{
+                                                color: isUser ? 'inherit' : (activeMessageIndex === idx ? 'primary.main' : 'inherit'),
+                                                p: 0.5,
+                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                            }}
+                                        >
+                                            <VolumeUpIcon fontSize="small" />
+                                        </IconButton>
+                                    </Tooltip>
+                                    <Tooltip title="Delete message">
+                                        <IconButton
+                                            size="small"
+                                            onClick={(e) => handleDeleteMessage(msg.id, e)}
+                                            sx={{
+                                                color: 'inherit',
+                                                p: 0.5,
+                                                '&:hover': { color: 'error.main' },
+                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                            }}
+                                        >
+                                            <DeleteIcon fontSize="small" />
+                                        </IconButton>
+                                    </Tooltip>
+                                </Box>
 
                                 <Typography variant="body2" component="div" sx={{
                                     cursor: 'text',
+                                    pr: 2, // Add some padding to avoid immediate overlap with icons if possible
                                     '& p': { m: 0, mb: 1 },
                                     '& p:last-child': { mb: 0 },
                                     '& ul, & ol': { pl: 2, m: 0, mb: 1 },
@@ -917,20 +1075,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
             {/* Input Area */}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {isModelWarming && (
-                    <Typography variant="caption" sx={{ color: 'info.main', textAlign: 'center', fontStyle: 'italic' }}>
-                        Bringing the AI model online, this may take a moment...
-                    </Typography>
-                )}
 
-                {indexingStatus !== 'ready' && (
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
-                        <CircularProgress size={16} />
-                        <Typography variant="caption" color="info.main">
-                            Indexing document...
-                        </Typography>
-                    </Box>
-                )}
 
                 {clarificationOptions && (
                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, justifyContent: 'center', p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
@@ -938,23 +1083,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             I need a bit more clarification. Did you mean one of these?
                         </Typography>
                         {clarificationOptions.map((opt, i) => (
-                            <Chip 
-                                key={i} 
-                                label={opt} 
-                                onClick={() => handleSend(opt)} 
-                                color="primary" 
-                                variant="outlined" 
+                            <Chip
+                                key={i}
+                                label={opt}
+                                onClick={() => handleSend(opt)}
+                                color="primary"
+                                variant="outlined"
                                 size="medium"
-                                sx={{ 
-                                    cursor: 'pointer', 
-                                    maxWidth: '300px',
-                                    '&:hover': { bgcolor: 'primary.main', color: 'white' } 
+                                sx={{
+                                    cursor: 'pointer',
+                                    height: 'auto',
+                                    maxWidth: '100%',
+                                    '& .MuiChip-label': {
+                                        whiteSpace: 'normal',
+                                        display: 'block',
+                                        py: 1,
+                                        px: 2
+                                    },
+                                    '&:hover': { bgcolor: 'primary.main', color: 'white' }
                                 }}
                             />
                         ))}
-                        <Button 
-                            size="small" 
-                            variant="text" 
+                        <Button
+                            size="small"
+                            variant="text"
                             onClick={() => setClarificationOptions(null)}
                             sx={{ fontSize: '0.7rem' }}
                         >
@@ -972,9 +1124,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         placeholder={
                             indexingStatus !== 'ready'
                                 ? "Indexing your document. This may take a moment..."
-                                : !llmModel
-                                    ? "Select LLM model..."
-                                    : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
+                                : isEmbedModelValid === null
+                                    ? "Checking embedding model..."
+                                    : isEmbedModelValid === false
+                                        ? "Selected embedding model is missing from server."
+                                        : (llmModel && isLlmModelValid === null)
+                                            ? "Checking chat model..."
+                                            : isLlmModelValid === false
+                                                ? "Selected model is not a valid chat model."
+                                                : !llmModel
+                                                    ? "Select LLM model..."
+                                                    : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
                         }
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
@@ -984,7 +1144,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 handleSend();
                             }
                         }}
-                        disabled={loading || !llmModel || indexingStatus !== 'ready'}
+                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                         sx={{
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: theme.palette.background.paper,
@@ -999,12 +1159,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             },
                         }}
                     />
-                    <IconButton 
-                        color="primary" 
-                        onClick={handleSend} 
-                        disabled={loading || !llmModel || indexingStatus !== 'ready'}
+                    <IconButton
+                        color="primary"
+                        onClick={handleSend}
+                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                     >
-                        {loading ? <CircularProgress size={24} /> : <SendIcon />}
+                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || indexingStatus !== 'ready') ? <CircularProgress size={24} /> : <SendIcon />}
                     </IconButton>
                 </Box>
             </Box>
@@ -1012,7 +1172,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Dialog
                 open={settingsDialogOpen}
                 onClose={() => !savingSettings && setSettingsDialogOpen(false)}
-                maxWidth="sm"
+                maxWidth="md"
                 fullWidth
             >
                 <DialogTitle>AI Prompt Settings</DialogTitle>
@@ -1037,14 +1197,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         </Tooltip>
                     </Box>
                     {minMaxIterations !== null && maxMaxIterations !== null ? (
-                    <TextField
-                        label="Max tool iterations"
-                        type="number"
-                        value={maxIterations}
-                        onChange={(e) => setMaxIterations(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
-                        inputProps={{ min: minMaxIterations, max: maxMaxIterations }}
-                        helperText="Lower is faster; higher allows deeper research."
-                    />
+                        <TextField
+                            label="Max tool iterations"
+                            type="number"
+                            value={maxIterations}
+                            onChange={(e) => setMaxIterations(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
+                            inputProps={{ min: minMaxIterations, max: maxMaxIterations }}
+                            helperText="Lower is faster; higher allows deeper research."
+                        />
                     ) : (
                         <Typography variant="caption" color="error">Iteration limits not loaded from server.</Typography>
                     )}
@@ -1053,34 +1213,53 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <FormControlLabel
                             control={
                                 <Switch
+                                    checked={reasoningMode}
+                                    onChange={(e) => {
+                                        const isChecked = e.target.checked;
+                                        setReasoningMode(isChecked);
+                                        // If reasoning mode is disabled, also disable the intent agent
+                                        if (!isChecked) {
+                                            setUseIntentAgent(false);
+                                        }
+                                    }}
+                                />
+                            }
+                            label={
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                    <Typography variant="body2" fontWeight={500}>Reasoning mode</Typography>
+                                </Box>
+                            }
+                        />
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
+                            Uses detailed multi-step prompts for reasoning-capable models. Turn off for compact prompts that
+                            perform better on non-reasoning models.
+                        </Typography>
+                    </Box>
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
                                     checked={useIntentAgent}
+                                    disabled={!reasoningMode}
                                     onChange={(e) => setUseIntentAgent(e.target.checked)}
                                 />
                             }
                             label={
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <Typography variant="body2" fontWeight={500}>Intent Agent</Typography>
+                                    <Typography variant="body2" fontWeight={500} color={!reasoningMode ? "text.disabled" : "text.primary"}>Intent Agent</Typography>
                                 </Box>
                             }
                         />
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25, opacity: !reasoningMode ? 0.6 : 1 }}>
                             Before answering, runs a lightweight LLM pass to detect ambiguity, rewrite follow-up questions
                             into standalone queries, and estimate whether the pre-fetched context is sufficient — reducing
-                            unnecessary tool calls. Disable to skip this step and process questions directly, which is faster
-                            but may produce less focused answers for follow-up questions.
+                            unnecessary tool calls.
+                            {!reasoningMode && (
+                                <Box component="span" sx={{ display: 'block', mt: 0.5, color: 'warning.main', fontWeight: 500 }}>
+                                    Requires Reasoning mode to be enabled.
+                                </Box>
+                            )}
                         </Typography>
-                        {useIntentAgent && (
-                            <TextField
-                                label="Intent agent iterations"
-                                type="number"
-                                value={intentAgentMaxIterations}
-                                onChange={(e) => setIntentAgentMaxIterations(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
-                                inputProps={{ min: 1, max: 10 }}
-                                helperText="Number of reasoning steps allowed for intent classification (1 is usually sufficient)."
-                                size="small"
-                                sx={{ mt: 1.5 }}
-                            />
-                        )}
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
                         <TextField
