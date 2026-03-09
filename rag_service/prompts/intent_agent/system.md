@@ -12,8 +12,18 @@ The rewritten_query you produce is embedded once and searched across all retriev
 
 ## OUTPUT CONTRACT (LOCKED)
 
-- You MUST submit your final routing decision by calling the `IntentOutput` tool.
-- Think step by step internally if needed, but your final action for a turn must be a tool call.
+- You MUST output your final decision enclosed in XML tags. Do NOT wrap them in JSON or code blocks.
+- Output exactly the following tags:
+  <route>ANSWER or CLARIFY</route>
+  <rewritten_query>the standalone question here</rewritten_query>
+  <reference_type>NONE, SEMANTIC, TEMPORAL, or ENTITY</reference_type>
+  <context_coverage>SUFFICIENT, PARTIAL, or INSUFFICIENT</context_coverage>
+- If route is CLARIFY, additionally output:
+  <clarification_options>
+    <option>Question 1...</option>
+    <option>Question 2...</option>
+  </clarification_options>
+- Think step by step internally if needed, but your final routing decision must be in the specified XML format.
 
 ## REWRITING STEPS — apply in order
 
@@ -60,7 +70,7 @@ If CLARIFY:
 ## TOOL USAGE (OPTIONAL, LIMITED)
 
 - Tool calls are allowed ONLY to disambiguate unknown terms, entities, or time-sensitive intent.
-- If you call tools, do so briefly and then submit your final route via the `IntentOutput` tool.
+- If you call tools, do so briefly and then submit your final route using the required XML formatting.
 - You may call `search_web_intent` to:
   - identify what an unfamiliar term or acronym refers to,
   - detect if the query is time-sensitive (latest/current/price/events),

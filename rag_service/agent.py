@@ -690,14 +690,6 @@ class IntentAgentState(TypedDict):
     use_web_search: bool
 
 
-class IntentOutput(BaseModel):
-    """Submit the final intent classification and rewritten query."""
-    route: str = Field(description="'ANSWER' if clear, 'CLARIFY' if ambiguous.")
-    rewritten_query: str = Field(description="A single, standalone question.")
-    reference_type: str = Field(description="'NONE', 'SEMANTIC', 'TEMPORAL', or 'ENTITY'.")
-    context_coverage: str = Field(description="'SUFFICIENT', 'PARTIAL', or 'INSUFFICIENT'.")
-    clarification_options: Optional[List[str]] = Field(None, description="2-4 clarification questions if CLARIFY.")
-
 
 async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     """
@@ -709,9 +701,11 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     allow_intent_web_search = bool(state.get("use_web_search"))
     
     tools_to_bind = intent_tools.copy() if allow_intent_web_search else []
-    tools_to_bind.append(IntentOutput)
     
-    llm_with_tools = llm.bind_tools(tools_to_bind)
+    if tools_to_bind:
+        llm_with_tools = llm.bind_tools(tools_to_bind)
+    else:
+        llm_with_tools = llm
     iteration = state.get("iteration_count", 0) + 1
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
     reasoning_mode = state.get("reasoning_mode", True)
@@ -763,33 +757,6 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": iteration, "intent_result": intent_result}
 
     if getattr(response, "tool_calls", None):
-        original_question = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
-        for tc in response.tool_calls:
-            if tc["name"] == "IntentOutput":
-                args = tc["args"]
-                clarification_options = args.get("clarification_options")
-                if args.get("route") != "CLARIFY":
-                    clarification_options = None
-                
-                rewritten = args.get("rewritten_query", "")
-                if not rewritten.strip():
-                    rewritten = original_question
-
-                intent_result = {
-                    "route": args.get("route", "ANSWER"),
-                    "rewritten_query": rewritten,
-                    "reference_type": args.get("reference_type", "NONE"),
-                    "context_coverage": args.get("context_coverage", "PARTIAL"),
-                    "clarification_options": clarification_options,
-                }
-                
-                tool_msg = ToolMessage(content="Intent recorded.", tool_call_id=tc["id"])
-                return {
-                    "messages": [response, tool_msg],
-                    "iteration_count": iteration,
-                    "intent_result": intent_result
-                }
-
         # If it reaches here, it's calling search_web_intent
         return {
             "messages": [response],
@@ -799,9 +766,9 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
 
     intent_result = parse_intent_response(response.content, logger=logger)
     if intent_result is None:
-        logger.warning("Intent JSON invalid; retrying once with strict JSON instruction.")
+        logger.warning("Intent XML invalid; retrying once with strict XML instruction.")
         retry_msg = HumanMessage(
-            content="Your previous output was invalid JSON. Output a single JSON object matching the schema. No code fences."
+            content="Your previous output was invalid or missing required XML tags. Output the required XML tags: <route>, <rewritten_query>, <reference_type>, <context_coverage>."
         )
         retry_messages = input_messages + [retry_msg]
         try:
@@ -823,7 +790,7 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
             "context_coverage": "INSUFFICIENT",
             "clarification_options": None,
         }
-        logger.warning("Intent JSON invalid after retry; using heuristic fallback.")
+        logger.warning("Intent XML invalid after retry; using heuristic fallback.")
 
     return {
         "messages": [response],

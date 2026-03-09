@@ -1213,46 +1213,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <FormControlLabel
                             control={
                                 <Switch
-                                    checked={useIntentAgent}
-                                    onChange={(e) => setUseIntentAgent(e.target.checked)}
-                                />
-                            }
-                            label={
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <Typography variant="body2" fontWeight={500}>Intent Agent</Typography>
-                                </Box>
-                            }
-                        />
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
-                            Before answering, runs a lightweight LLM pass to detect ambiguity, rewrite follow-up questions
-                            into standalone queries, and estimate whether the pre-fetched context is sufficient — reducing
-                            unnecessary tool calls. Disable to skip this step and process questions directly, which is faster
-                            but may produce less focused answers for follow-up questions.
-                        </Typography>
-                        {/* 
-                          HIDDEN: intentAgentMaxIterations is currently single-pass (no tools). 
-                          Can be exposed to user when Intent agent is upgraded with tools/multi-step reasoning.
-                          
-                          {useIntentAgent && (
-                            <TextField
-                                label="Intent agent iterations"
-                                type="number"
-                                value={intentAgentMaxIterations}
-                                onChange={(e) => setIntentAgentMaxIterations(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
-                                inputProps={{ min: 1, max: 10 }}
-                                helperText="Number of reasoning steps allowed for intent classification (1 is usually sufficient)."
-                                size="small"
-                                sx={{ mt: 1.5 }}
-                            />
-                          )} 
-                        */}
-                    </Box>
-                    <Box>
-                        <FormControlLabel
-                            control={
-                                <Switch
                                     checked={reasoningMode}
-                                    onChange={(e) => setReasoningMode(e.target.checked)}
+                                    onChange={(e) => {
+                                        const isChecked = e.target.checked;
+                                        setReasoningMode(isChecked);
+                                        // If reasoning mode is disabled, also disable the intent agent
+                                        if (!isChecked) {
+                                            setUseIntentAgent(false);
+                                        }
+                                    }}
                                 />
                             }
                             label={
@@ -1264,6 +1233,32 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
                             Uses detailed multi-step prompts for reasoning-capable models. Turn off for compact prompts that
                             perform better on non-reasoning models.
+                        </Typography>
+                    </Box>
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={useIntentAgent}
+                                    disabled={!reasoningMode}
+                                    onChange={(e) => setUseIntentAgent(e.target.checked)}
+                                />
+                            }
+                            label={
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                    <Typography variant="body2" fontWeight={500} color={!reasoningMode ? "text.disabled" : "text.primary"}>Intent Agent</Typography>
+                                </Box>
+                            }
+                        />
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25, opacity: !reasoningMode ? 0.6 : 1 }}>
+                            Before answering, runs a lightweight LLM pass to detect ambiguity, rewrite follow-up questions
+                            into standalone queries, and estimate whether the pre-fetched context is sufficient — reducing
+                            unnecessary tool calls.
+                            {!reasoningMode && (
+                                <Box component="span" sx={{ display: 'block', mt: 0.5, color: 'warning.main', fontWeight: 500 }}>
+                                    Requires Reasoning mode to be enabled.
+                                </Box>
+                            )}
                         </Typography>
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>

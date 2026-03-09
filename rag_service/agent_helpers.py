@@ -11,42 +11,72 @@ def build_chat_prompt() -> ChatPromptTemplate:
     )
 
 
+import re
+
 def parse_intent_response(raw: str, logger: logging.Logger) -> Optional[Dict[str, Any]]:
     content = (raw or "").strip()
-    try:
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
-        data = json.loads(content)
-    except Exception as e:
-        logger.error(f"Failed to parse intent JSON: {e}")
+    
+    # helper to extract first occurrence of an XML tag
+    def extract_tag(tag: str, text: str) -> Optional[str]:
+        pattern = f"<{tag}>(.*?)</{tag}>"
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        return match.group(1).strip() if match else None
+
+    # extract fields
+    route = extract_tag("route", content)
+    rewritten_query = extract_tag("rewritten_query", content)
+    reference_type = extract_tag("reference_type", content)
+    context_coverage = extract_tag("context_coverage", content)
+    
+    # extract clarification options
+    clarification_options = None
+    clarify_block = extract_tag("clarification_options", content)
+    if clarify_block:
+        options = re.findall(r"<option>(.*?)</option>", clarify_block, re.IGNORECASE | re.DOTALL)
+        if options:
+            clarification_options = [opt.strip() for opt in options]
+
+    # Defaults or validation parsing
+    if not route:
+        route = "ANSWER"
+    else:
+        route = route.upper()
+        
+    if not rewritten_query:
+        # If it failed to emit an XML rewritten query, we can't reliably proceed as an intent rewrite
         return None
 
-    if not isinstance(data, dict):
-        return None
+    if not reference_type:
+        reference_type = "NONE"
+    else:
+        reference_type = reference_type.upper()
 
-    required = {"route", "rewritten_query", "reference_type", "context_coverage", "clarification_options"}
-    if not required.issubset(set(data.keys())):
-        return None
+    if not context_coverage:
+        context_coverage = "PARTIAL"
+    else:
+        context_coverage = context_coverage.upper()
 
-    route_ok = data["route"] in {"ANSWER", "CLARIFY"}
-    ref_ok = data["reference_type"] in {"NONE", "SEMANTIC", "TEMPORAL", "ENTITY"}
-    cov_ok = data["context_coverage"] in {"SUFFICIENT", "PARTIAL", "INSUFFICIENT"}
-    if not (route_ok and ref_ok and cov_ok):
-        return None
+    # validations
+    if route not in {"ANSWER", "CLARIFY"}:
+        route = "ANSWER"
+    if reference_type not in {"NONE", "SEMANTIC", "TEMPORAL", "ENTITY"}:
+        reference_type = "NONE"
+    if context_coverage not in {"SUFFICIENT", "PARTIAL", "INSUFFICIENT"}:
+        context_coverage = "PARTIAL"
 
-    clar = data.get("clarification_options")
-    if data["route"] == "CLARIFY":
-        if not isinstance(clar, list) or len(clar) < 2:
+    if route == "CLARIFY":
+        if not clarification_options or len(clarification_options) < 2:
             return None
-    elif clar is not None and not isinstance(clar, list):
-        data["clarification_options"] = None
+    else:
+        clarification_options = None
 
-    if not isinstance(data.get("rewritten_query"), str) or not data["rewritten_query"].strip():
-        return None
-
-    return data
+    return {
+        "route": route,
+        "rewritten_query": rewritten_query,
+        "reference_type": reference_type,
+        "context_coverage": context_coverage,
+        "clarification_options": clarification_options,
+    }
 
 
 def looks_like_followup(question: str) -> bool:
