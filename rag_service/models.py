@@ -348,8 +348,7 @@ async def check_chat_model_ready(model_name: str) -> bool:
                     # Verify integrity: if the model name in the response same as the requested model name?
                     resp_model = data.get("model", "")
                     if resp_model and model_name not in resp_model and resp_model not in model_name:
-                        logger.warning(f"Chat model mismatch! Requested: {model_name}, Got: {resp_model}")
-                        return False
+                        logger.warning(f"Chat model mismatch! Requested: {model_name}, Got: {resp_model}. Continuing anyway...")
 
                     # Verify it actually generated a message structure
                     choices = data.get("choices", [])
@@ -402,8 +401,7 @@ async def check_embed_model_ready(model_name: str) -> bool:
                     resp_model = data.get("model", "")
                     # Verify integrity: if the model name in the response same as the requested model name?
                     if resp_model and model_name not in resp_model and resp_model not in model_name:
-                        logger.warning(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}")
-                        return False
+                        logger.warning(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}. Continuing anyway...")
                     return True
                 except Exception:
                     return False
