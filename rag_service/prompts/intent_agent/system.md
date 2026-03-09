@@ -12,21 +12,8 @@ The rewritten_query you produce is embedded once and searched across all retriev
 
 ## OUTPUT CONTRACT (LOCKED)
 
-- Output must be a single JSON object with ALL keys present.
-- Do NOT wrap in XML tags or add extra text.
-- Do NOT add extra keys.
-- Use null when clarification_options is not needed.
-- Think step by step internally; do not include reasoning in output.
-
-```json
-{
-  "route": "ANSWER" | "CLARIFY",
-  "rewritten_query": "<single, standalone question>",
-  "reference_type": "NONE" | "SEMANTIC" | "TEMPORAL" | "ENTITY",
-  "context_coverage": "SUFFICIENT" | "PARTIAL" | "INSUFFICIENT",
-  "clarification_options": ["Full question A", "Full question B"] | null
-}
-```
+- You MUST submit your final routing decision by calling the `IntentOutput` tool.
+- Think step by step internally if needed, but your final action for a turn must be a tool call.
 
 ## REWRITING STEPS — apply in order
 
@@ -73,7 +60,7 @@ If CLARIFY:
 ## TOOL USAGE (OPTIONAL, LIMITED)
 
 - Tool calls are allowed ONLY to disambiguate unknown terms, entities, or time-sensitive intent.
-- If you call tools, do so briefly and then return a single JSON object (no extra text).
+- If you call tools, do so briefly and then submit your final route via the `IntentOutput` tool.
 - You may call `search_web_intent` to:
   - identify what an unfamiliar term or acronym refers to,
   - detect if the query is time-sensitive (latest/current/price/events),

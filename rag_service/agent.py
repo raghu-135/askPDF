@@ -2,6 +2,7 @@ import asyncio
 import logging
 import json
 from typing import TypedDict, List, Annotated, Dict, Any, Optional
+from pydantic import BaseModel, Field
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
@@ -689,6 +690,15 @@ class IntentAgentState(TypedDict):
     use_web_search: bool
 
 
+class IntentOutput(BaseModel):
+    """Submit the final intent classification and rewritten query."""
+    route: str = Field(description="'ANSWER' if clear, 'CLARIFY' if ambiguous.")
+    rewritten_query: str = Field(description="A single, standalone question.")
+    reference_type: str = Field(description="'NONE', 'SEMANTIC', 'TEMPORAL', or 'ENTITY'.")
+    context_coverage: str = Field(description="'SUFFICIENT', 'PARTIAL', or 'INSUFFICIENT'.")
+    clarification_options: Optional[List[str]] = Field(None, description="2-4 clarification questions if CLARIFY.")
+
+
 async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     """
     Single-pass Intent Agent: classifies and rewrites the user's query for the Orchestrator.
@@ -697,7 +707,11 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     messages = state["messages"]
     llm = get_llm(state["llm_model"], temperature=0.0)
     allow_intent_web_search = bool(state.get("use_web_search"))
-    llm_with_tools = llm.bind_tools(intent_tools if allow_intent_web_search else [])
+    
+    tools_to_bind = intent_tools.copy() if allow_intent_web_search else []
+    tools_to_bind.append(IntentOutput)
+    
+    llm_with_tools = llm.bind_tools(tools_to_bind)
     iteration = state.get("iteration_count", 0) + 1
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
     reasoning_mode = state.get("reasoning_mode", True)
@@ -749,6 +763,34 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         return {"messages": [AIMessage(content=json.dumps(intent_result))], "iteration_count": iteration, "intent_result": intent_result}
 
     if getattr(response, "tool_calls", None):
+        original_question = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+        for tc in response.tool_calls:
+            if tc["name"] == "IntentOutput":
+                args = tc["args"]
+                clarification_options = args.get("clarification_options")
+                if args.get("route") != "CLARIFY":
+                    clarification_options = None
+                
+                rewritten = args.get("rewritten_query", "")
+                if not rewritten.strip():
+                    rewritten = original_question
+
+                intent_result = {
+                    "route": args.get("route", "ANSWER"),
+                    "rewritten_query": rewritten,
+                    "reference_type": args.get("reference_type", "NONE"),
+                    "context_coverage": args.get("context_coverage", "PARTIAL"),
+                    "clarification_options": clarification_options,
+                }
+                
+                tool_msg = ToolMessage(content="Intent recorded.", tool_call_id=tc["id"])
+                return {
+                    "messages": [response, tool_msg],
+                    "iteration_count": iteration,
+                    "intent_result": intent_result
+                }
+
+        # If it reaches here, it's calling search_web_intent
         return {
             "messages": [response],
             "iteration_count": iteration,
