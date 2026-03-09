@@ -20,18 +20,15 @@ from prompt_loaders import (
     get_orchestrator_phase0_prompt,
     get_orchestrator_phase0_prompt_compact,
     get_intent_agent_prompt,
-    get_intent_agent_prompt_compact,
     get_web_search_mandate,
 )
 from agent_helpers import (
     build_chat_prompt,
     parse_intent_response,
-    looks_like_followup,
     evidence_insufficient,
     collect_tool_sources,
 )
 from prompt_defaults import DEFAULT_SYSTEM_ROLE
-from intent_fallback import heuristic_rewrite_query
 from vectordb.qdrant import get_qdrant
 from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks
 
@@ -714,7 +711,7 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     bundle = state.get("pre_fetch_bundle")
     prefetch_text = _format_prefetch_for_prompt(bundle) if bundle else ""
 
-    base_prompt = get_intent_agent_prompt() if reasoning_mode else get_intent_agent_prompt_compact()
+    base_prompt = get_intent_agent_prompt()
     system_prompt = base_prompt.replace("{PREFETCH_CONTEXT}", prefetch_text)
     if not allow_intent_web_search:
         system_prompt += "\n\nWeb search is disabled for this session. Do NOT call any web search tools."
@@ -782,15 +779,14 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         original_question = next(
             (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
         )
-        fallback_query = heuristic_rewrite_query(original_question, state.get("pre_fetch_bundle"))
         intent_result = {
             "route": "ANSWER",
-            "rewritten_query": fallback_query,
+            "rewritten_query": original_question,
             "reference_type": "NONE",
             "context_coverage": "INSUFFICIENT",
             "clarification_options": None,
         }
-        logger.warning("Intent XML invalid after retry; using heuristic fallback.")
+        logger.warning("Intent XML invalid after retry; falling back to original question.")
 
     return {
         "messages": [response],

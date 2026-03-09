@@ -79,11 +79,6 @@ def parse_intent_response(raw: str, logger: logging.Logger) -> Optional[Dict[str
     }
 
 
-def looks_like_followup(question: str) -> bool:
-    q = (question or "").strip().lower()
-    return len(q.split()) <= 6 and any(q.startswith(p) for p in ("what about", "and", "also", "that", "it", "this"))
-
-
 def evidence_insufficient(state: Dict[str, Any]) -> bool:
     document_sources = state.get("document_sources") or []
     web_sources = state.get("web_sources") or []

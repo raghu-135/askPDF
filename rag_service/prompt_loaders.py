@@ -38,10 +38,6 @@ def get_intent_agent_prompt() -> str:
     """Load the intent agent system prompt."""
     return load_prompt("intent_agent/system.md")
 
-def get_intent_agent_prompt_compact() -> str:
-    """Load the compact intent agent system prompt."""
-    return load_prompt("intent_agent/system_compact.md")
-
 
 def get_web_search_mandate() -> str:
     """Load the web search mandate section."""
