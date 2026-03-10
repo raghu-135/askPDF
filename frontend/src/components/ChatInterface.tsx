@@ -123,6 +123,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [llmModel, setLlmModel] = useState('');
     const [availableModels, setAvailableModels] = useState<string[]>([]);
     const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(true);
+    const [isLlmToolsSupported, setIsLlmToolsSupported] = useState<boolean | null>(null);
     const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -147,6 +148,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
             setReasoningMode(defaultReasoningMode);
             setIsEmbedModelValid(null);
+            setIsLlmToolsSupported(null);
         }
     }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions, defaultReasoningMode]);
 
@@ -378,6 +380,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleLlmModelChange = async (model: string) => {
         setLlmModel(model);
         setIsLlmModelValid(null);
+        setIsLlmToolsSupported(null);
         if (model) {
             setShowContextHighlight(true);
             setTooltipOpen(true);
@@ -388,10 +391,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
         if (!model) return;
         try {
-            const valid = await checkLlmModelReady(model, ragApiUrl);
-            setIsLlmModelValid(valid);
+            const result = await checkLlmModelReady(model, ragApiUrl);
+            setIsLlmModelValid(result.ready);
+            setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
         } catch (err) {
             setIsLlmModelValid(false);
+            setIsLlmToolsSupported(null);
         }
     };
 
@@ -435,7 +440,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (savedLlm && !llmModel) {
             setLlmModel(savedLlm);
             setIsLlmModelValid(null);
-            checkLlmModelReady(savedLlm, ragApiUrl).then(setIsLlmModelValid);
+            setIsLlmToolsSupported(null);
+            checkLlmModelReady(savedLlm, ragApiUrl).then((result) => {
+                setIsLlmModelValid(result.ready);
+                setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
+            });
         }
 
         const savedCtx = localStorage.getItem('last_context_window');
@@ -1132,9 +1141,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             ? "Checking chat model..."
                                             : isLlmModelValid === false
                                                 ? "Selected model is not a valid chat model."
-                                                : !llmModel
-                                                    ? "Select LLM model..."
-                                                    : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
+                                                : isLlmToolsSupported === false
+                                                    ? "This model does not support tool calling — please pick another model."
+                                                    : !llmModel
+                                                        ? "Select LLM model..."
+                                                        : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
                         }
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
@@ -1144,7 +1155,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 handleSend();
                             }
                         }}
-                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                         sx={{
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: theme.palette.background.paper,
@@ -1162,7 +1173,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <IconButton
                         color="primary"
                         onClick={handleSend}
-                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                     >
                         {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || indexingStatus !== 'ready') ? <CircularProgress size={24} /> : <SendIcon />}
                     </IconButton>

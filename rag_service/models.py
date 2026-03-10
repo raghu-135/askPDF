@@ -376,6 +376,83 @@ async def check_chat_model_ready(model_name: str) -> bool:
         logging.exception("Exception during chat model readiness check")
         return _update_model_ready_cache(cache_key, False)
 
+async def check_model_supports_tools(model_name: str) -> bool:
+    """
+    Check whether the model supports tool/function calling by sending a minimal
+    chat request that includes a dummy tool definition.
+
+    Returns:
+        True  – model is reachable AND accepted the tool-enabled request (or returned
+                a valid response without calling the tool).
+        False – the model explicitly reported it does not support tools (HTTP 400
+                "does not support tools"), or the model is unreachable / not found.
+
+    The result is cached for 60 s (success) or 15 s (failure) to avoid
+    hammering the server on every thread load.
+    """
+    cache_key = f"tools:{model_name}"
+    cached_status = _check_model_ready_cache(cache_key)
+    if cached_status is not None:
+        return cached_status
+
+    base_url = _get_base_url()
+    try:
+        async with httpx.AsyncClient() as client:
+            if not await _check_model_exists(client, base_url, model_name):
+                return _update_model_ready_cache(cache_key, False)
+
+            # Minimal dummy tool — just enough for the server to validate tool support
+            dummy_tool = {
+                "type": "function",
+                "function": {
+                    "name": "noop",
+                    "description": "No-op tool for capability probing.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                },
+            }
+            payload = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": "ping"}],
+                "tools": [dummy_tool],
+                "max_tokens": 1,
+            }
+
+            def tools_validator(resp: httpx.Response) -> bool:
+                # 400 with "does not support tools" → capability absent
+                if resp.status_code == 400:
+                    try:
+                        body = resp.json()
+                        msg = (body.get("error", {}) or {}).get("message", "").lower()
+                        if "does not support tools" in msg or "tool" in msg:
+                            return False
+                    except Exception:
+                        pass
+                    return False
+                # 200 → tools accepted (model may or may not have called the tool)
+                return resp.status_code == 200
+
+            result = await _probe_with_retry(
+                client,
+                f"{base_url}/chat/completions",
+                payload,
+                tools_validator,
+                model_name,
+                "ToolSupport",
+                max_retries=2,
+            )
+            # Use a shorter TTL for tool-support cache (60 s) so model swaps are detected quickly
+            _model_ready_cache[cache_key] = (result, time.time())
+            return result
+
+    except Exception:
+        logging.exception("Exception during tool-support check")
+        return _update_model_ready_cache(cache_key, False)
+
+
 async def check_embed_model_ready(model_name: str) -> bool:
     """
     Check if the supplied model is an embedding model and is ready in the LLM API/server.

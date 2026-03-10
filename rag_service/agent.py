@@ -722,7 +722,7 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     )
 
     # Log complete prompt for Intent Agent in OpenAI-like format
-    logger.info(f"--- INTENT AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}] ---")
+    logger.debug(f"--- INTENT AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}] ---")
     payload = []
     for msg in input_messages:
         role = "system" if isinstance(msg, SystemMessage) else "user" if isinstance(msg, HumanMessage) else "assistant"
@@ -733,8 +733,8 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
             entry["role"] = "tool"
             entry["tool_call_id"] = msg.tool_call_id
         payload.append(entry)
-    logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
-    logger.info(f"--- INTENT AGENT PROMPT END ---")
+    logger.debug(json.dumps(payload, indent=2, ensure_ascii=False))
+    logger.debug(f"--- INTENT AGENT PROMPT END ---")
 
     # Single direct call — no tools, minimal retries
     try:
@@ -931,7 +931,7 @@ TOOL_FRIENDLY_CONFIG = {
         "id": "live_web_recon",
         "display_name": "Internet Search",
         "description": "Search the web for external, real-time, or post-training knowledge. Results are automatically cached in the thread knowledge base for future retrieval.",
-        "default_prompt": "MANDATORY when web search is enabled: call search_web for virtually every factual question to supplement document content with current, external knowledge. Run it IN PARALLEL with document searches — do not wait for document results first. Never skip it based on pre-fetched document evidence alone. Always cite the URL and title of web results in your answer.",
+        "default_prompt": "MANDATORY when web search is enabled: call search_web for virtually every factual question to supplement document content with current, external knowledge. Run it IN PARALLEL with any document searches — do not wait for document results first. Never skip it based on pre-fetched document evidence alone. Always cite the URL and title of web results in your answer.",
     },
     "ask_for_clarification": {
         "id": "clarify_intent",
@@ -1045,7 +1045,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
     llm_with_tools = llm.bind_tools(tools_list) if reasoning_mode else llm
 
     # Log complete prompt for Orchestrator Agent in OpenAI-like format
-    logger.info(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
+    logger.debug(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
     payload = []
     for msg in input_messages:
         role = "system" if isinstance(msg, SystemMessage) else "user" if isinstance(msg, HumanMessage) else "assistant"
@@ -1056,8 +1056,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
             entry["role"] = "tool"
             entry["tool_call_id"] = msg.tool_call_id
         payload.append(entry)
-    logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
-    logger.info(f"--- ORCHESTRATOR AGENT PROMPT END ---")
+    logger.debug(json.dumps(payload, indent=2, ensure_ascii=False))
+    logger.debug(f"--- ORCHESTRATOR AGENT PROMPT END ---")
 
     response = await invoke_with_retry(llm_with_tools.ainvoke, input_messages)
     return {"messages": [response], "iteration_count": iteration}

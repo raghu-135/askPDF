@@ -82,17 +82,23 @@ export const checkEmbedModelReady = async (model: string, apiBase: string): Prom
 };
 
 /**
- * Checks if the specified LLM (chat) model is ready on the backend.
+ * Checks if the specified LLM (chat) model is ready and supports tool calling.
  * @param model - The LLM model name to check.
  * @param apiBase - The base URL of the backend API.
- * @returns A promise resolving to true if the model is ready, false otherwise.
+ * @returns A promise resolving to { ready: boolean, supportsTools: boolean }.
  */
-export const checkLlmModelReady = async (model: string, apiBase: string): Promise<boolean> => {
+export const checkLlmModelReady = async (
+  model: string,
+  apiBase: string
+): Promise<{ ready: boolean; supportsTools: boolean }> => {
   try {
     const res = await fetch(`${apiBase}/health/is_chat_model_ready?model=${encodeURIComponent(model)}`);
     const data = await res.json();
-    return data.ready === true || data.chat_model_ready === true;
+    return {
+      ready: data.ready === true || data.chat_model_ready === true,
+      supportsTools: data.supports_tools === true,
+    };
   } catch {
-    return false;
+    return { ready: false, supportsTools: false };
   }
 };
