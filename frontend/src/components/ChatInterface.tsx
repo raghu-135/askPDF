@@ -74,6 +74,7 @@ interface ChatInterfaceProps {
     onResetChatId?: () => void;
     onThreadUpdate?: () => void;
     darkMode?: boolean;
+    autoScroll?: boolean;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -86,7 +87,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onJump,
     onThreadUpdate,
     onResetChatId,
-    darkMode = false
+    darkMode = false,
+    autoScroll = true
 }) => {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const theme = useTheme();
@@ -350,21 +352,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     };
 
     useEffect(() => {
-        if (activeMessageIndex !== null && messageRefs.current[activeMessageIndex]) {
+        if (autoScroll && activeMessageIndex !== null && messageRefs.current[activeMessageIndex]) {
             messageRefs.current[activeMessageIndex]?.scrollIntoView({
                 behavior: 'smooth',
-                block: 'start',
+                block: 'nearest',
             });
         }
-    }, [activeMessageIndex, currentChatId]);
+    }, [activeMessageIndex, currentChatId, autoScroll]);
 
     const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        if (autoScroll) {
+            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }
     };
 
     useEffect(() => {
         scrollToBottom();
-    }, [messages]);
+    }, [messages, autoScroll]);
 
     // Fetch available LLM models using chat-utils
     useEffect(() => {

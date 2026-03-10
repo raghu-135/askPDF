@@ -560,6 +560,7 @@ export default function Home() {
                       setPlayRequestId(null);
                     }}
                     darkMode={pdfDarkMode}
+                    autoScroll={autoScroll}
                   />
                 ) : (
                   <Box sx={{
