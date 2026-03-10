@@ -165,7 +165,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
                     setDefaultReasoningMode(res.defaults.reasoning_mode ?? true);
-                    if (res.defaults.context_window) {
+                    if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
                     }
                     if (!activeThread) {
@@ -400,6 +400,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
+    const handleContextWindowChange = (val: number) => {
+        setContextWindow(val);
+        if (val > 0 && typeof window !== 'undefined') {
+            localStorage.setItem('last_context_window', val.toString());
+        }
+    };
+
     // Polling for indexing and embedding model status
     useEffect(() => {
         if (!activeThread) return;
@@ -456,15 +463,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     }, [ragApiUrl]);
 
-    // Persist context window changes to browser memory
-    useEffect(() => {
-        if (contextWindow > 0 && typeof window !== 'undefined') {
-            const timer = setTimeout(() => {
-                localStorage.setItem('last_context_window', contextWindow.toString());
-            }, 1000);
-            return () => clearTimeout(timer);
-        }
-    }, [contextWindow]);
 
     const handleSend = async (overrideInput?: string | React.SyntheticEvent) => {
         const textToSend = typeof overrideInput === 'string' ? overrideInput : input.trim();
@@ -777,7 +775,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             label="Ctx size"
                             type="number"
                             value={contextWindow}
-                            onChange={(e) => setContextWindow(parseInt(e.target.value) || 0)}
+                            onChange={(e) => handleContextWindowChange(parseInt(e.target.value) || 0)}
                             onClick={() => {
                                 setShowContextHighlight(false);
                                 setTooltipOpen(false);

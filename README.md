@@ -1,6 +1,6 @@
 # askpdf
 
-A full-stack PDF Document and Webpages research assistant with **Text-to-Speech (TTS)**, **RAG (Retrieval Augmented Generation)**, **multi-agent AI chat**, and **reasoning trace support**—all designed to run privately and locally on your own machine. Upload a PDF or capture a live Website, have it read aloud with synchronized text highlighting, and chat with your documents using a LangGraph-powered orchestrator with an optional Intent Agent. Everything works for free using open-source models like Docker Model Runner, Ollama, or LMStudio—no cloud/subscriptions required.
+A full-stack PDF Document and Webpages research assistant with **Text-to-Speech (TTS)**, **RAG (Retrieval Augmented Generation)**, **multi-agent AI chat**, and **reasoning trace support**—all designed to run privately and locally on your own machine. Upload a PDF or capture a live Website, have it read aloud with synchronized text highlighting, and chat with your documents using a LangGraph-powered orchestrator with an optional Intent Agent. Everything works for free using open-source tools like Docker Model Runner, Ollama, or LMStudio—no cloud/subscriptions required.
 
 ## 🌟 Features
 
