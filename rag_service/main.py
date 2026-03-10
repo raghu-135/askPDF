@@ -15,7 +15,6 @@ Dependencies:
 - rag, agent, vectordb.qdrant, database (local modules)
 """
 
-import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
@@ -34,7 +33,6 @@ from models import (
     check_chat_model_ready,
     check_embed_model_ready,
     check_model_supports_tools,
-    default_thread_settings,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_TOKEN_BUDGET,
     MIN_MAX_ITERATIONS,
@@ -880,13 +878,16 @@ async def get_models():
 async def is_chat_model_ready_endpoint(model: str):
     """
     Check if a chat/LLM model is ready AND supports tool calling.
+
+    Runs sequentially: tool-support is only probed when the model is confirmed
+    ready, avoiding a wasted request to an unavailable model.
     Returns chat_model_ready and supports_tools as separate flags.
     """
-    ready, supports_tools = await asyncio.gather(
-        check_chat_model_ready(model),
-        check_model_supports_tools(model),
-    )
-    return {"model": model, "chat_model_ready": ready, "supports_tools": supports_tools}
+    ready = await check_chat_model_ready(model)
+    if not ready:
+        return {"model": model, "chat_model_ready": False, "supports_tools": False}
+    supports_tools = await check_model_supports_tools(model)
+    return {"model": model, "chat_model_ready": True, "supports_tools": supports_tools}
 
 
 @app.get("/health/is_embed_model_ready")
