@@ -1159,7 +1159,18 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
         system_prompt=sys_prompt,
         messages=[force_msg],
     )
-    response = await invoke_with_retry(llm.ainvoke, input_messages)
+    try:
+        response = await invoke_with_retry(llm.ainvoke, input_messages)
+    except Exception as e:
+        logger.error(f"Force final answer LLM call failed: {e}")
+        # Return a static fallback message inside an AIMessage so the graph can finish gracefully
+        fallback_text = (
+            "I have retrieved some information but am currently unable to synthesize "
+            "a final response due to a technical issue with the model server. "
+            "Please try again in a few moments."
+        )
+        response = AIMessage(content=fallback_text)
+    
     return {"messages": [response], "iteration_count": iteration}
 
 

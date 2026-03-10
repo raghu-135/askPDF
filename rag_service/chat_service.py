@@ -423,5 +423,31 @@ async def handle_thread_chat(
         }
         
     except Exception as e:
-        logger.error("Error in handle_thread_chat", exc_info=True)
-        raise e
+        logger.error(f"CRITICAL: Agent execution failed for thread {thread_id}", exc_info=True)
+        # Return a graceful fallback instead of raising, ensuring the user always gets an answer.
+        # Use simple default values for IDs and sources to keep the UI from crashing.
+        fallback_answer = (
+            "I'm sorry, I encountered a technical error while processing your request. "
+            "Please try again in a moment or try rephrasing your question."
+        )
+        if "503" in str(e) or "loading" in str(e).lower():
+            fallback_answer = "The LLM server is currently busy loading the model. Please try again in 10-20 seconds."
+        elif "429" in str(e) or "rate limit" in str(e).lower():
+            fallback_answer = "The LLM server is currently rate-limited. Please wait a moment before trying again."
+        elif "timeout" in str(e).lower():
+            fallback_answer = "The request timed out. The LLM server might be under heavy load. Please try again."
+
+        return {
+            "answer": fallback_answer,
+            "rewritten_query": question,
+            "user_message_id": None,
+            "assistant_message_id": None,
+            "used_chat_ids": [],
+            "document_sources": [],
+            "web_sources": [],
+            "clarification_options": None,
+            "reasoning": f"Exception during execution: {str(e)}",
+            "reasoning_available": True,
+            "reasoning_format": "markdown",
+            "context": "Agent execution failed gracefully."
+        }
