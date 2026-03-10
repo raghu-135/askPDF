@@ -333,7 +333,7 @@ async def handle_thread_chat(
         orchestrator_duration = time.perf_counter() - orchestrator_start
         total_duration = time.perf_counter() - start_total
         
-        logger.debug(
+        logger.info(
             f"CHAT COMPLETED [thread {thread_id}] | "
             f"Intent: {intent_duration:.2f}s | "
             f"Intent_Iterations: {intent_iterations} | "
