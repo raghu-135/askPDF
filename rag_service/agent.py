@@ -996,11 +996,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
     tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
     reasoning_mode = state.get("reasoning_mode", True)
-    reasoning_mode = state.get("reasoning_mode", True)
-
     use_web_search = state.get("use_web_search", False)
     intent_agent_ran = state.get("intent_agent_ran", True)
-    reasoning_mode = state.get("reasoning_mode", True)
+
     prompt_content = build_system_prompt(
         context_window=context_window,
         system_role=system_role,
@@ -1095,6 +1093,9 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
     system_role = sanitize_system_role(state.get("system_role", ""))
     tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
+    use_web_search = state.get("use_web_search", False)
+    intent_agent_ran = state.get("intent_agent_ran", True)
+    reasoning_mode = state.get("reasoning_mode", True)
 
     # ── Extract original user question ──
     original_question = ""
@@ -1133,6 +1134,8 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
         system_role=system_role,
         tool_instructions=tool_instructions,
         custom_instructions=custom_instructions,
+        use_web_search=use_web_search,
+        intent_agent_ran=intent_agent_ran,
         reasoning_mode=reasoning_mode,
     )
 

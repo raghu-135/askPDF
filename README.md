@@ -123,15 +123,15 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 
 ### Required Models (on your LLM server)
 
-You need one **chat model** and one **embedding model** loaded in whichever runtime you choose:
+You need a **chat model with TOOL CALLING support** (Reasoning models work well) and an **embedding model** loaded in whichever runtime you choose:
 
 | Runtime | Chat model example | Embedding model example |
 |---------|-------------------|------------------------|
 | DMR | `ai/qwen3:latest` | `ai/nomic-embed-text-v1.5:latest` |
 | Ollama | `llama3.2` | `nomic-embed-text` |
-| LMStudio | any GGUF chat model | any GGUF embedding model |
+| LMStudio | `google/gemma-3-12b` | `text-embedding-embeddinggemma-300m-qat`|
 
-You select both models inside the app after it starts — no hardcoding required.
+You can download multiple models. In the app, you can use any model for chat and any model for embeddings. You can check https://llm-explorer.com/list/ to find models that fits your system's resources and performance needs. If you're unsure, use LM Studio. When you search for a model, it displays a "Hardware Fit" indicator (Green/Yellow/Red) next to every version of the model.
 
 ## 🚀 Quick Start
 
@@ -155,8 +155,8 @@ The app needs an **OpenAI-compatible LLM server** running on your machine for bo
 1. Open **Docker Desktop** and make sure the **Model Runner** feature is enabled (Settings → Features in development → Enable Docker Model Runner).
 2. Pull the required models from the Docker Desktop UI **or** via the CLI:
    ```bash
-   docker model pull ai/qwen3:latest              # LLM
-   docker model pull ai/nomic-embed-text-v1.5:latest  # Embeddings
+   docker model pull ai/qwen3:latest              # or any chat model you prefer with tool calling support
+   docker model pull ai/nomic-embed-text-v1.5:latest  # embedding model
    ```
 3. Verify both models appear as **Running** in Docker Desktop → Model Runner.
 4. Create your `.env` file:
@@ -173,7 +173,7 @@ The app needs an **OpenAI-compatible LLM server** running on your machine for bo
 1. [Download and install Ollama](https://ollama.com/download) for your OS.
 2. Pull the required models:
    ```bash
-   ollama pull llama3.2          # or any chat model you prefer
+   ollama pull llama3.2          # or any chat model you prefer with tool calling support
    ollama pull nomic-embed-text  # embedding model
    ```
 3. Ollama runs on port `11434` by default. Create your `.env` file:
@@ -187,7 +187,7 @@ The app needs an **OpenAI-compatible LLM server** running on your machine for bo
 
 1. [Download and install LMStudio](https://lmstudio.ai/).
 2. Open LMStudio, search for and download:
-   - A chat model (e.g. `Llama 3.2`, `Qwen 2.5`, or any GGUF model)
+   - A chat model (e.g. `Llama 3.2`, `Qwen 2.5`, or any model with tool calling support)
    - An embedding model (e.g. `nomic-embed-text`)
 3. Go to **Local Server** in LMStudio and click **Start Server**. The default port is `1234`.
 4. Create your `.env` file:
