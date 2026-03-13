@@ -81,6 +81,7 @@ export interface ThreadSettings {
   use_intent_agent: boolean;
   intent_agent_max_iterations: number;
   reasoning_mode: boolean;
+  use_reranker: boolean;
 }
 
 export interface PromptToolDefinition {
@@ -101,6 +102,7 @@ export interface PromptDefaults {
   use_intent_agent: boolean;
   intent_agent_max_iterations: number;
   reasoning_mode: boolean;
+  use_reranker?: boolean;
 }
 
 export interface ThreadFile {
@@ -363,6 +365,7 @@ export async function threadChat(
   question: string,
   llmModel: string,
   useWebSearch: boolean = false,
+  useReranker: boolean = true,
   contextWindowSize: number = 4096,
   maxIterations?: number,
   systemRoleOverride?: string,
@@ -389,6 +392,7 @@ export async function threadChat(
     question,
     llm_model: llmModel,
     use_web_search: useWebSearch,
+    use_reranker: useReranker,
     context_window: contextWindowSize
   };
   if (typeof maxIterations === "number") {

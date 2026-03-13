@@ -85,7 +85,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   useEffect(() => {
     loadThreads();
     const ragApiUrl = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
-    fetchAvailableEmbedModels(ragApiUrl).then(setAvailableEmbedModels);
+    fetchAvailableEmbedModels(ragApiUrl).then((models) => {
+      setAvailableEmbedModels(models);
+      const envDefault = process.env.NEXT_PUBLIC_DEFAULT_EMBED_MODEL;
+      const defaultModel = envDefault || models[0] || '';
+      if (!newThreadEmbedModel && defaultModel) {
+        setNewThreadEmbedModel(defaultModel);
+      }
+    });
   }, []);
 
   const loadThreads = async () => {

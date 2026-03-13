@@ -19,3 +19,5 @@ langchain
 langchain-core
 langchain-community
 ddgs
+sentence-transformers
+torch

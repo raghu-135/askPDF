@@ -56,6 +56,7 @@ from database import (
 
 # Load environment variables from .env file
 load_dotenv()
+DEFAULT_EMBEDDING_MODEL = os.getenv("DEFAULT_EMBEDDING_MODEL", "").strip()
 
 
 @asynccontextmanager
@@ -81,7 +82,7 @@ app.add_middleware(
 class ThreadCreateRequest(BaseModel):
     """Request body for creating a thread."""
     name: str
-    embed_model: str
+    embed_model: str = Field(default=DEFAULT_EMBEDDING_MODEL)
 
 
 class ThreadUpdateRequest(BaseModel):
@@ -107,6 +108,7 @@ class ThreadChatRequest(BaseModel):
     question: str
     llm_model: str
     use_web_search: bool = False
+    use_reranker: Optional[bool] = None
     context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size
     max_iterations: Optional[int] = Field(default=None, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS)
     system_role_override: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
@@ -125,6 +127,7 @@ class ThreadSettingsResponse(BaseModel):
     use_intent_agent: bool = True
     intent_agent_max_iterations: int = Field(default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10)
     reasoning_mode: bool = True
+    use_reranker: bool = True
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -135,6 +138,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
     reasoning_mode: Optional[bool] = None
+    use_reranker: Optional[bool] = None
 
 
 class ToolCatalogEntry(BaseModel):
@@ -155,6 +159,7 @@ class PromptDefaults(BaseModel):
     use_intent_agent: bool = True
     intent_agent_max_iterations: int = INTENT_AGENT_MAX_ITERATIONS
     reasoning_mode: bool = True
+    use_reranker: bool = True
 
 
 class PromptPreviewRequest(BaseModel):
@@ -213,8 +218,11 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
     Also creates the Qdrant collection for this thread.
     """
     try:
+        embed_model = (req.embed_model or "").strip() or DEFAULT_EMBEDDING_MODEL
+        if not embed_model:
+            raise HTTPException(status_code=400, detail="embed_model is required (set DEFAULT_EMBEDDING_MODEL or pass embed_model).")
         # Create thread in SQLite
-        thread = await create_thread(req.name, req.embed_model)
+        thread = await create_thread(req.name, embed_model)
         
         # Create Qdrant collection for the thread
         db = get_qdrant()

@@ -66,7 +66,8 @@ export default function PdfUploader({ onUploaded, onIndexingComplete, disabled, 
     try {
       const form = new FormData();
       form.append("file", file);
-      form.append("embedding_model", "default_model"); // or handle it accordingly
+      const defaultEmbedModel = process.env.NEXT_PUBLIC_DEFAULT_EMBED_MODEL || "BAAI/bge-m3";
+      form.append("embedding_model", defaultEmbedModel);
       const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const res = await fetch(`${apiBase}/api/upload`, { method: "POST", body: form });
       const data = await res.json();

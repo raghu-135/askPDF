@@ -30,7 +30,7 @@ from agent_helpers import (
 )
 from prompt_defaults import DEFAULT_SYSTEM_ROLE
 from vectordb.qdrant import get_qdrant
-from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks
+from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,8 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
+        use_reranker = conf.get("use_reranker", True)
+        use_reranker = conf.get("use_reranker", True)
 
         if not thread_id or not embedding_model:
             return "No thread context found."
@@ -138,6 +140,8 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             query_vector=query_vector,
             limit=max_results
         )
+        if use_reranker:
+            raw_doc_chunks = await rerank_document_chunks(query, raw_doc_chunks)
 
         expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
         file_chunk_map = {}
@@ -168,6 +172,8 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             query_vector=query_vector,
             limit=max(3, max_results // 3),
         )
+        if use_reranker:
+            web_chunks = await rerank_document_chunks(query, web_chunks)
 
         if not expanded_doc_chunks and not web_chunks:
             return "No relevant content found in documents or cached web results."
@@ -242,7 +248,9 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         history, used_ids = await fetch_semantic_history(
             thread_id=thread_id,
             query_vector=query_vector,
+            query_text=query,
             limit=max_results,
+            use_reranker=use_reranker,
         )
 
         if not history:
@@ -356,6 +364,12 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         texts = result["texts"]
         urls = result["urls"]
         titles = result["titles"]
+        if conf.get("use_reranker", True):
+            web_chunks = [{"text": t, "url": urls[i], "title": titles[i]} for i, t in enumerate(texts)]
+            web_chunks = await rerank_document_chunks(query, web_chunks)
+            texts = [c.get("text", "") for c in web_chunks]
+            urls = [c.get("url", "") for c in web_chunks]
+            titles = [c.get("title", "") for c in web_chunks]
 
         # ── Persist results in Qdrant for future retrieval ──
         if thread_id and embedding_model and conf.get("web_search_index", True):

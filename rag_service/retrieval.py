@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from database import get_thread_shape
+from models import get_reranker_model, DEFAULT_RERANKER_MODEL
 from vectordb.qdrant import get_qdrant
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ def group_document_chunks(
 
         used_chars += len(text)
         short_text = text if len(text) <= 200 else text[:200] + "..."
+        score = chunk.get("rerank_score", chunk.get("score", 0.0))
         document_sources.append({
             "text": short_text,
             "file_hash": chunk.get("file_hash"),
@@ -79,7 +81,7 @@ def group_document_chunks(
             "title": title or None,
             "url": url or None,
             "source_type": source_type,
-            "score": chunk.get("score", 0.0),
+            "score": score,
         })
 
     context_parts: List[str] = []
@@ -91,11 +93,37 @@ def group_document_chunks(
     return "\n\n".join(context_parts), document_sources
 
 
+async def rerank_document_chunks(
+    query: str,
+    chunks: List[Dict[str, Any]],
+    model_name: Optional[str] = None,
+    top_k: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    if not chunks:
+        return chunks
+
+    reranker = get_reranker_model(model_name or DEFAULT_RERANKER_MODEL)
+    if reranker is None:
+        return chunks
+
+    passages = [c.get("text", "") for c in chunks]
+    scores = await reranker.ascore(query, passages)
+    for chunk, score in zip(chunks, scores):
+        chunk["rerank_score"] = float(score)
+
+    ranked = sorted(chunks, key=lambda c: c.get("rerank_score", c.get("score", 0.0)), reverse=True)
+    if top_k is not None:
+        return ranked[:top_k]
+    return ranked
+
+
 async def fetch_semantic_history(
     thread_id: str,
     query_vector: List[float],
+    query_text: Optional[str],
     limit: int,
     char_budget: Optional[int] = None,
+    use_reranker: bool = True,
 ) -> Tuple[str, List[str]]:
     """Fetch semantic chat memory text plus the list of used message IDs."""
 
@@ -105,6 +133,8 @@ async def fetch_semantic_history(
         query_vector=query_vector,
         limit=limit,
     )
+    if use_reranker and query_text:
+        recalled = await rerank_document_chunks(query_text, recalled)
 
     used_ids: List[str] = []
     parts: List[str] = []

@@ -5,9 +5,15 @@ import httpx
 import asyncio
 import logging
 import time
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List, Optional
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+try:
+    from sentence_transformers import SentenceTransformer, CrossEncoder
+except Exception:
+    SentenceTransformer = None
+    CrossEncoder = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -80,6 +86,22 @@ MAX_ITERATIONS_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_SUFFICIENT_COVE
 MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE", default=4)
 WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS", default=2)
 
+DEFAULT_EMBEDDING_MODEL = os.getenv("DEFAULT_EMBEDDING_MODEL", "").strip()
+DEFAULT_RERANKER_MODEL = os.getenv("DEFAULT_RERANKER_MODEL", "").strip()
+USE_LOCAL_EMBEDDINGS = os.getenv("USE_LOCAL_EMBEDDINGS", "true").lower() == "true"
+USE_LOCAL_RERANKER = os.getenv("USE_LOCAL_RERANKER", "true").lower() == "true"
+
+
+def _split_env_list(name: str) -> List[str]:
+    raw = os.getenv(name, "")
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return parts
+
+
+LOCAL_EMBEDDING_MODELS = _split_env_list("LOCAL_EMBEDDING_MODELS")
+if DEFAULT_EMBEDDING_MODEL and DEFAULT_EMBEDDING_MODEL not in LOCAL_EMBEDDING_MODELS:
+    LOCAL_EMBEDDING_MODELS.append(DEFAULT_EMBEDDING_MODEL)
+
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
 RATIO_DOCUMENT_CONTEXT = 0.45       # 45% for document chunks (PDF + webpage)
@@ -141,6 +163,7 @@ def default_thread_settings():
         "use_intent_agent": True,
         "intent_agent_max_iterations": INTENT_AGENT_MAX_ITERATIONS,
         "reasoning_mode": True,
+        "use_reranker": True,
     }
 
 
@@ -165,6 +188,15 @@ async def fetch_available_models():
     """
     llm_api_url = os.getenv("LLM_API_URL")
     try:
+        if not llm_api_url:
+            # Only local models available
+            return {
+                "embedding_models": LOCAL_EMBEDDING_MODELS,
+                "llm_models": [],
+                "all_models": LOCAL_EMBEDDING_MODELS,
+                "not_embedding_models": [],
+                "not_llm_models": [],
+            }
         if not llm_api_url.endswith("/v1"):
             llm_api_url = f"{llm_api_url}/v1"
 
@@ -179,6 +211,11 @@ async def fetch_available_models():
                 llm_models = [m for m in model_ids if is_llm_model_by_keyword(m)]
                 not_embedding_models = [m for m in model_ids if m not in embedding_models]
                 not_llm_models = [m for m in model_ids if m not in llm_models]
+                for local_model in LOCAL_EMBEDDING_MODELS:
+                    if local_model not in embedding_models:
+                        embedding_models.insert(0, local_model)
+                    if local_model not in model_ids:
+                        model_ids.insert(0, local_model)
                 result = {
                     "embedding_models": embedding_models,
                     "llm_models": llm_models,
@@ -195,7 +232,14 @@ async def fetch_available_models():
     except Exception as e:
         error_msg = f"Error fetching models from LLM API/server: {str(e)}"
         logger.error(error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
+        # Fall back to local-only list
+        return {
+            "embedding_models": LOCAL_EMBEDDING_MODELS,
+            "llm_models": [],
+            "all_models": LOCAL_EMBEDDING_MODELS,
+            "not_embedding_models": [],
+            "not_llm_models": [],
+        }
 
 # Identify embedding models by keywords in model id
 def is_embedding_model_by_keyword(model_id: str) -> bool:
@@ -233,12 +277,96 @@ def get_embedding_model(model_name: str):
     """
     Return a configured OpenAIEmbeddings client for the given model.
     """
+    if should_use_local_embeddings(model_name):
+        return get_local_embedding_model(model_name)
+
     return OpenAIEmbeddings(
         model=model_name,
         base_url=_get_base_url(),
         api_key="sk-no-key-required",
         check_embedding_ctx_length=False
     )
+
+
+class LocalEmbeddingWrapper:
+    def __init__(self, model: "SentenceTransformer"):
+        self.model = model
+
+    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+        def _encode():
+            embeddings = self.model.encode(texts, normalize_embeddings=True)
+            return embeddings.tolist()
+        return await asyncio.to_thread(_encode)
+
+    async def aembed_query(self, text: str) -> List[float]:
+        def _encode():
+            embeddings = self.model.encode([text], normalize_embeddings=True)
+            return embeddings[0].tolist()
+        return await asyncio.to_thread(_encode)
+
+
+class LocalRerankerWrapper:
+    def __init__(self, model: "CrossEncoder"):
+        self.model = model
+
+    async def ascore(self, query: str, passages: List[str]) -> List[float]:
+        def _score():
+            pairs = [(query, p) for p in passages]
+            scores = self.model.predict(pairs)
+            return scores.tolist() if hasattr(scores, "tolist") else list(scores)
+        return await asyncio.to_thread(_score)
+
+
+_local_embedder_cache: Dict[str, LocalEmbeddingWrapper] = {}
+_local_reranker_cache: Dict[str, LocalRerankerWrapper] = {}
+
+
+def normalize_model_name(name: str) -> str:
+    return (name or "").strip()
+
+
+def is_local_embedding_model(model_name: str) -> bool:
+    name = normalize_model_name(model_name)
+    return name in LOCAL_EMBEDDING_MODELS
+
+
+def should_use_local_embeddings(model_name: str) -> bool:
+    if not USE_LOCAL_EMBEDDINGS:
+        return False
+    return is_local_embedding_model(model_name)
+
+
+def get_local_embedding_model(model_name: str) -> LocalEmbeddingWrapper:
+    if SentenceTransformer is None:
+        raise RuntimeError("sentence-transformers is not installed; cannot load local embeddings.")
+
+    name = normalize_model_name(model_name)
+    if name not in _local_embedder_cache:
+        device = os.getenv("EMBEDDING_DEVICE", "cpu").strip() or "cpu"
+        model = SentenceTransformer(name, device=device, trust_remote_code=True)
+        _local_embedder_cache[name] = LocalEmbeddingWrapper(model)
+    return _local_embedder_cache[name]
+
+
+def should_use_local_reranker(model_name: str) -> bool:
+    if not USE_LOCAL_RERANKER:
+        return False
+    return bool(normalize_model_name(model_name))
+
+
+def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerankerWrapper]:
+    name = normalize_model_name(model_name or DEFAULT_RERANKER_MODEL)
+    if not name:
+        return None
+    if not should_use_local_reranker(name):
+        return None
+    if CrossEncoder is None:
+        raise RuntimeError("sentence-transformers is not installed; cannot load local reranker.")
+    if name not in _local_reranker_cache:
+        device = os.getenv("RERANKER_DEVICE", "cpu").strip() or "cpu"
+        model = CrossEncoder(name, device=device, trust_remote_code=True)
+        _local_reranker_cache[name] = LocalRerankerWrapper(model)
+    return _local_reranker_cache[name]
 
 def get_system_prompt(context: str, use_history: bool = False, use_web: bool = False) -> str:
     """
@@ -459,6 +587,15 @@ async def check_embed_model_ready(model_name: str) -> bool:
     Returns True if ready, False if not ready or not found.
     Robustly retries on transient error codes.
     """
+    if should_use_local_embeddings(model_name):
+        try:
+            embedder = get_local_embedding_model(model_name)
+            await embedder.aembed_query("ping")
+            return True
+        except Exception as exc:
+            logger.error("Local embedding model readiness check failed: %s", exc)
+            return False
+
     cache_key = f"embed:{model_name}"
     cached_status = _check_model_ready_cache(cache_key)
     if cached_status is not None:
