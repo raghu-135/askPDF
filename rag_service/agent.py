@@ -195,11 +195,12 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 web_groups[url] = {"title": wchunk.get("title", url), "texts": []}
             web_groups[url]["texts"].append(wchunk.get("text", ""))
 
+            score = wchunk.get("rerank_score", wchunk.get("score", 0.0))
             web_sources.append({
                 "text": wchunk.get("text", "")[:200] + "...",
                 "url": url,
                 "title": wchunk.get("title", url),
-                "score": wchunk.get("score", 0.0),
+                "score": score,
             })
 
         for url, group in web_groups.items():
@@ -301,18 +302,21 @@ async def _run_web_search(query: str, max_results: Optional[int]) -> Optional[Di
     return {"texts": texts, "urls": urls, "titles": titles}
 
 
-def _format_web_context(texts: List[str], urls: List[str], titles: List[str]) -> Dict[str, Any]:
+def _format_web_context(texts: List[str], urls: List[str], titles: List[str], scores: Optional[List[float]] = None) -> Dict[str, Any]:
     web_groups: Dict[str, Dict[str, Any]] = {}
-    web_sources: List[Dict[str, str]] = []
-    for text, url, title in zip(texts, urls, titles):
+    web_sources: List[Dict[str, Any]] = []
+    for idx, (text, url, title) in enumerate(zip(texts, urls, titles)):
         if url not in web_groups:
             web_groups[url] = {"title": title or url or "Internet Search", "texts": []}
         web_groups[url]["texts"].append(text)
-        web_sources.append({
+        entry: Dict[str, Any] = {
             "text": text[:200] + "...",
             "url": url,
             "title": title or "Internet Search",
-        })
+        }
+        if scores and idx < len(scores):
+            entry["score"] = scores[idx]
+        web_sources.append(entry)
 
     context_parts = []
     for url, group in web_groups.items():
@@ -364,12 +368,14 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         texts = result["texts"]
         urls = result["urls"]
         titles = result["titles"]
+        scores: Optional[List[float]] = None
         if conf.get("use_reranker", True):
             web_chunks = [{"text": t, "url": urls[i], "title": titles[i]} for i, t in enumerate(texts)]
             web_chunks = await rerank_document_chunks(query, web_chunks)
             texts = [c.get("text", "") for c in web_chunks]
             urls = [c.get("url", "") for c in web_chunks]
             titles = [c.get("title", "") for c in web_chunks]
+            scores = [c.get("rerank_score") for c in web_chunks]
 
         # ── Persist results in Qdrant for future retrieval ──
         if thread_id and embedding_model and conf.get("web_search_index", True):
@@ -388,7 +394,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
             except Exception as idx_err:
                 logger.warning(f"Web search indexing skipped: {idx_err}")
 
-        return json.dumps(_format_web_context(texts, urls, titles))
+        return json.dumps(_format_web_context(texts, urls, titles, scores=scores))
     except Exception as e:
         logger.error(f"Web search failed: {e}", exc_info=True)
         return f"Web search failed: {str(e)}"
