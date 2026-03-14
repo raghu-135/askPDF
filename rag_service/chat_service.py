@@ -7,6 +7,7 @@ This module provides:
 
 import asyncio
 import logging
+import os
 import time
 from typing import List, Dict, Any
 
@@ -31,7 +32,7 @@ from database import (
     increment_qa_stats,
 )
 from reasoning import normalize_ai_response
-from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks
+from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ async def prefetch_context(
     context_window: int,
     use_web_search: bool,
     reasoning_mode: bool,
+    use_reranker: bool,
 ) -> Dict[str, Any]:
     """
     Gather all retrieval context in parallel BEFORE any LLM call.
@@ -113,8 +115,10 @@ async def prefetch_context(
             return await fetch_semantic_history(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
+                query_text=raw_question,
                 limit=budget["semantic_limit"],
                 char_budget=budget["semantic_history_chars"],
+                use_reranker=use_reranker,
             )
         except Exception as exc:
             logger.warning(f"Prefetch semantic history failed: {exc}")
@@ -123,13 +127,17 @@ async def prefetch_context(
     async def _fetch_documents() -> tuple:
         try:
             db = get_qdrant()
+            limit = budget["document_limit"]
+            rerank_fetch_k = limit
             raw_chunks = await db.search_knowledge_sources(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
-                limit=budget["document_limit"],
+                limit=rerank_fetch_k,
             )
 
             hash_to_name = await get_document_name_lookup(thread_id)
+            if use_reranker:
+                raw_chunks = await rerank_document_chunks(question, raw_chunks)
             return group_document_chunks(
                 raw_chunks,
                 hash_to_name,
@@ -183,6 +191,9 @@ async def handle_thread_chat(
     question = req.question
     llm_model = req.llm_model
     use_web_search = getattr(req, 'use_web_search', False)
+    use_reranker = getattr(req, 'use_reranker', None)
+    if use_reranker is None:
+        use_reranker = True
     context_window = getattr(req, 'context_window', DEFAULT_TOKEN_BUDGET)
     max_iterations = getattr(req, 'max_iterations', None) or DEFAULT_MAX_ITERATIONS
     system_role = getattr(req, 'system_role_override', "") or ""
@@ -213,6 +224,7 @@ async def handle_thread_chat(
             context_window=context_window,
             use_web_search=use_web_search,
             reasoning_mode=reasoning_mode,
+            use_reranker=use_reranker,
         )
 
         # 2. Analyze intent using the Intent Agent (optional)
@@ -249,6 +261,7 @@ async def handle_thread_chat(
                         "embedding_model": embed_model,
                         "context_window": context_window,
                         "use_web_search": use_web_search,
+                        "use_reranker": use_reranker,
                         "web_search_index": False,
                     }
                 },
@@ -324,6 +337,7 @@ async def handle_thread_chat(
                 "embedding_model": embed_model,
                 "context_window": context_window,
                 "use_web_search": use_web_search,
+                "use_reranker": use_reranker,
             }
         }
         

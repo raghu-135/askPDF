@@ -120,6 +120,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
     const [reasoningMode, setReasoningMode] = useState(true);
     const [defaultReasoningMode, setDefaultReasoningMode] = useState(true);
+    const [useReranker, setUseReranker] = useState(true);
+    const [defaultUseReranker, setDefaultUseReranker] = useState(true);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -167,6 +169,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
                     setDefaultReasoningMode(res.defaults.reasoning_mode ?? true);
+                    setDefaultUseReranker(res.defaults.use_reranker ?? true);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
                     }
@@ -177,6 +180,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         setUseIntentAgent(res.defaults.use_intent_agent ?? true);
                         setIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
                         setReasoningMode(res.defaults.reasoning_mode ?? true);
+                        setUseReranker(res.defaults.use_reranker ?? true);
                     }
                 }
             } catch (error) {
@@ -198,6 +202,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setUseIntentAgent(settings.use_intent_agent ?? true);
             setIntentAgentMaxIterations(settings.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
             setReasoningMode(settings.reasoning_mode ?? defaultReasoningMode);
+            setUseReranker(settings.use_reranker ?? defaultUseReranker);
         } catch (error) {
             console.error('Failed to load thread settings:', error);
             setMaxIterations(defaultMaxIterations);
@@ -207,6 +212,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setUseIntentAgent(true);
             setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
             setReasoningMode(defaultReasoningMode);
+            setUseReranker(defaultUseReranker);
         }
     };
 
@@ -332,6 +338,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseIntentAgent(true);
         setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
         setReasoningMode(defaultReasoningMode);
+        setUseReranker(defaultUseReranker);
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -501,6 +508,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 textToSend,
                 llmModel,
                 useWebSearch,
+                useReranker,
                 contextWindow,
                 maxIterations,
                 systemRole,
@@ -661,6 +669,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 use_intent_agent: useIntentAgent,
                 intent_agent_max_iterations: Math.max(1, Math.min(10, intentAgentMaxIterations)),
                 reasoning_mode: reasoningMode,
+                use_reranker: useReranker,
             });
             setMaxIterations(saved.max_iterations);
             setSystemRole(saved.system_role);
@@ -669,6 +678,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setUseIntentAgent(saved.use_intent_agent ?? true);
             setIntentAgentMaxIterations(saved.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
             setReasoningMode(saved.reasoning_mode ?? defaultReasoningMode);
+            setUseReranker(saved.use_reranker ?? defaultUseReranker);
             setSettingsDialogOpen(false);
         } catch (error) {
             console.error('Failed to save thread settings:', error);
@@ -1272,6 +1282,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     Requires Reasoning mode to be enabled.
                                 </Box>
                             )}
+                        </Typography>
+                    </Box>
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={useReranker}
+                                    onChange={(e) => setUseReranker(e.target.checked)}
+                                />
+                            }
+                            label={
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                    <Typography variant="body2" fontWeight={500}>Reranker</Typography>
+                                </Box>
+                            }
+                        />
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
+                            Reorders retrieved chunks for documents, web results, and chat memory using the reranker model.
                         </Typography>
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>

@@ -133,6 +133,15 @@ You need a **chat model with TOOL CALLING support** (Reasoning models work well)
 
 You can download multiple models. In the app, you can use any model for chat and any model for embeddings. You can check https://llm-explorer.com/list/ to find models that fits your system's resources and performance needs. If you're unsure, use LM Studio. When you search for a model, it displays a "Hardware Fit" indicator (Green/Yellow/Red) next to every version of the model.
 
+### Default Local Embeddings (BGE-M3)
+
+The RAG service Docker image now ships with a **default local embedding model**:
+
+- **Embedding**: `BAAI/bge-m3`
+- **Reranker**: `BAAI/bge-reranker-v2-m3`
+
+This means you can run **chat via your LLM server** while letting the RAG service handle embeddings locally. If you prefer to use your own embedding model from Ollama/LMStudio/DMR instead, set the embedding model when creating a thread and disable local embeddings via environment variables (see **Configuration** below).
+
 ## 🚀 Quick Start
 
 ### 1. Clone the Repository
@@ -488,6 +497,13 @@ Health check endpoint.
 | `QDRANT_HOST` | RAG Service | `qdrant` | Qdrant hostname |
 | `QDRANT_PORT` | RAG Service | `6333` | Qdrant port |
 | `LLM_API_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (Change to `...:11434` for default Ollama) |
+| `DEFAULT_EMBEDDING_MODEL` | RAG Service | `BAAI/bge-m3` | Default embedding model used for new threads when not explicitly chosen |
+| `LOCAL_EMBEDDING_MODELS` | RAG Service | `BAAI/bge-m3` | Comma-separated list of embedding models that should be run locally in the RAG service |
+| `USE_LOCAL_EMBEDDINGS` | RAG Service | `true` | Toggle to enable/disable local embeddings in the RAG service |
+| `DEFAULT_RERANKER_MODEL` | RAG Service | `BAAI/bge-reranker-v2-m3` | Default reranker model for chunk re-ordering |
+| `USE_LOCAL_RERANKER` | RAG Service | `true` | Toggle to enable/disable reranking |
+| `EMBEDDING_DEVICE` | RAG Service | `cpu` | Device for local embeddings (`cpu` or `cuda`) |
+| `RERANKER_DEVICE` | RAG Service | `cpu` | Device for local reranker (`cpu` or `cuda`) |
 | `DEFAULT_TOKEN_BUDGET` | RAG Service | `128000` | Default context-window size in tokens |
 | `DEFAULT_MAX_ITERATIONS` | RAG Service | `10` | Default max orchestrator tool-call rounds |
 | `MIN_MAX_ITERATIONS` | RAG Service | `1` | Minimum allowed value for max iterations |
