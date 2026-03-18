@@ -200,6 +200,7 @@ async def handle_thread_chat(
     tool_instructions = getattr(req, 'tool_instructions_override', None) or {}
     custom_instructions = getattr(req, 'custom_instructions_override', "") or ""
     use_intent_agent = getattr(req, 'use_intent_agent', True)
+    intent_agent_skip_clarify = bool(getattr(req, 'intent_agent_skip_clarify', False))
     reasoning_mode = getattr(req, 'reasoning_mode', True)
     if use_intent_agent is None:
         use_intent_agent = True
@@ -271,17 +272,54 @@ async def handle_thread_chat(
             intent_iterations = intent_result_state.get("iteration_count", 0)
             if intent_result_state.get("intent_result"):
                 intent = intent_result_state["intent_result"]
+            if intent_agent_skip_clarify and intent.get("route") == "CLARIFY":
+                logger.info(f"Intent Agent clarification suppressed for thread {thread_id}")
+                intent["route"] = "ANSWER"
+                intent["clarification_options"] = None
         else:
             logger.info(f"Intent Agent disabled for thread {thread_id}, skipping")
         
         # If ambiguous, return early with clarification options
         if intent.get("route") == "CLARIFY" and intent.get("clarification_options"):
+            clarification_options = intent["clarification_options"]
+            clarification_answer = (
+                "I need a bit more clarification. Did you mean:\n"
+                + "\n".join([f"- {opt}" for opt in clarification_options])
+            )
+            user_message_id = None
+            assistant_message_id = None
+
+            try:
+                user_message = await create_message(
+                    thread_id=thread_id,
+                    role=MessageRole.USER,
+                    content=req.question,
+                    context_compact=None,
+                )
+                assistant_message = await create_message(
+                    thread_id=thread_id,
+                    role=MessageRole.ASSISTANT,
+                    content=clarification_answer,
+                    reasoning="",
+                    reasoning_available=False,
+                    reasoning_format="none",
+                )
+                user_message_id = user_message.id
+                assistant_message_id = assistant_message.id
+                try:
+                    qa_chars = len(req.question) + len(clarification_answer)
+                    await increment_qa_stats(thread_id, qa_chars)
+                except Exception as stats_err:
+                    logger.warning(f"thread_stats QA increment skipped (clarification): {stats_err}")
+            except Exception as msg_err:
+                logger.warning(f"Failed to persist clarification turn for thread {thread_id}: {msg_err}")
+
             return {
-                "answer": "I'm not sure I understand. Could you clarify which of these you meant?",
-                "clarification_options": intent["clarification_options"],
+                "answer": clarification_answer,
+                "clarification_options": clarification_options,
                 "rewritten_query": intent.get("rewritten_query") or question,
-                "user_message_id": None,
-                "assistant_message_id": None,
+                "user_message_id": user_message_id,
+                "assistant_message_id": assistant_message_id,
                 "used_chat_ids": [],
                 "document_sources": [],
                 "web_sources": [],

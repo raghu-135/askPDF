@@ -34,7 +34,24 @@ def parse_intent_response(raw: str, logger: logging.Logger) -> Optional[Dict[str
     if clarify_block:
         options = re.findall(r"<option>(.*?)</option>", clarify_block, re.IGNORECASE | re.DOTALL)
         if options:
-            clarification_options = [opt.strip() for opt in options]
+            cleaned = [opt.strip() for opt in options if opt.strip()]
+            meta_prefixes = (
+                "are you asking about",
+                "are you asking for",
+                "are you referring to",
+                "did you mean",
+                "do you mean",
+                "is your question about",
+                "is this about",
+                "are you looking for",
+                "would you like",
+                "do you want",
+            )
+            if any(opt.lower().startswith(meta_prefixes) for opt in cleaned):
+                logger.warning("Intent Agent clarification options looked like meta-questions; rejecting to force retry.")
+                clarification_options = None
+            else:
+                clarification_options = cleaned
 
     # Defaults or validation parsing
     if not route:

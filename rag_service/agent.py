@@ -785,7 +785,12 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     if intent_result is None:
         logger.warning("Intent XML invalid; retrying once with strict XML instruction.")
         retry_msg = HumanMessage(
-            content="Your previous output was invalid or missing required XML tags. Output the required XML tags: <route>, <rewritten_query>, <reference_type>, <context_coverage>."
+            content=(
+                "Your previous output was invalid or missing required XML tags. Output the required XML tags: "
+                "<route>, <rewritten_query>, <reference_type>, <context_coverage>. If route is CLARIFY, include "
+                "2–4 <option> questions that are direct standalone questions (not meta-questions like "
+                "\"Did you mean...\" or \"Are you asking about...\")."
+            )
         )
         retry_messages = input_messages + [retry_msg]
         try:

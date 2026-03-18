@@ -116,6 +116,7 @@ class ThreadChatRequest(BaseModel):
     custom_instructions_override: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
+    intent_agent_skip_clarify: Optional[bool] = None
     reasoning_mode: Optional[bool] = None
 
 

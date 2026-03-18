@@ -373,7 +373,8 @@ export async function threadChat(
   customInstructionsOverride?: string,
   useIntentAgent?: boolean,
   intentAgentMaxIterations?: number,
-  reasoningMode?: boolean
+  reasoningMode?: boolean,
+  intentAgentSkipClarify?: boolean
 ): Promise<{
   answer: string;
   user_message_id: string | null;
@@ -412,6 +413,9 @@ export async function threadChat(
   }
   if (typeof intentAgentMaxIterations === "number") {
     payload.intent_agent_max_iterations = intentAgentMaxIterations;
+  }
+  if (typeof intentAgentSkipClarify === "boolean") {
+    payload.intent_agent_skip_clarify = intentAgentSkipClarify;
   }
   if (typeof reasoningMode === "boolean") {
     payload.reasoning_mode = reasoningMode;

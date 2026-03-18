@@ -516,7 +516,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 customInstructions,
                 useIntentAgent,
                 useIntentAgent ? intentAgentMaxIterations : undefined,
-                reasoningMode
+                reasoningMode,
+                isClarificationSelection ? true : undefined
             );
 
             // Handle ambiguous query / clarification options
