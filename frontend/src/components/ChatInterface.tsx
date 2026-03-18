@@ -428,6 +428,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
+    const handleWebSearchToggle = () => {
+        setUseWebSearch(prev => {
+            const next = !prev;
+            if (typeof window !== 'undefined') {
+                localStorage.setItem('last_use_web_search', next ? '1' : '0');
+            }
+            return next;
+        });
+    };
+
     // Polling for indexing and embedding model status
     useEffect(() => {
         if (!activeThread) return;
@@ -460,7 +470,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         return () => clearInterval(intervalId);
     }, [activeThread?.id, indexingStatus, isEmbedModelValid]);
 
-    // Load browser memory settings (last selected LLM and context window) on mount
+    // Load browser memory settings (last selected LLM, context window, and web search) on mount
     useEffect(() => {
         if (typeof window === 'undefined') return;
 
@@ -481,6 +491,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             if (!isNaN(ctx) && ctx > 0) {
                 setContextWindow(ctx);
             }
+        }
+
+        const savedWebSearch = localStorage.getItem('last_use_web_search');
+        if (savedWebSearch === '1' || savedWebSearch === '0') {
+            setUseWebSearch(savedWebSearch === '1');
         }
     }, [ragApiUrl]);
 
@@ -781,7 +796,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <IconButton
                             size="small"
                             color={useWebSearch ? "primary" : "default"}
-                            onClick={() => setUseWebSearch(v => !v)}
+                            onClick={handleWebSearchToggle}
                             sx={{ p: 0.5 }}
                         >
                             {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
