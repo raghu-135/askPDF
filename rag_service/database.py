@@ -249,12 +249,13 @@ async def list_threads() -> List[Dict[str, Any]]:
             SELECT 
                 t.id, t.name, t.embed_model, t.settings, t.created_at,
                 COUNT(DISTINCT m.id) as message_count,
-                COUNT(DISTINCT tf.file_hash) as file_count
+                COUNT(DISTINCT tf.file_hash) as file_count,
+                MAX(m.created_at) as last_message_at
             FROM threads t
             LEFT JOIN messages m ON t.id = m.thread_id
             LEFT JOIN thread_files tf ON t.id = tf.thread_id
             GROUP BY t.id
-            ORDER BY t.created_at DESC
+            ORDER BY COALESCE(last_message_at, t.created_at) DESC
         """)
         rows = await cursor.fetchall()
         return [

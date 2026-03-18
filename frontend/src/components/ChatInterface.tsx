@@ -1165,7 +1165,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <Button
                             size="small"
                             variant="text"
-                            onClick={() => setClarificationOptions(null)}
+                            onClick={() => {
+                                setClarificationOptions(null);
+                                const lastIds = lastClarificationIdsRef.current;
+                                lastClarificationIdsRef.current = null;
+                                if (lastIds) {
+                                    setMessages(prev => prev.filter(m => {
+                                        if (m.id.startsWith('clarify-')) return false;
+                                        if (m.id === lastIds.userId || m.id === lastIds.assistantId) return false;
+                                        return true;
+                                    }));
+                                }
+                                if (lastIds && (lastIds.assistantId || lastIds.userId)) {
+                                    const deleteTargetId = lastIds.assistantId || lastIds.userId;
+                                    deleteMessage(deleteTargetId).catch(err => {
+                                        console.warn('Failed to delete clarification message pair:', err);
+                                    });
+                                }
+                            }}
                             sx={{ fontSize: '0.7rem' }}
                         >
                             None of these
