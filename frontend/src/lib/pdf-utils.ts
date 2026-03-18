@@ -1,4 +1,83 @@
 import { PdfTab } from "../components/PdfTabs";
+import { DocumentSource } from "./api";
+
+/**
+ * Clears any active source highlights in the UI.
+ */
+export function clearSourceHighlightsUtil(
+  setHighlightedSourceSentenceIds: (ids: number[]) => void,
+  setHighlightedSourceFileHash: (hash: string | null) => void,
+  setHighlightedSourceMessageId: (id: string | null) => void
+) {
+  setHighlightedSourceSentenceIds([]);
+  setHighlightedSourceFileHash(null);
+  setHighlightedSourceMessageId(null);
+}
+
+/**
+ * High-level orchestration for highlighting sources from a chat message. 
+ * Handles tab switching, ID aggregation, and focus.
+ */
+export function handleHighlightSourcesUtil(
+  payload: { messageId: string; documentSources: DocumentSource[]; matchedSentenceIds?: number[] },
+  highlightedSourceMessageId: string | null,
+  pdfTabs: PdfTab[],
+  activeTab: PdfTab | null,
+  activeTabId: string | null,
+  setPdfTabs: (tabs: PdfTab[]) => void,
+  setActiveTabId: (id: string | null) => void,
+  setHighlightedSourceSentenceIds: (ids: number[]) => void,
+  setHighlightedSourceFileHash: (hash: string | null) => void,
+  setHighlightedSourceMessageId: (id: string | null) => void,
+  setActiveSource: (src: 'pdf' | 'chat') => void,
+  setCurrentPdfId: (id: number | null) => void
+) {
+  if (highlightedSourceMessageId === payload.messageId) {
+    clearSourceHighlightsUtil(
+      setHighlightedSourceSentenceIds,
+      setHighlightedSourceFileHash,
+      setHighlightedSourceMessageId
+    );
+    return;
+  }
+
+  const pdfSources = (payload.documentSources || []).filter(s => (s.source_type ?? 'pdf') === 'pdf');
+  if (pdfSources.length === 0) return;
+
+  const activeFileHash = activeTab?.fileHash;
+  const preferredFileHash = activeFileHash && pdfSources.some(s => s.file_hash === activeFileHash)
+    ? activeFileHash
+    : pdfSources[0].file_hash;
+
+  const targetTab = pdfTabs.find(t => t.fileHash === preferredFileHash);
+  if (!targetTab) return;
+
+  if (activeTabId !== targetTab.id) {
+    setActiveTabId(targetTab.id);
+  }
+
+  const targetSources = pdfSources.filter(s => s.file_hash === preferredFileHash);
+  
+  // Use backend IDs if available, else aggregate manually
+  let matchedIds: number[] = [];
+  if (payload.matchedSentenceIds) {
+    matchedIds = payload.matchedSentenceIds;
+  } else {
+    const idSet = new Set<number>();
+    targetSources.forEach(s => {
+      if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));
+    });
+    matchedIds = Array.from(idSet);
+  }
+
+  setHighlightedSourceSentenceIds(matchedIds);
+  setHighlightedSourceFileHash(preferredFileHash);
+  setHighlightedSourceMessageId(payload.messageId);
+  setActiveSource('pdf');
+  if (matchedIds.length > 0) {
+    setCurrentPdfId(matchedIds[0]);
+  }
+}
 
 /**
  * Truncates a file name for display, preserving the extension if possible.

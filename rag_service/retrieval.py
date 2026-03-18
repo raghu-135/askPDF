@@ -76,12 +76,15 @@ def group_document_chunks(
         score = chunk.get("rerank_score", chunk.get("score", 0.0))
         document_sources.append({
             "text": short_text,
-            "file_hash": chunk.get("file_hash"),
+            "full_text": text,
+            "file_hash": fh,
             "file_name": fallback_name,
             "title": title or None,
             "url": url or None,
             "source_type": source_type,
             "score": score,
+            "page_number": chunk.get("metadata", {}).get("page_number"),
+            "sentence_ids": chunk.get("metadata", {}).get("sentence_ids"),
         })
 
     context_parts: List[str] = []

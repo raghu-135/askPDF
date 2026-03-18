@@ -459,6 +459,14 @@ async def handle_thread_chat(
         except Exception as stats_err:
             logger.warning(f"thread_stats QA increment skipped: {stats_err}")
 
+        # Aggregating matched sentence IDs for the UI to simplify front-end logic
+        matched_sentence_ids = []
+        for s in document_sources:
+            if s.get("sentence_ids"):
+                matched_sentence_ids.extend(s["sentence_ids"])
+        # Deduplicate and sort
+        matched_sentence_ids = sorted(list(set(matched_sentence_ids)))
+
         return {
             "answer": answer,
             "rewritten_query": question, # Return rewritten version for UI
@@ -466,6 +474,7 @@ async def handle_thread_chat(
             "assistant_message_id": assistant_message.id,
             "used_chat_ids": used_chat_ids,
             "document_sources": document_sources,
+            "matched_sentence_ids": matched_sentence_ids,
             "web_sources": web_sources,
             "clarification_options": clarification_options,
             "reasoning": normalized["reasoning"],

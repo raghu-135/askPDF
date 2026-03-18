@@ -61,10 +61,10 @@ async def summarize_qa(
         return f"Q: {question}\nA: {answer}"[:hard_limit_chars] + "..."
 
 
-async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[List[str]]:
+async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[List[Dict[str, Any]]]:
     """
     Download a PDF from the backend using file_hash and parse it into text chunks using unstructured.
-    Returns a list of chunked strings, or None if download/parsing fails.
+    Returns a list of chunked data (text and metadata), or None if download/parsing fails.
     """
     pdf_url = f"{backend_url}/{file_hash}.pdf"
     local_path = os.path.join(TEMP_PDF_DIR, f"{file_hash}.pdf")
@@ -89,7 +89,14 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[L
                     new_after_n_chars=400,
                     overlap=0 # Neighbors provide the continuity, so we don't need overlapping text
                 )
-                chunks = [str(c) for c in chunked_elements]
+                chunks = []
+                for c in chunked_elements:
+                    # Extract page number and other metadata if available
+                    page_number = getattr(c.metadata, 'page_number', None)
+                    chunks.append({
+                        "text": str(c),
+                        "page_number": page_number
+                    })
                 try:
                     os.remove(local_path)
                 except Exception:
@@ -103,17 +110,74 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[L
         return None
 
 
-async def get_chunks(file_hash: str) -> List[str]:
+async def get_chunks(file_hash: str) -> List[Dict[str, Any]]:
     """
-    Download a PDF from the backend using file_hash and parse it into text chunks using unstructured.
-    Returns a list of chunked strings.
+    Retrieve text chunks based on backend-provided sentences if available,
+    otherwise fallback to unstructured-based parsing. 
+    This ensures that vector-based highlights exactly match the backend's sentence IDs.
     """
     backend_url = os.getenv("BACKEND_URL", "http://backend:8000")
+    
+    # Try fetching sentences from backend cache first
+    try:
+        cache_url = f"{backend_url}/cache/{file_hash}.json"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(cache_url, timeout=10.0)
+            if resp.status_code == 200:
+                sentences = resp.json()
+                logger.info(f"Using {len(sentences)} backend sentences to build chunks for {file_hash}")
+                
+                chunks: List[Dict[str, Any]] = []
+                current_chunk_text = ""
+                current_chunk_ids = []
+                current_page = None
+                
+                # Logical chunking: group sentences while respecting page boundaries and size
+                for s in sentences:
+                    s_text = (s.get("text") or "").strip()
+                    if not s_text: continue
+                    s_id = s.get("id")
+                    
+                    # Estimate page number from bboxes (bboxes are from PyMuPDF, 1-indexed)
+                    s_page = None
+                    if s.get("bboxes") and len(s["bboxes"]) > 0:
+                        s_page = s["bboxes"][0].get("page")
+                    
+                    # Start new chunk if page changes OR size exceeds target (approx 700 chars)
+                    should_split = (current_page is not None and s_page != current_page) or \
+                                 (len(current_chunk_text) + len(s_text) > 700)
+                    
+                    if should_split and current_chunk_text:
+                        chunks.append({
+                            "text": current_chunk_text.strip(),
+                            "page_number": current_page,
+                            "sentence_ids": list(current_chunk_ids)
+                        })
+                        current_chunk_text = ""
+                        current_chunk_ids = []
+                    
+                    current_chunk_text += s_text + " "
+                    if s_id is not None:
+                        current_chunk_ids.append(s_id)
+                    current_page = s_page
+                
+                if current_chunk_text:
+                    chunks.append({
+                        "text": current_chunk_text.strip(),
+                        "page_number": current_page,
+                        "sentence_ids": list(current_chunk_ids)
+                    })
+                return chunks
+    except Exception as exc:
+        logger.warning(f"Failed to fetch chunks from backend cache for {file_hash}: {exc}")
+
+    # Fallback to pure unstructured parsing
+    logger.info(f"Falling back to unstructured partitioner for {file_hash}")
     chunks = await download_and_parse_pdf(file_hash, backend_url)
     if chunks:
         return chunks
     
-    logger.error(f"PDF download/parse failed for {file_hash}")
+    logger.error(f"Both backend cache and unstructured failed for {file_hash}")
     return []
 
 
@@ -171,7 +235,7 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
     """
     embed_model = get_embedding_model(embedding_model_name)
-    batch_size = 10  # LLM API/server strict batch size limits
+    batch_size = 30  # LLM API/server strict batch size limits
     vectors = []
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
@@ -204,23 +268,27 @@ async def index_document_for_thread(
     
     try:
         # 1. Get chunks from PDF
-        chunks = await get_chunks(file_hash)
-        if not chunks:
+        chunk_data = await get_chunks(file_hash)
+        if not chunk_data:
             logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
             return {"status": "error", "message": "No text extracted from PDF"}
         
-        logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
+        logger.info(f"Extracted {len(chunk_data)} chunks for thread {thread_id}, file {file_hash}")
+        
+        texts = [c["text"] for c in chunk_data]
         
         # 2. Generate embeddings
-        vectors = await generate_embeddings(chunks, embedding_model_name)
+        vectors = await generate_embeddings(texts, embedding_model_name)
         
         # 3. Prepare metadata for each chunk
         chunk_metadatas = []
-        for i, chunk in enumerate(chunks):
+        for i, c in enumerate(chunk_data):
             chunk_metadata = {
                 **metadata,
                 "file_hash": file_hash,
                 "chunk_index": i,
+                "page_number": c.get("page_number"),
+                "sentence_ids": c.get("sentence_ids"),
             }
             chunk_metadatas.append(chunk_metadata)
         
@@ -228,7 +296,7 @@ async def index_document_for_thread(
         indexed_count = await db_client.index_pdf_chunks(
             thread_id=thread_id,
             file_hash=file_hash,
-            texts=chunks,
+            texts=texts,
             embeddings=vectors,
             metadatas=chunk_metadatas
         )
@@ -243,7 +311,7 @@ async def index_document_for_thread(
                 file_hash=file_hash,
                 status="indexed",
                 chunk_count=indexed_count,
-                total_chars=sum(len(c) for c in chunks),
+                total_chars=sum(len(t) for t in texts),
             )
         except Exception as stats_err:
             logger.warning(f"thread_stats update skipped after indexing: {stats_err}")

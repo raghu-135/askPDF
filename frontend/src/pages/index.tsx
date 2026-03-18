@@ -21,9 +21,15 @@ import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
-import { Thread, addFileToThread, removeSourceFromThread } from "../lib/api";
-import { loadThreadTabs, createPdfTabFromUpload, createWebTabFromIndexed, extractTextFromSentences } from "../lib/thread-utils";
-import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
+import { Thread, DocumentSource, addFileToThread, removeSourceFromThread } from "../lib/api";
+import { 
+  loadThreadTabs, 
+  handleThreadSelectUtil, 
+  handlePdfUploadedUtil, 
+  handleWebIndexedUtil, 
+  handleTabRemoveUtil 
+} from "../lib/thread-utils";
+import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData, handleHighlightSourcesUtil, clearSourceHighlightsUtil } from "../lib/pdf-utils";
 
 type Sentence = { id: number; text: string; bboxes: any[] };
 
@@ -43,6 +49,9 @@ export default function Home() {
   const [playRequestId, setPlayRequestId] = useState<number | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [chatSentences, setChatSentences] = useState<any[]>([]);
+  const [highlightedSourceSentenceIds, setHighlightedSourceSentenceIds] = useState<number[]>([]);
+  const [highlightedSourceFileHash, setHighlightedSourceFileHash] = useState<string | null>(null);
+  const [highlightedSourceMessageId, setHighlightedSourceMessageId] = useState<string | null>(null);
 
   // Highlight toggle
   const [highlightEnabled, setHighlightEnabled] = useState(true);
@@ -90,124 +99,68 @@ export default function Home() {
   const rightPanelMinWidth = 350;
 
 
-  // Handle thread selection
   const handleThreadSelect = async (thread: Thread | null) => {
-    // Clear current state
-    setPdfTabs([]);
-    setActiveTabId(null);
-    setCurrentPdfId(null);
-    setCurrentChatId(null);
-    setPlayRequestId(null);
-    setActiveSource('pdf');
-    setChatSentences([]);
-
-    if (thread) {
-      try {
-        setIsPdfLoading(true);
-        // Always fetch the latest thread data to ensure we have current files and stats
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-        const detailedThread = await import("../lib/api").then(m => m.getThread(thread.id));
-        setActiveThread(detailedThread);
-
-        const loadedTabs = await loadThreadTabs(detailedThread, apiBase);
-        if (loadedTabs.length > 0) {
-          setPdfTabs(loadedTabs);
-          setActiveTabId(loadedTabs[0].id);
-        }
-      } catch (err) {
-        console.error('Failed to load thread files:', err);
-      } finally {
-        setIsPdfLoading(false);
-      }
-    } else {
-      setActiveThread(null);
-    }
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    await handleThreadSelectUtil(
+      thread,
+      apiBase,
+      setPdfTabs,
+      setActiveTabId,
+      setCurrentPdfId,
+      setCurrentChatId,
+      setPlayRequestId,
+      setActiveSource,
+      setChatSentences,
+      setHighlightedSourceSentenceIds,
+      setHighlightedSourceFileHash,
+      setHighlightedSourceMessageId,
+      setActiveThread,
+      setIsPdfLoading
+    );
   };
 
 
-  // Handle PDF upload - create new tab
   const handlePdfUploaded = async (data: any) => {
     const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const newTab = createPdfTabFromUpload(data, apiBase);
-
-    setPdfTabs(prev => [...prev, newTab]);
-    setActiveTabId(newTab.id);
-
-    // If we have an active thread, add the file to it
-    if (activeThread && data?.fileHash && data?.fileName) {
-      try {
-        await addFileToThread(
-          activeThread.id,
-          data.fileHash,
-          data.fileName,
-          newTab.text
-        );
-
-        // Refresh active thread to trigger UI updates (like indexing status in ChatInterface)
-        // Refresh full thread data to ensure we have updated file_count
-        const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
-        setActiveThread(updatedThread);
-        // Trigger sidebar refresh to update file counts in the list
-        setSidebarVersion(v => v + 1);
-      } catch (error) {
-        console.error('Failed to add file to thread:', error);
-      }
-    }
-
-    setCurrentPdfId(null);
-    setCurrentChatId(null);
-    setPlayRequestId(null);
-    setActiveSource('pdf');
+    await handlePdfUploadedUtil(
+      data,
+      apiBase,
+      activeThread,
+      setPdfTabs,
+      setActiveTabId,
+      setActiveThread,
+      setSidebarVersion,
+      setCurrentPdfId,
+      setCurrentChatId,
+      setPlayRequestId,
+      setActiveSource
+    );
   };
 
-  // Handle web source indexed
   const handleWebIndexed = async (data: { fileHash: string; url: string; status: string; message?: string }) => {
-    if (data.status !== 'accepted' || !activeThread || !data.fileHash) return;
-
-    const newTab = createWebTabFromIndexed(data.fileHash, data.url);
-
-    // Only add if not already present
-    setPdfTabs(prev => {
-      if (prev.some(t => t.id === newTab.id)) return prev;
-      return [...prev, newTab];
-    });
-    setActiveTabId(newTab.id);
-
-    try {
-      const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
-      setActiveThread(updatedThread);
-      setSidebarVersion(v => v + 1);
-    } catch (error) {
-      console.error('Failed to refresh thread after web source:', error);
-    }
-
-    setCurrentPdfId(null);
-    setCurrentChatId(null);
-    setPlayRequestId(null);
-    setActiveSource('pdf');
+    await handleWebIndexedUtil(
+      data,
+      activeThread,
+      setPdfTabs,
+      setActiveTabId,
+      setActiveThread,
+      setSidebarVersion,
+      setCurrentPdfId,
+      setCurrentChatId,
+      setPlayRequestId,
+      setActiveSource
+    );
   };
 
-  // Handle remove source from thread (deletes from DB + Qdrant, closes tab)
   const handleTabRemove = async (tabId: string) => {
-    if (!activeThread) return;
-    const tab = pdfTabs.find(t => t.id === tabId);
-    if (!tab) return;
-
-    try {
-      await removeSourceFromThread(activeThread.id, tab.fileHash);
-    } catch (error) {
-      console.error('Failed to remove source from thread:', error);
-    }
-
-    // Close the tab and refresh sidebar
-    handleTabClose(tabId);
-    try {
-      const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
-      setActiveThread(updatedThread);
-      setSidebarVersion(v => v + 1);
-    } catch (error) {
-      console.error('Failed to refresh thread after source removal:', error);
-    }
+    await handleTabRemoveUtil(
+      tabId,
+      pdfTabs,
+      activeThread,
+      handleTabClose,
+      setActiveThread,
+      setSidebarVersion
+    );
   };
 
   // Handle tab change
@@ -225,6 +178,30 @@ export default function Home() {
       setActiveTabId,
       setCurrentPdfId,
       setPlayRequestId
+    );
+  };
+
+
+
+
+  const clearSourceHighlights = () => {
+    clearSourceHighlightsUtil(setHighlightedSourceSentenceIds, setHighlightedSourceFileHash, setHighlightedSourceMessageId);
+  };
+
+  const handleHighlightSources = (payload: { messageId: string; documentSources: DocumentSource[]; matchedSentenceIds?: number[] }) => {
+    handleHighlightSourcesUtil(
+      payload,
+      highlightedSourceMessageId,
+      pdfTabs,
+      activeTab,
+      activeTabId,
+      setPdfTabs,
+      setActiveTabId,
+      setHighlightedSourceSentenceIds,
+      setHighlightedSourceFileHash,
+      setHighlightedSourceMessageId,
+      setActiveSource,
+      setCurrentPdfId
     );
   };
 
@@ -278,6 +255,17 @@ export default function Home() {
   const rightPanelWidth = isRightPanelOpen
     ? (isResizing ? 'var(--chat-width, 450px)' : chatWidth)
     : 0;
+
+  useEffect(() => {
+    if (!highlightedSourceFileHash) return;
+    if (!activeTab?.fileHash) {
+      clearSourceHighlights();
+      return;
+    }
+    if (highlightedSourceFileHash !== activeTab.fileHash) {
+      clearSourceHighlights();
+    }
+  }, [activeTab?.fileHash, highlightedSourceFileHash]);
 
 
   // Don't render until pdfDarkMode is determined (prevents hydration mismatch)
@@ -409,6 +397,7 @@ export default function Home() {
                 pdfUrl={pdfUrl}
                 sentences={pdfSentences}
                 currentId={activeSource === 'pdf' ? currentPdfId : null}
+                highlightIds={highlightedSourceFileHash === fileHash ? highlightedSourceSentenceIds : []}
                 onJump={(id) => {
                   setActiveSource('pdf');
                   setCurrentPdfId(id);
@@ -571,6 +560,8 @@ export default function Home() {
                       setCurrentChatId(null);
                       setPlayRequestId(null);
                     }}
+                    onHighlightSources={handleHighlightSources}
+                    activeHighlightMessageId={highlightedSourceMessageId}
                     darkMode={pdfDarkMode}
                     autoScroll={autoScroll}
                   />

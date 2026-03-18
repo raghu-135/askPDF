@@ -38,3 +38,14 @@ export function stripMarkdown(text: string): string {
         .replace(/\s+/g, ' ')
         .trim();
 }
+/**
+ * Normalizes text for comparison by lowering case, removing special characters, and collapsing whitespace.
+ */
+export function normalizeMatchText(text: string): string {
+    if (!text) return '';
+    return text
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}

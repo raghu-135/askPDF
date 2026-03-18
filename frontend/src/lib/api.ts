@@ -119,6 +119,19 @@ export interface WebSource {
   score?: number;
 }
 
+export interface DocumentSource {
+  text: string;
+  full_text?: string;
+  file_hash: string;
+  file_name?: string;
+  score?: number;
+  source_type?: 'pdf' | 'webpage';
+  title?: string;
+  url?: string;
+  page_number?: number;
+  sentence_ids?: number[];
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -130,6 +143,7 @@ export interface Message {
   reasoning_format?: 'structured' | 'tagged_text' | 'none';
   context_compact?: string;
   web_sources?: WebSource[];
+  document_sources?: DocumentSource[];
 }
 
 export async function createThread(name: string, embedModel: string): Promise<Thread> {
@@ -380,7 +394,8 @@ export async function threadChat(
   user_message_id: string | null;
   assistant_message_id: string | null;
   used_chat_ids: string[];
-  document_sources: { text: string; file_hash: string; score: number; source_type?: 'pdf' | 'webpage'; title?: string; url?: string }[];
+  document_sources: DocumentSource[];
+  matched_sentence_ids?: number[];
   web_sources?: WebSource[];
   reasoning?: string;
   reasoning_available?: boolean;

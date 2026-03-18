@@ -28,6 +28,7 @@ type Props = {
     pdfUrl: string;
     sentences: Sentence[];
     currentId: number | null;
+    highlightIds?: number[];
     onJump: (id: number) => void;
     autoScroll: boolean;
     isResizing?: boolean;
@@ -35,7 +36,7 @@ type Props = {
     darkMode?: boolean;
 };
 
-const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, onJump, autoScroll, isResizing, highlightEnabled = true, darkMode = false }: Props) {
+const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, highlightIds = [], onJump, autoScroll, isResizing, highlightEnabled = true, darkMode = false }: Props) {
     const theme = useTheme();
     const [numPages, setNumPages] = useState<number | null>(null);
     const [pageWidth, setPageWidth] = useState<number>(600); // Actual width for PDF rendering
@@ -113,6 +114,8 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
         return map;
     }, [sentences]);
 
+    const highlightIdSet = useMemo(() => new Set(highlightIds || []), [highlightIds]);
+
     // Auto-scroll to active sentence
     useEffect(() => {
         if (autoScroll && currentId !== null && sentenceRefs.current[currentId]) {
@@ -127,9 +130,9 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
     const getPageOverlays = (pageNumber: number) => {
         if (!highlightEnabled) return null;
         const pageData = sentencesByPage[pageNumber] || [];
-        // ONLY render the highlight for the current active sentence
         const activeSentence = pageData.find(s => s.id === currentId);
-        if (!activeSentence) return null;
+        const highlightSentences = pageData.filter(s => highlightIdSet.has(s.id) && s.id !== currentId);
+        if (!activeSentence && highlightSentences.length === 0) return null;
 
         return (
             <div
@@ -143,9 +146,24 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                     zIndex: 5, // Keep it above canvas but potentially below text layer if needed
                 }}
             >
-                {activeSentence.pageBBoxes.map((bbox, idx) => (
+                {highlightSentences.map(sentence => (
+                    sentence.pageBBoxes.map((bbox, idx) => (
+                        <div
+                            key={`highlight-${sentence.id}-${idx}`}
+                            style={{
+                                position: 'absolute',
+                                left: `${(bbox.x / bbox.page_width) * 100}%`,
+                                top: `${((bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height) * 100}%`,
+                                width: `${(bbox.width / bbox.page_width) * 100}%`,
+                                height: `${(bbox.height / bbox.page_height) * 100}%`,
+                                backgroundColor: 'rgba(255, 215, 64, 0.22)',
+                            }}
+                        />
+                    ))
+                ))}
+                {activeSentence && activeSentence.pageBBoxes.map((bbox, idx) => (
                     <div
-                        key={idx}
+                        key={`active-${idx}`}
                         ref={el => {
                             if (idx === 0) {
                                 sentenceRefs.current[activeSentence.id] = el;
@@ -157,7 +175,7 @@ const PdfViewer = React.memo(function PdfViewer({ pdfUrl, sentences, currentId, 
                             top: `${((bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height) * 100}%`,
                             width: `${(bbox.width / bbox.page_width) * 100}%`,
                             height: `${(bbox.height / bbox.page_height) * 100}%`,
-                            backgroundColor: 'rgba(255, 255, 0, 0.3)',
+                            backgroundColor: 'rgba(255, 255, 0, 0.35)',
                         }}
                     />
                 ))}

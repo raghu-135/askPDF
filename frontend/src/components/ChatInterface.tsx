@@ -35,6 +35,7 @@ import ReplayIcon from '@mui/icons-material/Replay';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import CheckIcon from '@mui/icons-material/Check';
+import FluorescentIcon from '@mui/icons-material/Fluorescent';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
@@ -42,6 +43,7 @@ import {
     Thread,
     Message,
     WebSource,
+    DocumentSource,
     PromptToolDefinition,
     threadChat,
     getThreadMessages,
@@ -61,6 +63,8 @@ interface ChatMessage extends Message {
     reasoning_format?: 'structured' | 'tagged_text' | 'none';
     rewritten_query?: string;
     web_sources?: WebSource[];
+    document_sources?: DocumentSource[];
+    matched_sentence_ids?: number[];
 }
 
 interface ChatInterfaceProps {
@@ -73,6 +77,8 @@ interface ChatInterfaceProps {
     onJump: (id: number) => void;
     onResetChatId?: () => void;
     onThreadUpdate?: () => void;
+    onHighlightSources?: (payload: { messageId: string; documentSources: DocumentSource[]; matchedSentenceIds?: number[] }) => void;
+    activeHighlightMessageId?: string | null;
     darkMode?: boolean;
     autoScroll?: boolean;
 }
@@ -87,6 +93,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onJump,
     onThreadUpdate,
     onResetChatId,
+    onHighlightSources,
+    activeHighlightMessageId = null,
     darkMode = false,
     autoScroll = true
 }) => {
@@ -236,6 +244,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 isRecollected: false,
                 rewritten_query: m.role === 'user' ? m.context_compact : undefined,
                 web_sources: m.role === 'assistant' ? (m.web_sources || []) : undefined,
+                document_sources: m.role === 'assistant' ? (m.document_sources || []) : undefined,
+                matched_sentence_ids: m.role === 'assistant' ? (m as any).matched_sentence_ids : undefined,
             })));
         } catch (error) {
             console.error('Failed to load messages:', error);
@@ -599,12 +609,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             reasoning_available: !!response.reasoning_available,
                             reasoning_format: response.reasoning_format || 'none',
                             web_sources: response.web_sources || [],
+                            document_sources: response.document_sources || [],
+                            matched_sentence_ids: response.matched_sentence_ids || [],
                             created_at: new Date().toISOString()
                         });
                     }
 
                     return finalMessages;
                 });
+
+                // Auto-highlight sources if IDs are available for precise mapping
+                if (onHighlightSources && response.matched_sentence_ids && response.matched_sentence_ids.length > 0) {
+                    onHighlightSources({
+                        messageId: response.assistant_message_id || '',
+                        documentSources: response.document_sources || [],
+                        matchedSentenceIds: response.matched_sentence_ids
+                    });
+                }
 
                 // Mark recollected messages
                 if (response.used_chat_ids && response.used_chat_ids.length > 0) {
@@ -995,6 +1016,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             <VolumeUpIcon fontSize="small" />
                                         </IconButton>
                                     </Tooltip>
+                                    {msg.role === 'assistant' && msg.document_sources && msg.document_sources.length > 0 && onHighlightSources && (
+                                        (() => {
+                                            const pdfSources = msg.document_sources.filter(s => (s.source_type ?? 'pdf') === 'pdf');
+                                            if (pdfSources.length === 0) return null;
+                                            const isActive = activeHighlightMessageId === msg.id;
+                                            return (
+                                                <Tooltip title={isActive ? "Clear document highlights" : "Highlight in PDF"}>
+                                                    <IconButton
+                                                        size="small"
+                                                        onClick={() => onHighlightSources({ messageId: msg.id, documentSources: pdfSources })}
+                                                        sx={{
+                                                            color: isActive ? 'primary.main' : 'inherit',
+                                                            p: 0.5,
+                                                            '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                                        }}
+                                                    >
+                                                        <FluorescentIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                            );
+                                        })()
+                                    )}
                                     <Tooltip title="Delete message">
                                         <IconButton
                                             size="small"
