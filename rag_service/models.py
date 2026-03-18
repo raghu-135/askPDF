@@ -9,6 +9,8 @@ from typing import Dict, Tuple, List, Optional
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
+from prompt_defaults import DEFAULT_SYSTEM_ROLE
+
 try:
     from sentence_transformers import SentenceTransformer, CrossEncoder
 except Exception:
@@ -157,7 +159,7 @@ def default_thread_settings():
         "min_max_iterations": MIN_MAX_ITERATIONS,
         "max_max_iterations": MAX_MAX_ITERATIONS,
         "context_window": DEFAULT_TOKEN_BUDGET,
-        "system_role": "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers.",
+        "system_role": DEFAULT_SYSTEM_ROLE,
         "tool_instructions": {},
         "custom_instructions": "",
         "use_intent_agent": True,

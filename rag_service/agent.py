@@ -31,6 +31,7 @@ from agent_helpers import (
 from prompt_defaults import DEFAULT_SYSTEM_ROLE
 from vectordb.qdrant import get_qdrant
 from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
+from tool_registry import TOOL_FRIENDLY_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -99,20 +100,11 @@ class AgentState(TypedDict):
 @tool
 async def search_documents(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """
-    Perform a semantic vector search over all uploaded documents (PDFs + webpages) AND previously cached
-    internet search results for this thread.
-    Returns the most relevant chunks along with neighboring context passages for continuity.
-
-    This uses embedding-based similarity — phrase queries as natural questions rather than
-    keyword strings for best results. If the first call returns weak or irrelevant evidence,
-    retry with a rephrased or more specific query before concluding the information is absent.
-
-    Each returned passage is prefixed with its source so you can cite it accurately:
-      - Document passages: [Source: PDF: <filename>] or [Source: Webpage: <title> | <url>]
-      - Cached web results: [Source: Internet Search — "<title>" | <url>]
+    Semantic search across all uploaded documents and cached web results.
+    Returns labeled passages with surrounding context for citation.
 
     Args:
-        query: A natural-language question or description of the fact to locate.
+        query: Natural-language question or description of the fact to locate.
         max_results: Number of seed chunks to retrieve before context expansion.
     """
     try:
@@ -221,16 +213,11 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
 @tool
 async def search_conversation_history(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """
-    Perform a semantic vector search across all past conversation QA pairs in this thread.
-    Returns the most relevant past exchanges ranked by embedding similarity, regardless
-    of when they occurred in the conversation.
-
-    Use this for thematic or conceptual recall (e.g., "what did we previously discuss
-    about X?"). Searches by embedding similarity regardless of when in the conversation
-    the content appeared. Retry with a rephrased query if initial results are off-topic.
+    Semantic search across past conversation Q/A pairs in this thread.
+    Returns the most relevant exchanges regardless of time.
 
     Args:
-        query: A natural-language description of the topic or fact to recall from prior exchanges.
+        query: Natural-language description of the topic or fact to recall.
         max_results: Maximum number of past QA pairs to return.
     """
     try:
@@ -332,25 +319,11 @@ def _format_web_context(texts: List[str], urls: List[str], titles: List[str], sc
 @tool
 async def search_web(query: str, config: RunnableConfig = None) -> str:
     """
-    Search the web for external, real-time, or post-training knowledge.
-
-    Results are automatically stored in the thread's knowledge base so that future
-    questions on the same topic can be answered without a new web request.
-
-    Use this along with search_documents when you need to augment the knowledge from
-    uploaded documents with the latest information from the internet. This helps
-    provide a more comprehensive answer by checking both internal documents and external
-    web resources in parallel.
-
-    If internet search is not enabled for this session, this tool will return a
-    message indicating that and no search will be performed.
-
-    Each returned passage is prefixed with its source URL so you can cite it accurately:
-      [Source: Internet Search — "<title>" | <url>]
+    Live web search for external or time-sensitive information.
+    Results are cached to the thread and returned with labeled sources.
 
     Args:
-        query: A concise, keyword-rich search query. Rephrase and retry with different
-               keywords if initial results are off-topic or insufficient.
+        query: Concise, keyword-rich search query.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -403,19 +376,11 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
 @tool
 async def search_web_intent(query: str, config: RunnableConfig = None) -> str:
     """
-    Lightweight web lookup for query rewriting, intent disambiguation, and
-    time-sensitivity detection.
-
-    Use ONLY to identify unknown terms/entities or determine if the question is about
-    current events, prices, or other time-sensitive facts. Use results only to
-    clarify user intent and improve the rewritten query. Do NOT use this as evidence
-    in the final answer.
-
-    If internet search is not enabled for this session, this tool will return a
-    message indicating that and no search will be performed.
+    Lightweight web lookup for intent disambiguation and time-sensitivity checks.
+    Use for query rewriting only; do not cite as evidence.
 
     Args:
-        query: A concise query aimed at identifying the term or entity in question.
+        query: Concise query aimed at identifying a term or entity.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -436,19 +401,11 @@ async def search_web_intent(query: str, config: RunnableConfig = None) -> str:
 @tool
 async def ask_for_clarification(options: List[str]) -> str:
     """
-    Present the user with 2–4 interpretations of their ambiguous question so they can
-    select the one they intended.
-
-    Only call this when the question is genuinely ambiguous AND making a reasonable
-    assumption would risk answering the wrong question entirely. Do NOT use for minor
-    phrasing uncertainty — make a safe assumption and proceed instead.
-
-    Each option must be a complete, self-contained question representing a distinct
-    interpretation of the user's intent, not just a short label or phrase.
+    Present the user with 2–4 distinct interpretations of their question.
+    Each option must be a complete, self-contained question.
 
     Args:
-        options: A list of 2–4 complete questions, each representing a distinct and
-                 plausible interpretation of what the user might have meant.
+        options: List of 2–4 complete questions representing distinct interpretations.
     """
     return json.dumps({"__clarification_options__": options})
 
@@ -456,13 +413,7 @@ async def ask_for_clarification(options: List[str]) -> str:
 @tool
 async def list_uploaded_documents(config: RunnableConfig = None) -> str:
     """
-    Return metadata for all documents indexed in this thread:
-    file name, file hash, and upload order (most recent first).
-
-    Use when the user references "the document", "the PDF", "the webpage", "the first file",
-    "the report", or any document by name or topic — to identify the correct
-    file_hash before calling search_document_by_id. Do NOT call this on every
-    request; only invoke it when you genuinely need to resolve a document reference.
+    List indexed documents with file name, file hash, and upload order.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -501,16 +452,11 @@ async def search_document_by_id(
     config: RunnableConfig = None,
 ) -> str:
     """
-    Semantic search scoped to a SINGLE document identified by file_hash.
-
-    Use when the user explicitly refers to a specific document and you have resolved
-    its file_hash via list_uploaded_documents (or from the document list in the
-    pre-fetched context). Prefer this over search_documents when the target document
-    is known — it avoids contaminating results with chunks from unrelated files.
+    Semantic search within a single document identified by file_hash.
 
     Args:
         query: Natural-language question to search for within the document.
-        file_hash: The file_hash of the target document.
+        file_hash: File hash of the target document.
         max_results: Number of seed chunks before neighbor expansion.
     """
     try:
@@ -575,16 +521,11 @@ async def find_topic_anchor_in_history(
     config: RunnableConfig = None,
 ) -> str:
     """
-    Find the chronological FIRST occurrence of a topic in the conversation history.
-    Returns the approximate turn number, message_id, and a short excerpt.
-
-    Use for temporal references like "what you first said about X",
-    "when we started discussing Y", or "your original answer about Z".
-    This returns a precise chronological anchor so you can rewrite the query
-    with temporal precision (e.g., "In the message at turn 3, what was stated about X?").
+    Find the earliest occurrence of a topic in conversation history.
+    Returns turn number, message_id, and a short excerpt.
 
     Args:
-        topic: The topic or question to locate in the conversation history.
+        topic: Topic or question to locate in conversation history.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -866,17 +807,8 @@ intent_app = intent_workflow.compile()
 @tool
 async def get_thread_shape(config: RunnableConfig = None) -> str:
     """
-    Return a compact snapshot of this thread's content inventory: number of
-    uploaded documents/websites with their chunk counts and indexing status,
-    plus QA history volume (total pairs and average size).
-
-    Use this to calibrate your retrieval strategy BEFORE making tool calls:
-    - Documents with large chunk_count → deep retrieval likely needed
-    - Many QA pairs with high avg_qa_chars → rich semantic memory available
-    - Documents with status 'pending' or 'failed' → indexing incomplete, warn user
-
-    This reads from a pre-maintained stats table — it is very fast and does NOT
-    perform any vector search or scan the messages table.
+    Snapshot of thread content inventory: documents + QA history volume.
+    Use to calibrate retrieval strategy before making tool calls.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -926,51 +858,6 @@ tools_list = [
     ask_for_clarification,
 ]
 
-
-TOOL_FRIENDLY_CONFIG = {
-    "search_documents": {
-        "id": "document_evidence",
-        "display_name": "Document Evidence",
-        "description": "Semantic vector search across ALL uploaded documents (PDFs + webpages) — returns matching chunks with surrounding context.",
-        "default_prompt": "Use when the question spans multiple documents or the target document is unknown. If results are weak, retry with a rephrased or more specific query. When the document is known, prefer search_document_by_id instead.",
-    },
-    "search_document_by_id": {
-        "id": "focused_document_evidence",
-        "display_name": "Focused Document Evidence",
-        "description": "Semantic search scoped to a SINGLE document by file_hash — avoids contamination from unrelated files.",
-        "default_prompt": "Prefer this over Document Evidence when the user explicitly refers to a specific document. Resolve the file_hash from the document list in the pre-fetched context or via list_uploaded_documents.",
-    },
-    "search_conversation_history": {
-        "id": "deep_memory",
-        "display_name": "Deep Memory",
-        "description": "Semantic vector search across all past conversation QA pairs in this thread.",
-        "default_prompt": "Use for thematic or semantic recall (e.g., 'what did we discuss about X?') across the full thread history. Retry with a rephrased query if initial results are irrelevant.",
-    },
-    "find_topic_anchor_in_history": {
-        "id": "temporal_anchor",
-        "display_name": "Temporal Anchor",
-        "description": "Locates the chronological FIRST occurrence of a topic in the conversation history, returning turn number, message_id, and a short excerpt.",
-        "default_prompt": "Use for temporal references like 'your first answer about X', 'what you said earlier regarding Y', 'when we started discussing Z'. Returns precise turn anchors so you can ground time-relative claims accurately. Combine with search_conversation_history to retrieve the full content of that turn.",
-    },
-    "search_web": {
-        "id": "live_web_recon",
-        "display_name": "Internet Search",
-        "description": "Search the web for external, real-time, or post-training knowledge. Results are automatically cached in the thread knowledge base for future retrieval.",
-        "default_prompt": "MANDATORY when web search is enabled: call search_web for virtually every factual question to supplement document content with current, external knowledge. Run it IN PARALLEL with any document searches — do not wait for document results first. Never skip it based on pre-fetched document evidence alone. Always cite the URL and title of web results in your answer.",
-    },
-    "ask_for_clarification": {
-        "id": "clarify_intent",
-        "display_name": "Clarify Intent",
-        "description": "Present the user with distinct interpretations of an ambiguous question.",
-        "default_prompt": "Use only when the question has multiple plausible interpretations and making an assumption risks answering the wrong question entirely. Each option must be a complete, self-contained question.",
-    },
-    "get_thread_shape": {
-        "id": "thread_shape",
-        "display_name": "Thread Shape",
-        "description": "Returns a snapshot of the thread's content inventory: document list with chunk counts and indexing status, plus QA history volume metrics.",
-        "default_prompt": "Use to calibrate retrieval strategy: check document chunk counts to decide between search_documents vs. search_document_by_id, and check QA history volume to decide whether semantic memory search is worthwhile. Only call once — the snapshot is current at the time of the call.",
-    },
-}
 
 
 class OrchestratorToolNode(ToolNode):
@@ -1409,7 +1296,7 @@ def build_system_prompt(
     reasoning_mode: bool = True,
 ) -> str:
     """Build the Orchestrator Agent system prompt."""
-    role = system_role or "Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers."
+    role = system_role or DEFAULT_SYSTEM_ROLE
     catalog = get_tool_catalog()
     playbook = normalize_tool_instructions(tool_instructions or {})
     
