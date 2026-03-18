@@ -984,7 +984,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     <Box sx={{ mt: 1 }}>
                                         <details>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                Rewritten for context
+                                                <Tooltip
+                                                    title="To disable rewriting, turn off Intent Agent in the settings."
+                                                    arrow
+                                                >
+                                                    <span>Rewritten for context</span>
+                                                </Tooltip>
                                             </summary>
                                             <Typography
                                                 variant="caption"

@@ -436,6 +436,18 @@ export default function Home() {
                     <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
                     <li>Double-click any text to start audio playback from that point.</li>
                   </ul>
+                  <Typography sx={{ mt: 2, mb: 1, color: pdfDarkMode ? '#ccc' : 'textSecondary' }}>
+                    Settings tips:
+                  </Typography>
+                  <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
+                    <li>Open the <b>Chat</b> tab and click the <b>gear icon</b> to configure AI prompt settings for the current thread.</li>
+                    <li>Toggle <b>Reasoning mode</b> for deeper multi-step answers on reasoning-capable models.</li>
+                    <li>Use <b>Intent Agent</b> (requires Reasoning mode) to rewrite follow-up questions into standalone queries.</li>
+                    <li>Enable <b>Reranker</b> to improve ordering of retrieved chunks.</li>
+                    <li>Customize <b>Tools</b> to control which capabilities the assistant can use.</li>
+                    <li>Edit the <b>System role</b> to change the assistant’s behavior and tone.</li>
+                    <li>Use <b>Prompt preview</b> to see the exact prompt that will be sent to the model.</li>
+                  </ul>
                   <Typography sx={{ mt: 2, fontSize: 14, color: pdfDarkMode ? '#aaa' : 'textSecondary' }}>
                     <b>Note:</b> The embedding model is locked once a thread is created. Create a new thread to use a different model.
                   </Typography>
