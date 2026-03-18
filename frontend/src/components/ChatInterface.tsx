@@ -133,6 +133,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
+    const lastClarificationIdsRef = useRef<{ userId: string | null; assistantId: string | null } | null>(null);
 
     // Load messages when thread changes
     useEffect(() => {
@@ -143,6 +144,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             checkEmbedModelStatus();
         } else {
             setMessages([]);
+            setClarificationOptions(null);
+            lastClarificationIdsRef.current = null;
             setIndexingStatus('ready');
             setMaxIterations(defaultMaxIterations);
             setSystemRole(defaultSystemRole);
@@ -155,6 +158,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setIsLlmToolsSupported(null);
         }
     }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions, defaultReasoningMode]);
+
+    useEffect(() => {
+        if (activeThread) {
+            setClarificationOptions(null);
+            lastClarificationIdsRef.current = null;
+        }
+    }, [activeThread?.id]);
 
     useEffect(() => {
         const loadTools = async () => {
@@ -480,6 +490,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!textToSend || !llmModel || !activeThread) return;
 
         const isClarificationSelection = typeof overrideInput === 'string';
+        const priorClarificationIds = isClarificationSelection ? lastClarificationIdsRef.current : null;
 
         setInput('');
         setClarificationOptions(null);
@@ -496,7 +507,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             let updated = prev;
             // Immediate replacement: If this is a clarification selection, remove the previous "ambiguous" turn
             if (isClarificationSelection) {
-                updated = updated.filter(m => !m.id.startsWith('clarify-'));
+                const lastIds = priorClarificationIds;
+                updated = updated.filter(m => {
+                    if (m.id.startsWith('clarify-')) return false;
+                    if (lastIds && (m.id === lastIds.userId || m.id === lastIds.assistantId)) return false;
+                    return true;
+                });
             }
             return [...updated, tempUserMsg];
         });
@@ -523,21 +539,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             // Handle ambiguous query / clarification options
             if (response.clarification_options) {
                 setClarificationOptions(response.clarification_options);
+                lastClarificationIdsRef.current = {
+                    userId: response.user_message_id ?? null,
+                    assistantId: response.assistant_message_id ?? null
+                };
 
-                // Add the clarification request to the message list so it's visible in history,
-                // even though it wasn't persisted to the backend database.
+                // Add the clarification request to the message list so it's visible in history.
                 setMessages(prev => {
                     const updated = prev.filter(m => m.id !== tempUserMsg.id);
                     return [
                         ...updated,
                         {
                             ...tempUserMsg,
-                            id: 'clarify-user-' + Date.now()
+                            id: response.user_message_id || ('clarify-user-' + Date.now())
                         },
                         {
-                            id: 'clarify-asst-' + Date.now(),
+                            id: response.assistant_message_id || ('clarify-asst-' + Date.now()),
                             role: 'assistant',
-                            content: response.answer || "I need a bit more clarification.",
+                            content: "I need a bit more clarification.",
                             created_at: new Date().toISOString()
                         }
                     ];
@@ -582,6 +601,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 // Notify parent that thread was updated
                 if (onThreadUpdate) {
                     onThreadUpdate();
+                }
+            }
+
+            if (isClarificationSelection) {
+                if (priorClarificationIds && (priorClarificationIds.assistantId || priorClarificationIds.userId)) {
+                    const deleteTargetId = priorClarificationIds.assistantId || priorClarificationIds.userId;
+                    deleteMessage(deleteTargetId).catch(err => {
+                        console.warn('Failed to delete clarification message pair:', err);
+                    });
+                }
+                if (!response.clarification_options) {
+                    lastClarificationIdsRef.current = null;
                 }
             }
         } catch (err: any) {
