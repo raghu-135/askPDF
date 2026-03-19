@@ -128,7 +128,7 @@ async def prefetch_context(
         try:
             db = get_qdrant()
             limit = budget["document_limit"]
-            rerank_fetch_k = limit
+            rerank_fetch_k = limit * 2 if use_reranker else limit
             raw_chunks = await db.search_knowledge_sources(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
@@ -137,7 +137,8 @@ async def prefetch_context(
 
             hash_to_name = await get_document_name_lookup(thread_id)
             if use_reranker:
-                raw_chunks = await rerank_document_chunks(raw_question, raw_chunks)
+                raw_chunks = await rerank_document_chunks(raw_question, raw_chunks, top_k=limit)
+                raw_chunks = [c for c in raw_chunks if c.get("rerank_score", 0.0) >= 0.0]
             return group_document_chunks(
                 raw_chunks,
                 hash_to_name,

@@ -56,11 +56,14 @@ export function handleHighlightSourcesUtil(
 
   if (mode === 'focused') {
     // Strategy: show top X% of results by count.
+    const validTargetSources = targetSources.filter(s => s.score !== undefined && s.score !== null && s.score > 0);
+    const baseSources = validTargetSources.length > 0 ? validTargetSources : targetSources;
+    
     // targetSources are already sorted by score descending from the backend.
     const ratio = Math.max(0.05, Math.min(1.0, threshold)); // Clamp ratio between 5% and 100%
-    const count = Math.max(1, Math.ceil(targetSources.length * ratio));
-    const focusedSources = [...targetSources]
-      .sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity))
+    const count = Math.max(1, Math.ceil(baseSources.length * ratio));
+    const focusedSources = [...baseSources]
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
       .slice(0, count);
 
     const idSet = new Set<number>();
@@ -68,21 +71,16 @@ export function handleHighlightSourcesUtil(
       if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));
     });
     matchedIds = Array.from(idSet);
-
-    // Fallback: if focused mode results in 0 highlights, show all anyway so the user isn't confused?
-    // User logic: 1st click focused, 2nd click all. If focused is empty, 1st click will look like nothing happened.
-    // I specify the user's requested logic strictly.
   } else {
-    // Show all matching IDs
-    if (payload.matchedSentenceIds) {
-      matchedIds = payload.matchedSentenceIds;
-    } else {
-      const idSet = new Set<number>();
-      targetSources.forEach(s => {
-        if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));
-      });
-      matchedIds = Array.from(idSet);
-    }
+    // Show all matching IDs but filter out context expansion pollution (score 0.0)
+    const validTargetSources = targetSources.filter(s => s.score !== undefined && s.score !== null && s.score > 0);
+    const baseSources = validTargetSources.length > 0 ? validTargetSources : targetSources;
+    
+    const idSet = new Set<number>();
+    baseSources.forEach(s => {
+      if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));
+    });
+    matchedIds = Array.from(idSet);
   }
 
   setHighlightedSourceSentenceIds(matchedIds);

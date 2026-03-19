@@ -130,19 +130,25 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         raw_doc_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=max_results
+            limit=max_results * 2 if use_reranker else max_results
         )
         if use_reranker:
-            raw_doc_chunks = await rerank_document_chunks(query, raw_doc_chunks)
+            raw_doc_chunks = await rerank_document_chunks(query, raw_doc_chunks, top_k=max_results)
+            raw_doc_chunks = [c for c in raw_doc_chunks if c.get("rerank_score", 0.0) >= 0.0]
 
         expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
         file_chunk_map = {}
+        score_map = {}
         for hit in raw_doc_chunks:
             file_hash = hit.get("file_hash")
             chunk_id = hit.get("chunk_id")
+            score = hit.get("rerank_score", hit.get("score", 0.0))
             if file_hash is not None and chunk_id is not None:
                 if file_hash not in file_chunk_map:
                     file_chunk_map[file_hash] = set()
+                
+                score_map[f"{file_hash}:{chunk_id}"] = score
+
                 for neighbor_id in range(chunk_id - expansion_radius, chunk_id + expansion_radius + 1):
                     if neighbor_id >= 0:
                         file_chunk_map[file_hash].add(neighbor_id)
@@ -154,18 +160,25 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 file_hash=file_hash,
                 chunk_ids=list(id_set)
             )
+            for chunk in expanded_batch:
+                ch_id = chunk.get("chunk_id")
+                # Attach the score if this chunk was originally matched, otherwise 0.0
+                chunk["score"] = score_map.get(f"{file_hash}:{ch_id}", 0.0)
+                
             expanded_doc_chunks.extend(expanded_batch)
 
         expanded_doc_chunks.sort(key=lambda x: (x.get("file_hash", ""), x.get("chunk_id", 0)))
 
         # ── Cached web search results ──
+        web_limit = max(3, max_results // 3)
         web_chunks = await db.search_web_chunks(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=max(3, max_results // 3),
+            limit=web_limit * 2 if use_reranker else web_limit,
         )
         if use_reranker:
-            web_chunks = await rerank_document_chunks(query, web_chunks)
+            web_chunks = await rerank_document_chunks(query, web_chunks, top_k=web_limit)
+            web_chunks = [c for c in web_chunks if c.get("rerank_score", 0.0) >= 0.0]
 
         if not expanded_doc_chunks and not web_chunks:
             return "No relevant content found in documents or cached web results."
@@ -484,9 +497,13 @@ async def search_document_by_id(
 
         expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
         chunk_ids_to_fetch: set = set()
+        score_map = {}
+        
         for hit in raw_chunks:
             chunk_id = hit.get("chunk_id")
+            score = hit.get("score", 0.0)
             if chunk_id is not None:
+                score_map[chunk_id] = score
                 for neighbor_id in range(chunk_id - expansion_radius, chunk_id + expansion_radius + 1):
                     if neighbor_id >= 0:
                         chunk_ids_to_fetch.add(neighbor_id)
@@ -496,6 +513,11 @@ async def search_document_by_id(
             file_hash=file_hash,
             chunk_ids=list(chunk_ids_to_fetch),
         )
+        
+        for chunk in expanded_chunks:
+            ch_id = chunk.get("chunk_id")
+            chunk["score"] = score_map.get(ch_id, 0.0)
+            
         expanded_chunks.sort(key=lambda x: x.get("chunk_id", 0))
 
         # Resolve file name for source attribution from thread_stats (no DB join)
