@@ -50,19 +50,25 @@ export function handleHighlightSourcesUtil(
   }
 
   const targetSources = pdfSources.filter(s => s.file_hash === preferredFileHash);
-  
+
   // Figure out which IDs to show based on mode
   let matchedIds: number[] = [];
-  
+
   if (mode === 'focused') {
-    // Only show IDs from chunks whose score (rerank_score) is above threshold
-    const focusedSources = targetSources.filter(s => (s.score ?? -Infinity) >= threshold);
+    // Strategy: show top X% of results by count.
+    // targetSources are already sorted by score descending from the backend.
+    const ratio = Math.max(0.05, Math.min(1.0, threshold)); // Clamp ratio between 5% and 100%
+    const count = Math.max(1, Math.ceil(targetSources.length * ratio));
+    const focusedSources = [...targetSources]
+      .sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity))
+      .slice(0, count);
+
     const idSet = new Set<number>();
     focusedSources.forEach(s => {
       if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));
     });
     matchedIds = Array.from(idSet);
-    
+
     // Fallback: if focused mode results in 0 highlights, show all anyway so the user isn't confused?
     // User logic: 1st click focused, 2nd click all. If focused is empty, 1st click will look like nothing happened.
     // I specify the user's requested logic strictly.

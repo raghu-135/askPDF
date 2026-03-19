@@ -19,6 +19,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from models import (
     get_env_required,
+    get_env_int_required,
     get_embedding_model, get_llm, 
     DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
@@ -236,7 +237,13 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
     """
     embed_model = get_embedding_model(embedding_model_name)
-    batch_size = 100  # LLM API/server strict batch size limits
+
+    # Set batch size based on the embedding model
+    if embed_model == get_env_required("LOCAL_EMBEDDING_MODELS"):
+        batch_size = 50
+    else:
+        batch_size = get_env_int_required("GPU_EMBEDDING_BATCH_SIZE")
+
     vectors = []
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]

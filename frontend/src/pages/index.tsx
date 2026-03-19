@@ -218,7 +218,7 @@ export default function Home() {
         setActiveSource,
         setCurrentPdfId,
         nextMode,
-        threshold ?? 0.0
+        threshold
       );
       setHighlightedSourceMode(nextMode);
     }

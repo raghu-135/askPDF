@@ -628,7 +628,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         messageId: response.assistant_message_id || '',
                         documentSources: response.document_sources || [],
                         matchedSentenceIds: response.matched_sentence_ids
-                    });
+                    }, focusedRerankThreshold);
                 }
 
                 // Mark recollected messages
