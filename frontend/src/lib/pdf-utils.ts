@@ -30,17 +30,10 @@ export function handleHighlightSourcesUtil(
   setHighlightedSourceFileHash: (hash: string | null) => void,
   setHighlightedSourceMessageId: (id: string | null) => void,
   setActiveSource: (src: 'pdf' | 'chat') => void,
-  setCurrentPdfId: (id: number | null) => void
+  setCurrentPdfId: (id: number | null) => void,
+  mode: 'all' | 'focused' = 'all',
+  threshold: number = 1.0
 ) {
-  if (highlightedSourceMessageId === payload.messageId) {
-    clearSourceHighlightsUtil(
-      setHighlightedSourceSentenceIds,
-      setHighlightedSourceFileHash,
-      setHighlightedSourceMessageId
-    );
-    return;
-  }
-
   const pdfSources = (payload.documentSources || []).filter(s => (s.source_type ?? 'pdf') === 'pdf');
   if (pdfSources.length === 0) return;
 
@@ -58,16 +51,32 @@ export function handleHighlightSourcesUtil(
 
   const targetSources = pdfSources.filter(s => s.file_hash === preferredFileHash);
   
-  // Use backend IDs if available, else aggregate manually
+  // Figure out which IDs to show based on mode
   let matchedIds: number[] = [];
-  if (payload.matchedSentenceIds) {
-    matchedIds = payload.matchedSentenceIds;
-  } else {
+  
+  if (mode === 'focused') {
+    // Only show IDs from chunks whose score (rerank_score) is above threshold
+    const focusedSources = targetSources.filter(s => (s.score ?? -Infinity) >= threshold);
     const idSet = new Set<number>();
-    targetSources.forEach(s => {
+    focusedSources.forEach(s => {
       if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));
     });
     matchedIds = Array.from(idSet);
+    
+    // Fallback: if focused mode results in 0 highlights, show all anyway so the user isn't confused?
+    // User logic: 1st click focused, 2nd click all. If focused is empty, 1st click will look like nothing happened.
+    // I specify the user's requested logic strictly.
+  } else {
+    // Show all matching IDs
+    if (payload.matchedSentenceIds) {
+      matchedIds = payload.matchedSentenceIds;
+    } else {
+      const idSet = new Set<number>();
+      targetSources.forEach(s => {
+        if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));
+      });
+      matchedIds = Array.from(idSet);
+    }
   }
 
   setHighlightedSourceSentenceIds(matchedIds);

@@ -52,6 +52,7 @@ export default function Home() {
   const [highlightedSourceSentenceIds, setHighlightedSourceSentenceIds] = useState<number[]>([]);
   const [highlightedSourceFileHash, setHighlightedSourceFileHash] = useState<string | null>(null);
   const [highlightedSourceMessageId, setHighlightedSourceMessageId] = useState<string | null>(null);
+  const [highlightedSourceMode, setHighlightedSourceMode] = useState<'off' | 'focused' | 'all'>('off');
 
   // Highlight toggle
   const [highlightEnabled, setHighlightEnabled] = useState(true);
@@ -186,23 +187,41 @@ export default function Home() {
 
   const clearSourceHighlights = () => {
     clearSourceHighlightsUtil(setHighlightedSourceSentenceIds, setHighlightedSourceFileHash, setHighlightedSourceMessageId);
+    setHighlightedSourceMode('off');
   };
 
-  const handleHighlightSources = (payload: { messageId: string; documentSources: DocumentSource[]; matchedSentenceIds?: number[] }) => {
-    handleHighlightSourcesUtil(
-      payload,
-      highlightedSourceMessageId,
-      pdfTabs,
-      activeTab,
-      activeTabId,
-      setPdfTabs,
-      setActiveTabId,
-      setHighlightedSourceSentenceIds,
-      setHighlightedSourceFileHash,
-      setHighlightedSourceMessageId,
-      setActiveSource,
-      setCurrentPdfId
-    );
+  const handleHighlightSources = (payload: { messageId: string; documentSources: DocumentSource[]; matchedSentenceIds?: number[] }, threshold?: number) => {
+    let nextMode: 'all' | 'focused' | 'off' = 'focused';
+
+    if (highlightedSourceMessageId === payload.messageId) {
+      if (highlightedSourceMode === 'focused') {
+        nextMode = 'all';
+      } else if (highlightedSourceMode === 'all') {
+        nextMode = 'off';
+      }
+    }
+
+    if (nextMode === 'off') {
+      clearSourceHighlights();
+    } else {
+      handleHighlightSourcesUtil(
+        payload,
+        highlightedSourceMessageId,
+        pdfTabs,
+        activeTab,
+        activeTabId,
+        setPdfTabs,
+        setActiveTabId,
+        setHighlightedSourceSentenceIds,
+        setHighlightedSourceFileHash,
+        setHighlightedSourceMessageId,
+        setActiveSource,
+        setCurrentPdfId,
+        nextMode,
+        threshold ?? 0.0
+      );
+      setHighlightedSourceMode(nextMode);
+    }
   };
 
   // Handle resize with optimized performance
@@ -562,6 +581,7 @@ export default function Home() {
                     }}
                     onHighlightSources={handleHighlightSources}
                     activeHighlightMessageId={highlightedSourceMessageId}
+                    activeHighlightMode={highlightedSourceMode}
                     darkMode={pdfDarkMode}
                     autoScroll={autoScroll}
                   />

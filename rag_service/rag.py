@@ -18,6 +18,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from models import (
+    get_env_required,
     get_embedding_model, get_llm, 
     DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
@@ -116,7 +117,7 @@ async def get_chunks(file_hash: str) -> List[Dict[str, Any]]:
     otherwise fallback to unstructured-based parsing. 
     This ensures that vector-based highlights exactly match the backend's sentence IDs.
     """
-    backend_url = os.getenv("BACKEND_URL", "http://backend:8000")
+    backend_url = get_env_required("BACKEND_URL")
     
     # Try fetching sentences from backend cache first
     try:
@@ -235,7 +236,7 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
     """
     embed_model = get_embedding_model(embedding_model_name)
-    batch_size = 30  # LLM API/server strict batch size limits
+    batch_size = 100  # LLM API/server strict batch size limits
     vectors = []
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]

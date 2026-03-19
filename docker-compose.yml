@@ -85,6 +85,8 @@ services:
       - MAX_ITERATIONS_SUFFICIENT_COVERAGE=2
       - MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE=4
       - WEB_SEARCH_ITERATION_BONUS=2
+      - FOCUSED_RERANK_THRESHOLD=0.5
+      - BACKEND_URL=http://backend:8000
     env_file:
       - .env
     depends_on:

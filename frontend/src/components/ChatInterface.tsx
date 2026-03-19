@@ -77,9 +77,10 @@ interface ChatInterfaceProps {
     onJump: (id: number) => void;
     onResetChatId?: () => void;
     onThreadUpdate?: () => void;
-    onHighlightSources?: (payload: { messageId: string; documentSources: DocumentSource[]; matchedSentenceIds?: number[] }) => void;
+    onHighlightSources?: (payload: { messageId: string; documentSources: DocumentSource[]; matchedSentenceIds?: number[] }, threshold?: number) => void;
     activeHighlightMessageId?: string | null;
-    darkMode?: boolean;
+    activeHighlightMode?: 'off' | 'focused' | 'all';
+    darkMode: boolean;
     autoScroll?: boolean;
 }
 
@@ -95,6 +96,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onResetChatId,
     onHighlightSources,
     activeHighlightMessageId = null,
+    activeHighlightMode = 'off',
     darkMode = false,
     autoScroll = true
 }) => {
@@ -130,6 +132,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultReasoningMode, setDefaultReasoningMode] = useState(true);
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
+    const [focusedRerankThreshold, setFocusedRerankThreshold] = useState(1.0);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -188,6 +191,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
                     setDefaultReasoningMode(res.defaults.reasoning_mode ?? true);
                     setDefaultUseReranker(res.defaults.use_reranker ?? true);
+                    setFocusedRerankThreshold(res.defaults.focused_rerank_threshold ?? 1.0);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
                     }
@@ -1017,27 +1021,41 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         </IconButton>
                                     </Tooltip>
                                     {msg.role === 'assistant' && msg.document_sources && msg.document_sources.length > 0 && onHighlightSources && (
-                                        (() => {
-                                            const pdfSources = msg.document_sources.filter(s => (s.source_type ?? 'pdf') === 'pdf');
-                                            if (pdfSources.length === 0) return null;
-                                            const isActive = activeHighlightMessageId === msg.id;
-                                            return (
-                                                <Tooltip title={isActive ? "Clear document highlights" : "Highlight in PDF"}>
-                                                    <IconButton
-                                                        size="small"
-                                                        onClick={() => onHighlightSources({ messageId: msg.id, documentSources: pdfSources })}
-                                                        sx={{
-                                                            color: isActive ? 'primary.main' : 'inherit',
-                                                            p: 0.5,
-                                                            '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                                                        }}
-                                                    >
-                                                        <FluorescentIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
-                                            );
-                                        })()
-                                    )}
+                                         (() => {
+                                             const pdfSources = msg.document_sources.filter(s => (s.source_type ?? 'pdf') === 'pdf');
+                                             if (pdfSources.length === 0) return null;
+                                             const isActive = activeHighlightMessageId === msg.id;
+                                             const currentMode = isActive ? activeHighlightMode : 'off';
+                                             
+                                             let tooltip = "Highlight in PDF";
+                                             let iconColor = 'inherit';
+                                             if (isActive) {
+                                                 if (currentMode === 'focused') {
+                                                     tooltip = "Showing most relevant (click for all)";
+                                                     iconColor = 'success.main';
+                                                 } else if (currentMode === 'all') {
+                                                     tooltip = "Showing all context (click to clear)";
+                                                     iconColor = 'primary.main';
+                                                 }
+                                             }
+
+                                             return (
+                                                 <Tooltip title={tooltip}>
+                                                     <IconButton
+                                                         size="small"
+                                                         onClick={() => onHighlightSources({ messageId: msg.id, documentSources: pdfSources }, focusedRerankThreshold)}
+                                                         sx={{
+                                                             color: iconColor,
+                                                             p: 0.5,
+                                                             '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                                         }}
+                                                     >
+                                                         <FluorescentIcon fontSize="small" />
+                                                     </IconButton>
+                                                 </Tooltip>
+                                             );
+                                         })()
+                                     )}
                                     <Tooltip title="Delete message">
                                         <IconButton
                                             size="small"

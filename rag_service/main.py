@@ -29,6 +29,7 @@ from agent import app as agent_app, get_tool_catalog, normalize_tool_instruction
 from rag import index_document_for_thread, index_webpage_for_thread
 from vectordb.qdrant import get_qdrant
 from models import (
+    get_env_required,
     fetch_available_models,
     check_chat_model_ready,
     check_embed_model_ready,
@@ -40,6 +41,7 @@ from models import (
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
     MAX_SYSTEM_ROLE_CHARS,
     INTENT_AGENT_MAX_ITERATIONS,
+    FOCUSED_RERANK_THRESHOLD,
     merge_thread_settings,
 )
 from chat_service import handle_thread_chat
@@ -56,7 +58,7 @@ from database import (
 
 # Load environment variables from .env file
 load_dotenv()
-DEFAULT_EMBEDDING_MODEL = os.getenv("DEFAULT_EMBEDDING_MODEL", "").strip()
+DEFAULT_EMBEDDING_MODEL = get_env_required("DEFAULT_EMBEDDING_MODEL").strip()
 
 
 @asynccontextmanager
@@ -129,6 +131,7 @@ class ThreadSettingsResponse(BaseModel):
     intent_agent_max_iterations: int = Field(default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10)
     reasoning_mode: bool = True
     use_reranker: bool = True
+    focused_rerank_threshold: float = FOCUSED_RERANK_THRESHOLD
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -140,6 +143,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
     reasoning_mode: Optional[bool] = None
     use_reranker: Optional[bool] = None
+    focused_rerank_threshold: Optional[float] = None
 
 
 class ToolCatalogEntry(BaseModel):
@@ -161,6 +165,7 @@ class PromptDefaults(BaseModel):
     intent_agent_max_iterations: int = INTENT_AGENT_MAX_ITERATIONS
     reasoning_mode: bool = True
     use_reranker: bool = True
+    focused_rerank_threshold: float = FOCUSED_RERANK_THRESHOLD
 
 
 class PromptPreviewRequest(BaseModel):

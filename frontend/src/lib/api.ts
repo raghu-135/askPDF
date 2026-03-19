@@ -103,6 +103,7 @@ export interface PromptDefaults {
   intent_agent_max_iterations: number;
   reasoning_mode: boolean;
   use_reranker?: boolean;
+  focused_rerank_threshold?: number;
 }
 
 export interface ThreadFile {

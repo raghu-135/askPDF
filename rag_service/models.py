@@ -41,66 +41,55 @@ def _update_model_ready_cache(cache_key: str, is_ready: bool) -> bool:
     return is_ready
 
 
-# Token budget configuration
-def get_default_token_budget():
-    budget = os.getenv("DEFAULT_TOKEN_BUDGET")
-    if budget is None:
-        raise ValueError("DEFAULT_TOKEN_BUDGET environment variable is not set")
-    return int(budget)
-
-def get_default_max_iterations():
-    val = os.getenv("DEFAULT_MAX_ITERATIONS")
-    if val is None:
-        raise ValueError("DEFAULT_MAX_ITERATIONS environment variable is not set")
-    return int(val)
-
-def get_min_max_iterations():
-    val = os.getenv("MIN_MAX_ITERATIONS")
-    if val is None:
-        raise ValueError("MIN_MAX_ITERATIONS environment variable is not set")
-    return int(val)
-
-def get_max_max_iterations():
-    val = os.getenv("MAX_MAX_ITERATIONS")
-    if val is None:
-        raise ValueError("MAX_MAX_ITERATIONS environment variable is not set")
-    return int(val)
-
-DEFAULT_TOKEN_BUDGET = get_default_token_budget()
-DEFAULT_MAX_ITERATIONS = get_default_max_iterations()
-MIN_MAX_ITERATIONS = get_min_max_iterations()
-MAX_MAX_ITERATIONS = get_max_max_iterations()
-
-def get_env_int(name: str, default: int | None = None) -> int:
+def get_env_required(name: str) -> str:
     val = os.getenv(name)
     if val is None:
-        if default is not None:
-            return default
         raise ValueError(f"{name} environment variable is not set")
-    return int(val)
+    return val
 
-MAX_CUSTOM_INSTRUCTIONS_CHARS = get_env_int("MAX_CUSTOM_INSTRUCTIONS_CHARS")
-MAX_SYSTEM_ROLE_CHARS = get_env_int("MAX_SYSTEM_ROLE_CHARS")
-MAX_TOOL_INSTRUCTION_CHARS = get_env_int("MAX_TOOL_INSTRUCTION_CHARS")
+def get_env_int_required(name: str) -> int:
+    return int(get_env_required(name))
 
-INTENT_AGENT_MAX_ITERATIONS = get_env_int("INTENT_AGENT_MAX_ITERATIONS", default=1)
-MAX_ITERATIONS_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_SUFFICIENT_COVERAGE", default=2)
-MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE", default=4)
-WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS", default=2)
+def get_env_float_required(name: str) -> float:
+    return float(get_env_required(name))
 
-DEFAULT_EMBEDDING_MODEL = os.getenv("DEFAULT_EMBEDDING_MODEL", "").strip()
-DEFAULT_RERANKER_MODEL = os.getenv("DEFAULT_RERANKER_MODEL", "").strip()
-USE_LOCAL_EMBEDDINGS = os.getenv("USE_LOCAL_EMBEDDINGS", "true").lower() == "true"
-USE_LOCAL_RERANKER = os.getenv("USE_LOCAL_RERANKER", "true").lower() == "true"
+def get_env_bool_required(name: str) -> bool:
+    val = get_env_required(name).lower()
+    if val in ("true", "1", "yes"):
+        return True
+    if val in ("false", "0", "no"):
+        return False
+    raise ValueError(f"{name} environment variable must be a boolean ('true' or 'false')")
 
-
-def _split_env_list(name: str) -> List[str]:
-    raw = os.getenv(name, "")
+def _split_env_list_required(name: str) -> List[str]:
+    raw = get_env_required(name)
     parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        raise ValueError(f"{name} environment variable is empty or invalid list")
     return parts
 
+# Token budget configuration
+DEFAULT_TOKEN_BUDGET = get_env_int_required("DEFAULT_TOKEN_BUDGET")
+DEFAULT_MAX_ITERATIONS = get_env_int_required("DEFAULT_MAX_ITERATIONS")
+MIN_MAX_ITERATIONS = get_env_int_required("MIN_MAX_ITERATIONS")
+MAX_MAX_ITERATIONS = get_env_int_required("MAX_MAX_ITERATIONS")
 
-LOCAL_EMBEDDING_MODELS = _split_env_list("LOCAL_EMBEDDING_MODELS")
+MAX_CUSTOM_INSTRUCTIONS_CHARS = get_env_int_required("MAX_CUSTOM_INSTRUCTIONS_CHARS")
+MAX_SYSTEM_ROLE_CHARS = get_env_int_required("MAX_SYSTEM_ROLE_CHARS")
+MAX_TOOL_INSTRUCTION_CHARS = get_env_int_required("MAX_TOOL_INSTRUCTION_CHARS")
+
+INTENT_AGENT_MAX_ITERATIONS = get_env_int_required("INTENT_AGENT_MAX_ITERATIONS")
+MAX_ITERATIONS_SUFFICIENT_COVERAGE = get_env_int_required("MAX_ITERATIONS_SUFFICIENT_COVERAGE")
+MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE = get_env_int_required("MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE")
+WEB_SEARCH_ITERATION_BONUS = get_env_int_required("WEB_SEARCH_ITERATION_BONUS")
+
+DEFAULT_EMBEDDING_MODEL = get_env_required("DEFAULT_EMBEDDING_MODEL").strip()
+DEFAULT_RERANKER_MODEL = get_env_required("DEFAULT_RERANKER_MODEL").strip()
+FOCUSED_RERANK_THRESHOLD = get_env_float_required("FOCUSED_RERANK_THRESHOLD")
+USE_LOCAL_EMBEDDINGS = get_env_bool_required("USE_LOCAL_EMBEDDINGS")
+USE_LOCAL_RERANKER = get_env_bool_required("USE_LOCAL_RERANKER")
+
+LOCAL_EMBEDDING_MODELS = _split_env_list_required("LOCAL_EMBEDDING_MODELS")
 if DEFAULT_EMBEDDING_MODEL and DEFAULT_EMBEDDING_MODEL not in LOCAL_EMBEDDING_MODELS:
     LOCAL_EMBEDDING_MODELS.append(DEFAULT_EMBEDDING_MODEL)
 
@@ -166,6 +155,7 @@ def default_thread_settings():
         "intent_agent_max_iterations": INTENT_AGENT_MAX_ITERATIONS,
         "reasoning_mode": True,
         "use_reranker": True,
+        "focused_rerank_threshold": FOCUSED_RERANK_THRESHOLD,
     }
 
 
@@ -179,7 +169,7 @@ def merge_thread_settings(overrides=None):
 
 def _get_base_url() -> str:
     """Get the LLM API base URL, ensuring it ends with /v1."""
-    base_url = os.getenv("LLM_API_URL")
+    base_url = get_env_required("LLM_API_URL")
     return base_url if base_url.endswith("/v1") else f"{base_url}/v1"
 
 async def fetch_available_models():
@@ -188,7 +178,7 @@ async def fetch_available_models():
     Returns:
         dict: {"embedding_models": [...], "llm_models": [...], "unknown_models": [...], "all_models": [...]}
     """
-    llm_api_url = os.getenv("LLM_API_URL")
+    llm_api_url = get_env_required("LLM_API_URL")
     try:
         if not llm_api_url:
             # Only local models available
@@ -344,7 +334,7 @@ def get_local_embedding_model(model_name: str) -> LocalEmbeddingWrapper:
 
     name = normalize_model_name(model_name)
     if name not in _local_embedder_cache:
-        device = os.getenv("EMBEDDING_DEVICE", "cpu").strip() or "cpu"
+        device = get_env_required("EMBEDDING_DEVICE").strip()
         model = SentenceTransformer(name, device=device, trust_remote_code=True)
         _local_embedder_cache[name] = LocalEmbeddingWrapper(model)
     return _local_embedder_cache[name]
@@ -365,7 +355,7 @@ def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerank
     if CrossEncoder is None:
         raise RuntimeError("sentence-transformers is not installed; cannot load local reranker.")
     if name not in _local_reranker_cache:
-        device = os.getenv("RERANKER_DEVICE", "cpu").strip() or "cpu"
+        device = get_env_required("RERANKER_DEVICE").strip()
         model = CrossEncoder(name, device=device, trust_remote_code=True)
         _local_reranker_cache[name] = LocalRerankerWrapper(model)
     return _local_reranker_cache[name]
