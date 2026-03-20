@@ -177,11 +177,12 @@ class QdrantAdapter:
         thread_id: str,
         query_vector: List[float],
         limit: int = 5,
-        file_hash: Optional[str] = None
+        file_hash: Optional[str] = None,
+        page_number: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Search for indexed knowledge source chunks (PDFs and webpages) in a thread's collection.
-        Optionally filter by file_hash.
+        Optionally filter by file_hash and/or page_number.
         """
         collection_name = self.get_thread_collection_name(thread_id)
         
@@ -201,6 +202,14 @@ class QdrantAdapter:
                 models.FieldCondition(
                     key="file_hash",
                     match=models.MatchValue(value=file_hash)
+                )
+            )
+
+        if page_number is not None:
+            must_conditions.append(
+                models.FieldCondition(
+                    key="page_number",
+                    match=models.MatchValue(value=page_number)
                 )
             )
 
