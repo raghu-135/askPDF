@@ -138,7 +138,7 @@ You can download multiple models. In the app, you can use any model for chat and
 The RAG service Docker image now ships with a **default local embedding model**:
 
 - **Embedding**: `BAAI/bge-m3`
-- **Reranker**: `BAAI/bge-reranker-v2-m3`
+- **Reranker**: `Qwen/Qwen3-Reranker-0.6B`
 
 This means you can run **chat via your LLM server** while letting the RAG service handle embeddings locally. If you prefer to use your own embedding model from Ollama/LMStudio/DMR instead, set the embedding model when creating a thread and disable local embeddings via environment variables (see **Configuration** below).
 
@@ -500,7 +500,7 @@ Health check endpoint.
 | `DEFAULT_EMBEDDING_MODEL` | RAG Service | `BAAI/bge-m3` | Default embedding model used for new threads when not explicitly chosen |
 | `LOCAL_EMBEDDING_MODELS` | RAG Service | `BAAI/bge-m3` | Comma-separated list of embedding models that should be run locally in the RAG service |
 | `USE_LOCAL_EMBEDDINGS` | RAG Service | `true` | Toggle to enable/disable local embeddings in the RAG service |
-| `DEFAULT_RERANKER_MODEL` | RAG Service | `BAAI/bge-reranker-v2-m3` | Default reranker model for chunk re-ordering |
+| `DEFAULT_RERANKER_MODEL` | RAG Service | `Qwen/Qwen3-Reranker-0.6B` | Default reranker model for chunk re-ordering |
 | `USE_LOCAL_RERANKER` | RAG Service | `true` | Toggle to enable/disable reranking |
 | `EMBEDDING_DEVICE` | RAG Service | `cpu` | Device for local embeddings (`cpu` or `cuda`) |
 | `RERANKER_DEVICE` | RAG Service | `cpu` | Device for local reranker (`cpu` or `cuda`) |

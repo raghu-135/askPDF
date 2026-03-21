@@ -73,9 +73,15 @@ class QdrantAdapter:
                     size=vector_size, 
                     distance=models.Distance.COSINE
                 ),
+                sparse_vectors_config={
+                    "sparse": models.SparseVectorParams(
+                        index=models.SparseIndexParams(
+                            on_disk=True,
+                        )
+                    )
+                }
             )
-            # Create payload indexes for commonly filtered fields to speed up
-            # filtered vector searches as the collection grows.
+            # Create payload indexes for commonly filtered fields
             for field, schema in [
                 ("type",        models.PayloadSchemaType.KEYWORD),
                 ("file_hash",   models.PayloadSchemaType.KEYWORD),
@@ -91,7 +97,7 @@ class QdrantAdapter:
                     )
                 except Exception as idx_err:
                     print(f"Warning: could not create index on '{field}': {idx_err}", flush=True)
-            print(f"Created thread collection: {collection_name}", flush=True)
+            print(f"Created thread collection with Hybrid support: {collection_name}", flush=True)
         
         return collection_name
 
@@ -129,6 +135,7 @@ class QdrantAdapter:
         file_hash: str,
         texts: List[str],
         embeddings: List[List[float]],
+        sparse_embeddings: Optional[List[Dict[int, float]]] = None,
         metadatas: Optional[List[Dict[str, Any]]] = None
     ) -> int:
         """
@@ -155,10 +162,21 @@ class QdrantAdapter:
                 "chunk_id": i,
                 **metadata
             }
+            
+            # Hybrid vector format
+            vector_data = {
+                "": vector
+            }
+            if sparse_embeddings:
+                vector_data["sparse"] = models.SparseVector(
+                    indices=list(sparse_embeddings[i].keys()),
+                    values=list(sparse_embeddings[i].values())
+                )
+
             points.append(
                 models.PointStruct(
                     id=str(uuid.uuid4()),
-                    vector=vector,
+                    vector=vector_data,
                     payload=payload
                 )
             )
@@ -176,6 +194,7 @@ class QdrantAdapter:
         self,
         thread_id: str,
         query_vector: List[float],
+        sparse_query_vector: Optional[Dict[int, float]] = None,
         limit: int = 5,
         file_hash: Optional[str] = None,
         page_number: Optional[int] = None
@@ -183,13 +202,14 @@ class QdrantAdapter:
         """
         Search for indexed knowledge source chunks (PDFs and webpages) in a thread's collection.
         Optionally filter by file_hash and/or page_number.
+        Uses RRF Fusion for hybrid search if sparse vector is provided.
         """
         collection_name = self.get_thread_collection_name(thread_id)
         
         if not self.client.collection_exists(collection_name):
             return []
 
-        # Build filter for knowledge sources (PDFs and webpages share type='knowledge_source')
+        # Build filter for knowledge sources
         must_conditions = [
             models.FieldCondition(
                 key="type",
@@ -215,12 +235,38 @@ class QdrantAdapter:
 
         search_filter = models.Filter(must=must_conditions)
 
-        search_result = self.client.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            query_filter=search_filter,
-            limit=limit
-        ).points
+        if sparse_query_vector:
+            # Hybrid Search using Prefetch
+            prefetch = [
+                models.Prefetch(
+                    query=query_vector,
+                    filter=search_filter,
+                    limit=limit * 2,
+                ),
+                models.Prefetch(
+                    query=models.SparseVector(
+                        indices=list(sparse_query_vector.keys()),
+                        values=list(sparse_query_vector.values())
+                    ),
+                    using="sparse",
+                    filter=search_filter,
+                    limit=limit * 2,
+                ),
+            ]
+            search_result = self.client.query_points(
+                collection_name=collection_name,
+                prefetch=prefetch,
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=limit
+            ).points
+        else:
+            # Standard Dense search
+            search_result = self.client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=search_filter,
+                limit=limit
+            ).points
 
         results = []
         for hit in search_result:
@@ -233,7 +279,7 @@ class QdrantAdapter:
                 "source_kind": source_kind,
                 "url": hit.payload.get("url"),
                 "title": hit.payload.get("title"),
-                "score": hit.score,
+                "score": float(hit.score) if hit.score is not None else 0.0,
                 "metadata": {k: v for k, v in hit.payload.items() if k not in ["text", "type"]}
             })
         return results
@@ -357,7 +403,8 @@ class QdrantAdapter:
         question: str,
         answer: str,
         texts: List[str],
-        embeddings: List[List[float]]
+        embeddings: List[List[float]],
+        sparse_embeddings: Optional[List[Dict[int, float]]] = None
     ) -> int:
         """
         Store a QA pair as chat memory for semantic retrieval.
@@ -379,10 +426,21 @@ class QdrantAdapter:
                 "answer": answer,
                 "chunk_id": i
             }
+            
+            # Hybrid vector format
+            vector_data = {
+                "": vector
+            }
+            if sparse_embeddings:
+                vector_data["sparse"] = models.SparseVector(
+                    indices=list(sparse_embeddings[i].keys()),
+                    values=list(sparse_embeddings[i].values())
+                )
+
             points.append(
                 models.PointStruct(
                     id=str(uuid.uuid4()),
-                    vector=vector,
+                    vector=vector_data,
                     payload=payload
                 )
             )
@@ -399,6 +457,7 @@ class QdrantAdapter:
         self,
         thread_id: str,
         query_vector: List[float],
+        sparse_query_vector: Optional[Dict[int, float]] = None,
         limit: int = 3,
         exclude_message_ids: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
@@ -434,12 +493,32 @@ class QdrantAdapter:
             must_not=must_not_conditions if must_not_conditions else None
         )
 
-        search_result = self.client.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            query_filter=search_filter,
-            limit=limit
-        ).points
+        if sparse_query_vector:
+            prefetch = [
+                models.Prefetch(query=query_vector, filter=search_filter, limit=limit * 2),
+                models.Prefetch(
+                    query=models.SparseVector(
+                        indices=list(sparse_query_vector.keys()),
+                        values=list(sparse_query_vector.values())
+                    ),
+                    using="sparse",
+                    filter=search_filter,
+                    limit=limit * 2
+                ),
+            ]
+            search_result = self.client.query_points(
+                collection_name=collection_name,
+                prefetch=prefetch,
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=limit
+            ).points
+        else:
+            search_result = self.client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=search_filter,
+                limit=limit
+            ).points
 
         results = []
         for hit in search_result:
@@ -493,6 +572,7 @@ class QdrantAdapter:
         query: str,
         texts: List[str],
         embeddings: List[List[float]],
+        sparse_embeddings: Optional[List[Dict[int, float]]] = None,
         urls: Optional[List[str]] = None,
         titles: Optional[List[str]] = None,
     ) -> int:
@@ -518,10 +598,21 @@ class QdrantAdapter:
                 "title": (titles[i] if titles and i < len(titles) else ""),
                 "chunk_id": i,
             }
+            
+            # Hybrid vector format
+            vector_data = {
+                "": vector
+            }
+            if sparse_embeddings:
+                vector_data["sparse"] = models.SparseVector(
+                    indices=list(sparse_embeddings[i].keys()),
+                    values=list(sparse_embeddings[i].values())
+                )
+
             points.append(
                 models.PointStruct(
                     id=str(uuid.uuid4()),
-                    vector=vector,
+                    vector=vector_data,
                     payload=payload,
                 )
             )
@@ -534,6 +625,7 @@ class QdrantAdapter:
         self,
         thread_id: str,
         query_vector: List[float],
+        sparse_query_vector: Optional[Dict[int, float]] = None,
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
         """
@@ -550,12 +642,32 @@ class QdrantAdapter:
             ]
         )
 
-        search_result = self.client.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            query_filter=search_filter,
-            limit=limit,
-        ).points
+        if sparse_query_vector:
+            prefetch = [
+                models.Prefetch(query=query_vector, filter=search_filter, limit=limit * 2),
+                models.Prefetch(
+                    query=models.SparseVector(
+                        indices=list(sparse_query_vector.keys()),
+                        values=list(sparse_query_vector.values())
+                    ),
+                    using="sparse",
+                    filter=search_filter,
+                    limit=limit * 2
+                ),
+            ]
+            search_result = self.client.query_points(
+                collection_name=collection_name,
+                prefetch=prefetch,
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=limit,
+            ).points
+        else:
+            search_result = self.client.query_points(
+                collection_name=collection_name,
+                query=query_vector,
+                query_filter=search_filter,
+                limit=limit,
+            ).points
 
         results = []
         for hit in search_result:
@@ -616,6 +728,7 @@ class QdrantAdapter:
         title: str,
         texts: List[str],
         embeddings: List[List[float]],
+        sparse_embeddings: Optional[List[Dict[int, float]]] = None,
         metadatas: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
         """
@@ -643,10 +756,21 @@ class QdrantAdapter:
                 "chunk_id": i,
                 **metadata,
             }
+            
+            # Hybrid vector format
+            vector_data = {
+                "": vector
+            }
+            if sparse_embeddings:
+                vector_data["sparse"] = models.SparseVector(
+                    indices=list(sparse_embeddings[i].keys()),
+                    values=list(sparse_embeddings[i].values())
+                )
+
             points.append(
                 models.PointStruct(
                     id=str(uuid.uuid4()),
-                    vector=vector,
+                    vector=vector_data,
                     payload=payload,
                 )
             )

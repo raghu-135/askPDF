@@ -10,6 +10,7 @@ This module handles:
 import os
 import logging
 import asyncio
+import time
 from typing import Dict, Any, List, Optional
 
 import httpx
@@ -20,7 +21,11 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from models import (
     get_env_required,
     get_env_int_required,
-    get_embedding_model, get_llm, 
+    get_embedding_model, 
+    DEFAULT_EMBEDDING_MODEL,
+    GPU_EMBEDDING_BATCH_SIZE,
+    LOCAL_EMBEDDING_MODELS,
+    get_llm, 
     DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
 )
@@ -300,25 +305,40 @@ def split_chat_memory_text(compact_text: str) -> List[str]:
     return [c.page_content for c in chunks]
 
 
-async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> List[List[float]]:
+async def generate_hybrid_embeddings(chunks: List[str], embedding_model_name: str) -> tuple[List[List[float]], List[Dict[int, float]]]:
     """
-    Generate embeddings for each chunk using the specified embedding model.
-    Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
+    Generate both dense and sparse embeddings for each chunk using FastEmbed with batching.
     """
-    embed_model = get_embedding_model(embedding_model_name)
-
-    # Set batch size based on the embedding model
-    if embed_model == get_env_required("LOCAL_EMBEDDING_MODELS"):
+    logger.info(f"Generating hybrid embeddings for {len(chunks)} chunks using {embedding_model_name}...")
+    embed_model = await get_embedding_model(embedding_model_name)
+    
+    if embedding_model_name in LOCAL_EMBEDDING_MODELS:
         batch_size = 50
     else:
-        batch_size = get_env_int_required("GPU_EMBEDDING_BATCH_SIZE")
+        batch_size = GPU_EMBEDDING_BATCH_SIZE
 
-    vectors = []
-    for i in range(0, len(chunks), batch_size):
+    dense_vectors = []
+    sparse_vectors = []
+    
+    total_chunks = len(chunks)
+    total_batches = (total_chunks + batch_size - 1) // batch_size
+    
+    start_time_all = time.time()
+    for i in range(0, total_chunks, batch_size):
         batch = chunks[i:i + batch_size]
-        batch_vectors = await embed_model.aembed_documents(batch)
-        vectors.extend(batch_vectors)
-    return vectors
+        current_batch = i // batch_size + 1
+        logger.info(f"Processing batch {current_batch}/{total_batches} ({len(batch)} chunks)...")
+        
+        # Generate dense embeddings
+        batch_dense = await embed_model.aembed_documents(batch)
+        dense_vectors.extend(batch_dense)
+        
+        # Generate sparse embeddings
+        batch_sparse = await embed_model.aembed_sparse_documents(batch)
+        sparse_vectors.extend(batch_sparse)
+        
+    logger.info(f"Finished generating hybrid embeddings for all batches in {time.time() - start_time_all:.2f}s")
+    return dense_vectors, sparse_vectors
 
 
 async def index_document_for_thread(
@@ -328,17 +348,7 @@ async def index_document_for_thread(
     metadata: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Index a document into a thread's Qdrant collection.
-    The PDF is fetched from the backend and parsed using Unstructured.
-    
-    Args:
-        thread_id: The thread ID to index into
-        file_hash: Unique hash of the file
-        embedding_model_name: The embedding model to use
-        metadata: Additional metadata to store with chunks
-    
-    Returns:
-        Status dict with indexing results
+    Index a document into a thread's Qdrant collection with Hybrid (Dense + BM25) support.
     """
     db_client = get_qdrant()
     metadata = metadata or {}
@@ -354,8 +364,8 @@ async def index_document_for_thread(
         
         texts = [c["text"] for c in chunk_data]
         
-        # 2. Generate embeddings
-        vectors = await generate_embeddings(texts, embedding_model_name)
+        # 2. Generate Hybrid embeddings
+        vectors, sparse_vectors = await generate_hybrid_embeddings(texts, embedding_model_name)
         
         # 3. Prepare metadata for each chunk
         chunk_metadatas = []
@@ -375,6 +385,7 @@ async def index_document_for_thread(
             file_hash=file_hash,
             texts=texts,
             embeddings=vectors,
+            sparse_embeddings=sparse_vectors,
             metadatas=chunk_metadatas
         )
         
@@ -420,8 +431,7 @@ async def index_chat_memory_for_thread(
     context_window: int = DEFAULT_TOKEN_BUDGET
 ) -> Dict[str, Any]:
     """
-    Process, chunk, and index a chat message as semantic memory.
-    Uses LangChain splitters and optional LLM summarization with dynamic budgets.
+    Process, chunk, and index a chat message as hybrid semantic memory.
     """
     db_client = get_qdrant()
     
@@ -435,8 +445,8 @@ async def index_chat_memory_for_thread(
         )
         chunks = split_chat_memory_text(compact_text)
         
-        # 2. Generate embeddings
-        vectors = await generate_embeddings(chunks, embedding_model_name)
+        # 2. Generate Hybrid embeddings
+        vectors, sparse_vectors = await generate_hybrid_embeddings(chunks, embedding_model_name)
         
         # 3. Store into vector database
         indexed_count = await db_client.index_chat_memory(
@@ -445,7 +455,8 @@ async def index_chat_memory_for_thread(
             question=question,
             answer=answer,
             texts=chunks,
-            embeddings=vectors
+            embeddings=vectors,
+            sparse_embeddings=sparse_vectors
         )
         
         return {
@@ -466,17 +477,7 @@ async def index_webpage_for_thread(
     embedding_model_name: str,
 ) -> Dict[str, Any]:
     """
-    Fetch a webpage, extract its text, chunk it, generate embeddings,
-    and index into the thread's Qdrant collection as knowledge_source (webpage) chunks.
-
-    Args:
-        thread_id: The thread to index into.
-        url: The full URL of the page to fetch.
-        file_hash: MD5 hash of the URL (used as the stable identifier).
-        embedding_model_name: Embedding model to use.
-
-    Returns:
-        Status dict with indexed chunk count, page title, and any error.
+    Index webpage content chunks with Hybrid support.
     """
     from bs4 import BeautifulSoup
 
@@ -518,7 +519,8 @@ async def index_webpage_for_thread(
         if not chunks:
             return {"status": "error", "message": "No chunks produced from page text"}
 
-        vectors = await generate_embeddings(chunks, embedding_model_name)
+        # Hybrid embeddings
+        vectors, sparse_vectors = await generate_hybrid_embeddings(chunks, embedding_model_name)
 
         indexed_count = await db_client.index_web_source_chunks(
             thread_id=thread_id,
@@ -527,6 +529,7 @@ async def index_webpage_for_thread(
             title=title,
             texts=chunks,
             embeddings=vectors,
+            sparse_embeddings=sparse_vectors
         )
 
         logger.info(f"Indexed {indexed_count} web source chunks for thread {thread_id}, url {url}")
@@ -581,28 +584,17 @@ async def index_web_search_for_thread(
     embedding_model_name: str,
 ) -> Dict[str, Any]:
     """
-    Embed and store web search result snippets into the thread's Qdrant collection
-    so they can be semantically retrieved in future queries.
-
-    Args:
-        thread_id: The thread to store snippets in.
-        query: The search query that produced these results.
-        texts: List of result snippet texts.
-        urls: Corresponding source URLs (parallel to texts).
-        titles: Corresponding page titles (parallel to texts).
-        embedding_model_name: Embedding model to use.
-
-    Returns:
-        Status dict with indexed chunk count.
+    Embed and store web search result snippets with Hybrid support.
     """
     db_client = get_qdrant()
     try:
-        vectors = await generate_embeddings(texts, embedding_model_name)
+        vectors, sparse_vectors = await generate_hybrid_embeddings(texts, embedding_model_name)
         indexed_count = await db_client.index_web_search_chunks(
             thread_id=thread_id,
             query=query,
             texts=texts,
             embeddings=vectors,
+            sparse_embeddings=sparse_vectors,
             urls=urls,
             titles=titles,
         )

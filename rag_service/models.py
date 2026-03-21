@@ -12,13 +12,27 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from prompt_defaults import DEFAULT_SYSTEM_ROLE
 
 try:
-    from sentence_transformers import SentenceTransformer, CrossEncoder
+    from fastembed import TextEmbedding, SparseTextEmbedding, SparseEmbedding
+    from fastembed.rerank.cross_encoder import TextCrossEncoder
 except Exception:
-    SentenceTransformer = None
-    CrossEncoder = None
+    TextEmbedding = None
+    SparseTextEmbedding = None
+    TextCrossEncoder = None
+    SparseEmbedding = None
+    logger.warning("fastembed not installed or submodules missing. Local models will not be available.")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Registry and Locks for Model loading
+_local_embedder_cache: Dict[str, "LocalEmbeddingWrapper"] = {}
+_local_reranker_cache: Dict[str, "LocalRerankerWrapper"] = {}
+_loader_locks: Dict[str, asyncio.Lock] = {}
+
+def get_lock(name: str) -> asyncio.Lock:
+    if name not in _loader_locks:
+        _loader_locks[name] = asyncio.Lock()
+    return _loader_locks[name]
 
 # Cache for model readiness checks
 _model_ready_cache: Dict[str, Tuple[bool, float]] = {}
@@ -92,6 +106,7 @@ USE_LOCAL_RERANKER = get_env_bool_required("USE_LOCAL_RERANKER")
 LOCAL_EMBEDDING_MODELS = _split_env_list_required("LOCAL_EMBEDDING_MODELS")
 if DEFAULT_EMBEDDING_MODEL and DEFAULT_EMBEDDING_MODEL not in LOCAL_EMBEDDING_MODELS:
     LOCAL_EMBEDDING_MODELS.append(DEFAULT_EMBEDDING_MODEL)
+GPU_EMBEDDING_BATCH_SIZE = get_env_int_required("GPU_EMBEDDING_BATCH_SIZE")
 
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
@@ -265,12 +280,12 @@ def get_llm(model_name: str, temperature: float = 0.0):
         api_key="sk-no-key-required"
     )
 
-def get_embedding_model(model_name: str):
+async def get_embedding_model(model_name: str):
     """
-    Return a configured OpenAIEmbeddings client for the given model.
+    Return a configured OpenAIEmbeddings client or LocalEmbeddingWrapper for the given model.
     """
     if should_use_local_embeddings(model_name):
-        return get_local_embedding_model(model_name)
+        return await get_local_embedding_model(model_name)
 
     return OpenAIEmbeddings(
         model=model_name,
@@ -281,36 +296,68 @@ def get_embedding_model(model_name: str):
 
 
 class LocalEmbeddingWrapper:
-    def __init__(self, model: "SentenceTransformer"):
+    def __init__(self, model: "TextEmbedding", sparse_model: "SparseTextEmbedding"):
         self.model = model
+        self.sparse_model = sparse_model
 
     async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
         def _encode():
-            embeddings = self.model.encode(texts, normalize_embeddings=True)
-            return embeddings.tolist()
+            return [list(e) for e in self.model.embed(texts)]
         return await asyncio.to_thread(_encode)
 
     async def aembed_query(self, text: str) -> List[float]:
         def _encode():
-            embeddings = self.model.encode([text], normalize_embeddings=True)
-            return embeddings[0].tolist()
+            return list(next(self.model.query_embed(text)))
+        return await asyncio.to_thread(_encode)
+
+    async def aembed_sparse_documents(self, texts: List[str]) -> List[Dict[int, float]]:
+        def _encode():
+            results = []
+            for e in self.sparse_model.embed(texts):
+                # Convert SparseEmbedding object to dict of {index: value}
+                sparse_dict = {int(i): float(v) for i, v in zip(e.indices, e.values)}
+                results.append(sparse_dict)
+            return results
+        return await asyncio.to_thread(_encode)
+
+    async def aembed_sparse_query(self, text: str) -> Dict[int, float]:
+        def _encode():
+            e = next(self.sparse_model.embed([text]))
+            return {int(i): float(v) for i, v in zip(e.indices, e.values)}
         return await asyncio.to_thread(_encode)
 
 
 class LocalRerankerWrapper:
-    def __init__(self, model: "CrossEncoder"):
+    def __init__(self, model: "TextCrossEncoder"):
         self.model = model
 
     async def ascore(self, query: str, passages: List[str]) -> List[float]:
         def _score():
-            pairs = [(query, p) for p in passages]
-            scores = self.model.predict(pairs)
-            return scores.tolist() if hasattr(scores, "tolist") else list(scores)
+            # results can be an iterable of RerankResult objects or a list of floats
+            raw_results = self.model.rerank(query, passages)
+            results = list(raw_results)
+            
+            if not results:
+                return [0.0] * len(passages)
+                
+            # If the results are already floats, return them directly
+            if isinstance(results[0], (int, float)):
+                return [float(r) for r in results]
+                
+            # Otherwise, map them back to the original order using the index attribute
+            scores = [0.0] * len(passages)
+            for r in results:
+                try:
+                    # FastEmbed RerankResult has .score and .index
+                    scores[r.index] = float(r.score)
+                except (AttributeError, TypeError, IndexError):
+                    # Fallback to direct placement if indexing fails
+                    pass
+            return scores
         return await asyncio.to_thread(_score)
 
 
-_local_embedder_cache: Dict[str, LocalEmbeddingWrapper] = {}
-_local_reranker_cache: Dict[str, LocalRerankerWrapper] = {}
+
 
 
 def normalize_model_name(name: str) -> str:
@@ -328,16 +375,31 @@ def should_use_local_embeddings(model_name: str) -> bool:
     return is_local_embedding_model(model_name)
 
 
-def get_local_embedding_model(model_name: str) -> LocalEmbeddingWrapper:
-    if SentenceTransformer is None:
-        raise RuntimeError("sentence-transformers is not installed; cannot load local embeddings.")
+async def get_local_embedding_model(model_name: str) -> "LocalEmbeddingWrapper":
+    if TextEmbedding is None:
+        raise RuntimeError("fastembed is not installed; cannot load local embeddings.")
 
     name = normalize_model_name(model_name)
-    if name not in _local_embedder_cache:
-        device = get_env_required("EMBEDDING_DEVICE").strip()
-        model = SentenceTransformer(name, device=device, trust_remote_code=True)
-        _local_embedder_cache[name] = LocalEmbeddingWrapper(model)
-    return _local_embedder_cache[name]
+    if name in _local_embedder_cache:
+        return _local_embedder_cache[name]
+
+    async with get_lock(f"embed_{name}"):
+        if name not in _local_embedder_cache:
+            logger.info(f"Loading local embedding models: {name} (Dense) and BM25 (Sparse)...")
+            start_time = time.time()
+            
+            def _load():
+                # Load Dense model
+                model = TextEmbedding(model_name=name)
+                # Load Sparse model (BM25)
+                sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
+                return model, sparse_model
+                
+            model, sparse_model = await asyncio.to_thread(_load)
+            _local_embedder_cache[name] = LocalEmbeddingWrapper(model, sparse_model)
+            logger.info(f"Loaded embedding models in {time.time() - start_time:.2f}s")
+            
+        return _local_embedder_cache[name]
 
 
 def should_use_local_reranker(model_name: str) -> bool:
@@ -346,19 +408,30 @@ def should_use_local_reranker(model_name: str) -> bool:
     return bool(normalize_model_name(model_name))
 
 
-def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerankerWrapper]:
+async def get_reranker_model(model_name: Optional[str] = None) -> Optional["LocalRerankerWrapper"]:
     name = normalize_model_name(model_name or DEFAULT_RERANKER_MODEL)
     if not name:
         return None
     if not should_use_local_reranker(name):
         return None
-    if CrossEncoder is None:
-        raise RuntimeError("sentence-transformers is not installed; cannot load local reranker.")
-    if name not in _local_reranker_cache:
-        device = get_env_required("RERANKER_DEVICE").strip()
-        model = CrossEncoder(name, device=device, trust_remote_code=True)
-        _local_reranker_cache[name] = LocalRerankerWrapper(model)
-    return _local_reranker_cache[name]
+    if TextCrossEncoder is None:
+        raise RuntimeError("fastembed is not installed; cannot load local reranker.")
+    if name in _local_reranker_cache:
+        return _local_reranker_cache[name]
+
+    async with get_lock(f"rerank_{name}"):
+        if name not in _local_reranker_cache:
+            logger.info(f"Loading local reranker model: {name}...")
+            start_time = time.time()
+            
+            def _load():
+                return TextCrossEncoder(model_name=name)
+                
+            model = await asyncio.to_thread(_load)
+            _local_reranker_cache[name] = LocalRerankerWrapper(model)
+            logger.info(f"Loaded reranker model in {time.time() - start_time:.2f}s")
+            
+        return _local_reranker_cache[name]
 
 def get_system_prompt(context: str, use_history: bool = False, use_web: bool = False) -> str:
     """
@@ -581,7 +654,7 @@ async def check_embed_model_ready(model_name: str) -> bool:
     """
     if should_use_local_embeddings(model_name):
         try:
-            embedder = get_local_embedding_model(model_name)
+            embedder = await get_local_embedding_model(model_name)
             await embedder.aembed_query("ping")
             return True
         except Exception as exc:

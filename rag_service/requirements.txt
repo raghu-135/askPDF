@@ -19,7 +19,6 @@ langchain
 langchain-core
 langchain-community
 ddgs
-sentence-transformers
-torch
+fastembed>=0.5.0
 pandas
 tabulate

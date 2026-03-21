@@ -178,9 +178,9 @@ async def get_db():
 
 # ============ Thread Operations ============
 
-async def create_thread(name: str, embed_model: str) -> Thread:
+async def create_thread(name: str, embed_model: str, thread_id: Optional[str] = None) -> Thread:
     """Create a new thread."""
-    thread_id = str(uuid.uuid4())
+    thread_id = thread_id or str(uuid.uuid4())
     created_at = datetime.utcnow()
     
     async with aiosqlite.connect(DB_PATH) as db:

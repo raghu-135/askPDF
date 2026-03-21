@@ -22,7 +22,12 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 ARG DOWNLOAD_LOCAL_MODELS=true
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
-      python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); print('Downloaded local embedding + reranker models')"; \
+    python -c "from fastembed import TextEmbedding, SparseTextEmbedding; \
+    from fastembed.rerank.cross_encoder import TextCrossEncoder; \
+    TextEmbedding('mixedbread-ai/mxbai-embed-large-v1'); \
+    SparseTextEmbedding('Qdrant/bm25'); \
+    TextCrossEncoder('jinaai/jina-reranker-v1-tiny-en'); \
+    print('Downloaded FastEmbed models: MXBAI-Large, BM25 Sparse, and Jina-Reranker-Tiny-En')"; \
     fi
 
 COPY rag_service /app

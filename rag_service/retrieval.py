@@ -105,7 +105,7 @@ async def rerank_document_chunks(
     if not chunks:
         return chunks
 
-    reranker = get_reranker_model(model_name or DEFAULT_RERANKER_MODEL)
+    reranker = await get_reranker_model(model_name or DEFAULT_RERANKER_MODEL)
     if reranker is None:
         return chunks
 
@@ -123,6 +123,7 @@ async def rerank_document_chunks(
 async def fetch_semantic_history(
     thread_id: str,
     query_vector: List[float],
+    sparse_query_vector: Optional[Dict[int, float]],
     query_text: Optional[str],
     limit: int,
     char_budget: Optional[int] = None,
@@ -135,6 +136,7 @@ async def fetch_semantic_history(
     recalled = await db.search_chat_memory(
         thread_id=thread_id,
         query_vector=query_vector,
+        sparse_query_vector=sparse_query_vector,
         limit=rerank_fetch_k,
     )
     if use_reranker and query_text:

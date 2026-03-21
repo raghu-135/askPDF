@@ -10,7 +10,7 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
       - NEXT_PUBLIC_RAG_API_URL=http://localhost:8001
-      - NEXT_PUBLIC_DEFAULT_EMBED_MODEL=BAAI/bge-m3
+      - NEXT_PUBLIC_DEFAULT_EMBED_MODEL=mixedbread-ai/mxbai-embed-large-v1
     depends_on:
       backend:
         condition: service_healthy
@@ -66,12 +66,12 @@ services:
       - QDRANT_PORT=6333
       - DATA_DIR=/data
       - BACKEND_URL=http://backend:8000
-      - DEFAULT_EMBEDDING_MODEL=BAAI/bge-m3
-      - DEFAULT_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
-      - LOCAL_EMBEDDING_MODELS=BAAI/bge-m3
+      - DEFAULT_EMBEDDING_MODEL=mixedbread-ai/mxbai-embed-large-v1
+      - DEFAULT_RERANKER_MODEL=jinaai/jina-reranker-v1-tiny-en
+      - LOCAL_EMBEDDING_MODELS=mixedbread-ai/mxbai-embed-large-v1
       - USE_LOCAL_EMBEDDINGS=true
       - USE_LOCAL_RERANKER=true
-      - GPU_EMBEDDING_BATCH_SIZE=100 # LLM API/servers may have strict/lower batch size limits
+      - GPU_EMBEDDING_BATCH_SIZE=50 # Lowered to prevent OOM
       - EMBEDDING_DEVICE=cpu
       - RERANKER_DEVICE=cpu
       - RERANK_TOP_K_MULTIPLIER=4

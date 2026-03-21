@@ -829,6 +829,40 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
 
 # ============ Indexing Endpoints ============
 
+class LegacyIndexRequest(BaseModel):
+    embedding_model: str
+    metadata: Dict[str, Any]
+
+@app.post("/index")
+async def legacy_index_endpoint(req: LegacyIndexRequest, background_tasks: BackgroundTasks):
+    """
+    Legacy indexing endpoint called by the backend.
+    Maps to a default thread or handles it as a global index.
+    For this version, we'll use a constant 'legacy_default_thread' or similar.
+    """
+    thread_id = "legacy_default_thread"
+    file_hash = req.metadata.get("file_hash")
+    file_name = req.metadata.get("filename")
+    
+    if not file_hash or not file_name:
+         raise HTTPException(status_code=400, detail="file_hash and filename are required in metadata")
+         
+    # Ensure thread exists
+    thread = await get_thread(thread_id)
+    if not thread:
+        await create_thread("Legacy Default Thread", req.embedding_model, thread_id=thread_id)
+    
+    # Trigger indexing
+    background_tasks.add_task(
+        index_document_for_thread,
+        thread_id=thread_id,
+        file_hash=file_hash,
+        embedding_model_name=req.embedding_model,
+        metadata=req.metadata
+    )
+    
+    return {"status": "accepted", "thread_id": thread_id, "file_hash": file_hash}
+
 @app.get("/threads/{thread_id}/index-status")
 async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = None):
     """

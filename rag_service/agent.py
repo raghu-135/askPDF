@@ -119,8 +119,9 @@ async def search_documents(query: str, max_results: int = 10, page_number: Optio
         if not thread_id or not embedding_model:
             return "No thread context found."
 
-        embed_model = get_embedding_model(embedding_model)
+        embed_model = await get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
+        sparse_query_vector = await invoke_with_retry(embed_model.aembed_sparse_query, query)
 
         db = get_qdrant()
 
@@ -131,6 +132,7 @@ async def search_documents(query: str, max_results: int = 10, page_number: Optio
         raw_doc_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
             limit=max_results * 2 if use_reranker else max_results,
             page_number=page_number,
         )
@@ -176,6 +178,7 @@ async def search_documents(query: str, max_results: int = 10, page_number: Optio
         web_chunks = await db.search_web_chunks(
             thread_id=thread_id,
             query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
             limit=web_limit * 2 if use_reranker else web_limit,
         )
         if use_reranker:
@@ -244,13 +247,15 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         if not thread_id or not embedding_model:
             return "No thread context found."
 
-        embed_model = get_embedding_model(embedding_model)
+        embed_model = await get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
+        sparse_query_vector = await invoke_with_retry(embed_model.aembed_sparse_query, query)
         
         db = get_qdrant()
         history, used_ids = await fetch_semantic_history(
             thread_id=thread_id,
             query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
             query_text=query,
             limit=max_results,
             use_reranker=use_reranker,
@@ -485,13 +490,15 @@ async def search_document_by_id(
         if not thread_id or not embedding_model:
             return "No thread context found."
 
-        embed_model = get_embedding_model(embedding_model)
+        embed_model = await get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
+        sparse_query_vector = await invoke_with_retry(embed_model.aembed_sparse_query, query)
 
         db = get_qdrant()
         raw_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
             limit=max_results,
             file_hash=file_hash,
             page_number=page_number,
@@ -561,13 +568,15 @@ async def find_topic_anchor_in_history(
         if not thread_id or not embedding_model:
             return "No thread context found."
 
-        embed_model = get_embedding_model(embedding_model)
+        embed_model = await get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, topic)
+        sparse_query_vector = await invoke_with_retry(embed_model.aembed_sparse_query, topic)
 
         db = get_qdrant()
         recalled = await db.search_chat_memory(
             thread_id=thread_id,
             query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
             limit=5,
         )
 

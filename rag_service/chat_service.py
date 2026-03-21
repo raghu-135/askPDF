@@ -71,9 +71,10 @@ async def prefetch_context(
 
     budget = compute_prefetch_budget(context_window)
 
-    # Embed the raw question ONCE and share the vector across parallel tasks
-    embed_model = get_embedding_model(embed_model_name)
+    # Embed the raw question ONCE and share the vectors across parallel tasks
+    embed_model = await get_embedding_model(embed_model_name)
     shared_query_vector = await invoke_with_retry(embed_model.aembed_query, raw_question)
+    shared_sparse_query_vector = await invoke_with_retry(embed_model.aembed_sparse_query, raw_question)
 
     async def _fetch_recent() -> str:
         msgs = await get_recent_messages(thread_id, limit=budget["recent_turn_limit"] * 2)
@@ -115,6 +116,7 @@ async def prefetch_context(
             return await fetch_semantic_history(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
+                sparse_query_vector=shared_sparse_query_vector,
                 query_text=raw_question,
                 limit=budget["semantic_limit"],
                 char_budget=budget["semantic_history_chars"],
@@ -132,6 +134,7 @@ async def prefetch_context(
             raw_chunks = await db.search_knowledge_sources(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
+                sparse_query_vector=shared_sparse_query_vector,
                 limit=rerank_fetch_k,
             )
 
