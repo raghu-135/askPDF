@@ -5,6 +5,7 @@ import httpx
 import asyncio
 import logging
 import time
+import json
 from typing import Dict, Tuple, List, Optional
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -12,10 +13,16 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from prompt_defaults import DEFAULT_SYSTEM_ROLE
 
 try:
-    from sentence_transformers import SentenceTransformer, CrossEncoder
+    from optimum.onnxruntime import ORTModelForFeatureExtraction, ORTModelForSequenceClassification
+    from transformers import AutoTokenizer
+    import numpy as np
+    import onnxruntime as ort
 except Exception:
-    SentenceTransformer = None
-    CrossEncoder = None
+    ORTModelForFeatureExtraction = None
+    ORTModelForSequenceClassification = None
+    AutoTokenizer = None
+    np = None
+    ort = None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -61,6 +68,23 @@ def get_env_bool_required(name: str) -> bool:
         return False
     raise ValueError(f"{name} environment variable must be a boolean ('true' or 'false')")
 
+def get_env_bool_default(name: str, default: bool) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    val = val.lower().strip()
+    if val in ("true", "1", "yes"):
+        return True
+    if val in ("false", "0", "no"):
+        return False
+    raise ValueError(f"{name} environment variable must be a boolean ('true' or 'false')")
+
+def get_env_int_default(name: str, default: int) -> int:
+    val = os.getenv(name)
+    if val is None or val.strip() == "":
+        return default
+    return int(val)
+
 def _split_env_list_required(name: str) -> List[str]:
     raw = get_env_required(name)
     parts = [p.strip() for p in raw.split(",") if p.strip()]
@@ -92,6 +116,20 @@ USE_LOCAL_RERANKER = get_env_bool_required("USE_LOCAL_RERANKER")
 LOCAL_EMBEDDING_MODELS = _split_env_list_required("LOCAL_EMBEDDING_MODELS")
 if DEFAULT_EMBEDDING_MODEL and DEFAULT_EMBEDDING_MODEL not in LOCAL_EMBEDDING_MODELS:
     LOCAL_EMBEDDING_MODELS.append(DEFAULT_EMBEDDING_MODEL)
+
+LOCAL_ONNX_MODELS_DIR = os.getenv("LOCAL_ONNX_MODELS_DIR", "/models/onnx").strip()
+EMBEDDING_POOLING = os.getenv("EMBEDDING_POOLING", "cls").strip().lower()
+EMBEDDING_MAX_LENGTH = get_env_int_default("EMBEDDING_MAX_LENGTH", 0)
+RERANKER_MAX_LENGTH = get_env_int_default("RERANKER_MAX_LENGTH", 0)
+LOCAL_EMBEDDING_BATCH_SIZE = get_env_int_default("LOCAL_EMBEDDING_BATCH_SIZE", 32)
+LOCAL_RERANKER_BATCH_SIZE = get_env_int_default("LOCAL_RERANKER_BATCH_SIZE", 16)
+
+# ONNX Runtime tuning (CPU-focused)
+ORT_INTRA_OP_NUM_THREADS = get_env_int_default("ORT_INTRA_OP_NUM_THREADS", os.cpu_count() or 1)
+ORT_INTER_OP_NUM_THREADS = get_env_int_default("ORT_INTER_OP_NUM_THREADS", 1)
+ORT_ENABLE_MEM_ARENA = get_env_bool_default("ORT_ENABLE_MEM_ARENA", True)
+ORT_ENABLE_MEM_PATTERN = get_env_bool_default("ORT_ENABLE_MEM_PATTERN", True)
+ORT_ENABLE_PROFILING = get_env_bool_default("ORT_ENABLE_PROFILING", False)
 
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
@@ -178,14 +216,20 @@ async def fetch_available_models():
     Returns:
         dict: {"embedding_models": [...], "llm_models": [...], "unknown_models": [...], "all_models": [...]}
     """
+    local_onnx_models = list_local_onnx_models()
+    local_embedding_models = []
+    for m in LOCAL_EMBEDDING_MODELS + local_onnx_models:
+        if is_embedding_model_by_keyword(m) and m not in local_embedding_models:
+            local_embedding_models.append(m)
+
     llm_api_url = get_env_required("LLM_API_URL")
     try:
         if not llm_api_url:
             # Only local models available
             return {
-                "embedding_models": LOCAL_EMBEDDING_MODELS,
+                "embedding_models": local_embedding_models,
                 "llm_models": [],
-                "all_models": LOCAL_EMBEDDING_MODELS,
+                "all_models": local_embedding_models,
                 "not_embedding_models": [],
                 "not_llm_models": [],
             }
@@ -203,7 +247,7 @@ async def fetch_available_models():
                 llm_models = [m for m in model_ids if is_llm_model_by_keyword(m)]
                 not_embedding_models = [m for m in model_ids if m not in embedding_models]
                 not_llm_models = [m for m in model_ids if m not in llm_models]
-                for local_model in LOCAL_EMBEDDING_MODELS:
+                for local_model in local_embedding_models:
                     if local_model not in embedding_models:
                         embedding_models.insert(0, local_model)
                     if local_model not in model_ids:
@@ -226,19 +270,85 @@ async def fetch_available_models():
         logger.error(error_msg)
         # Fall back to local-only list
         return {
-            "embedding_models": LOCAL_EMBEDDING_MODELS,
+            "embedding_models": local_embedding_models,
             "llm_models": [],
-            "all_models": LOCAL_EMBEDDING_MODELS,
+            "all_models": local_embedding_models,
             "not_embedding_models": [],
             "not_llm_models": [],
         }
+
+def _read_model_id_from_config(model_dir: str) -> Optional[str]:
+    config_path = os.path.join(model_dir, "config.json")
+    if not os.path.isfile(config_path):
+        return None
+    try:
+        with open(config_path, "r") as f:
+            cfg = json.load(f)
+        for key in ("_name_or_path", "name_or_path", "model_name", "model_id"):
+            val = cfg.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    except Exception:
+        return None
+    return None
+
+
+def list_local_onnx_models() -> List[str]:
+    if not os.path.isdir(LOCAL_ONNX_MODELS_DIR):
+        return []
+    names: List[str] = []
+    try:
+        for entry in sorted(os.listdir(LOCAL_ONNX_MODELS_DIR)):
+            if entry.startswith("."):
+                continue
+            model_dir = os.path.join(LOCAL_ONNX_MODELS_DIR, entry)
+            if not os.path.isdir(model_dir):
+                continue
+            model_id = _read_model_id_from_config(model_dir) or entry
+            names.append(model_id)
+    except Exception:
+        return []
+    return names
+
+
+def has_local_onnx_model(model_name: str) -> bool:
+    model_dir = resolve_local_onnx_dir(model_name)
+    return os.path.isdir(model_dir)
+
+
+def load_tokenizer(model_dir: str):
+    """
+    Load tokenizer with optional fix for Mistral regex bug when supported.
+    """
+    try:
+        return AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True, fix_mistral_regex=True)
+    except TypeError:
+        return AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+
+
+def _build_ort_session_options():
+    if ort is None:
+        return None
+    opts = ort.SessionOptions()
+    if ORT_INTRA_OP_NUM_THREADS and ORT_INTRA_OP_NUM_THREADS > 0:
+        opts.intra_op_num_threads = ORT_INTRA_OP_NUM_THREADS
+    if ORT_INTER_OP_NUM_THREADS and ORT_INTER_OP_NUM_THREADS > 0:
+        opts.inter_op_num_threads = ORT_INTER_OP_NUM_THREADS
+    opts.enable_cpu_mem_arena = ORT_ENABLE_MEM_ARENA
+    opts.enable_mem_pattern = ORT_ENABLE_MEM_PATTERN
+    opts.enable_profiling = ORT_ENABLE_PROFILING
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    return opts
+
 
 # Identify embedding models by keywords in model id
 def is_embedding_model_by_keyword(model_id: str) -> bool:
     """
     Returns True if the model id suggests it is an embedding model (by keyword).
     """
-    name = model_id.lower()
+    name = (model_id or "").lower()
+    if "reranker" in name or "cross-encoder" in name:
+        return False
     keywords = ["embed", "bge", "gte", "e5", "sts", "query", "passage"]
     return any(k in name for k in keywords)
 
@@ -281,31 +391,93 @@ def get_embedding_model(model_name: str):
 
 
 class LocalEmbeddingWrapper:
-    def __init__(self, model: "SentenceTransformer"):
+    def __init__(self, model: "ORTModelForFeatureExtraction", tokenizer: "AutoTokenizer", pooling: str, max_length: int = 0):
         self.model = model
+        self.tokenizer = tokenizer
+        self.pooling = pooling
+        self.max_length = max_length
+
+    def _pool_embeddings(self, last_hidden_state, attention_mask):
+        if self.pooling == "cls":
+            embeddings = last_hidden_state[:, 0]
+        elif self.pooling == "mean":
+            mask = attention_mask[..., None].astype(np.float32)
+            summed = (last_hidden_state * mask).sum(axis=1)
+            denom = np.clip(mask.sum(axis=1), a_min=1e-9, a_max=None)
+            embeddings = summed / denom
+        else:
+            raise ValueError(f"Unknown EMBEDDING_POOLING value: {self.pooling}")
+
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        embeddings = embeddings / np.clip(norms, a_min=1e-12, a_max=None)
+        return embeddings
 
     async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
         def _encode():
-            embeddings = self.model.encode(texts, normalize_embeddings=True)
+            kwargs = {
+                "padding": True,
+                "truncation": True,
+                "return_tensors": "np"
+            }
+            if self.max_length and self.max_length > 0:
+                kwargs["max_length"] = self.max_length
+            inputs = self.tokenizer(texts, **kwargs)
+            outputs = self.model(**inputs)
+            embeddings = self._pool_embeddings(outputs.last_hidden_state, inputs["attention_mask"])
             return embeddings.tolist()
         return await asyncio.to_thread(_encode)
 
     async def aembed_query(self, text: str) -> List[float]:
         def _encode():
-            embeddings = self.model.encode([text], normalize_embeddings=True)
+            kwargs = {
+                "padding": True,
+                "truncation": True,
+                "return_tensors": "np"
+            }
+            if self.max_length and self.max_length > 0:
+                kwargs["max_length"] = self.max_length
+            inputs = self.tokenizer([text], **kwargs)
+            outputs = self.model(**inputs)
+            embeddings = self._pool_embeddings(outputs.last_hidden_state, inputs["attention_mask"])
             return embeddings[0].tolist()
         return await asyncio.to_thread(_encode)
 
 
 class LocalRerankerWrapper:
-    def __init__(self, model: "CrossEncoder"):
+    def __init__(
+        self,
+        model: "ORTModelForSequenceClassification",
+        tokenizer: "AutoTokenizer",
+        max_length: int = 0,
+        batch_size: int = 16,
+    ):
         self.model = model
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.batch_size = max(1, batch_size)
 
     async def ascore(self, query: str, passages: List[str]) -> List[float]:
         def _score():
-            pairs = [(query, p) for p in passages]
-            scores = self.model.predict(pairs)
-            return scores.tolist() if hasattr(scores, "tolist") else list(scores)
+            if not passages:
+                return []
+            all_scores: List[float] = []
+            kwargs = {
+                "padding": True,
+                "truncation": True,
+                "return_tensors": "np"
+            }
+            if self.max_length and self.max_length > 0:
+                kwargs["max_length"] = self.max_length
+            for i in range(0, len(passages), self.batch_size):
+                batch = passages[i:i + self.batch_size]
+                queries = [query] * len(batch)
+                inputs = self.tokenizer(queries, batch, **kwargs)
+                outputs = self.model(**inputs)
+                logits = outputs.logits
+                scores = logits.squeeze(-1)
+                batch_scores = scores.tolist() if hasattr(scores, "tolist") else list(scores)
+                all_scores.extend(batch_scores)
+            return all_scores
         return await asyncio.to_thread(_score)
 
 
@@ -317,9 +489,24 @@ def normalize_model_name(name: str) -> str:
     return (name or "").strip()
 
 
+def resolve_local_onnx_dir(model_name: str) -> str:
+    """
+    Resolve a model name to a local ONNX directory.
+    - If model_name is already a directory path, return it.
+    - Otherwise, map HF-style IDs like "org/model" to "<LOCAL_ONNX_MODELS_DIR>/model".
+    """
+    name = normalize_model_name(model_name)
+    if os.path.isdir(name):
+        return name
+    slug = name.split("/")[-1] if name else name
+    return os.path.join(LOCAL_ONNX_MODELS_DIR, slug)
+
+
 def is_local_embedding_model(model_name: str) -> bool:
     name = normalize_model_name(model_name)
-    return name in LOCAL_EMBEDDING_MODELS
+    if name in LOCAL_EMBEDDING_MODELS:
+        return True
+    return has_local_onnx_model(name)
 
 
 def should_use_local_embeddings(model_name: str) -> bool:
@@ -329,21 +516,52 @@ def should_use_local_embeddings(model_name: str) -> bool:
 
 
 def get_local_embedding_model(model_name: str) -> LocalEmbeddingWrapper:
-    if SentenceTransformer is None:
-        raise RuntimeError("sentence-transformers is not installed; cannot load local embeddings.")
+    if ORTModelForFeatureExtraction is None or AutoTokenizer is None or np is None:
+        raise RuntimeError("optimum/onnxruntime/transformers are not installed; cannot load local embeddings.")
 
     name = normalize_model_name(model_name)
     if name not in _local_embedder_cache:
-        device = get_env_required("EMBEDDING_DEVICE").strip()
-        model = SentenceTransformer(name, device=device, trust_remote_code=True)
-        _local_embedder_cache[name] = LocalEmbeddingWrapper(model)
+        _ = get_env_required("EMBEDDING_DEVICE").strip()
+        model_dir = resolve_local_onnx_dir(name)
+        if not os.path.isdir(model_dir):
+            raise RuntimeError(
+                f"Local ONNX embedding model not found at {model_dir}. "
+                f"Export the model to ONNX or mount it into {LOCAL_ONNX_MODELS_DIR}."
+            )
+        tokenizer = load_tokenizer(model_dir)
+        session_options = _build_ort_session_options()
+        providers = ["CPUExecutionProvider"]
+        try:
+            model = ORTModelForFeatureExtraction.from_pretrained(
+                model_dir,
+                provider="CPUExecutionProvider",
+                session_options=session_options,
+            )
+        except TypeError:
+            try:
+                model = ORTModelForFeatureExtraction.from_pretrained(
+                    model_dir,
+                    providers=providers,
+                    session_options=session_options,
+                )
+            except TypeError:
+                model = ORTModelForFeatureExtraction.from_pretrained(model_dir)
+        _local_embedder_cache[name] = LocalEmbeddingWrapper(
+            model,
+            tokenizer,
+            EMBEDDING_POOLING,
+            EMBEDDING_MAX_LENGTH,
+        )
     return _local_embedder_cache[name]
 
 
 def should_use_local_reranker(model_name: str) -> bool:
     if not USE_LOCAL_RERANKER:
         return False
-    return bool(normalize_model_name(model_name))
+    name = normalize_model_name(model_name)
+    if not name:
+        return False
+    return has_local_onnx_model(name)
 
 
 def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerankerWrapper]:
@@ -352,12 +570,40 @@ def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerank
         return None
     if not should_use_local_reranker(name):
         return None
-    if CrossEncoder is None:
-        raise RuntimeError("sentence-transformers is not installed; cannot load local reranker.")
+    if ORTModelForSequenceClassification is None or AutoTokenizer is None:
+        raise RuntimeError("optimum/onnxruntime/transformers are not installed; cannot load local reranker.")
     if name not in _local_reranker_cache:
-        device = get_env_required("RERANKER_DEVICE").strip()
-        model = CrossEncoder(name, device=device, trust_remote_code=True)
-        _local_reranker_cache[name] = LocalRerankerWrapper(model)
+        _ = get_env_required("RERANKER_DEVICE").strip()
+        model_dir = resolve_local_onnx_dir(name)
+        if not os.path.isdir(model_dir):
+            raise RuntimeError(
+                f"Local ONNX reranker model not found at {model_dir}. "
+                f"Export the model to ONNX or mount it into {LOCAL_ONNX_MODELS_DIR}."
+            )
+        tokenizer = load_tokenizer(model_dir)
+        session_options = _build_ort_session_options()
+        providers = ["CPUExecutionProvider"]
+        try:
+            model = ORTModelForSequenceClassification.from_pretrained(
+                model_dir,
+                provider="CPUExecutionProvider",
+                session_options=session_options,
+            )
+        except TypeError:
+            try:
+                model = ORTModelForSequenceClassification.from_pretrained(
+                    model_dir,
+                    providers=providers,
+                    session_options=session_options,
+                )
+            except TypeError:
+                model = ORTModelForSequenceClassification.from_pretrained(model_dir)
+        _local_reranker_cache[name] = LocalRerankerWrapper(
+            model,
+            tokenizer,
+            RERANKER_MAX_LENGTH,
+            LOCAL_RERANKER_BATCH_SIZE,
+        )
     return _local_reranker_cache[name]
 
 def get_system_prompt(context: str, use_history: bool = False, use_web: bool = False) -> str:

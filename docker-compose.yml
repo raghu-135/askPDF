@@ -74,6 +74,12 @@ services:
       - GPU_EMBEDDING_BATCH_SIZE=100 # LLM API/servers may have strict/lower batch size limits
       - EMBEDDING_DEVICE=cpu
       - RERANKER_DEVICE=cpu
+      - EMBEDDING_MAX_LENGTH=0
+      - RERANKER_MAX_LENGTH=0
+      - ORT_INTRA_OP_NUM_THREADS=0
+      - ORT_INTER_OP_NUM_THREADS=1
+      - ORT_ENABLE_MEM_ARENA=true
+      - ORT_ENABLE_MEM_PATTERN=true
       - RERANK_TOP_K_MULTIPLIER=4
       - DEFAULT_TOKEN_BUDGET=8192
       - DEFAULT_MAX_ITERATIONS=10

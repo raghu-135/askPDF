@@ -500,10 +500,23 @@ Health check endpoint.
 | `DEFAULT_EMBEDDING_MODEL` | RAG Service | `BAAI/bge-m3` | Default embedding model used for new threads when not explicitly chosen |
 | `LOCAL_EMBEDDING_MODELS` | RAG Service | `BAAI/bge-m3` | Comma-separated list of embedding models that should be run locally in the RAG service |
 | `USE_LOCAL_EMBEDDINGS` | RAG Service | `true` | Toggle to enable/disable local embeddings in the RAG service |
+| `LOCAL_ONNX_MODELS_DIR` | RAG Service | `/models/onnx` | Directory where local ONNX embedding/reranker models are stored (auto-discovered) |
+| `EMBEDDING_POOLING` | RAG Service | `cls` | Pooling strategy for ONNX embeddings: `cls` or `mean` |
+| `EMBEDDING_MAX_LENGTH` | RAG Service | `0` | Max token length for ONNX embeddings (0 = tokenizer default) |
+| `RERANKER_MAX_LENGTH` | RAG Service | `0` | Max token length for ONNX reranker (0 = tokenizer default) |
+| `LOCAL_EMBEDDING_BATCH_SIZE` | RAG Service | `32` | Batch size for local ONNX embedding inference |
+| `LOCAL_RERANKER_BATCH_SIZE` | RAG Service | `16` | Batch size for local ONNX reranker inference |
 | `DEFAULT_RERANKER_MODEL` | RAG Service | `BAAI/bge-reranker-v2-m3` | Default reranker model for chunk re-ordering |
 | `USE_LOCAL_RERANKER` | RAG Service | `true` | Toggle to enable/disable reranking |
 | `EMBEDDING_DEVICE` | RAG Service | `cpu` | Device for local embeddings (`cpu` or `cuda`) |
 | `RERANKER_DEVICE` | RAG Service | `cpu` | Device for local reranker (`cpu` or `cuda`) |
+| `EMBEDDING_MAX_LENGTH` | RAG Service | `0` | Max token length for embedding inputs (0 = use model default). Lower values reduce RAM. |
+| `RERANKER_MAX_LENGTH` | RAG Service | `0` | Max token length for reranker inputs (0 = use model default). Lower values reduce RAM. |
+| `ORT_INTRA_OP_NUM_THREADS` | RAG Service | `cpu_count` | ONNX Runtime intra-op threads (CPU). Use `0` to let ORT choose. |
+| `ORT_INTER_OP_NUM_THREADS` | RAG Service | `1` | ONNX Runtime inter-op threads (CPU). |
+| `ORT_ENABLE_MEM_ARENA` | RAG Service | `true` | Toggle ORT CPU memory arena (enable for speed, disable to reduce RAM). |
+| `ORT_ENABLE_MEM_PATTERN` | RAG Service | `true` | Toggle ORT memory pattern optimization (enable for speed, disable to reduce peak RAM). |
+| `ORT_ENABLE_PROFILING` | RAG Service | `false` | Toggle ORT profiling output. |
 | `DEFAULT_TOKEN_BUDGET` | RAG Service | `128000` | Default context-window size in tokens |
 | `DEFAULT_MAX_ITERATIONS` | RAG Service | `10` | Default max orchestrator tool-call rounds |
 | `MIN_MAX_ITERATIONS` | RAG Service | `1` | Minimum allowed value for max iterations |
