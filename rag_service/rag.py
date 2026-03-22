@@ -20,7 +20,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from models import (
     get_env_required,
     get_env_int_required,
-    get_embedding_model, get_llm, 
+    get_embedding_model, get_llm, should_use_local_embeddings,
+    LOCAL_EMBEDDING_BATCH_SIZE,
     DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
 )
@@ -308,8 +309,8 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     embed_model = get_embedding_model(embedding_model_name)
 
     # Set batch size based on the embedding model
-    if embed_model == get_env_required("LOCAL_EMBEDDING_MODELS"):
-        batch_size = 50
+    if should_use_local_embeddings(embedding_model_name):
+        batch_size = LOCAL_EMBEDDING_BATCH_SIZE
     else:
         batch_size = get_env_int_required("GPU_EMBEDDING_BATCH_SIZE")
 

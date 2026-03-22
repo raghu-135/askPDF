@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   frontend:
     build:
@@ -10,7 +8,7 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
       - NEXT_PUBLIC_RAG_API_URL=http://localhost:8001
-      - NEXT_PUBLIC_DEFAULT_EMBED_MODEL=BAAI/bge-m3
+      - NEXT_PUBLIC_DEFAULT_EMBED_MODEL=sentence-transformers/all-mpnet-base-v2
     depends_on:
       backend:
         condition: service_healthy
@@ -43,6 +41,10 @@ services:
     depends_on:
       rag-service:
         condition: service_healthy
+      tei-embed:
+        condition: service_healthy
+      tei-rerank:
+        condition: service_healthy
     volumes:
       - ./backend:/app/backend
       - pdf_data:/static
@@ -59,6 +61,8 @@ services:
     build:
       context: .
       dockerfile: rag_service/Dockerfile
+      args:
+        DOWNLOAD_LOCAL_MODELS: "false"
     ports:
       - "8001:8000"
     environment:
@@ -67,10 +71,15 @@ services:
       - DATA_DIR=/data
       - BACKEND_URL=http://backend:8000
       - DEFAULT_EMBEDDING_MODEL=BAAI/bge-m3
-      - DEFAULT_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+      - DEFAULT_RERANKER_MODEL=BAAI/bge-reranker-base
       - LOCAL_EMBEDDING_MODELS=BAAI/bge-m3
       - USE_LOCAL_EMBEDDINGS=true
       - USE_LOCAL_RERANKER=true
+      - LOCAL_EMBEDDING_PROVIDER=tei
+      - LOCAL_RERANKER_PROVIDER=tei
+      - TEI_EMBEDDINGS_URL=http://tei-embed:80
+      - TEI_RERANKER_URL=http://tei-rerank:80
+      - LOCAL_EMBEDDING_BATCH_SIZE=64
       - GPU_EMBEDDING_BATCH_SIZE=100 # LLM API/servers may have strict/lower batch size limits
       - EMBEDDING_DEVICE=cpu
       - RERANKER_DEVICE=cpu
@@ -92,6 +101,8 @@ services:
       - .env
     depends_on:
       - qdrant
+      - tei-embed
+      - tei-rerank
     volumes:
       - ./rag_service:/app
       - ./data:/data
@@ -110,6 +121,51 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  tei-embed:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    command:
+      - --model-id
+      - BAAI/bge-m3
+    ports:
+      - "8081:80"
+    volumes:
+      - tei_embed_data:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  tei-rerank:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
+    platform: linux/amd64
+    command:
+      - --model-id
+      - BAAI/bge-reranker-base
+      - --max-concurrent-requests
+      - "8"
+      - --max-batch-tokens
+      - "1024"
+      - --max-batch-requests
+      - "4"
+      - --max-client-batch-size
+      - "8"
+      - --tokenization-workers
+      - "1"
+    ports:
+      - "8082:80"
+    volumes:
+      - tei_rerank_data:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
 volumes:
   qdrant_data:
   pdf_data:
+  tei_embed_data:
+  tei_rerank_data:

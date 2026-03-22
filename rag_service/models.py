@@ -5,7 +5,7 @@ import httpx
 import asyncio
 import logging
 import time
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple, List, Optional, Any
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
@@ -45,6 +45,12 @@ def get_env_required(name: str) -> str:
     val = os.getenv(name)
     if val is None:
         raise ValueError(f"{name} environment variable is not set")
+    return val
+
+def get_env_optional(name: str, default: Optional[str] = None) -> Optional[str]:
+    val = os.getenv(name)
+    if val is None:
+        return default
     return val
 
 def get_env_int_required(name: str) -> int:
@@ -88,6 +94,11 @@ DEFAULT_RERANKER_MODEL = get_env_required("DEFAULT_RERANKER_MODEL").strip()
 FOCUSED_RERANK_THRESHOLD = get_env_float_required("FOCUSED_RERANK_THRESHOLD")
 USE_LOCAL_EMBEDDINGS = get_env_bool_required("USE_LOCAL_EMBEDDINGS")
 USE_LOCAL_RERANKER = get_env_bool_required("USE_LOCAL_RERANKER")
+LOCAL_EMBEDDING_PROVIDER = (get_env_optional("LOCAL_EMBEDDING_PROVIDER", "sentence-transformers") or "").strip().lower()
+LOCAL_RERANKER_PROVIDER = (get_env_optional("LOCAL_RERANKER_PROVIDER", "sentence-transformers") or "").strip().lower()
+TEI_EMBEDDINGS_URL = (get_env_optional("TEI_EMBEDDINGS_URL") or "").strip()
+TEI_RERANKER_URL = (get_env_optional("TEI_RERANKER_URL") or "").strip()
+LOCAL_EMBEDDING_BATCH_SIZE = int(get_env_optional("LOCAL_EMBEDDING_BATCH_SIZE", "50"))
 
 LOCAL_EMBEDDING_MODELS = _split_env_list_required("LOCAL_EMBEDDING_MODELS")
 if DEFAULT_EMBEDDING_MODEL and DEFAULT_EMBEDDING_MODEL not in LOCAL_EMBEDDING_MODELS:
@@ -309,8 +320,79 @@ class LocalRerankerWrapper:
         return await asyncio.to_thread(_score)
 
 
-_local_embedder_cache: Dict[str, LocalEmbeddingWrapper] = {}
-_local_reranker_cache: Dict[str, LocalRerankerWrapper] = {}
+_local_embedder_cache: Dict[str, Any] = {}
+_local_reranker_cache: Dict[str, Any] = {}
+
+class TEIEmbeddingWrapper:
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+
+    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+        payload = {"inputs": texts}
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{self.base_url}/embed", json=payload, timeout=60.0)
+            resp.raise_for_status()
+            data = resp.json()
+        return _parse_tei_embeddings(data)
+
+    async def aembed_query(self, text: str) -> List[float]:
+        payload = {"inputs": text}
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{self.base_url}/embed", json=payload, timeout=60.0)
+            resp.raise_for_status()
+            data = resp.json()
+        vectors = _parse_tei_embeddings(data)
+        return vectors[0] if vectors else []
+
+
+class TEIRerankerWrapper:
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+
+    async def ascore(self, query: str, passages: List[str]) -> List[float]:
+        payload = {"query": query, "texts": passages}
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(f"{self.base_url}/rerank", json=payload, timeout=60.0)
+            resp.raise_for_status()
+            data = resp.json()
+        return _parse_tei_rerank_scores(data, len(passages))
+
+
+def _parse_tei_embeddings(data) -> List[List[float]]:
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        if "embeddings" in data and isinstance(data["embeddings"], list):
+            return data["embeddings"]
+        if "data" in data and isinstance(data["data"], list):
+            # OpenAI-compatible style: {"data":[{"embedding":[...]}]}
+            return [d.get("embedding", []) for d in data["data"]]
+    raise ValueError("Unexpected TEI embeddings response format")
+
+
+def _parse_tei_rerank_scores(data, expected: int) -> List[float]:
+    if isinstance(data, list):
+        # Sometimes rerank returns list of floats
+        return [float(x) for x in data]
+    if isinstance(data, dict):
+        if "scores" in data and isinstance(data["scores"], list):
+            return [float(x) for x in data["scores"]]
+        if "results" in data and isinstance(data["results"], list):
+            # Results may contain objects with score (and optional index)
+            results = data["results"]
+            if results and isinstance(results[0], dict):
+                if "index" in results[0]:
+                    scores = [0.0] * expected
+                    for r in results:
+                        idx = r.get("index")
+                        score = r.get("score")
+                        if isinstance(idx, int) and idx < expected and score is not None:
+                            scores[idx] = float(score)
+                    return scores
+                scores = [r.get("score") for r in results]
+                return [float(s) for s in scores if s is not None]
+    # Fallback: return zeros to avoid crashing retrieval
+    return [0.0] * expected
 
 
 def normalize_model_name(name: str) -> str:
@@ -328,7 +410,12 @@ def should_use_local_embeddings(model_name: str) -> bool:
     return is_local_embedding_model(model_name)
 
 
-def get_local_embedding_model(model_name: str) -> LocalEmbeddingWrapper:
+def get_local_embedding_model(model_name: str) -> Any:
+    if LOCAL_EMBEDDING_PROVIDER == "tei":
+        if not TEI_EMBEDDINGS_URL:
+            raise RuntimeError("TEI_EMBEDDINGS_URL is not set; cannot use TEI for local embeddings.")
+        return _local_embedder_cache.setdefault("_tei", TEIEmbeddingWrapper(TEI_EMBEDDINGS_URL))
+
     if SentenceTransformer is None:
         raise RuntimeError("sentence-transformers is not installed; cannot load local embeddings.")
 
@@ -346,12 +433,17 @@ def should_use_local_reranker(model_name: str) -> bool:
     return bool(normalize_model_name(model_name))
 
 
-def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerankerWrapper]:
+def get_reranker_model(model_name: Optional[str] = None) -> Optional[Any]:
     name = normalize_model_name(model_name or DEFAULT_RERANKER_MODEL)
     if not name:
         return None
     if not should_use_local_reranker(name):
         return None
+    if LOCAL_RERANKER_PROVIDER == "tei":
+        if not TEI_RERANKER_URL:
+            raise RuntimeError("TEI_RERANKER_URL is not set; cannot use TEI for local reranker.")
+        return _local_reranker_cache.setdefault("_tei", TEIRerankerWrapper(TEI_RERANKER_URL))
+
     if CrossEncoder is None:
         raise RuntimeError("sentence-transformers is not installed; cannot load local reranker.")
     if name not in _local_reranker_cache:

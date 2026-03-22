@@ -500,8 +500,13 @@ Health check endpoint.
 | `DEFAULT_EMBEDDING_MODEL` | RAG Service | `BAAI/bge-m3` | Default embedding model used for new threads when not explicitly chosen |
 | `LOCAL_EMBEDDING_MODELS` | RAG Service | `BAAI/bge-m3` | Comma-separated list of embedding models that should be run locally in the RAG service |
 | `USE_LOCAL_EMBEDDINGS` | RAG Service | `true` | Toggle to enable/disable local embeddings in the RAG service |
-| `DEFAULT_RERANKER_MODEL` | RAG Service | `BAAI/bge-reranker-v2-m3` | Default reranker model for chunk re-ordering |
+| `LOCAL_EMBEDDING_PROVIDER` | RAG Service | `BAAI/bge-m3` | Local embedding backend (`BAAI/bge-m3` or `tei`) |
+| `TEI_EMBEDDINGS_URL` | RAG Service | `http://tei-embed:80` | Base URL for the TEI embeddings service |
+| `LOCAL_EMBEDDING_BATCH_SIZE` | RAG Service | `50` | Batch size for local embeddings (TEI or BAAI/bge-m3) |
+| `DEFAULT_RERANKER_MODEL` | RAG Service | `BAAI/bge-reranker-base` | Default reranker model for chunk re-ordering |
 | `USE_LOCAL_RERANKER` | RAG Service | `true` | Toggle to enable/disable reranking |
+| `LOCAL_RERANKER_PROVIDER` | RAG Service | `BAAI/bge-reranker-base` | Local reranker backend (`BAAI/bge-reranker-base` or `tei`) |
+| `TEI_RERANKER_URL` | RAG Service | `http://tei-rerank:80` | Base URL for the TEI reranker service |
 | `EMBEDDING_DEVICE` | RAG Service | `cpu` | Device for local embeddings (`cpu` or `cuda`) |
 | `RERANKER_DEVICE` | RAG Service | `cpu` | Device for local reranker (`cpu` or `cuda`) |
 | `DEFAULT_TOKEN_BUDGET` | RAG Service | `128000` | Default context-window size in tokens |
