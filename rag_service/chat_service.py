@@ -137,7 +137,7 @@ async def prefetch_context(
 
             hash_to_name = await get_document_name_lookup(thread_id)
             if use_reranker:
-                raw_chunks = await rerank_document_chunks(question, raw_chunks)
+                raw_chunks = await rerank_document_chunks(raw_question, raw_chunks)
             return group_document_chunks(
                 raw_chunks,
                 hash_to_name,
