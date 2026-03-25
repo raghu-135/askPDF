@@ -9,7 +9,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, cast
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -156,8 +156,8 @@ async def prefetch_context(
         return_exceptions=True,
     )
 
-    recent_text: str = results[0] if not isinstance(results[0], Exception) else ""
-    meta: Dict[str, Any] = results[1] if not isinstance(results[1], Exception) else {"stats": {}, "documents": []}
+    recent_text = cast(str, results[0]) if not isinstance(results[0], Exception) else ""
+    meta = cast(Dict[str, Any], results[1]) if not isinstance(results[1], Exception) else {"stats": {}, "documents": []}
     semantic_result = results[2] if not isinstance(results[2], Exception) else ("", [])
     document_result = results[3] if not isinstance(results[3], Exception) else ("", [])
     web_result = ("", [])

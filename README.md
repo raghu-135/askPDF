@@ -134,8 +134,7 @@ You need a **chat model with TOOL CALLING support** (Reasoning models work well)
 You can download multiple models. In the app, you can use any model for chat and any model for embeddings. You can check https://llm-explorer.com/list/ to find models that fits your system's resources and performance needs. If you're unsure, use LM Studio. When you search for a model, it displays a "Hardware Fit" indicator (Green/Yellow/Red) next to every version of the model.
 
 ### Default Local Embeddings (BGE-M3)
-
-The RAG service Docker image now ships with a **default local embedding model**:
+The RAG service Docker image now ships with a **default local embedding model**. *Try to use one from LLM server since, this one runs on CPU and will be slower*.
 
 - **Embedding**: `BAAI/bge-m3`
 - **Reranker**: `BAAI/bge-reranker-v2-m3`
