@@ -128,17 +128,15 @@ async def prefetch_context(
         try:
             db = get_qdrant()
             limit = budget["document_limit"]
-            rerank_fetch_k = limit * 2 if use_reranker else limit
             raw_chunks = await db.search_knowledge_sources(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
-                limit=rerank_fetch_k,
+                limit=limit,
             )
 
             hash_to_name = await get_document_name_lookup(thread_id)
             if use_reranker:
-                raw_chunks = await rerank_document_chunks(raw_question, raw_chunks, top_k=limit)
-                raw_chunks = [c for c in raw_chunks if c.get("rerank_score", 0.0) >= 0.0]
+                raw_chunks = await rerank_document_chunks(raw_question, raw_chunks)
             return group_document_chunks(
                 raw_chunks,
                 hash_to_name,
@@ -463,9 +461,13 @@ async def handle_thread_chat(
         # Aggregating matched sentence IDs for the UI to simplify front-end logic
         matched_sentence_ids = []
         for s in document_sources:
-            if s.get("sentence_ids"):
+            score = s.get("score", 0.0) or 0.0
+            if score > 0 and s.get("sentence_ids"):
                 matched_sentence_ids.extend(s["sentence_ids"])
-        # Deduplicate and sort
+        if not matched_sentence_ids:
+            for s in document_sources:
+                if s.get("sentence_ids"):
+                    matched_sentence_ids.extend(s["sentence_ids"])
         matched_sentence_ids = sorted(list(set(matched_sentence_ids)))
 
         return {

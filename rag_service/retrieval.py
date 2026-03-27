@@ -76,14 +76,12 @@ def group_document_chunks(
         score = chunk.get("rerank_score", chunk.get("score", 0.0))
         document_sources.append({
             "text": short_text,
-            "full_text": text,
             "file_hash": fh,
             "file_name": fallback_name,
             "title": title or None,
             "url": url or None,
             "source_type": source_type,
             "score": score,
-            "page_number": chunk.get("metadata", {}).get("page_number"),
             "sentence_ids": chunk.get("metadata", {}).get("sentence_ids"),
         })
 
@@ -131,15 +129,13 @@ async def fetch_semantic_history(
     """Fetch semantic chat memory text plus the list of used message IDs."""
 
     db = get_qdrant()
-    rerank_fetch_k = limit * 2 if (use_reranker and query_text) else limit
     recalled = await db.search_chat_memory(
         thread_id=thread_id,
         query_vector=query_vector,
-        limit=rerank_fetch_k,
+        limit=limit,
     )
     if use_reranker and query_text:
-        recalled = await rerank_document_chunks(query_text, recalled, top_k=limit)
-        recalled = [c for c in recalled if c.get("rerank_score", 0.0) >= 0.0]
+        recalled = await rerank_document_chunks(query_text, recalled)
 
     used_ids: List[str] = []
     parts: List[str] = []

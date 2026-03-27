@@ -21,5 +21,3 @@ langchain-community
 ddgs
 sentence-transformers
 torch
-pandas
-tabulate

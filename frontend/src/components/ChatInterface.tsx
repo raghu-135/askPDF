@@ -1429,7 +1429,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             }
                         />
                         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
-                            Reorders retrieved chunks for documents, web results, and chat memory using the reranker model.
+                            Reorders retrieved chunks for documents, web results, and chat memory using the reranker model. Takes long, turn off for faster responses.
                         </Typography>
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>

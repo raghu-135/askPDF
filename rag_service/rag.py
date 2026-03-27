@@ -18,8 +18,6 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from models import (
-    get_env_required,
-    get_env_int_required,
     get_embedding_model, get_llm, 
     DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
@@ -32,36 +30,6 @@ TEMP_PDF_DIR = "/tmp/pdfs"
 os.makedirs(TEMP_PDF_DIR, exist_ok=True)
 
 
-async def summarize_text(
-    text: str,
-    llm_name: str,
-    max_sentences: int = 3,
-    context_window: int = DEFAULT_TOKEN_BUDGET,
-    instruction: str = "Summarize the following text accurately and concisely."
-) -> str:
-    """
-    Generic text summarization using the LLM.
-    """
-    from langchain_core.messages import HumanMessage
-    try:
-        llm = get_llm(llm_name)
-        prompt = (
-            f"{instruction} "
-            f"Keep it under {max_sentences} sentences and preserve key facts.\n\n"
-            f"Text:\n{text}\n\n"
-            "Summary:"
-        )
-        # Use simple invoke for summarization
-        from agent import invoke_with_retry
-        response = await invoke_with_retry(llm.ainvoke, [HumanMessage(content=prompt)])
-        return response.content.strip()
-    except Exception as e:
-        logger.error(f"Error summarizing text: {e}")
-        # Fallback to truncated version based on hard limit percentage
-        hard_limit_chars = int(context_window * RATIO_MEMORY_HARD_LIMIT * CHARS_PER_TOKEN)
-        return text[:hard_limit_chars] + "..."
-
-
 async def summarize_qa(
     question: str, 
     answer: str, 
@@ -72,101 +40,61 @@ async def summarize_qa(
     Summarize a QA pair using the LLM for concise memory storage or display.
     Uses dynamic hard limits based on context window percentages.
     """
-    qa_text = f"Q: {question}\nA: {answer}"
-    return await summarize_text(
-        text=qa_text,
-        llm_name=llm_name,
-        max_sentences=3,
-        context_window=context_window,
-        instruction="Summarize the following Q&A pair accurately and concisely."
-    )
+    from langchain_core.messages import HumanMessage
+    try:
+        llm = get_llm(llm_name)
+        prompt = (
+            "Summarize the following Q&A pair accurately and concisely. "
+            "Keep it under 3 sentences and preserve key facts.\n\n"
+            f"Q: {question}\n"
+            f"A: {answer}\n\n"
+            "Summary:"
+        )
+        # Use simple invoke for summarization
+        from agent import invoke_with_retry
+        response = await invoke_with_retry(llm.ainvoke, [HumanMessage(content=prompt)])
+        return response.content.strip()
+    except Exception as e:
+        logger.error(f"Error summarizing QA: {e}")
+        # Fallback to truncated version based on hard limit percentage
+        hard_limit_chars = int(context_window * RATIO_MEMORY_HARD_LIMIT * CHARS_PER_TOKEN)
+        return f"Q: {question}\nA: {answer}"[:hard_limit_chars] + "..."
 
 
 async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[List[Dict[str, Any]]]:
     """
     Download a PDF from the backend using file_hash and parse it into text chunks using unstructured.
     Returns a list of chunked data (text and metadata), or None if download/parsing fails.
-    
-    Optimizations:
-    - Table structure inference (HTML -> Markdown)
-    - Section-aware header injection (Contextual RAG)
-    - Rich element metadata (Page, Category, Coordinates)
     """
     pdf_url = f"{backend_url}/{file_hash}.pdf"
     local_path = os.path.join(TEMP_PDF_DIR, f"{file_hash}.pdf")
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(pdf_url, timeout=45.0)
+            resp = await client.get(pdf_url, timeout=30.0)
             if resp.status_code == 200:
                 with open(local_path, "wb") as f:
                     f.write(resp.content)
                 
-                # Run partitioning in a thread pool with high-fidelity settings
-                elements = await asyncio.to_thread(
-                    partition_pdf, 
-                    filename=local_path,
-                    infer_table_structure=True, # Extract structural table data
-                    strategy="fast" # "fast" is good for throughput, "hi_res" is better for layout
-                )
-                
-                # Pre-process elements to assist with header tracking and table conversion
-                processed_elements = []
-                current_section = None
-                
-                for el in elements:
-                    category = getattr(el, 'category', 'Text')
-                    if category == "Title":
-                        current_section = el.text.strip()
-                    
-                    # Store tracking info on the element for the chunker
-                    el.metadata.section = current_section
-                    
-                    # Convert tables to markdown if HTML is available
-                    if category == "Table" and hasattr(el.metadata, 'text_as_html'):
-                        try:
-                            # Lightweight HTML to Markdown table conversion
-                            import pandas as pd
-                            import io
-                            dfs = pd.read_html(io.StringIO(el.metadata.text_as_html))
-                            if dfs:
-                                el.text = dfs[0].to_markdown(index=False)
-                        except Exception:
-                            logger.warning("Table markdown conversion failed, falling back to raw text.")
-                    
-                    processed_elements.append(el)
+                # Run partitioning in a thread pool as it is CPU-bound
+                elements = await asyncio.to_thread(partition_pdf, filename=local_path)
 
                 from unstructured.chunking.title import chunk_by_title
+                # Improved chunking: ensure sentences are not split and use consistent sizing
+                # multipage_sections=True helps keep context across page breaks
                 chunked_elements = chunk_by_title(
-                    processed_elements,
+                    elements,
                     multipage_sections=True,
                     combine_text_under_n_chars=200,
-                    max_characters=800, # Slightly larger chunks for better context
-                    new_after_n_chars=600,
-                    overlap=0 
+                    max_characters=500,
+                    new_after_n_chars=400,
+                    overlap=0 # Neighbors provide the continuity, so we don't need overlapping text
                 )
                 
-                chunks = []
-                for c in chunked_elements:
-                    page_number = getattr(c.metadata, 'page_number', None)
-                    section = getattr(c.metadata, 'section', None)
-                    category = getattr(c, 'category', 'CompositeElement')
-                    
-                    # Header Injection: Prepend section title if not already the first thing in the chunk
-                    raw_text = str(c).strip()
-                    if section and not raw_text.startswith(section):
-                        injected_text = f"[Section: {section}]\n{raw_text}"
-                    else:
-                        injected_text = raw_text
-
-                    chunks.append({
-                        "text": injected_text,
-                        "page_number": page_number,
-                        "metadata": {
-                            "section": section,
-                            "category": category,
-                            "is_table": category == "Table"
-                        }
-                    })
+                chunks = [{
+                    "text": str(c),
+                    "page_number": None,
+                    "sentence_ids": None,
+                } for c in chunked_elements]
 
                 try:
                     os.remove(local_path)
@@ -177,7 +105,7 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[L
                 logger.error(f"Failed to download PDF from {pdf_url}: {resp.status_code}")
                 return None
     except Exception as e:
-        logger.error(f"Error downloading/parsing PDF: {e}", exc_info=True)
+        logger.error(f"Error downloading/parsing PDF: {e}")
         return None
 
 
@@ -187,7 +115,7 @@ async def get_chunks(file_hash: str) -> List[Dict[str, Any]]:
     otherwise fallback to unstructured-based parsing. 
     This ensures that vector-based highlights exactly match the backend's sentence IDs.
     """
-    backend_url = get_env_required("BACKEND_URL")
+    backend_url = os.getenv("BACKEND_URL", "http://backend:8000")
     
     # Try fetching sentences from backend cache first
     try:
@@ -307,12 +235,7 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     """
     embed_model = get_embedding_model(embedding_model_name)
 
-    # Set batch size based on the embedding model
-    if embed_model == get_env_required("LOCAL_EMBEDDING_MODELS"):
-        batch_size = 50
-    else:
-        batch_size = get_env_int_required("GPU_EMBEDDING_BATCH_SIZE")
-
+    batch_size = 10  # LLM API/server strict batch size limits
     vectors = []
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]

@@ -55,27 +55,27 @@ export function handleHighlightSourcesUtil(
   let matchedIds: number[] = [];
 
   if (mode === 'focused') {
-    // Strategy: show top X% of results by count.
-    const validTargetSources = targetSources.filter(s => s.score !== undefined && s.score !== null && s.score > 0);
-    const baseSources = validTargetSources.length > 0 ? validTargetSources : targetSources;
-    
-    // targetSources are already sorted by score descending from the backend.
-    const ratio = Math.max(0.05, Math.min(1.0, threshold)); // Clamp ratio between 5% and 100%
-    const count = Math.max(1, Math.ceil(baseSources.length * ratio));
-    const focusedSources = [...baseSources]
-      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-      .slice(0, count);
+    if (payload.matchedSentenceIds && payload.matchedSentenceIds.length > 0) {
+      const targetIdSet = new Set<number>();
+      targetSources.forEach(s => {
+        if (s.sentence_ids) s.sentence_ids.forEach(id => targetIdSet.add(Number(id)));
+      });
+      matchedIds = payload.matchedSentenceIds
+        .map(id => Number(id))
+        .filter(id => targetIdSet.size === 0 || targetIdSet.has(id));
+    }
 
-    const idSet = new Set<number>();
-    focusedSources.forEach(s => {
-      if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));
-    });
-    matchedIds = Array.from(idSet);
+    if (matchedIds.length === 0) {
+      const idSet = new Set<number>();
+      targetSources.forEach(s => {
+        if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));
+      });
+      matchedIds = Array.from(idSet);
+    }
   } else {
-    // Show all matching IDs but filter out context expansion pollution (score 0.0)
-    const validTargetSources = targetSources.filter(s => s.score !== undefined && s.score !== null && s.score > 0);
-    const baseSources = validTargetSources.length > 0 ? validTargetSources : targetSources;
-    
+    // Show all matching IDs for the full prompt context.
+    const baseSources = targetSources;
+
     const idSet = new Set<number>();
     baseSources.forEach(s => {
       if (s.sentence_ids) s.sentence_ids.forEach(id => idSet.add(Number(id)));

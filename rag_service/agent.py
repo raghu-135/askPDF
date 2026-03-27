@@ -98,7 +98,7 @@ class AgentState(TypedDict):
 
 
 @tool
-async def search_documents(query: str, max_results: int = 10, page_number: Optional[int] = None, config: RunnableConfig = None) -> str:
+async def search_documents(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """
     Semantic search across all uploaded documents and cached web results.
     Returns labeled passages with surrounding context for citation.
@@ -106,7 +106,6 @@ async def search_documents(query: str, max_results: int = 10, page_number: Optio
     Args:
         query: Natural-language question or description of the fact to locate.
         max_results: Number of seed chunks to retrieve before context expansion.
-        page_number: Optional hard filter for a specific page number.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -131,12 +130,10 @@ async def search_documents(query: str, max_results: int = 10, page_number: Optio
         raw_doc_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=max_results * 2 if use_reranker else max_results,
-            page_number=page_number,
+            limit=max_results,
         )
         if use_reranker:
-            raw_doc_chunks = await rerank_document_chunks(query, raw_doc_chunks, top_k=max_results)
-            raw_doc_chunks = [c for c in raw_doc_chunks if c.get("rerank_score", 0.0) >= 0.0]
+            raw_doc_chunks = await rerank_document_chunks(query, raw_doc_chunks)
 
         expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
         file_chunk_map = {}
@@ -176,11 +173,10 @@ async def search_documents(query: str, max_results: int = 10, page_number: Optio
         web_chunks = await db.search_web_chunks(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=web_limit * 2 if use_reranker else web_limit,
+            limit=web_limit,
         )
         if use_reranker:
-            web_chunks = await rerank_document_chunks(query, web_chunks, top_k=web_limit)
-            web_chunks = [c for c in web_chunks if c.get("rerank_score", 0.0) >= 0.0]
+            web_chunks = await rerank_document_chunks(query, web_chunks)
 
         if not expanded_doc_chunks and not web_chunks:
             return "No relevant content found in documents or cached web results."
@@ -464,7 +460,6 @@ async def search_document_by_id(
     query: str,
     file_hash: str,
     max_results: int = 8,
-    page_number: Optional[int] = None,
     config: RunnableConfig = None,
 ) -> str:
     """
@@ -474,7 +469,6 @@ async def search_document_by_id(
         query: Natural-language question to search for within the document.
         file_hash: File hash of the target document.
         max_results: Number of seed chunks before neighbor expansion.
-        page_number: Optional hard filter for a specific page number.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
@@ -494,7 +488,6 @@ async def search_document_by_id(
             query_vector=query_vector,
             limit=max_results,
             file_hash=file_hash,
-            page_number=page_number,
         )
 
         if not raw_chunks:
@@ -502,13 +495,9 @@ async def search_document_by_id(
 
         expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
         chunk_ids_to_fetch: set = set()
-        score_map = {}
-        
         for hit in raw_chunks:
             chunk_id = hit.get("chunk_id")
-            score = hit.get("score", 0.0)
             if chunk_id is not None:
-                score_map[chunk_id] = score
                 for neighbor_id in range(chunk_id - expansion_radius, chunk_id + expansion_radius + 1):
                     if neighbor_id >= 0:
                         chunk_ids_to_fetch.add(neighbor_id)
@@ -518,11 +507,6 @@ async def search_document_by_id(
             file_hash=file_hash,
             chunk_ids=list(chunk_ids_to_fetch),
         )
-        
-        for chunk in expanded_chunks:
-            ch_id = chunk.get("chunk_id")
-            chunk["score"] = score_map.get(ch_id, 0.0)
-            
         expanded_chunks.sort(key=lambda x: x.get("chunk_id", 0))
 
         # Resolve file name for source attribution from thread_stats (no DB join)
@@ -603,15 +587,10 @@ async def find_topic_anchor_in_history(
 # Pre-fetch bundle formatter
 # ---------------------------------------------------------------------------
 
-async def _format_prefetch_for_prompt(
-    bundle: Optional[Dict[str, Any]], 
-    compact: bool = False,
-    llm_model: Optional[str] = None
-) -> str:
+def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
     """
-    Format the pre-fetch bundle results for insertion into agent system prompts.
-    If compact=True, tries to summarize evidence text to save tokens while 
-    preserving 'what' is present (useful for Intent Agent).
+    Format a pre-fetched context bundle as a labelled block for injection into
+    LLM system prompts.  Returns an empty string when the bundle is None/empty.
     """
     if not bundle:
         return ""
@@ -642,45 +621,10 @@ async def _format_prefetch_for_prompt(
 
     documents = bundle.get("document_evidence_text", "")
     if documents:
-        if compact and len(documents) > 1000:
-            if llm_model:
-                try:
-                    from rag import summarize_text
-                    # Summarize to preserve 'what' is there for intent analysis
-                    logger.info(f"Summarizing document evidence ({len(documents)} chars) for Intent Agent")
-                    documents = await summarize_text(
-                        text=documents,
-                        llm_name=llm_model,
-                        max_sentences=6,
-                        instruction="Summarize the core topics and facts present in these document snippets. The goal is to help an agent decide if this context is sufficient to answer a user's question. Focus on coverage and key entities."
-                    )
-                    documents += "\n[SUMMARIZED for intent analysis]"
-                except Exception as e:
-                    logger.warning(f"Summarization failed, falling back to truncation: {e}")
-                    documents = documents[:1000] + "... [TRUNCATED for intent analysis]"
-            else:
-                documents = documents[:1000] + "... [TRUNCATED for intent analysis]"
-        parts.append(f"[DOCUMENT EVIDENCE (PDF + WEBPAGE)]\n{documents}")
+        parts.append(f"[DOCUMENT EVIDENCE (PDF + WEBPAGE)  (queried with raw/un-rewritten question)]\n{documents}")
 
     web = bundle.get("web_evidence_text", "")
     if web:
-        if compact and len(web) > 500:
-            if llm_model:
-                try:
-                    from rag import summarize_text
-                    logger.info(f"Summarizing web evidence ({len(web)} chars) for Intent Agent")
-                    web = await summarize_text(
-                        text=web,
-                        llm_name=llm_model,
-                        max_sentences=4,
-                        instruction="Summarize the key information found in these web search results to help determine if they are relevant to the user's query."
-                    )
-                    web += "\n[SUMMARIZED for intent analysis]"
-                except Exception as e:
-                    logger.warning(f"Summarization failed, falling back to truncation: {e}")
-                    web = web[:500] + "... [TRUNCATED for intent analysis]"
-            else:
-                web = web[:500] + "... [TRUNCATED for intent analysis]"
         parts.append(f"[WEB SEARCH EVIDENCE]\n{web}")
 
     if not parts:
@@ -735,9 +679,9 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
     reasoning_mode = state.get("reasoning_mode", True)
 
-    # Load and format the Intent Agent prompt — use COMPACT context for reasoning speed
+    # Load and format the Intent Agent prompt
     bundle = state.get("pre_fetch_bundle")
-    prefetch_text = await _format_prefetch_for_prompt(bundle, compact=True, llm_model=state["llm_model"]) if bundle else ""
+    prefetch_text = _format_prefetch_for_prompt(bundle) if bundle else ""
 
     base_prompt = get_intent_agent_prompt()
     system_prompt = base_prompt.replace("{PREFETCH_CONTEXT}", prefetch_text)
@@ -991,7 +935,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
     # Inject pre-fetched context bundle + pre-fetch-first retrieval policy
     bundle = state.get("pre_fetch_bundle")
     if bundle:
-        bundle_text = await _format_prefetch_for_prompt(bundle, llm_model=state["llm_model"])
+        bundle_text = _format_prefetch_for_prompt(bundle)
         if bundle_text:
             prompt_content += (
                 "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
@@ -1160,29 +1104,10 @@ def should_continue(state: AgentState):
     max_iterations = state.get("max_iterations", DEFAULT_MAX_ITERATIONS)
     reasoning_mode = state.get("reasoning_mode", True)
 
-    logger.info(f"Checking continuation | Iteration: {iteration_count}/{max_iterations} | Reasoning: {reasoning_mode}")
-
     if getattr(last_message, "tool_calls", None):
-        # 1. Repetition Guard: Detect infinite loops where the model calls the same tool with same args
-        if iteration_count > 1:
-            tool_calls = last_message.tool_calls
-            prior_tool_calls = []
-            for msg in reversed(messages[:-1]):
-                if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-                    prior_tool_calls.extend(msg.tool_calls)
-                if len(prior_tool_calls) > 20: break # don't look back forever
-                
-            for current_call in tool_calls:
-                c_name = current_call.get("name")
-                c_args = current_call.get("args")
-                for prior_call in prior_tool_calls:
-                    if prior_call.get("name") == c_name and prior_call.get("args") == c_args:
-                        logger.warning(f"Detected repetitive tool call '{c_name}' with identical arguments. Forcing termination to break loop.")
-                        return "force_final_answer"
-
-        # 2. Hard Iteration Guard
         if iteration_count >= max_iterations:
-            # Grant one extra pass ONLY for search_web if it hasn't run yet
+            # If the only pending call is search_web and no web search has run yet,
+            # grant one extra pass so we don't force-finalize with zero web context.
             pending_tool_names = {tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "") for tc in last_message.tool_calls}
             web_sources_so_far = state.get("web_sources", [])
             if pending_tool_names == {"search_web"} and not web_sources_so_far:
@@ -1199,10 +1124,10 @@ def should_continue(state: AgentState):
         logger.info("Non-reasoning mode: auto-tools pass triggered (no tool calls, insufficient evidence).")
         return "auto_tools"
 
-    # Detect empty-content response after tool execution
+    # Detect empty-content response after tool execution (e.g. model outputs nothing after
+    # receiving tool results). Force a final answer instead of silently ending with blank text.
     if iteration_count > 0:
         content = getattr(last_message, "content", "")
-        text_body = ""
         if isinstance(content, list):
             from reasoning import _text_from_content_item
             text_body = "\n".join([_text_from_content_item(i) for i in content if i]).strip()
