@@ -1,5 +1,5 @@
 """
-main.py - FastAPI entrypoint for the RAG Service
+main.py - FastAPI entrypoint for the Processing Service
 
 This module provides endpoints for:
 - Thread management (create, list, get, delete)
@@ -7,12 +7,6 @@ This module provides endpoints for:
 - Chat with retrieval-augmented generation (with semantic memory)
 - Message management (list, delete)
 - Model listing and health checks
-
-Dependencies:
-- FastAPI
-- httpx
-- dotenv
-- rag, agent, vectordb.qdrant, database (local modules)
 """
 
 from __future__ import annotations
@@ -248,8 +242,9 @@ class WebCaptureRequest(BaseModel):
 @app.post("/parse-pdf")
 async def parse_pdf_endpoint(req: PdfParseRequest):
     """
-    Download a PDF from the backend, extract sentences and character coordinates.
-    This replaces the heavy parsing logic that was previously in the backend.
+    Extract structured text items and spatial coordinates (bounding boxes) from a PDF.
+    Downloads the file from the backend and performs high-fidelity parsing to enable
+    accurate PDF highlighting and sentence-level indexing.
     """
     pdf_url = f"{req.backend_url}/{req.file_hash}.pdf"
     try:

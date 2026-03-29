@@ -31,6 +31,7 @@ _MAX_ASSET_BYTES = 2 * 1024 * 1024
 
 
 async def _fetch_bytes(client: httpx.AsyncClient, url: str) -> Optional[bytes]:
+    """Helper to fetch raw bytes for an asset (e.g., image, CSS) with size limits."""
     try:
         r = await client.get(url, headers=_FETCH_HEADERS, follow_redirects=True, timeout=10.0)
         r.raise_for_status()
@@ -43,10 +44,12 @@ async def _fetch_bytes(client: httpx.AsyncClient, url: str) -> Optional[bytes]:
 
 
 def _data_uri(content: bytes, mime: str) -> str:
+    """Convert raw bytes into a Base64-encoded data URI."""
     return f"data:{mime};base64,{base64.b64encode(content).decode()}"
 
 
 def _image_mime(url: str) -> str:
+    """Infer the MIME type of an image asset based on its file extension."""
     ext = urlparse(url).path.lower().rsplit(".", 1)[-1]
     return {
         "png": "image/png",
@@ -62,6 +65,7 @@ def _image_mime(url: str) -> str:
 
 
 def _rewrite_css_urls(css_text: str, stylesheet_url: str) -> str:
+    """Rewrite relative URLs within CSS content to be absolute."""
     def replace(m: re.Match) -> str:
         inner = m.group(1).strip("'\"")
         if inner.startswith("data:") or inner.startswith("http"):
@@ -71,13 +75,15 @@ def _rewrite_css_urls(css_text: str, stylesheet_url: str) -> str:
 
 
 def _url_to_hash(url: str) -> str:
+    """Generate a stable MD5 hash of a URL for file naming."""
     return hashlib.md5(url.encode()).hexdigest()
 
 
 async def capture_webpage(url: str, force: bool = False, webpages_dir: str = WEBPAGES_DIR) -> dict:
     """
-    Fetch, inline assets, and save a self-contained HTML file.
-    Also extracts clean text and metadata using Trafilatura for RAG.
+    Perform a full-page capture: fetches HTML, inlines external CSS and images, 
+    extractions clean text and metadata, and saves a self-contained HTML file 
+    to the shared volume. This enables reliable offline viewing and RAG indexing.
     """
     file_hash = _url_to_hash(url)
     saved_path = os.path.join(webpages_dir, f"{file_hash}.html")

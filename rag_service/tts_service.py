@@ -20,18 +20,26 @@ except Exception as e:
 VOICES_DIR = "/models/kokoro/voices"
 
 class KokoroTTS:
+    """
+    Core TTS engine using the Kokoro model for fast, high-quality speech synthesis.
+    """
     def __init__(self):
         self.pipeline = _pipeline
         self.voices_dir = VOICES_DIR
         self.sample_rate = 24000  # Kokoro standard sample rate
 
     def get_available_voices(self) -> list[str]:
+        """Fetch all .pt voice models available in the configured voices directory."""
         if not os.path.exists(self.voices_dir):
             return []
         pt_files = glob.glob(os.path.join(self.voices_dir, "*.pt"))
         return sorted([os.path.basename(f).replace(".pt", "") for f in pt_files])
 
     def synthesize(self, text: str, voice: str, speed: float = 1.0) -> tuple[torch.Tensor, int]:
+        """
+        Convert text to speech tensor using the specified voice and speed. 
+        Falls back to the first available voice if the requested one is not found.
+        """
         if not self.pipeline:
             raise RuntimeError("Kokoro pipeline not initialized.")
             
@@ -52,6 +60,7 @@ class KokoroTTS:
         return full_audio, self.sample_rate
 
     def synthesize_to_file(self, text: str, out_path: str, voice: str, speed: float = 1.0) -> str:
+        """Synthesize speech and save it to a WAV file at the specified path."""
         audio, sr = self.synthesize(text, voice, speed)
         audio_np = audio.numpy() if torch.is_tensor(audio) else audio
         sf.write(out_path, audio_np, sr)
@@ -61,8 +70,8 @@ _tts = KokoroTTS()
 
 def synthesize_speech(text: str, voice: str, speed: float = 1.0, out_dir: str = "/data/audio") -> str:
     """
-    Synthesize speech and save to a file in the shared volume.
-    Returns the relative path or filename.
+    Synthesize speech and save the result as a WAV file in the shared storage volume.
+    Returns the generated filename.
     """
     os.makedirs(out_dir, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(suffix=".wav", dir=out_dir)
@@ -79,4 +88,5 @@ def synthesize_speech(text: str, voice: str, speed: float = 1.0, out_dir: str = 
     return os.path.basename(tmp_path)
 
 def list_voices() -> list[str]:
+    """Expose available TTS voices for external API calls."""
     return _tts.get_available_voices()

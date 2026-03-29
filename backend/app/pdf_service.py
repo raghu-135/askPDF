@@ -5,6 +5,7 @@ import logging
 import json
 from enum import Enum
 from typing import Dict, Optional, List
+from .service_client import ProcessingService
 from datetime import datetime
 from fastapi import HTTPException
 
@@ -62,44 +63,32 @@ def set_indexing_status(file_hash: str, status: IndexingStatus, error: Optional[
 
 class PDFService:
     """
-    Service class for coordinate-aware PDF processing and RAG indexing.
-    Now delegates heavy parsing to the RAG service.
+    Service class for coordinate-aware PDF processing and RAG indexing coordination.
+    Handles file upload management, caching of parsed results, and delegation of tasks to specialized services.
     """
-    def __init__(self, static_dir="/static", rag_service_url=None):
+    def __init__(self, static_dir="/static", service_client: ProcessingService = None):
         self.static_dir = static_dir
         self.cache_dir = os.path.join(static_dir, "cache")
-        self.rag_service_url = rag_service_url or os.getenv("RAG_SERVICE_URL")
-        # Internal URL for RAG to reach backend for PDF download
+        self.service_client = service_client
+        # Internal URL for processing service to reach backend for PDF download
         self.backend_internal_url = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8000")
         
-        if not self.rag_service_url:
-            raise RuntimeError("RAG_SERVICE_URL is not set.")
+        if not self.service_client:
+            raise RuntimeError("ServiceClient is not provided.")
             
         os.makedirs(self.static_dir, exist_ok=True)
         os.makedirs(self.cache_dir, exist_ok=True)
 
     async def _delegate_parsing(self, file_hash: str, filename: str) -> List[dict]:
-        """Call the RAG service to extract sentences and bounding boxes."""
-        async with httpx.AsyncClient() as client:
-            try:
-                payload = {
-                    "file_hash": file_hash,
-                    "file_name": filename,
-                    "backend_url": self.backend_internal_url
-                }
-                response = await client.post(
-                    f"{self.rag_service_url}/parse-pdf",
-                    json=payload,
-                    timeout=300.0
-                )
-                if response.status_code != 200:
-                    logging.error(f"RAG service /parse-pdf failed with {response.status_code}: {response.text}")
-                response.raise_for_status()
-                data = response.json()
-                return data.get("sentences", [])
-            except Exception as e:
-                logging.error(f"Failed to delegate parsing to RAG service: {e}")
-                raise HTTPException(status_code=502, detail="PDF parsing service unavailable or failed.")
+        """
+        Request enriched PDF parsing from the processing service.
+        Returns a list of sentences with bounding boxes and font metadata.
+        """
+        try:
+            return await self.service_client.parse_pdf(file_hash, filename, self.backend_internal_url)
+        except Exception as e:
+            logging.error(f"Failed to delegate parsing: {e}")
+            raise HTTPException(status_code=502, detail="PDF parsing service unavailable or failed.")
 
     async def process_upload(self, file, embedding_model, background_tasks):
         if not file.filename.lower().endswith(".pdf"):
@@ -143,29 +132,19 @@ class PDFService:
         }
 
     async def _call_rag_index(self, metadata: dict, emb_model: str, file_hash: str):
-        """Standard RAG indexing call."""
+        """
+        Coordinate the indexing call to ensure documents are processed into the vector database.
+        """
         set_indexing_status(file_hash, IndexingStatus.INDEXING, progress=10)
         
-        payload = {
-            "embedding_model": emb_model,
-            "metadata": metadata
-        }
-
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.rag_service_url}/index",
-                    json=payload,
-                    timeout=600.0
-                )
-                
-                if response.status_code == 200:
-                    set_indexing_status(file_hash, IndexingStatus.READY, progress=100)
-                else:
-                    error_msg = f"RAG service returned status {response.status_code}"
-                    set_indexing_status(file_hash, IndexingStatus.FAILED, error=error_msg)
-            except Exception as e:
-                set_indexing_status(file_hash, IndexingStatus.FAILED, error=str(e))
+        try:
+            success = await self.service_client.index_document(metadata, emb_model)
+            if success:
+                set_indexing_status(file_hash, IndexingStatus.READY, progress=100)
+            else:
+                set_indexing_status(file_hash, IndexingStatus.FAILED, error="Indexing service failed.")
+        except Exception as e:
+            set_indexing_status(file_hash, IndexingStatus.FAILED, error=str(e))
 
     async def get_pdf_by_hash(self, file_hash: str) -> dict:
         pdf_filename = f"{file_hash}.pdf"

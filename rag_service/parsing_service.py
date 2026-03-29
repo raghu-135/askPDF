@@ -44,10 +44,12 @@ _docling_converter = DocumentConverter(
 )
 
 def _get_table_bboxes(page):
+    """Identify bounding boxes for all tables detected on a PDF page."""
     tables = page.find_tables()
     return [fitz.Rect(t.bbox) for t in tables]
 
 def _get_image_bboxes(page):
+    """Identify bounding boxes for all images detected on a PDF page."""
     image_bboxes = []
     for img in page.get_images():
         rects = page.get_image_rects(img[0])
@@ -55,6 +57,10 @@ def _get_image_bboxes(page):
     return image_bboxes
 
 def _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes):
+    """
+    Determine if a text block should be filtered out (e.g., headers, footers, 
+    items inside tables or overlapping images).
+    """
     if bbox.y1 < header_height or bbox.y0 > footer_y:
         return True
     block_center = fitz.Point((bbox.x0 + bbox.x1)/2, (bbox.y0 + bbox.y1)/2)
@@ -65,6 +71,10 @@ def _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes
     return False
 
 def _process_line(line, page_num, page_height, page_width):
+    """
+    Process a single line of text from PyMuPDF, extracting character-level 
+    coordinates and font information.
+    """
     line_text = ""
     line_chars = []
     processed_fonts = []
@@ -100,6 +110,10 @@ def _process_line(line, page_num, page_height, page_width):
     return line_text, line_chars, line_font
 
 def _process_block(block, page_num, page_height, page_width):
+    """
+    Process a text block containing multiple lines, grouping them into 
+    segments with consistent font styles.
+    """
     segments = []
     current_text = ""
     current_chars = []
@@ -165,6 +179,11 @@ def _process_block(block, page_num, page_height, page_width):
 
 
 def extract_text_with_coordinates(data: bytes, filename: str):
+    """
+    Extract high-fidelity text items from a PDF using a hybrid approach:
+    Docling for structural segmentation (labels like 'table', 'heading') 
+    combined with PyMuPDF for precise character-level coordinates.
+    """
     from docling.datamodel.document import TextItem, TableItem, PictureItem
     if not filename:
         return []

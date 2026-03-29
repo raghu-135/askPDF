@@ -33,7 +33,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - RAG_SERVICE_URL=http://rag-service:8000
+      - PROCESSING_SERVICE_URL=http://rag-service:8000
       - BACKEND_INTERNAL_URL=http://backend:8000
     depends_on:
       rag-service:

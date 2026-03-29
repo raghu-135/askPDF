@@ -1,17 +1,13 @@
 """
 main.py
---------
-FastAPI application for PDF Text-to-Speech (TTS) and Retrieval-Augmented Generation (RAG) services.
+-------
+FastAPI entry point for the AskPDF backend service.
 
-Features:
-- Upload PDF files, extract sentences and bounding boxes, and trigger RAG indexing
-- Synthesize audio for sentences using TTS
-- List available TTS voices/styles
-- Check RAG indexing status
-- Serve static and audio files
-
-Environment Variables:
-- RAG_SERVICE_URL: URL for the RAG service (default: http://rag-service:8000)
+This service acts as a coordinator and API gateway for:
+- PDF uploads and metadata management
+- Coordination of PDF parsing and indexing tasks (delegated to the processing service)
+- Proxying Text-to-Speech (TTS) and Web Capture requests to the processing service
+- Managing indexing status and serving processed assets
 """
 import os
 import uuid
@@ -25,17 +21,17 @@ from pydantic import BaseModel
 
 
 # Local imports
-from .tts import tts_sentence_to_wav, list_voice_styles
+from .tts import tts_sentence_to_wav
 from .pdf_service import PDFService, get_indexing_status, IndexingStatus
 
 
 
 API_PREFIX = "/api"
 AUDIO_DIR = "/data/audio"
-# RAG service URL (can be overridden by environment variable)
-RAG_SERVICE_URL = os.getenv("RAG_SERVICE_URL")
-if RAG_SERVICE_URL is None:
-    raise ValueError("RAG_SERVICE_URL environment variable is not set")
+# External service configuration
+PROCESSING_SERVICE_URL = os.getenv("PROCESSING_SERVICE_URL")
+if PROCESSING_SERVICE_URL is None:
+    raise ValueError("PROCESSING_SERVICE_URL environment variable is not set")
 
 
 app = FastAPI(title="PDF TTS")
@@ -53,7 +49,9 @@ os.makedirs("/static", exist_ok=True)
 
 
 
-pdf_service = PDFService(static_dir="/static", rag_service_url=RAG_SERVICE_URL)
+from .service_client import ProcessingService, RestProcessingServiceClient
+service_client: ProcessingService = RestProcessingServiceClient(service_url=PROCESSING_SERVICE_URL)
+pdf_service = PDFService(static_dir="/static", service_client=service_client)
 
 @app.post(f"{API_PREFIX}/upload")
 async def upload_pdf(
@@ -110,7 +108,7 @@ async def get_voices():
     Returns:
         dict: Available voices/styles for TTS.
     """
-    voices = await list_voice_styles()
+    voices = await service_client.list_voices()
     return {"voices": voices}
 
 
@@ -131,7 +129,7 @@ async def synthesize_sentence(payload: dict):
     speed = payload.get("speed", 1.0)
     if not text:
         raise HTTPException(status_code=400, detail="Missing 'text' in payload.")
-    path = await tts_sentence_to_wav(text, AUDIO_DIR, voice_style=voice, speed=speed)
+    path = await tts_sentence_to_wav(service_client, text, AUDIO_DIR, voice_style=voice, speed=speed)
     rel = os.path.relpath(path, "/")
     url = f"/{rel}"
     return {"audioUrl": url}
@@ -161,10 +159,6 @@ async def get_file_index_status(file_hash: str):
     }
 
 
-# ---------------------------------------------------------------------------
-# Web capture endpoints
-# ---------------------------------------------------------------------------
-
 class WebCaptureRequest(BaseModel):
     url: str
     force: bool = False
@@ -173,18 +167,12 @@ class WebCaptureRequest(BaseModel):
 @app.post(f"{API_PREFIX}/web-capture")
 async def web_capture(req: WebCaptureRequest):
     """
-    Delegate webpage capture to the RAG service.
-    The RAG service saves the result to the shared volume (/static/webpages).
+    Proxy a webpage capture request to the processing service.
+    The processing service performs the capture, inlines assets, and saves the 
+    resulting self-contained HTML file to the shared volume (/static/webpages).
     """
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{RAG_SERVICE_URL}/web-capture",
-                json=req.dict(),
-                timeout=60.0
-            )
-            response.raise_for_status()
-            return response.json()
+        return await service_client.web_capture(url=req.url, force=req.force)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to capture page: {exc}")
 

@@ -17,8 +17,10 @@ URL_PATTERN = re.compile(r'(?:https?://|www\.)\S+|(?:[\w\.-]+)\s*@\s*(?:[\w\.-]+
 
 def split_into_sentences(items: list[dict]):
     """
-    Splits structured items into sentences, joining consecutive paragraphs if they
-    seem to be part of the same sentence.
+    Split structured PDF text items into logical sentences.
+    Uses spaCy for sentence segmentation, with custom logic to join consecutive 
+    text blocks based on spatial proximity, font consistency, and linguistic 
+    connectors to maintain document flow.
     """
     if not items or not _nlp:
         return []
