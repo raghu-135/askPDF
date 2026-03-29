@@ -1,22 +1,3 @@
-
-
-"""
-PDFService: High-level business logic for PDF upload, extraction, and RAG indexing.
-
-This service handles:
-- Saving uploaded PDF files
-- Extracting text and character coordinates
-- Splitting text into sentences
-- Mapping sentences to bounding boxes
-- Triggering background RAG indexing
-- Tracking indexing status per file
-
-Dependencies:
-- fastapi.HTTPException for error handling
-- httpx for async HTTP requests
-- pdf_parser and nlp modules for PDF/text processing
-"""
-
 import os
 import hashlib
 import httpx
@@ -26,9 +7,9 @@ from enum import Enum
 from typing import Dict, Optional, List
 from datetime import datetime
 from fastapi import HTTPException
-from .pdf_parser import extract_text_with_coordinates
-from .nlp import split_into_sentences
 
+# NOTE: Heavy PDF parsing and NLP logic moved to rag_service.
+# We no longer import .pdf_parser or .nlp here.
 
 class IndexingStatus(str, Enum):
     PENDING = "pending"
@@ -81,40 +62,46 @@ def set_indexing_status(file_hash: str, status: IndexingStatus, error: Optional[
 
 class PDFService:
     """
-    Service class for handling PDF uploads, extraction, and RAG indexing.
+    Service class for coordinate-aware PDF processing and RAG indexing.
+    Now delegates heavy parsing to the RAG service.
     """
     def __init__(self, static_dir="/static", rag_service_url=None):
-        """
-        Initialize the PDFService.
-
-        Args:
-            static_dir (str): Directory to save uploaded PDFs and cached data.
-            rag_service_url (str): URL for the RAG service. If not provided, uses RAG_SERVICE_URL env var.
-        Raises:
-            RuntimeError: If RAG_SERVICE_URL is not set.
-        """
         self.static_dir = static_dir
         self.cache_dir = os.path.join(static_dir, "cache")
         self.rag_service_url = rag_service_url or os.getenv("RAG_SERVICE_URL")
+        # Internal URL for RAG to reach backend for PDF download
+        self.backend_internal_url = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8000")
+        
         if not self.rag_service_url:
-            logging.error("RAG_SERVICE_URL is not set. Please set the environment variable or pass it explicitly.")
-            raise RuntimeError("RAG_SERVICE_URL is not set. Please set the environment variable or pass it explicitly.")
+            raise RuntimeError("RAG_SERVICE_URL is not set.")
+            
         os.makedirs(self.static_dir, exist_ok=True)
         os.makedirs(self.cache_dir, exist_ok=True)
 
-    async def process_upload(self, file, embedding_model, background_tasks):
-        """
-        Handle the upload of a PDF file, extract text and bounding boxes, and trigger RAG indexing.
+    async def _delegate_parsing(self, file_hash: str, filename: str) -> List[dict]:
+        """Call the RAG service to extract sentences and bounding boxes."""
+        async with httpx.AsyncClient() as client:
+            try:
+                payload = {
+                    "file_hash": file_hash,
+                    "file_name": filename,
+                    "backend_url": self.backend_internal_url
+                }
+                response = await client.post(
+                    f"{self.rag_service_url}/parse-pdf",
+                    json=payload,
+                    timeout=300.0
+                )
+                if response.status_code != 200:
+                    logging.error(f"RAG service /parse-pdf failed with {response.status_code}: {response.text}")
+                response.raise_for_status()
+                data = response.json()
+                return data.get("sentences", [])
+            except Exception as e:
+                logging.error(f"Failed to delegate parsing to RAG service: {e}")
+                raise HTTPException(status_code=502, detail="PDF parsing service unavailable or failed.")
 
-        Args:
-            file (UploadFile): The uploaded PDF file.
-            embedding_model (str): The embedding model to use for RAG.
-            background_tasks (BackgroundTasks): FastAPI background tasks for async RAG call.
-        Returns:
-            dict: Contains sentences with bounding boxes, PDF URL, and file hash.
-        Raises:
-            HTTPException: If file is not a PDF or embedding_model is missing.
-        """
+    async def process_upload(self, file, embedding_model, background_tasks):
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Please upload a PDF file.")
         if not embedding_model:
@@ -123,29 +110,26 @@ class PDFService:
         content = await file.read()
         file_hash = hashlib.md5(content).hexdigest()
 
-        # Use file_hash as the PDF filename for consistency
         pdf_filename = f"{file_hash}.pdf"
         pdf_path = os.path.join(self.static_dir, pdf_filename)
 
-        # Only write the file if it doesn't already exist (deduplication)
         if not os.path.exists(pdf_path):
             with open(pdf_path, "wb") as f:
                 f.write(content)
 
-        items = extract_text_with_coordinates(content, filename=file.filename)
-        enriched_sentences = split_into_sentences(items)
+        # Delegate parsing to RAG service
+        enriched_sentences = await self._delegate_parsing(file_hash, file.filename)
 
         # Save to cache
         cache_path = os.path.join(self.cache_dir, f"{file_hash}.json")
         with open(cache_path, "w") as f:
             json.dump(enriched_sentences, f)
 
-        # Initialize indexing status as pending
         set_indexing_status(file_hash, IndexingStatus.PENDING)
 
-        # Trigger RAG Indexing in background
+        # Trigger RAG Indexing in background (calls separate /index endpoint in RAG service)
         background_tasks.add_task(
-            self._call_rag,
+            self._call_rag_index,
             {"filename": file.filename, "file_hash": file_hash},
             embedding_model,
             file_hash
@@ -153,25 +137,15 @@ class PDFService:
 
         return {
             "sentences": enriched_sentences,
-            "pdfUrl": f"/{pdf_filename}",
+            "pdfUrl": f"/api/pdf-file/{file_hash}",
             "fileHash": file_hash,
             "indexingStatus": IndexingStatus.PENDING.value
         }
 
-
-    async def _call_rag(self, metadata: dict, emb_model: str, file_hash: str):
-        """
-        Asynchronously call the RAG service to index the PDF.
-        The RAG service will download the PDF using the file_hash and parse it independently.
-
-        Args:
-            metadata (dict): Metadata about the PDF/file.
-            emb_model (str): The embedding model to use.
-            file_hash (str): The file hash for status tracking and PDF retrieval.
-        """
+    async def _call_rag_index(self, metadata: dict, emb_model: str, file_hash: str):
+        """Standard RAG indexing call."""
         set_indexing_status(file_hash, IndexingStatus.INDEXING, progress=10)
         
-        # Prepare payload - RAG service uses file_hash from metadata to fetch the PDF
         payload = {
             "embedding_model": emb_model,
             "metadata": metadata
@@ -182,36 +156,18 @@ class PDFService:
                 response = await client.post(
                     f"{self.rag_service_url}/index",
                     json=payload,
-                    timeout=600.0  # 10 minutes for large PDFs
+                    timeout=600.0
                 )
                 
                 if response.status_code == 200:
                     set_indexing_status(file_hash, IndexingStatus.READY, progress=100)
-                    print(f"RAG Indexing completed for {file_hash}", flush=True)
                 else:
                     error_msg = f"RAG service returned status {response.status_code}"
                     set_indexing_status(file_hash, IndexingStatus.FAILED, error=error_msg)
-                    print(f"RAG Indexing failed: {error_msg}", flush=True)
-                    
             except Exception as e:
-                import traceback
-                traceback.print_exc()
-                error_msg = repr(e)
-                set_indexing_status(file_hash, IndexingStatus.FAILED, error=error_msg)
-                print(f"RAG Indexing failed: {error_msg}", flush=True)
+                set_indexing_status(file_hash, IndexingStatus.FAILED, error=str(e))
 
     async def get_pdf_by_hash(self, file_hash: str) -> dict:
-        """
-        Get PDF data (sentences with bounding boxes) for an existing PDF by file hash.
-        Uses cached data if available, otherwise re-parses the PDF.
-
-        Args:
-            file_hash (str): The MD5 hash of the PDF file.
-        Returns:
-            dict: Contains sentences with bounding boxes and PDF URL.
-        Raises:
-            HTTPException: If PDF file is not found.
-        """
         pdf_filename = f"{file_hash}.pdf"
         pdf_path = os.path.join(self.static_dir, pdf_filename)
         cache_path = os.path.join(self.cache_dir, f"{file_hash}.json")
@@ -219,28 +175,21 @@ class PDFService:
         if not os.path.exists(pdf_path):
             raise HTTPException(status_code=404, detail=f"PDF file not found: {file_hash}")
 
-        # Try to load from cache first
         if os.path.exists(cache_path):
             try:
                 with open(cache_path, "r") as f:
                     enriched_sentences = json.load(f)
                 return {
                     "sentences": enriched_sentences,
-                    "pdfUrl": f"/{pdf_filename}",
+                    "pdfUrl": f"/api/pdf-file/{file_hash}",
                     "fileHash": file_hash
                 }
             except Exception as e:
                 logging.warning(f"Failed to load cache for {file_hash}: {e}")
 
-        # Fallback: Read and re-parse the PDF content
-        with open(pdf_path, "rb") as f:
-            content = f.read()
+        # Fallback: re-parse via RAG service
+        enriched_sentences = await self._delegate_parsing(file_hash, pdf_filename)
 
-        # Extract text and coordinates
-        items = extract_text_with_coordinates(content, filename=pdf_filename)
-        enriched_sentences = split_into_sentences(items)
-
-        # Update cache
         try:
             with open(cache_path, "w") as f:
                 json.dump(enriched_sentences, f)
@@ -249,6 +198,6 @@ class PDFService:
 
         return {
             "sentences": enriched_sentences,
-            "pdfUrl": f"/{pdf_filename}",
+            "pdfUrl": f"/api/pdf-file/{file_hash}",
             "fileHash": file_hash
         }

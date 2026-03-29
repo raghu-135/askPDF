@@ -21,8 +21,12 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     libmagic-dev \
     libgl1 \
+    libglib2.0-0 \
     libgomp1 \
+    libsndfile1 \
+    espeak-ng \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY rag_service/requirements.txt /app/requirements.txt
@@ -31,6 +35,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 ARG DOWNLOAD_LOCAL_MODELS=true
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
       python -c "from sentence_transformers import SentenceTransformer, CrossEncoder; SentenceTransformer('BAAI/bge-m3', trust_remote_code=True); CrossEncoder('BAAI/bge-reranker-v2-m3', trust_remote_code=True); print('Downloaded local embedding + reranker models')"; \
+      python -m spacy download en_core_web_sm; \
+      python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='hexgrad/Kokoro-82M', allow_patterns=['voices/*.pt', 'kokoro-v0_19.pth'], local_dir='/models/kokoro')"; \
     fi
 
 COPY rag_service /app

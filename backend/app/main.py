@@ -27,7 +27,6 @@ from pydantic import BaseModel
 # Local imports
 from .tts import tts_sentence_to_wav, list_voice_styles
 from .pdf_service import PDFService, get_indexing_status, IndexingStatus
-from .web_capture_service import capture_webpage, webpage_exists, url_to_hash
 
 
 
@@ -91,6 +90,18 @@ async def get_pdf_data(file_hash: str):
     return await pdf_service.get_pdf_by_hash(file_hash)
 
 
+@app.get(f"{API_PREFIX}/pdf-file/{{file_hash}}")
+async def get_pdf_file(file_hash: str):
+    """
+    Serve the actual PDF file from the static directory with CORS headers.
+    This replaces serving it via StaticFiles which lacks CORS on some setups.
+    """
+    file_path = f"/static/{file_hash}.pdf"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return FileResponse(file_path, media_type="application/pdf")
+
+
 @app.get(f"{API_PREFIX}/voices")
 async def get_voices():
     """
@@ -99,7 +110,7 @@ async def get_voices():
     Returns:
         dict: Available voices/styles for TTS.
     """
-    voices = list_voice_styles()
+    voices = await list_voice_styles()
     return {"voices": voices}
 
 
@@ -120,7 +131,7 @@ async def synthesize_sentence(payload: dict):
     speed = payload.get("speed", 1.0)
     if not text:
         raise HTTPException(status_code=400, detail="Missing 'text' in payload.")
-    path = tts_sentence_to_wav(text, AUDIO_DIR, voice_style=voice, speed=speed)
+    path = await tts_sentence_to_wav(text, AUDIO_DIR, voice_style=voice, speed=speed)
     rel = os.path.relpath(path, "/")
     url = f"/{rel}"
     return {"audioUrl": url}
@@ -162,21 +173,20 @@ class WebCaptureRequest(BaseModel):
 @app.post(f"{API_PREFIX}/web-capture")
 async def web_capture(req: WebCaptureRequest):
     """
-    Fetch a webpage, inline its assets, and save a self-contained HTML file.
-
-    Returns the file_hash and page title so the frontend can build the
-    iframe URL: GET /api/web-page/{file_hash}
+    Delegate webpage capture to the RAG service.
+    The RAG service saves the result to the shared volume (/static/webpages).
     """
     try:
-        result = await capture_webpage(req.url, force=req.force)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{RAG_SERVICE_URL}/web-capture",
+                json=req.dict(),
+                timeout=60.0
+            )
+            response.raise_for_status()
+            return response.json()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to capture page: {exc}")
-    return {
-        "file_hash": result["file_hash"],
-        "title": result["title"],
-        "cached": result["cached"],
-        "content_hash": result.get("content_hash"),
-    }
 
 
 @app.get(f"{API_PREFIX}/web-page/{{file_hash}}")
@@ -188,9 +198,9 @@ async def get_web_page(file_hash: str):
     it inside an <iframe> — bypassing any X-Frame-Options / CSP from the
     original site entirely.
     """
-    if not webpage_exists(file_hash):
-        raise HTTPException(status_code=404, detail="Web page capture not found.")
     html_path = f"/static/webpages/{file_hash}.html"
+    if not os.path.exists(html_path):
+        raise HTTPException(status_code=404, detail="Web page capture not found.")
     return FileResponse(
         html_path,
         media_type="text/html",

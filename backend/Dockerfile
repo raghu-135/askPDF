@@ -4,32 +4,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libsndfile1 \
     curl \
-    espeak-ng \
-    git \
-    libgl1 \
-    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy requirements from the context (root)
+# Copy requirements
 COPY backend/requirements.txt /app/backend/requirements.txt
 
-# Install dependencies
+# Install minimal dependencies
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
-RUN pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1.tar.gz
 
-# Create data and model directories
-RUN mkdir -p /data/audio /models/kokoro
-
-# Download Kokoro model weights and voices from Hugging Face to prevent runtime downloads
-RUN python -c "from huggingface_hub import snapshot_download; \
-    snapshot_download(repo_id='hexgrad/Kokoro-82M', \
-    allow_patterns=['voices/*.pt', 'kokoro-v0_19.pth'], \
-    local_dir='/models/kokoro')"
+# Create static/data directories for the shared volume mounts
+RUN mkdir -p /data/audio /static/webpages /static/cache
 
 # Copy backend app code
 COPY backend/app /app/app

@@ -15,44 +15,69 @@ Dependencies:
 - rag, agent, vectordb.qdrant, database (local modules)
 """
 
+from __future__ import annotations
+
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
+import httpx
+from agent import app as agent_app
+from agent import build_system_prompt, get_tool_catalog, normalize_tool_instructions
+from chat_service import handle_thread_chat
+from database import (
+    MessageRole,
+    add_file_to_thread,
+    create_message,
+    create_or_get_file,
+    create_thread,
+    delete_message,
+    delete_message_pair,
+    delete_thread,
+    get_file,
+    get_message,
+    get_recent_messages,
+    get_thread,
+    get_thread_files,
+    get_thread_messages,
+    get_thread_settings,
+    init_db,
+    is_file_in_thread,
+    list_threads,
+    recompute_qa_stats,
+    remove_document_from_stats,
+    remove_file_from_thread,
+    update_thread,
+    update_thread_settings,
+    upsert_thread_stats_document,
+)
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 from langchain_core.messages import AIMessage, HumanMessage
-
-from agent import app as agent_app, get_tool_catalog, normalize_tool_instructions, build_system_prompt
-from rag import index_document_for_thread, index_webpage_for_thread
-from vectordb.qdrant import get_qdrant
 from models import (
-    fetch_available_models,
+    DEFAULT_MAX_ITERATIONS,
+    DEFAULT_TOKEN_BUDGET,
+    INTENT_AGENT_MAX_ITERATIONS,
+    MAX_CUSTOM_INSTRUCTIONS_CHARS,
+    MAX_MAX_ITERATIONS,
+    MAX_SYSTEM_ROLE_CHARS,
+    MIN_MAX_ITERATIONS,
     check_chat_model_ready,
     check_embed_model_ready,
     check_model_supports_tools,
-    DEFAULT_MAX_ITERATIONS,
-    DEFAULT_TOKEN_BUDGET,
-    MIN_MAX_ITERATIONS,
-    MAX_MAX_ITERATIONS,
-    MAX_CUSTOM_INSTRUCTIONS_CHARS,
-    MAX_SYSTEM_ROLE_CHARS,
-    INTENT_AGENT_MAX_ITERATIONS,
+    fetch_available_models,
     merge_thread_settings,
 )
-from chat_service import handle_thread_chat
-from database import (
-    init_db, 
-    create_thread, get_thread, list_threads, update_thread, delete_thread,
-    get_thread_settings, update_thread_settings,
-    create_or_get_file, get_file, add_file_to_thread, get_thread_files, is_file_in_thread,
-    remove_file_from_thread,
-    create_message, get_message, get_thread_messages, delete_message, delete_message_pair, get_recent_messages,
-    MessageRole,
-    upsert_thread_stats_document, remove_document_from_stats, recompute_qa_stats,
-)
+from nlp_service import split_into_sentences
+
+# Local service imports
+from parsing_service import extract_text_with_coordinates
+from pydantic import BaseModel, Field
+from rag import index_document_for_thread, index_webpage_for_thread
+from tts_service import list_voices, synthesize_speech
+from vectordb.qdrant import get_qdrant
+from web_capture_service import capture_webpage
 
 # Load environment variables from .env file
 load_dotenv()
@@ -79,19 +104,23 @@ app.add_middleware(
 
 # ============ Request/Response Models ============
 
+
 class ThreadCreateRequest(BaseModel):
     """Request body for creating a thread."""
+
     name: str
     embed_model: str = Field(default=DEFAULT_EMBEDDING_MODEL)
 
 
 class ThreadUpdateRequest(BaseModel):
     """Request body for updating a thread."""
+
     name: str
 
 
 class ThreadFileRequest(BaseModel):
     """Request body for adding a file to a thread."""
+
     file_hash: str
     file_name: str
     file_path: Optional[str] = None
@@ -99,21 +128,29 @@ class ThreadFileRequest(BaseModel):
 
 class WebSourceRequest(BaseModel):
     """Request body for indexing a webpage into a thread."""
+
     url: str
 
 
 class ThreadChatRequest(BaseModel):
     """Request body for thread-based chat."""
+
     thread_id: str
     question: str
     llm_model: str
     use_web_search: bool = False
     use_reranker: Optional[bool] = None
     context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size
-    max_iterations: Optional[int] = Field(default=None, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS)
-    system_role_override: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
+    max_iterations: Optional[int] = Field(
+        default=None, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS
+    )
+    system_role_override: Optional[str] = Field(
+        default=None, max_length=MAX_SYSTEM_ROLE_CHARS
+    )
     tool_instructions_override: Optional[Dict[str, str]] = None
-    custom_instructions_override: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
+    custom_instructions_override: Optional[str] = Field(
+        default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
+    )
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
     intent_agent_skip_clarify: Optional[bool] = None
@@ -121,21 +158,31 @@ class ThreadChatRequest(BaseModel):
 
 
 class ThreadSettingsResponse(BaseModel):
-    max_iterations: int = Field(default=DEFAULT_MAX_ITERATIONS, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS)
+    max_iterations: int = Field(
+        default=DEFAULT_MAX_ITERATIONS, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS
+    )
     system_role: str = Field(default="", max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Dict[str, str] = Field(default_factory=dict)
-    custom_instructions: str = Field(default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
+    custom_instructions: str = Field(
+        default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
+    )
     use_intent_agent: bool = True
-    intent_agent_max_iterations: int = Field(default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10)
+    intent_agent_max_iterations: int = Field(
+        default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10
+    )
     reasoning_mode: bool = True
     use_reranker: bool = True
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
-    max_iterations: Optional[int] = Field(default=None, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS)
+    max_iterations: Optional[int] = Field(
+        default=None, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS
+    )
     system_role: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Optional[Dict[str, str]] = None
-    custom_instructions: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
+    custom_instructions: Optional[str] = Field(
+        default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
+    )
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
     reasoning_mode: Optional[bool] = None
@@ -167,20 +214,104 @@ class PromptPreviewRequest(BaseModel):
     context_window: int = DEFAULT_TOKEN_BUDGET
     system_role: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Optional[Dict[str, str]] = None
-    custom_instructions: Optional[str] = Field(default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS)
+    custom_instructions: Optional[str] = Field(
+        default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
+    )
     use_web_search: bool = False
     intent_agent_ran: bool = True
     reasoning_mode: bool = True
 
 
+# ============ Compute Request Models ============
+
+
+class PdfParseRequest(BaseModel):
+    file_hash: str
+    file_name: str
+    backend_url: str = "http://backend:8000"
+
+
+class TtsRequest(BaseModel):
+    text: str
+    voice: str
+    speed: float = 1.0
+
+
+class WebCaptureRequest(BaseModel):
+    url: str
+    force: bool = False
+
+
+# ============ Compute Endpoints (Heavy Processing) ============
+
+
+@app.post("/parse-pdf")
+async def parse_pdf_endpoint(req: PdfParseRequest):
+    """
+    Download a PDF from the backend, extract sentences and character coordinates.
+    This replaces the heavy parsing logic that was previously in the backend.
+    """
+    pdf_url = f"{req.backend_url}/{req.file_hash}.pdf"
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(pdf_url, timeout=30.0)
+            resp.raise_for_status()
+            pdf_data = resp.content
+
+        items = extract_text_with_coordinates(pdf_data, filename=req.file_name)
+        enriched_sentences = split_into_sentences(items)
+
+        return {"file_hash": req.file_hash, "sentences": enriched_sentences}
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
+
+
+@app.post("/synthesize-tts")
+async def synthesize_tts_endpoint(req: TtsRequest):
+    """
+    Synthesize speech from text and save to the shared audio volume.
+    """
+    try:
+        filename = synthesize_speech(req.text, req.voice, req.speed)
+        return {"audio_url": f"/data/audio/{filename}", "filename": filename}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
+
+
+@app.post("/web-capture")
+async def web_capture_endpoint(req: WebCaptureRequest):
+    """
+    Capture a webpage, inline assets, and save to the shared webpages volume.
+    """
+    try:
+        result = await capture_webpage(req.url, force=req.force)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Web capture failed: {str(e)}")
+
+
+@app.get("/voices")
+async def list_voices_endpoint():
+    """List available TTS voices."""
+    return {"voices": list_voices()}
+
+
+
+
 # ============ Thread Endpoints ============
+
 
 @app.get("/prompt-tools")
 async def prompt_tools_endpoint():
     """Return user-facing tool aliases and default prompts for prompt customization UI."""
     try:
         defaults = merge_thread_settings({})
-        defaults["tool_instructions"] = normalize_tool_instructions(defaults.get("tool_instructions", {}))
+        defaults["tool_instructions"] = normalize_tool_instructions(
+            defaults.get("tool_instructions", {})
+        )
         payload = PromptDefaults(**defaults).dict()
         return {
             "tools": [ToolCatalogEntry(**t).dict() for t in get_tool_catalog()],
@@ -188,6 +319,7 @@ async def prompt_tools_endpoint():
         }
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -209,8 +341,10 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
         return {"prompt": prompt}
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/threads")
 async def create_thread_endpoint(req: ThreadCreateRequest):
@@ -221,24 +355,28 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
     try:
         embed_model = (req.embed_model or "").strip() or DEFAULT_EMBEDDING_MODEL
         if not embed_model:
-            raise HTTPException(status_code=400, detail="embed_model is required (set DEFAULT_EMBEDDING_MODEL or pass embed_model).")
+            raise HTTPException(
+                status_code=400,
+                detail="embed_model is required (set DEFAULT_EMBEDDING_MODEL or pass embed_model).",
+            )
         # Create thread in SQLite
         thread = await create_thread(req.name, embed_model)
-        
+
         # Create Qdrant collection for the thread
         db = get_qdrant()
         # Default vector size will be determined when first embeddings are added
         # For now, we'll create it on first index
-        
+
         return {
             "id": thread.id,
             "name": thread.name,
             "embed_model": thread.embed_model,
             "settings": thread.settings,
-            "created_at": thread.created_at.isoformat()
+            "created_at": thread.created_at.isoformat(),
         }
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -253,6 +391,7 @@ async def list_threads_endpoint():
         return {"threads": threads}
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -266,7 +405,7 @@ async def get_thread_endpoint(thread_id: str):
         thread = await get_thread(thread_id)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
-        
+
         files = await get_thread_files(thread_id)
         db = get_qdrant()
         stats = await db.get_thread_stats(thread_id)
@@ -276,14 +415,22 @@ async def get_thread_endpoint(thread_id: str):
             "embed_model": thread.embed_model,
             "settings": thread.settings,
             "created_at": thread.created_at.isoformat(),
-            "files": [{"file_hash": f.file_hash, "file_name": f.file_name, "source_type": f.source_type} for f in files],
+            "files": [
+                {
+                    "file_hash": f.file_hash,
+                    "file_name": f.file_name,
+                    "source_type": f.source_type,
+                }
+                for f in files
+            ],
             "stats": stats,
-            "file_count": len(files)
+            "file_count": len(files),
         }
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -303,12 +450,13 @@ async def update_thread_endpoint(thread_id: str, req: ThreadUpdateRequest):
             "name": thread.name,
             "embed_model": thread.embed_model,
             "settings": thread.settings,
-            "created_at": thread.created_at.isoformat()
+            "created_at": thread.created_at.isoformat(),
         }
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -321,18 +469,23 @@ async def get_thread_settings_endpoint(thread_id: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
         settings = merge_thread_settings(await get_thread_settings(thread_id))
-        settings["tool_instructions"] = normalize_tool_instructions(settings.get("tool_instructions", {}))
+        settings["tool_instructions"] = normalize_tool_instructions(
+            settings.get("tool_instructions", {})
+        )
         return ThreadSettingsResponse(**settings)
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.put("/threads/{thread_id}/settings")
-async def update_thread_settings_endpoint(thread_id: str, req: ThreadSettingsUpdateRequest):
+async def update_thread_settings_endpoint(
+    thread_id: str, req: ThreadSettingsUpdateRequest
+):
     """Update persisted chat settings for a thread."""
     try:
         thread = await get_thread(thread_id)
@@ -342,17 +495,22 @@ async def update_thread_settings_endpoint(thread_id: str, req: ThreadSettingsUpd
         current = merge_thread_settings(await get_thread_settings(thread_id))
         updates = req.dict(exclude_none=True)
         next_settings = {**current, **updates}
-        next_settings["tool_instructions"] = normalize_tool_instructions(next_settings.get("tool_instructions", {}))
+        next_settings["tool_instructions"] = normalize_tool_instructions(
+            next_settings.get("tool_instructions", {})
+        )
         persisted = await update_thread_settings(thread_id, next_settings)
         if persisted is None:
             raise HTTPException(status_code=404, detail="Thread not found")
         merged = merge_thread_settings(persisted)
-        merged["tool_instructions"] = normalize_tool_instructions(merged.get("tool_instructions", {}))
+        merged["tool_instructions"] = normalize_tool_instructions(
+            merged.get("tool_instructions", {})
+        )
         return ThreadSettingsResponse(**merged)
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -366,28 +524,28 @@ async def delete_thread_endpoint(thread_id: str):
         # Delete Qdrant collection first
         db = get_qdrant()
         await db.delete_thread_collection(thread_id)
-        
+
         # Delete from SQLite
         deleted = await delete_thread(thread_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Thread not found")
-        
+
         return {"status": "deleted", "thread_id": thread_id}
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============ Thread File Endpoints ============
 
+
 @app.post("/threads/{thread_id}/files")
 async def add_file_to_thread_endpoint(
-    thread_id: str, 
-    req: ThreadFileRequest,
-    background_tasks: BackgroundTasks
+    thread_id: str, req: ThreadFileRequest, background_tasks: BackgroundTasks
 ):
     """
     Add a file to a thread and trigger background indexing.
@@ -397,10 +555,10 @@ async def add_file_to_thread_endpoint(
         thread = await get_thread(thread_id)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
-        
+
         # Create or get file record
         file = await create_or_get_file(req.file_hash, req.file_name, req.file_path)
-        
+
         # Associate file with thread
         await add_file_to_thread(thread_id, req.file_hash)
 
@@ -415,26 +573,27 @@ async def add_file_to_thread_endpoint(
         # Check if already indexed in this thread's collection
         db = get_qdrant()
         collection_exists = await db.thread_collection_exists(thread_id)
-        
+
         # Trigger background indexing
         background_tasks.add_task(
             index_document_for_thread,
             thread_id=thread_id,
             file_hash=req.file_hash,
-            embedding_model_name=thread.embed_model
+            embedding_model_name=thread.embed_model,
         )
-        
+
         return {
             "status": "accepted",
             "thread_id": thread_id,
             "file_hash": req.file_hash,
             "file_name": req.file_name,
-            "indexing": "in_progress"
+            "indexing": "in_progress",
         }
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -448,16 +607,25 @@ async def get_thread_files_endpoint(thread_id: str):
         thread = await get_thread(thread_id)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
-        
+
         files = await get_thread_files(thread_id)
         return {
             "thread_id": thread_id,
-            "files": [{"file_hash": f.file_hash, "file_name": f.file_name, "file_path": f.file_path, "source_type": f.source_type} for f in files]
+            "files": [
+                {
+                    "file_hash": f.file_hash,
+                    "file_name": f.file_name,
+                    "file_path": f.file_path,
+                    "source_type": f.source_type,
+                }
+                for f in files
+            ],
         }
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -479,7 +647,9 @@ async def add_web_source_to_thread_endpoint(
             raise HTTPException(status_code=404, detail="Thread not found")
 
         if not req.url.startswith(("http://", "https://")):
-            raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+            raise HTTPException(
+                status_code=400, detail="URL must start with http:// or https://"
+            )
 
         # Stable hash for this URL
         file_hash = hashlib.md5(req.url.encode()).hexdigest()
@@ -521,6 +691,7 @@ async def add_web_source_to_thread_endpoint(
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -556,6 +727,7 @@ async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -594,12 +766,15 @@ async def refresh_web_source_endpoint(
         if not file:
             raise HTTPException(status_code=404, detail="Web source not found")
 
-        url = file.file_path or file.file_name  # file_path holds the URL for web sources
+        url = (
+            file.file_path or file.file_name
+        )  # file_path holds the URL for web sources
 
         # ── Phase 1: content-change check ──────────────────────────────────
         if req.content_hash and not req.confirmed:
             # Read stored content_hash from thread_stats
             from database import get_thread_shape as _get_shape
+
             shape = await _get_shape(thread_id)
             stored_meta = shape["documents"].get(file_hash, {})
             stored_hash = stored_meta.get("content_hash")
@@ -653,17 +828,17 @@ async def refresh_web_source_endpoint(
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============ Message Endpoints ============
 
+
 @app.get("/threads/{thread_id}/messages")
 async def get_thread_messages_endpoint(
-    thread_id: str,
-    limit: int = 100,
-    offset: int = 0
+    thread_id: str, limit: int = 100, offset: int = 0
 ):
     """
     Get messages for a thread with pagination.
@@ -672,7 +847,7 @@ async def get_thread_messages_endpoint(
         thread = await get_thread(thread_id)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
-        
+
         messages = await get_thread_messages(thread_id, limit, offset)
         return {
             "thread_id": thread_id,
@@ -686,17 +861,18 @@ async def get_thread_messages_endpoint(
                     "reasoning_available": m.reasoning_available,
                     "reasoning_format": m.reasoning_format,
                     "web_sources": m.web_sources,
-                    "created_at": m.created_at.isoformat()
+                    "created_at": m.created_at.isoformat(),
                 }
                 for m in messages
             ],
             "limit": limit,
-            "offset": offset
+            "offset": offset,
         }
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -723,7 +899,11 @@ async def delete_message_endpoint(message_id: str):
         else:
             # USER → find the immediately following assistant message
             for i, m in enumerate(all_msgs):
-                if m.id == message_id and i + 1 < len(all_msgs) and all_msgs[i + 1].role == MessageRole.ASSISTANT:
+                if (
+                    m.id == message_id
+                    and i + 1 < len(all_msgs)
+                    and all_msgs[i + 1].role == MessageRole.ASSISTANT
+                ):
                     assistant_msg_id = all_msgs[i + 1].id
                     break
 
@@ -776,11 +956,13 @@ async def delete_message_endpoint(message_id: str):
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============ Chat Endpoints ============
+
 
 @app.post("/threads/{thread_id}/chat")
 async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
@@ -793,7 +975,7 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
         thread = await get_thread(thread_id)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
-        
+
         # Override thread_id from path
         req.thread_id = thread_id
         thread_settings = merge_thread_settings(await get_thread_settings(thread_id))
@@ -802,27 +984,33 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
         if req.system_role_override is None:
             req.system_role_override = thread_settings["system_role"]
         if req.tool_instructions_override is None:
-            req.tool_instructions_override = normalize_tool_instructions(thread_settings.get("tool_instructions", {}))
+            req.tool_instructions_override = normalize_tool_instructions(
+                thread_settings.get("tool_instructions", {})
+            )
         if req.custom_instructions_override is None:
             req.custom_instructions_override = thread_settings["custom_instructions"]
         if req.use_intent_agent is None:
             req.use_intent_agent = thread_settings.get("use_intent_agent", True)
         if req.intent_agent_max_iterations is None:
-            req.intent_agent_max_iterations = thread_settings.get("intent_agent_max_iterations", INTENT_AGENT_MAX_ITERATIONS)
+            req.intent_agent_max_iterations = thread_settings.get(
+                "intent_agent_max_iterations", INTENT_AGENT_MAX_ITERATIONS
+            )
         if req.reasoning_mode is None:
             req.reasoning_mode = thread_settings.get("reasoning_mode", True)
-        
+
         result = await handle_thread_chat(thread_id, req, thread.embed_model)
         return result
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============ Indexing Endpoints ============
+
 
 @app.get("/threads/{thread_id}/index-status")
 async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = None):
@@ -833,9 +1021,9 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         thread = await get_thread(thread_id)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
-        
+
         db = get_qdrant()
-        
+
         if file_hash:
             # Check specific file
             is_indexed = await db.has_file_indexed(thread_id, file_hash)
@@ -853,27 +1041,29 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
                         all_indexed = False
                         break
                 status = "ready" if all_indexed else "not_ready"
-        
+
         stats = await db.get_thread_stats(thread_id)
-        
+
         # Check embedding model readiness (using cached check)
         embed_model_ready = await check_embed_model_ready(thread.embed_model)
-        
+
         return {
             "thread_id": thread_id,
             "status": status,
             "stats": stats,
-            "embed_model_ready": embed_model_ready
+            "embed_model_ready": embed_model_ready,
         }
     except HTTPException:
         raise
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============ Model Endpoints ============
+
 
 @app.get("/models")
 async def get_models():
