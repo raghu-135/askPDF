@@ -6,7 +6,7 @@ All composition logic lives in agent.py. This module just handles file I/O.
 
 from pathlib import Path
 
-PROMPTS_DIR = Path(__file__).parent / "prompts"
+PROMPTS_DIR = Path(__file__).parent
 
 
 def load_prompt(filename: str) -> str:

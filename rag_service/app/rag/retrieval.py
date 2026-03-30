@@ -3,9 +3,9 @@
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from database import get_thread_shape
-from models import get_reranker_model, DEFAULT_RERANKER_MODEL
-from vectordb.qdrant import get_qdrant
+from app.db.database import get_thread_shape
+from app.models.llm_server_client import get_reranker_model, DEFAULT_RERANKER_MODEL
+from app.db.qdrant import get_qdrant
 
 logger = logging.getLogger(__name__)
 

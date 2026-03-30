@@ -13,8 +13,8 @@ from typing import List, Dict, Any, cast
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from rag import index_chat_memory_for_thread
-from models import (
+from app.rag.indexer import index_chat_memory_for_thread
+from app.models.llm_server_client import (
     get_embedding_model,
     DEFAULT_TOKEN_BUDGET,
     DEFAULT_MAX_ITERATIONS,
@@ -23,7 +23,7 @@ from models import (
     compute_prefetch_budget,
     INTENT_AGENT_MAX_ITERATIONS,
 )
-from database import (
+from app.db.database import (
     create_message,
     get_recent_messages,
     update_message_context_compact,
@@ -31,8 +31,8 @@ from database import (
     get_thread_shape,
     increment_qa_stats,
 )
-from reasoning import normalize_ai_response
-from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
+from app.agent.reasoning import normalize_ai_response
+from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +66,8 @@ async def prefetch_context(
     - Both agents receive the same bundle; no re-fetching between Intent and
       Orchestrator for the same raw question.
     """
-    from vectordb.qdrant import get_qdrant
-    from agent import invoke_with_retry
+    from app.db.qdrant import get_qdrant
+    from app.agent.agent import invoke_with_retry
 
     budget = compute_prefetch_budget(context_window)
 
@@ -215,7 +215,7 @@ async def handle_thread_chat(
     intent_iterations = 0
     
     try:
-        from agent import app as agent_app, intent_app, AgentState
+        from app.agent.agent import app as agent_app, intent_app, AgentState
         
         # 1. Run context pre-fetch (no LLM cost)
         prefetch_bundle = await prefetch_context(
