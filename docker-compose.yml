@@ -41,7 +41,6 @@ services:
     volumes:
       - ./backend:/app/backend
       - pdf_data:/static
-      - audio_data:/data/audio
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -94,7 +93,6 @@ services:
     volumes:
       - ./rag_service:/app
       - ./data:/data
-      - audio_data:/data/audio
       - pdf_data:/static
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -114,4 +112,3 @@ services:
 volumes:
   qdrant_data:
   pdf_data:
-  audio_data:

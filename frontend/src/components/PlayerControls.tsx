@@ -3,10 +3,6 @@ import { Button, Stack, Select, MenuItem, Slider, Typography, FormControl, Input
 import { PlayArrow, Pause, SkipPrevious, SkipNext } from '@mui/icons-material';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 
-// For Next.js/browser env
-declare const process: {
-  env: Record<string, string | undefined>;
-};
 import { ttsSentence, getVoices } from "../lib/tts-api";
 
 type Sentence = { id: number; text: string };
@@ -45,6 +41,9 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
 
   const open = Boolean(anchorEl);
   const id_popover = open ? 'voice-settings-popover' : undefined;
+  const voiceOptions = voices.length > 0
+    ? voices
+    : (selectedVoice ? [selectedVoice] : []);
 
   // Fetch available TTS voices on mount
   useEffect(() => {
@@ -52,11 +51,11 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
       try {
         const voicesData = await getVoices();
         setVoices(voicesData);
-        if (voicesData.length > 0 && !selectedVoice) {
-          // Prefer 'af_heart' if available, else use first item
+        if (voicesData.length > 0) {
+          // Prefer af_heart when available; otherwise keep current if valid, else first voice.
           if (voicesData.includes('af_heart')) {
             setSelectedVoice('af_heart');
-          } else {
+          } else if (!voicesData.includes(selectedVoice)) {
             setSelectedVoice(voicesData[0]);
           }
         }
@@ -110,10 +109,6 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
    * Handles TTS audio fetching and playback, and auto-advances to next sentence on end.
    */
   async function playSentence(id: number, resumeFrom?: number) {
-    if (selectedVoice === "") {
-      console.warn("No voice selected, skipping playback.");
-      return;
-    }
     const audio = audioRef.current;
     if (!audio) return;
 
@@ -126,9 +121,8 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
     onCurrentChange(id);
 
     try {
-      const { audioUrl } = await ttsSentence(s.text, selectedVoice, speed);
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      audio.src = `${apiBase}${audioUrl}`;
+      const { audioUrl } = await ttsSentence(s.text, selectedVoice || "af_heart", speed);
+      audio.src = audioUrl;
       await audio.play();
       if (resumeFrom) {
         audio.currentTime = resumeFrom;
@@ -219,11 +213,16 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
           <FormControl size="small" fullWidth>
             <InputLabel>Voice</InputLabel>
             <Select
-              value={selectedVoice}
+              value={voiceOptions.includes(selectedVoice) ? selectedVoice : ""}
               label="Voice"
               onChange={(e: any) => setSelectedVoice(e.target.value as string)}
             >
-              {voices.map((v: string) => (
+              {voiceOptions.length === 0 && (
+                <MenuItem value="" disabled>
+                  No voices available
+                </MenuItem>
+              )}
+              {voiceOptions.map((v: string) => (
                 <MenuItem key={v} value={v}>
                   {v.replace(".json", "")}
                 </MenuItem>

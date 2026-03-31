@@ -6,7 +6,7 @@ FastAPI entry point for the AskPDF backend service.
 This service acts as a coordinator and API gateway for:
 - PDF uploads and metadata management
 - Coordination of PDF parsing and indexing tasks (delegated to the processing service)
-- Proxying Text-to-Speech (TTS) and Web Capture requests to the processing service
+- Proxying Web Capture requests to the processing service
 - Managing indexing status and serving processed assets
 """
 import os
@@ -21,13 +21,11 @@ from pydantic import BaseModel
 
 
 # Local imports
-from .tts import tts_sentence_to_wav
 from .pdf_service import PDFService, get_indexing_status, IndexingStatus
 
 
 
 API_PREFIX = "/api"
-AUDIO_DIR = "/data/audio"
 # External service configuration
 PROCESSING_SERVICE_URL = os.getenv("PROCESSING_SERVICE_URL")
 if PROCESSING_SERVICE_URL is None:
@@ -43,8 +41,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure audio and static directories exist
-os.makedirs(AUDIO_DIR, exist_ok=True)
+# Ensure static directory exists
 os.makedirs("/static", exist_ok=True)
 
 
@@ -98,41 +95,6 @@ async def get_pdf_file(file_hash: str):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="PDF not found")
     return FileResponse(file_path, media_type="application/pdf")
-
-
-@app.get(f"{API_PREFIX}/voices")
-async def get_voices():
-    """
-    List available TTS voices/styles.
-    
-    Returns:
-        dict: Available voices/styles for TTS.
-    """
-    voices = await service_client.list_voices()
-    return {"voices": voices}
-
-
-@app.post(f"{API_PREFIX}/tts")
-async def synthesize_sentence(payload: dict):
-    """
-    Synthesize audio for a sentence using TTS.
-    
-    Args:
-        payload (dict): Should contain 'text', 'voice', and optional 'speed'.
-    Returns:
-        dict: URL to the generated audio file.
-    Raises:
-        HTTPException: If 'text' is missing in the payload.
-    """
-    text = payload.get("text")
-    voice = payload.get("voice")
-    speed = payload.get("speed", 1.0)
-    if not text:
-        raise HTTPException(status_code=400, detail="Missing 'text' in payload.")
-    path = await tts_sentence_to_wav(service_client, text, AUDIO_DIR, voice_style=voice, speed=speed)
-    rel = os.path.relpath(path, "/")
-    url = f"/{rel}"
-    return {"audioUrl": url}
 
 
 @app.get(f"{API_PREFIX}/index-status/{{file_hash}}")
@@ -209,9 +171,6 @@ async def health():
     """
     return {"status": "ok"}
 
-
-# Serve audio files
-app.mount("/data", StaticFiles(directory="/data"), name="data")
 
 # Mount static files last to avoid shadowing API routes
 app.mount("/", StaticFiles(directory="/static", html=True), name="static")

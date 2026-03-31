@@ -60,7 +60,6 @@ from app.models.requests import (
     ThreadSettingsUpdateRequest,
     ThreadUpdateRequest,
     ToolCatalogEntry,
-    TtsRequest,
     WebCaptureRequest,
     WebSourceRequest,
 )
@@ -68,7 +67,6 @@ from app.rag.chat_service import handle_thread_chat
 from app.rag.indexer import index_document_for_thread, index_webpage_for_thread
 from app.services.nlp_service import split_into_sentences
 from app.services.parsing_service import extract_text_with_coordinates
-from app.services.tts_service import list_voices, synthesize_speech
 from app.services.web_capture_service import capture_webpage
 
 router = APIRouter()
@@ -101,18 +99,6 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
         raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
 
 
-@router.post("/synthesize-tts")
-async def synthesize_tts_endpoint(req: TtsRequest):
-    """
-    Synthesize speech from text and save to the shared audio volume.
-    """
-    try:
-        filename = synthesize_speech(req.text, req.voice, req.speed)
-        return {"audio_url": f"/data/audio/{filename}", "filename": filename}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
-
-
 @router.post("/web-capture")
 async def web_capture_endpoint(req: WebCaptureRequest):
     """
@@ -123,12 +109,6 @@ async def web_capture_endpoint(req: WebCaptureRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Web capture failed: {str(e)}")
-
-
-@router.get("/voices")
-async def list_voices_endpoint():
-    """List available TTS voices."""
-    return {"voices": list_voices()}
 
 
 # ============ Thread Endpoints ============

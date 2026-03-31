@@ -21,14 +21,6 @@ class ProcessingService(ABC):
         pass
 
     @abstractmethod
-    async def synthesize_tts(self, text: str, voice: str, speed: float = 1.0) -> str:
-        pass
-
-    @abstractmethod
-    async def list_voices(self) -> List[str]:
-        pass
-
-    @abstractmethod
     async def web_capture(self, url: str, force: bool = False) -> Dict[str, Any]:
         pass
 
@@ -86,47 +78,6 @@ class RestProcessingServiceClient(ProcessingService):
             except httpx.HTTPError as e:
                 logger.error(f"Failed to index document: {e}")
                 return False
-
-    async def synthesize_tts(self, text: str, voice: str, speed: float = 1.0) -> str:
-        """
-        Request TTS synthesis from the processing service.
-        Returns the filename of the generated audio file.
-        """
-        payload = {
-            "text": text,
-            "voice": voice,
-            "speed": speed
-        }
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.service_url}/synthesize-tts",
-                    json=payload,
-                    timeout=60.0
-                )
-                response.raise_for_status()
-                data = response.json()
-                return data.get("filename")
-            except httpx.HTTPError as e:
-                logger.error(f"TTS synthesis failed: {e}")
-                raise
-
-    async def list_voices(self) -> List[str]:
-        """
-        Fetch available voice styles from the processing service.
-        """
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(f"{self.service_url}/voices", timeout=10.0)
-                response.raise_for_status()
-                data = response.json()
-                return data.get("voices", [])
-            except httpx.HTTPStatusError as e:
-                logger.error(f"Failed to fetch voices: {e}")
-                return []
-            except Exception as e:
-                logger.error(f"Failed to fetch voices: {e}")
-                return []
 
     async def web_capture(self, url: str, force: bool = False) -> Dict[str, Any]:
         """

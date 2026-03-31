@@ -146,14 +146,6 @@ class PdfParseRequest(BaseModel):
     backend_url: str
 
 
-class TtsRequest(BaseModel):
-    """Request body for TTS synthesis."""
-
-    text: str
-    voice: str
-    speed: float = 1.0
-
-
 class WebCaptureRequest(BaseModel):
     """Request body for web capture."""
 
