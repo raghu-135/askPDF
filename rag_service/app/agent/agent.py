@@ -113,7 +113,6 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         embedding_model = conf.get("embedding_model")
         context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
         use_reranker = conf.get("use_reranker", True)
-        use_reranker = conf.get("use_reranker", True)
 
         if not thread_id or not embedding_model:
             return "No thread context found."
@@ -225,6 +224,7 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
+        use_reranker = conf.get("use_reranker", True)
 
         if not thread_id or not embedding_model:
             return "No thread context found."
@@ -329,6 +329,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         conf = config.get("configurable", {}) if config else {}
         if not conf.get("use_web_search", False):
             return "Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available. Answer using only the uploaded documents and conversation history."
+        use_reranker = conf.get("use_reranker", True)
 
         logger.info(f"--- WEB SEARCH INITIATED --- Query: '{query}'")
         thread_id = conf.get("thread_id")
@@ -342,7 +343,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         urls = result["urls"]
         titles = result["titles"]
         scores: Optional[List[float]] = None
-        if conf.get("use_reranker", True):
+        if use_reranker:
             web_chunks = [{"text": t, "url": urls[i], "title": titles[i]} for i, t in enumerate(texts)]
             web_chunks = await rerank_document_chunks(query, web_chunks)
             texts = [c.get("text", "") for c in web_chunks]
