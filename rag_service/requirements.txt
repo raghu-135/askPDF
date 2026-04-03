@@ -19,5 +19,12 @@ langchain
 langchain-core
 langchain-community
 ddgs
-sentence-transformers
+sentence_transformers
 torch
+PyMuPDF>=1.24.0
+pymupdf-layout
+spacy>=3.7.0
+docling>=2.0.0
+numpy
+pydub
+trafilatura

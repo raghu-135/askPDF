@@ -1,15 +1,42 @@
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000") + "/api";
+const API_BASE = "/api";
 
+/**
+ * Fetches available TTS voices from the unified frontend TTS API.
+ * Accepts multiple payload shapes and normalizes the result to voice ids.
+ *
+ * @returns A normalized list of available voice ids.
+ */
 export async function getVoices(): Promise<string[]> {
-    const res = await fetch(`${API_BASE}/voices`);
+    const res = await fetch(`${API_BASE}/tts?action=voices`);
     if (!res.ok) {
         console.error("Failed to fetch voices");
         return [];
     }
     const data = await res.json();
-    return data.voices;
+    const raw = data?.voices;
+    if (Array.isArray(raw)) {
+        return raw
+            .map((v: any) => String(v?.voice ?? v?.id ?? v))
+            .map((v: string) => v.replace(/\.json$/i, "").replace(/\.pt$/i, ""))
+            .filter(Boolean);
+    }
+    if (raw && typeof raw === "object") {
+        return Object.keys(raw)
+            .map((v) => v.replace(/\.json$/i, "").replace(/\.pt$/i, ""))
+            .filter(Boolean);
+    }
+    return [];
 }
 
+/**
+ * Requests synthesis for a sentence and returns a URL that can be assigned
+ * directly to an HTML audio element.
+ *
+ * @param text - Sentence text to synthesize.
+ * @param voice - Voice id to use.
+ * @param speed - Playback/synthesis speed multiplier.
+ * @returns Audio URL payload from the TTS API.
+ */
 export async function ttsSentence(text: string, voice: string, speed: number): Promise<{ audioUrl: string }> {
     const res = await fetch(`${API_BASE}/tts`, {
         method: "POST",

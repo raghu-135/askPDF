@@ -9,7 +9,7 @@ from typing import Dict, Tuple, List, Optional
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-from prompt_defaults import DEFAULT_SYSTEM_ROLE
+from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
 
 try:
     from sentence_transformers import SentenceTransformer, CrossEncoder

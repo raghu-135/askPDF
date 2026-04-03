@@ -13,8 +13,8 @@ from langgraph.graph import StateGraph, END, START
 from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import add_messages
 
-from models import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
-from prompt_loaders import (
+from app.models.llm_server_client import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
+from app.prompts.loaders import (
     get_orchestrator_prompt,
     get_orchestrator_prompt_compact,
     get_orchestrator_phase0_prompt,
@@ -22,16 +22,16 @@ from prompt_loaders import (
     get_intent_agent_prompt,
     get_web_search_mandate,
 )
-from agent_helpers import (
+from app.agent.agent_helpers import (
     build_chat_prompt,
     parse_intent_response,
     evidence_insufficient,
     collect_tool_sources,
 )
-from prompt_defaults import DEFAULT_SYSTEM_ROLE
-from vectordb.qdrant import get_qdrant
-from retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
-from tool_registry import TOOL_FRIENDLY_CONFIG
+from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
+from app.db.qdrant import get_qdrant
+from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
+from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,6 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
-        use_reranker = conf.get("use_reranker", True)
         use_reranker = conf.get("use_reranker", True)
 
         if not thread_id or not embedding_model:
@@ -225,6 +224,7 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
+        use_reranker = conf.get("use_reranker", True)
 
         if not thread_id or not embedding_model:
             return "No thread context found."
@@ -329,6 +329,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         conf = config.get("configurable", {}) if config else {}
         if not conf.get("use_web_search", False):
             return "Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available. Answer using only the uploaded documents and conversation history."
+        use_reranker = conf.get("use_reranker", True)
 
         logger.info(f"--- WEB SEARCH INITIATED --- Query: '{query}'")
         thread_id = conf.get("thread_id")
@@ -342,7 +343,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         urls = result["urls"]
         titles = result["titles"]
         scores: Optional[List[float]] = None
-        if conf.get("use_reranker", True):
+        if use_reranker:
             web_chunks = [{"text": t, "url": urls[i], "title": titles[i]} for i, t in enumerate(texts)]
             web_chunks = await rerank_document_chunks(query, web_chunks)
             texts = [c.get("text", "") for c in web_chunks]
@@ -353,7 +354,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         # ── Persist results in Qdrant for future retrieval ──
         if thread_id and embedding_model and conf.get("web_search_index", True):
             try:
-                from rag import index_web_search_for_thread
+                from app.rag.indexer import index_web_search_for_thread
                 asyncio.create_task(
                     index_web_search_for_thread(
                         thread_id=thread_id,
@@ -421,7 +422,7 @@ async def list_uploaded_documents(config: RunnableConfig = None) -> str:
         if not thread_id:
             return "No thread context found."
 
-        from database import get_thread_shape as _get_shape
+        from app.db.database import get_thread_shape as _get_shape
         shape = await _get_shape(thread_id)
         docs = shape["documents"]
 
@@ -547,7 +548,7 @@ async def find_topic_anchor_in_history(
         if not recalled:
             return "No relevant history found for this topic."
 
-        from database import get_thread_messages
+        from app.db.database import get_thread_messages
         all_messages = await get_thread_messages(thread_id, limit=2000)
         position_map = {msg.id: i + 1 for i, msg in enumerate(all_messages)}
 

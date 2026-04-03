@@ -52,7 +52,7 @@ export async function getPdfByHash(fileHash: string): Promise<PdfData> {
 // ============ TTS ============
 
 export async function ttsSentence(text: string, voice: string, speed: number) {
-  const res = await fetch(`${API_BASE}/api/tts`, {
+  const res = await fetch(`/api/tts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, voice, speed })

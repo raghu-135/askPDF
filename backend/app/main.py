@@ -1,17 +1,13 @@
 """
 main.py
---------
-FastAPI application for PDF Text-to-Speech (TTS) and Retrieval-Augmented Generation (RAG) services.
+-------
+FastAPI entry point for the AskPDF backend service.
 
-Features:
-- Upload PDF files, extract sentences and bounding boxes, and trigger RAG indexing
-- Synthesize audio for sentences using TTS
-- List available TTS voices/styles
-- Check RAG indexing status
-- Serve static and audio files
-
-Environment Variables:
-- RAG_SERVICE_URL: URL for the RAG service (default: http://rag-service:8000)
+This service acts as a coordinator and API gateway for:
+- PDF uploads and metadata management
+- Coordination of PDF parsing and indexing tasks (delegated to the processing service)
+- Proxying Web Capture requests to the processing service
+- Managing indexing status and serving processed assets
 """
 import os
 import uuid
@@ -25,18 +21,15 @@ from pydantic import BaseModel
 
 
 # Local imports
-from .tts import tts_sentence_to_wav, list_voice_styles
 from .pdf_service import PDFService, get_indexing_status, IndexingStatus
-from .web_capture_service import capture_webpage, webpage_exists, url_to_hash
 
 
 
 API_PREFIX = "/api"
-AUDIO_DIR = "/data/audio"
-# RAG service URL (can be overridden by environment variable)
-RAG_SERVICE_URL = os.getenv("RAG_SERVICE_URL")
-if RAG_SERVICE_URL is None:
-    raise ValueError("RAG_SERVICE_URL environment variable is not set")
+# External service configuration
+PROCESSING_SERVICE_URL = os.getenv("PROCESSING_SERVICE_URL")
+if PROCESSING_SERVICE_URL is None:
+    raise ValueError("PROCESSING_SERVICE_URL environment variable is not set")
 
 
 app = FastAPI(title="PDF TTS")
@@ -48,13 +41,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Ensure audio and static directories exist
-os.makedirs(AUDIO_DIR, exist_ok=True)
+# Ensure static directory exists
 os.makedirs("/static", exist_ok=True)
 
 
 
-pdf_service = PDFService(static_dir="/static", rag_service_url=RAG_SERVICE_URL)
+from .service_client import ProcessingService, RestProcessingServiceClient
+service_client: ProcessingService = RestProcessingServiceClient(service_url=PROCESSING_SERVICE_URL)
+pdf_service = PDFService(static_dir="/static", service_client=service_client)
 
 @app.post(f"{API_PREFIX}/upload")
 async def upload_pdf(
@@ -91,39 +85,16 @@ async def get_pdf_data(file_hash: str):
     return await pdf_service.get_pdf_by_hash(file_hash)
 
 
-@app.get(f"{API_PREFIX}/voices")
-async def get_voices():
+@app.get(f"{API_PREFIX}/pdf-file/{{file_hash}}")
+async def get_pdf_file(file_hash: str):
     """
-    List available TTS voices/styles.
-    
-    Returns:
-        dict: Available voices/styles for TTS.
+    Serve the actual PDF file from the static directory with CORS headers.
+    This replaces serving it via StaticFiles which lacks CORS on some setups.
     """
-    voices = list_voice_styles()
-    return {"voices": voices}
-
-
-@app.post(f"{API_PREFIX}/tts")
-async def synthesize_sentence(payload: dict):
-    """
-    Synthesize audio for a sentence using TTS.
-    
-    Args:
-        payload (dict): Should contain 'text', 'voice', and optional 'speed'.
-    Returns:
-        dict: URL to the generated audio file.
-    Raises:
-        HTTPException: If 'text' is missing in the payload.
-    """
-    text = payload.get("text")
-    voice = payload.get("voice")
-    speed = payload.get("speed", 1.0)
-    if not text:
-        raise HTTPException(status_code=400, detail="Missing 'text' in payload.")
-    path = tts_sentence_to_wav(text, AUDIO_DIR, voice_style=voice, speed=speed)
-    rel = os.path.relpath(path, "/")
-    url = f"/{rel}"
-    return {"audioUrl": url}
+    file_path = f"/static/{file_hash}.pdf"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return FileResponse(file_path, media_type="application/pdf")
 
 
 @app.get(f"{API_PREFIX}/index-status/{{file_hash}}")
@@ -150,10 +121,6 @@ async def get_file_index_status(file_hash: str):
     }
 
 
-# ---------------------------------------------------------------------------
-# Web capture endpoints
-# ---------------------------------------------------------------------------
-
 class WebCaptureRequest(BaseModel):
     url: str
     force: bool = False
@@ -162,21 +129,14 @@ class WebCaptureRequest(BaseModel):
 @app.post(f"{API_PREFIX}/web-capture")
 async def web_capture(req: WebCaptureRequest):
     """
-    Fetch a webpage, inline its assets, and save a self-contained HTML file.
-
-    Returns the file_hash and page title so the frontend can build the
-    iframe URL: GET /api/web-page/{file_hash}
+    Proxy a webpage capture request to the processing service.
+    The processing service performs the capture, inlines assets, and saves the 
+    resulting self-contained HTML file to the shared volume (/static/webpages).
     """
     try:
-        result = await capture_webpage(req.url, force=req.force)
+        return await service_client.web_capture(url=req.url, force=req.force)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to capture page: {exc}")
-    return {
-        "file_hash": result["file_hash"],
-        "title": result["title"],
-        "cached": result["cached"],
-        "content_hash": result.get("content_hash"),
-    }
 
 
 @app.get(f"{API_PREFIX}/web-page/{{file_hash}}")
@@ -188,9 +148,9 @@ async def get_web_page(file_hash: str):
     it inside an <iframe> — bypassing any X-Frame-Options / CSP from the
     original site entirely.
     """
-    if not webpage_exists(file_hash):
-        raise HTTPException(status_code=404, detail="Web page capture not found.")
     html_path = f"/static/webpages/{file_hash}.html"
+    if not os.path.exists(html_path):
+        raise HTTPException(status_code=404, detail="Web page capture not found.")
     return FileResponse(
         html_path,
         media_type="text/html",
@@ -211,9 +171,6 @@ async def health():
     """
     return {"status": "ok"}
 
-
-# Serve audio files
-app.mount("/data", StaticFiles(directory="/data"), name="data")
 
 # Mount static files last to avoid shadowing API routes
 app.mount("/", StaticFiles(directory="/static", html=True), name="static")

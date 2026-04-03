@@ -33,13 +33,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - RAG_SERVICE_URL=http://rag-service:8000
-      # Docling Tuning Options (Accuracy vs Speed)
-      - DOCLING_DO_OCR=True # OCRs images/scans, preserves digital text.
-      - DOCLING_DO_TABLE_STRUCTURE=True
-      - DOCLING_TABLE_MODE=ACCURATE # ACCURATE is better for tables but slower.
-      - DOCLING_FORCE_FULL_PAGE_OCR=False # KEEP FALSE for digital PDFs to avoid noise and degradation.
-      - DOCLING_DO_FORMULA_ENRICHMENT=False
+      - PROCESSING_SERVICE_URL=http://rag-service:8000
+      - BACKEND_INTERNAL_URL=http://backend:8000
     depends_on:
       rag-service:
         condition: service_healthy
@@ -85,6 +80,12 @@ services:
       - MAX_ITERATIONS_SUFFICIENT_COVERAGE=2
       - MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE=4
       - WEB_SEARCH_ITERATION_BONUS=2
+      # Docling Tuning Options (Accuracy vs Speed)
+      - DOCLING_DO_OCR=True # OCRs images/scans, preserves digital text.
+      - DOCLING_DO_TABLE_STRUCTURE=True
+      - DOCLING_TABLE_MODE=ACCURATE # ACCURATE is better for tables but slower.
+      - DOCLING_FORCE_FULL_PAGE_OCR=False # KEEP FALSE for digital PDFs to avoid noise and degradation.
+      - DOCLING_DO_FORMULA_ENRICHMENT=False # use when you have formulas in your PDFs
     env_file:
       - .env
     depends_on:
@@ -92,6 +93,7 @@ services:
     volumes:
       - ./rag_service:/app
       - ./data:/data
+      - pdf_data:/static
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

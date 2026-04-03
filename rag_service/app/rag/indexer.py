@@ -17,12 +17,12 @@ from unstructured.partition.pdf import partition_pdf
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from models import (
+from app.models.llm_server_client import (
     get_embedding_model, get_llm, 
     DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
 )
-from vectordb.qdrant import get_qdrant
+from app.db.qdrant import get_qdrant
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ async def summarize_qa(
             "Summary:"
         )
         # Use simple invoke for summarization
-        from agent import invoke_with_retry
+        from app.agent.agent import invoke_with_retry
         response = await invoke_with_retry(llm.ainvoke, [HumanMessage(content=prompt)])
         return response.content.strip()
     except Exception as e:
@@ -237,7 +237,7 @@ async def index_document_for_thread(
 
         # Update thread stats snapshot
         try:
-            from database import update_document_indexing_status
+            from app.db.database import update_document_indexing_status
             await update_document_indexing_status(
                 thread_id=thread_id,
                 file_hash=file_hash,
@@ -258,7 +258,7 @@ async def index_document_for_thread(
     except Exception as e:
         logger.error(f"Error indexing document for thread {thread_id}: {e}", exc_info=True)
         try:
-            from database import update_document_indexing_status
+            from app.db.database import update_document_indexing_status
             await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
         except Exception:
             pass
@@ -388,7 +388,7 @@ async def index_webpage_for_thread(
 
         # Update thread stats snapshot
         try:
-            from database import update_document_indexing_status
+            from app.db.database import update_document_indexing_status
             await update_document_indexing_status(
                 thread_id=thread_id,
                 file_hash=file_hash,
@@ -412,7 +412,7 @@ async def index_webpage_for_thread(
         msg = f"HTTP error fetching {url}: {e.response.status_code}"
         logger.error(msg)
         try:
-            from database import update_document_indexing_status
+            from app.db.database import update_document_indexing_status
             await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
         except Exception:
             pass
@@ -420,7 +420,7 @@ async def index_webpage_for_thread(
     except Exception as e:
         logger.error(f"Error indexing webpage for thread {thread_id}: {e}", exc_info=True)
         try:
-            from database import update_document_indexing_status
+            from app.db.database import update_document_indexing_status
             await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
         except Exception:
             pass
