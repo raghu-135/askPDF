@@ -337,6 +337,7 @@ async def index_chat_memory_for_thread(
 
 
 def _extract_question_from_compact_text(compact_text: str) -> str:
+    """Extract the leading `Q:` line from compact chat-memory text."""
     for line in compact_text.splitlines():
         line = line.strip()
         if not line:
@@ -576,6 +577,7 @@ _reembed_locks: Dict[str, asyncio.Lock] = {}
 
 
 def _thread_reembed_lock(thread_id: str) -> asyncio.Lock:
+    """Return the per-thread lock used to avoid concurrent re-embed runs."""
     if thread_id not in _reembed_locks:
         _reembed_locks[thread_id] = asyncio.Lock()
     return _reembed_locks[thread_id]

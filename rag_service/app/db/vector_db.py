@@ -38,6 +38,7 @@ class WeaviateAdapter:
     """Adapter for Weaviate with thread-filtered global collections."""
 
     def __init__(self) -> None:
+        """Initialize Weaviate client connection and ensure required collections exist."""
         weaviate_url = os.getenv("WEAVIATE_URL")
         if not weaviate_url:
             raise ValueError("WEAVIATE_URL environment variable is not set")
@@ -61,9 +62,11 @@ class WeaviateAdapter:
         self._ensure_collections_sync()
 
     async def ensure_collections(self) -> None:
+        """Ensure all required Weaviate collections exist (async wrapper)."""
         await asyncio.to_thread(self._ensure_collections_sync)
 
     def _ensure_collections_sync(self) -> None:
+        """Synchronously create all application collections if missing."""
         self._ensure_collection(
             DOCUMENT_COLLECTION,
             [
@@ -105,6 +108,7 @@ class WeaviateAdapter:
         )
 
     def _ensure_collection(self, name: str, properties: List[tuple[str, Any]]) -> None:
+        """Create a single collection with self-provided vectors when absent."""
         if self.client.collections.exists(name):
             return
         self.client.collections.create(
@@ -118,6 +122,7 @@ class WeaviateAdapter:
 
     @staticmethod
     def _metadata_json(metadata: Optional[Dict[str, Any]]) -> str:
+        """Serialize metadata dict to JSON; return `{}` on empty/invalid input."""
         if not metadata:
             return "{}"
         import json
@@ -129,6 +134,7 @@ class WeaviateAdapter:
 
     @staticmethod
     def _parse_metadata(raw: Optional[str]) -> Dict[str, Any]:
+        """Parse metadata JSON string into a dict; return empty dict on failure."""
         if not raw:
             return {}
         import json
@@ -141,6 +147,7 @@ class WeaviateAdapter:
 
     @staticmethod
     def _score(obj: Any) -> float:
+        """Extract retrieval score (or distance fallback) from Weaviate result metadata."""
         meta = getattr(obj, "metadata", None)
         if not meta:
             return 0.0
@@ -155,6 +162,7 @@ class WeaviateAdapter:
             return 0.0
 
     async def _insert_many(self, collection_name: str, points: List[Dict[str, Any]]) -> int:
+        """Insert vector points into a target collection and return inserted count."""
         if not points:
             return 0
         col = self.client.collections.use(collection_name)
@@ -168,6 +176,7 @@ class WeaviateAdapter:
         return len(points)
 
     async def delete_thread_data(self, thread_id: str) -> bool:
+        """Delete all document, chat-memory, and web-search vectors for a thread."""
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
         try:
             for name in [DOCUMENT_COLLECTION, CHAT_COLLECTION, WEB_SEARCH_COLLECTION]:
@@ -186,6 +195,7 @@ class WeaviateAdapter:
         embeddings: List[List[float]],
         metadatas: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
+        """Index PDF chunks into `DocumentChunk` with embedding-model/file identifiers."""
         points: List[Dict[str, Any]] = []
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
             md = metadatas[i] if metadatas and i < len(metadatas) else {}
@@ -219,6 +229,7 @@ class WeaviateAdapter:
         embeddings: List[List[float]],
         metadatas: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
+        """Index captured webpage chunks into `DocumentChunk`."""
         points: List[Dict[str, Any]] = []
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
             md = metadatas[i] if metadatas and i < len(metadatas) else {}
@@ -250,6 +261,7 @@ class WeaviateAdapter:
         texts: List[str],
         embeddings: List[List[float]],
     ) -> int:
+        """Index compact chat-memory chunks into `ChatMemoryChunk`."""
         points: List[Dict[str, Any]] = []
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
             points.append(
@@ -277,6 +289,7 @@ class WeaviateAdapter:
         urls: Optional[List[str]] = None,
         titles: Optional[List[str]] = None,
     ) -> int:
+        """Index transient web-search snippets into `WebSearchChunk`."""
         points: List[Dict[str, Any]] = []
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
             points.append(
@@ -305,6 +318,7 @@ class WeaviateAdapter:
         file_hashes: Optional[List[str]] = None,
         query_text: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        """Search document chunks using vector or hybrid retrieval with file/model filters."""
         base_filter = wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
         if file_hash:
             base_filter = base_filter & wvc.query.Filter.by_property("file_hash").equal(file_hash)
@@ -358,6 +372,7 @@ class WeaviateAdapter:
         file_hash: str,
         chunk_ids: List[int],
     ) -> List[Dict[str, Any]]:
+        """Fetch specific document chunks by file hash and chunk IDs."""
         if not chunk_ids:
             return []
         filt = (
@@ -400,6 +415,7 @@ class WeaviateAdapter:
         limit: int = 3,
         exclude_message_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
+        """Search chat-memory vectors within a thread, with optional message exclusions."""
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
         if exclude_message_ids:
             filt = filt & wvc.query.Filter.not_(
@@ -437,6 +453,7 @@ class WeaviateAdapter:
         limit: int = 5,
         query_text: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        """Search web-search snippet vectors for a thread via vector or hybrid query."""
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
         col = self.client.collections.use(WEB_SEARCH_COLLECTION)
 
@@ -477,6 +494,7 @@ class WeaviateAdapter:
         return out
 
     async def delete_chat_memory_by_message_id(self, thread_id: str, message_id: str) -> bool:
+        """Delete all chat-memory chunks belonging to a single assistant message."""
         filt = (
             wvc.query.Filter.by_property("thread_id").equal(thread_id)
             & wvc.query.Filter.by_property("message_id").equal(message_id)
@@ -489,6 +507,7 @@ class WeaviateAdapter:
             return False
 
     async def delete_web_chunks_by_urls(self, thread_id: str, urls: List[str]) -> int:
+        """Delete web-search chunks for a thread whose URLs match any provided URL."""
         if not urls:
             return 0
         filt = (
@@ -503,6 +522,7 @@ class WeaviateAdapter:
             return 0
 
     async def delete_source_chunks_by_file_hash(self, thread_id: str, file_hash: str, embedding_model_name: str) -> bool:
+        """Delete all document chunks for a file hash under a specific embedding model."""
         filt = (
             wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
             & wvc.query.Filter.by_property("file_hash").equal(file_hash)
@@ -515,6 +535,7 @@ class WeaviateAdapter:
             return False
 
     async def has_file_indexed(self, thread_id: str, file_hash: str, embedding_model_name: str) -> bool:
+        """Return whether document chunks exist for a file hash + embedding model."""
         filt = (
             wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
             & wvc.query.Filter.by_property("file_hash").equal(file_hash)
@@ -524,6 +545,7 @@ class WeaviateAdapter:
         return bool(getattr(response, "total_count", 0) > 0)
 
     async def has_chat_memory_indexed(self, thread_id: str, message_id: str) -> bool:
+        """Return whether at least one chat-memory chunk exists for a message in a thread."""
         filt = (
             wvc.query.Filter.by_property("thread_id").equal(thread_id)
             & wvc.query.Filter.by_property("message_id").equal(message_id)
@@ -533,6 +555,7 @@ class WeaviateAdapter:
         return bool(getattr(response, "total_count", 0) > 0)
 
     async def get_file_chunk_count(self, file_hash: str, embedding_model_name: str) -> int:
+        """Return the number of indexed document chunks for a file/model pair."""
         filt = (
             wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
             & wvc.query.Filter.by_property("file_hash").equal(file_hash)
@@ -547,6 +570,7 @@ class WeaviateAdapter:
         file_hashes: Optional[List[str]] = None,
         embedding_model_name: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Return aggregate vector counts for thread-scoped chat/web and filtered documents."""
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
 
         doc_col = self.client.collections.use(DOCUMENT_COLLECTION)
