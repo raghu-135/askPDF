@@ -412,6 +412,40 @@ async def is_file_in_thread(thread_id: str, file_hash: str) -> bool:
         return row is not None
 
 
+async def count_threads_with_file_for_model(
+    file_hash: str,
+    embed_model: str,
+    exclude_thread_id: Optional[str] = None,
+) -> int:
+    """
+    Count thread associations for a file restricted to a specific embedding model.
+    Optionally exclude one thread (useful after detaching a file from that thread).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        if exclude_thread_id:
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*)
+                FROM thread_files tf
+                JOIN threads t ON t.id = tf.thread_id
+                WHERE tf.file_hash = ? AND t.embed_model = ? AND tf.thread_id != ?
+                """,
+                (file_hash, embed_model, exclude_thread_id),
+            )
+        else:
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*)
+                FROM thread_files tf
+                JOIN threads t ON t.id = tf.thread_id
+                WHERE tf.file_hash = ? AND t.embed_model = ?
+                """,
+                (file_hash, embed_model),
+            )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+
 # ============ Message Operations ============
 
 async def create_message(

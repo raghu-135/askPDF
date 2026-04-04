@@ -29,7 +29,7 @@ from app.agent.agent_helpers import (
     collect_tool_sources,
 )
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
-from app.db.qdrant import get_qdrant
+from app.db.vector_db import get_vector_db
 from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
@@ -120,16 +120,22 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
 
-        db = get_qdrant()
+        db = get_vector_db()
 
         # ── Build a file_hash → file_name lookup from thread_stats (no DB join) ──
         hash_to_name = await get_document_name_lookup(thread_id)
+        thread_file_hashes = list(hash_to_name.keys())
+        if not thread_file_hashes:
+            return "No documents are linked to this thread yet."
 
         # ── Document chunk search with neighbor expansion ──
         raw_doc_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
-            limit=max_results
+            embedding_model_name=embedding_model,
+            limit=max_results,
+            file_hashes=thread_file_hashes,
+            query_text=query,
         )
         if use_reranker:
             raw_doc_chunks = await rerank_document_chunks(query, raw_doc_chunks)
@@ -150,6 +156,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         for file_hash, id_set in file_chunk_map.items():
             expanded_batch = await db.get_knowledge_source_chunks_by_ids(
                 thread_id=thread_id,
+                embedding_model_name=embedding_model,
                 file_hash=file_hash,
                 chunk_ids=list(id_set)
             )
@@ -162,6 +169,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             thread_id=thread_id,
             query_vector=query_vector,
             limit=max(3, max_results // 3),
+            query_text=query,
         )
         if use_reranker:
             web_chunks = await rerank_document_chunks(query, web_chunks)
@@ -232,7 +240,7 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
         
-        db = get_qdrant()
+        db = get_vector_db()
         history, used_ids = await fetch_semantic_history(
             thread_id=thread_id,
             query_vector=query_vector,
@@ -351,7 +359,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
             titles = [c.get("title", "") for c in web_chunks]
             scores = [c.get("rerank_score") for c in web_chunks]
 
-        # ── Persist results in Qdrant for future retrieval ──
+        # ── Persist results in Weaviate for future retrieval ──
         if thread_id and embedding_model and conf.get("web_search_index", True):
             try:
                 from app.rag.indexer import index_web_search_for_thread
@@ -472,12 +480,14 @@ async def search_document_by_id(
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
 
-        db = get_qdrant()
+        db = get_vector_db()
         raw_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
+            embedding_model_name=embedding_model,
             limit=max_results,
             file_hash=file_hash,
+            query_text=query,
         )
 
         if not raw_chunks:
@@ -494,6 +504,7 @@ async def search_document_by_id(
 
         expanded_chunks = await db.get_knowledge_source_chunks_by_ids(
             thread_id=thread_id,
+            embedding_model_name=embedding_model,
             file_hash=file_hash,
             chunk_ids=list(chunk_ids_to_fetch),
         )
@@ -538,7 +549,7 @@ async def find_topic_anchor_in_history(
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, topic)
 
-        db = get_qdrant()
+        db = get_vector_db()
         recalled = await db.search_chat_memory(
             thread_id=thread_id,
             query_vector=query_vector,

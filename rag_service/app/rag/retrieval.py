@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.db.database import get_thread_shape
 from app.models.llm_server_client import get_reranker_model, DEFAULT_RERANKER_MODEL
-from app.db.qdrant import get_qdrant
+from app.db.vector_db import get_vector_db
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ async def fetch_semantic_history(
 ) -> Tuple[str, List[str]]:
     """Fetch semantic chat memory text plus the list of used message IDs."""
 
-    db = get_qdrant()
+    db = get_vector_db()
     recalled = await db.search_chat_memory(
         thread_id=thread_id,
         query_vector=query_vector,
