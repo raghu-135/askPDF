@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -207,23 +208,12 @@ async def get_thread_endpoint(thread_id: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        embed_model_ready = await check_embed_model_ready(thread.embed_model, use_cache=False)
-        if embed_model_ready:
-            import asyncio
-
-            asyncio.create_task(
-                trigger_reembed_for_missing_sources(
-                    thread_id=thread_id,
-                    embedding_model_name=thread.embed_model,
-                )
+        asyncio.create_task(
+            trigger_reembed_for_missing_sources(
+                thread_id=thread_id,
+                embedding_model_name=thread.embed_model,
             )
-        else:
-            logger.info(
-                "Skipping re-embed trigger for thread %s: embed model '%s' is not ready",
-                thread_id,
-                thread.embed_model,
-            )
-
+        )
         files = await get_thread_files(thread_id)
         db = get_vector_db()
         stats = await db.get_thread_stats(
@@ -253,7 +243,6 @@ async def get_thread_endpoint(thread_id: str):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.put("/threads/{thread_id}")
 async def update_thread_endpoint(thread_id: str, req: ThreadUpdateRequest):

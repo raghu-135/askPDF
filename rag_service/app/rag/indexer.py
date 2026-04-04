@@ -591,25 +591,7 @@ async def trigger_reembed_for_missing_sources(
     Called when a thread is opened.
     """
     from app.db.database import get_thread_files, get_thread_messages, MessageRole
-    from app.models.llm_server_client import check_embed_model_ready
-
-    try:
-        embed_model_ready = await check_embed_model_ready(embedding_model_name, use_cache=False)
-    except Exception as ready_err:
-        logger.warning(
-            "Skipping re-embed for thread %s: embed-model readiness check failed for '%s': %s",
-            thread_id,
-            embedding_model_name,
-            ready_err,
-        )
-        return {"status": "skipped", "reason": "embed_model_check_failed"}
-
-    if not embed_model_ready:
-        logger.warning(
-            "Skipping re-embed for thread %s: embed model '%s' is not ready",
-            thread_id,
-            embedding_model_name,
-        )
+    if not await embed_model_check(thread_id, embedding_model_name):
         return {"status": "skipped", "reason": "embed_model_not_ready"}
 
     lock = _thread_reembed_lock(thread_id)
@@ -628,8 +610,7 @@ async def trigger_reembed_for_missing_sources(
 
         for f in files:
             try:
-                still_ready = await check_embed_model_ready(embedding_model_name, use_cache=False)
-                if not still_ready:
+                if not await embed_model_check(thread_id, embedding_model_name, during_run=True):
                     logger.warning(
                         "Stopping re-embed for thread %s: embed model '%s' became unavailable",
                         thread_id,
@@ -664,8 +645,7 @@ async def trigger_reembed_for_missing_sources(
         try:
             messages = await get_thread_messages(thread_id, limit=10000)
             for msg in messages:
-                still_ready = await check_embed_model_ready(embedding_model_name, use_cache=False)
-                if not still_ready:
+                if not await embed_model_check(thread_id, embedding_model_name, during_run=True):
                     logger.warning(
                         "Stopping chat-memory backfill for thread %s: embed model '%s' became unavailable",
                         thread_id,
@@ -698,3 +678,36 @@ async def trigger_reembed_for_missing_sources(
             "files": reindexed_files,
             "chat_message_ids": reindexed_chat_messages,
         }
+
+
+async def embed_model_check(
+    thread_id: str, embedding_model_name: str, during_run: bool = False
+) -> bool:
+    """
+    Verify embedding-model availability for re-index paths.
+    Returns False on both hard not-ready and check failures.
+    """
+    from app.models.llm_server_client import check_embed_model_ready
+
+    try:
+        ready = await check_embed_model_ready(embedding_model_name, use_cache=False)
+    except Exception as ready_err:
+        phase = "during re-embed run" if during_run else "before re-embed trigger"
+        logger.warning(
+            "Skipping re-embed for thread %s: embed-model readiness check failed %s for '%s': %s",
+            thread_id,
+            phase,
+            embedding_model_name,
+            ready_err,
+        )
+        return False
+
+    if not ready:
+        logger.info(
+            "Skipping re-embed for thread %s: embed model '%s' is not ready",
+            thread_id,
+            embedding_model_name,
+        )
+        return False
+
+    return True
