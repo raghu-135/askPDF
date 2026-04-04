@@ -455,7 +455,7 @@ export async function threadChat(
 
 export async function getThreadIndexStatus(threadId: string): Promise<{
   thread_id: string;
-  status: 'ready' | 'not_ready';
+  status: 'ready' | 'not_ready' | 'blocked';
   stats: any;
   embed_model_ready?: boolean;
 }> {

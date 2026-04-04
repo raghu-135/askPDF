@@ -207,13 +207,22 @@ async def get_thread_endpoint(thread_id: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        import asyncio
-        asyncio.create_task(
-            trigger_reembed_for_missing_sources(
-                thread_id=thread_id,
-                embedding_model_name=thread.embed_model,
+        embed_model_ready = await check_embed_model_ready(thread.embed_model, use_cache=False)
+        if embed_model_ready:
+            import asyncio
+
+            asyncio.create_task(
+                trigger_reembed_for_missing_sources(
+                    thread_id=thread_id,
+                    embedding_model_name=thread.embed_model,
+                )
             )
-        )
+        else:
+            logger.info(
+                "Skipping re-embed trigger for thread %s: embed model '%s' is not ready",
+                thread_id,
+                thread.embed_model,
+            )
 
         files = await get_thread_files(thread_id)
         db = get_vector_db()
@@ -813,6 +822,7 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
             raise HTTPException(status_code=404, detail="Thread not found")
 
         db = get_vector_db()
+        embed_model_ready = await check_embed_model_ready(thread.embed_model)
 
         if file_hash:
             # Check specific file
@@ -838,8 +848,9 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
             embedding_model_name=thread.embed_model,
         )
 
-        # Check embedding model readiness (using cached check)
-        embed_model_ready = await check_embed_model_ready(thread.embed_model)
+        # If vectors are missing and embedding model is offline, surface as blocked
+        if status != "ready" and not embed_model_ready:
+            status = "blocked"
 
         return {
             "thread_id": thread_id,

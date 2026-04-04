@@ -141,6 +141,15 @@ async def prefetch_context(
                 file_hashes=thread_file_hashes,
                 query_text=raw_question,
             )
+            if not raw_chunks:
+                logger.error(
+                    "Missing document vectors for thread %s (files=%d, embed_model=%s). "
+                    "Recovery is only triggered on thread open.",
+                    thread_id,
+                    len(thread_file_hashes),
+                    embed_model_name,
+                )
+                return "", []
             hash_to_name = await get_document_name_lookup(thread_id)
             if use_reranker:
                 raw_chunks = await rerank_document_chunks(raw_question, raw_chunks)

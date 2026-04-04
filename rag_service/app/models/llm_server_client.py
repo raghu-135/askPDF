@@ -583,7 +583,7 @@ async def check_model_supports_tools(model_name: str) -> bool:
         return _update_model_ready_cache(cache_key, False)
 
 
-async def check_embed_model_ready(model_name: str) -> bool:
+async def check_embed_model_ready(model_name: str, use_cache: bool = True) -> bool:
     """
     Check if the supplied model is an embedding model and is ready in the LLM API/server.
     Returns True if ready, False if not ready or not found.
@@ -599,9 +599,10 @@ async def check_embed_model_ready(model_name: str) -> bool:
             return False
 
     cache_key = f"embed:{model_name}"
-    cached_status = _check_model_ready_cache(cache_key)
-    if cached_status is not None:
-        return cached_status
+    if use_cache:
+        cached_status = _check_model_ready_cache(cache_key)
+        if cached_status is not None:
+            return cached_status
 
     base_url = _get_base_url()
     try:

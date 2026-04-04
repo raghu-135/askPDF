@@ -523,6 +523,15 @@ class WeaviateAdapter:
         response = await asyncio.to_thread(col.aggregate.over_all, filters=filt)
         return bool(getattr(response, "total_count", 0) > 0)
 
+    async def has_chat_memory_indexed(self, thread_id: str, message_id: str) -> bool:
+        filt = (
+            wvc.query.Filter.by_property("thread_id").equal(thread_id)
+            & wvc.query.Filter.by_property("message_id").equal(message_id)
+        )
+        col = self.client.collections.use(CHAT_COLLECTION)
+        response = await asyncio.to_thread(col.aggregate.over_all, filters=filt)
+        return bool(getattr(response, "total_count", 0) > 0)
+
     async def get_file_chunk_count(self, file_hash: str, embedding_model_name: str) -> int:
         filt = (
             wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)

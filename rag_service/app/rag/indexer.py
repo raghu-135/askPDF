@@ -336,6 +336,52 @@ async def index_chat_memory_for_thread(
         return {"status": "error", "message": str(e)}
 
 
+def _extract_question_from_compact_text(compact_text: str) -> str:
+    for line in compact_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("Q:"):
+            return line[2:].strip()
+        break
+    return ""
+
+
+async def index_chat_memory_from_compact_for_thread(
+    thread_id: str,
+    message_id: str,
+    compact_text: str,
+    answer: str,
+    embedding_model_name: str,
+) -> Dict[str, Any]:
+    """
+    Re-index chat memory using the exact persisted compact text so summarized
+    vs non-summarized memory stays identical to what was originally stored.
+    """
+    db_client = get_vector_db()
+    try:
+        chunks = split_chat_memory_text(compact_text)
+        vectors = await generate_embeddings(chunks, embedding_model_name)
+        indexed_count = await db_client.index_chat_memory(
+            thread_id=thread_id,
+            message_id=message_id,
+            question=_extract_question_from_compact_text(compact_text),
+            answer=answer,
+            texts=chunks,
+            embeddings=vectors,
+        )
+        return {"status": "success", "chunks_count": indexed_count}
+    except Exception as e:
+        logger.error(
+            "Error re-indexing compact chat memory for thread %s message %s: %s",
+            thread_id,
+            message_id,
+            e,
+            exc_info=True,
+        )
+        return {"status": "error", "message": str(e)}
+
+
 async def index_webpage_for_thread(
     thread_id: str,
     url: str,
@@ -541,10 +587,30 @@ async def trigger_reembed_for_missing_sources(
     file_hashes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Lazy, async backfill for sources that exist in SQLite but are missing in vector DB.
-    This intentionally does not backfill chat-memory history.
+    Lazy backfill for sources and chat-memory vectors missing in vector DB.
+    Called when a thread is opened.
     """
-    from app.db.database import get_thread_files
+    from app.db.database import get_thread_files, get_thread_messages, MessageRole
+    from app.models.llm_server_client import check_embed_model_ready
+
+    try:
+        embed_model_ready = await check_embed_model_ready(embedding_model_name, use_cache=False)
+    except Exception as ready_err:
+        logger.warning(
+            "Skipping re-embed for thread %s: embed-model readiness check failed for '%s': %s",
+            thread_id,
+            embedding_model_name,
+            ready_err,
+        )
+        return {"status": "skipped", "reason": "embed_model_check_failed"}
+
+    if not embed_model_ready:
+        logger.warning(
+            "Skipping re-embed for thread %s: embed model '%s' is not ready",
+            thread_id,
+            embedding_model_name,
+        )
+        return {"status": "skipped", "reason": "embed_model_not_ready"}
 
     lock = _thread_reembed_lock(thread_id)
     if lock.locked():
@@ -557,35 +623,78 @@ async def trigger_reembed_for_missing_sources(
             files = [f for f in files if f.file_hash in wanted]
 
         db = get_vector_db()
-        scheduled: List[Dict[str, str]] = []
+        reindexed_files: List[Dict[str, str]] = []
+        reindexed_chat_messages: List[str] = []
 
         for f in files:
             try:
+                still_ready = await check_embed_model_ready(embedding_model_name, use_cache=False)
+                if not still_ready:
+                    logger.warning(
+                        "Stopping re-embed for thread %s: embed model '%s' became unavailable",
+                        thread_id,
+                        embedding_model_name,
+                    )
+                    break
                 if await db.has_file_indexed(thread_id, f.file_hash, embedding_model_name):
                     continue
                 if f.source_type == "web":
                     url = (f.file_path or f.file_name or "").strip()
                     if not url:
                         continue
-                    asyncio.create_task(
-                        index_webpage_for_thread(
-                            thread_id=thread_id,
-                            url=url,
-                            file_hash=f.file_hash,
-                            embedding_model_name=embedding_model_name,
-                        )
+                    result = await index_webpage_for_thread(
+                        thread_id=thread_id,
+                        url=url,
+                        file_hash=f.file_hash,
+                        embedding_model_name=embedding_model_name,
                     )
-                    scheduled.append({"file_hash": f.file_hash, "source_type": "web"})
+                    if result.get("status") == "success":
+                        reindexed_files.append({"file_hash": f.file_hash, "source_type": "web"})
                 else:
-                    asyncio.create_task(
-                        index_document_for_thread(
-                            thread_id=thread_id,
-                            file_hash=f.file_hash,
-                            embedding_model_name=embedding_model_name,
-                        )
+                    result = await index_document_for_thread(
+                        thread_id=thread_id,
+                        file_hash=f.file_hash,
+                        embedding_model_name=embedding_model_name,
                     )
-                    scheduled.append({"file_hash": f.file_hash, "source_type": "pdf"})
+                    if result.get("status") == "success":
+                        reindexed_files.append({"file_hash": f.file_hash, "source_type": "pdf"})
             except Exception as item_err:
                 logger.warning("Skipping re-embed for file %s: %s", f.file_hash, item_err)
 
-        return {"status": "scheduled", "count": len(scheduled), "files": scheduled}
+        try:
+            messages = await get_thread_messages(thread_id, limit=10000)
+            for msg in messages:
+                still_ready = await check_embed_model_ready(embedding_model_name, use_cache=False)
+                if not still_ready:
+                    logger.warning(
+                        "Stopping chat-memory backfill for thread %s: embed model '%s' became unavailable",
+                        thread_id,
+                        embedding_model_name,
+                    )
+                    break
+                if msg.role != MessageRole.ASSISTANT:
+                    continue
+                compact_text = (msg.context_compact or "").strip()
+                if not compact_text:
+                    continue
+                if await db.has_chat_memory_indexed(thread_id, msg.id):
+                    continue
+                chat_result = await index_chat_memory_from_compact_for_thread(
+                    thread_id=thread_id,
+                    message_id=msg.id,
+                    compact_text=compact_text,
+                    answer=msg.content,
+                    embedding_model_name=embedding_model_name,
+                )
+                if chat_result.get("status") == "success":
+                    reindexed_chat_messages.append(msg.id)
+        except Exception as chat_err:
+            logger.warning("Skipping chat-memory backfill for thread %s: %s", thread_id, chat_err)
+
+        return {
+            "status": "completed",
+            "file_count": len(reindexed_files),
+            "chat_memory_count": len(reindexed_chat_messages),
+            "files": reindexed_files,
+            "chat_message_ids": reindexed_chat_messages,
+        }

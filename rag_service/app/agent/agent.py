@@ -137,6 +137,15 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             file_hashes=thread_file_hashes,
             query_text=query,
         )
+        if not raw_doc_chunks:
+            logger.error(
+                "Missing document vectors for thread %s (files=%d, embed_model=%s). "
+                "Open thread endpoint should trigger recovery.",
+                thread_id,
+                len(thread_file_hashes),
+                embedding_model,
+            )
+            return "Document index is missing for this thread. Re-open the thread to trigger re-indexing."
         if use_reranker:
             raw_doc_chunks = await rerank_document_chunks(query, raw_doc_chunks)
 
@@ -491,6 +500,12 @@ async def search_document_by_id(
         )
 
         if not raw_chunks:
+            logger.error(
+                "Missing vectors for file %s in thread %s (embed_model=%s).",
+                file_hash,
+                thread_id,
+                embedding_model,
+            )
             return f"No relevant content found in document {file_hash}."
 
         expansion_radius = max(2, min(10, int(context_window / 8000) + 1))
