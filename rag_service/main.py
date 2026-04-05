@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Import modular components
 from app.api.routes import router
 from app.db.database import init_db
+from app.db.vector_db import get_vector_db
 
 # Load environment variables
 load_dotenv()
@@ -43,6 +44,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.critical(f"Failed to initialize database: {e}", exc_info=True)
         # We continue to allow the process to start so it can be debugged via /health
+
+    try:
+        logger.info("Initializing Weaviate collections...")
+        await get_vector_db().ensure_collections()
+        logger.info("Weaviate collection initialization complete.")
+    except Exception as e:
+        logger.critical(f"Failed to initialize Weaviate collections: {e}", exc_info=True)
         
     yield
     logger.info("--- RAG Service Shutting Down ---")

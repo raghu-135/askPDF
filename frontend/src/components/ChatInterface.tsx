@@ -95,7 +95,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'error'>('checking');
+    const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'blocked'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
     const [contextWindow, setContextWindow] = useState<number>(0);
     const [maxIterations, setMaxIterations] = useState(0);
@@ -247,9 +247,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             setIndexingStatus('checking');
             const status = await getThreadIndexStatus(activeThread.id);
-            // Map rag-service status ('ready' | 'not_ready') to UI status
+            // Map rag-service status ('ready' | 'blocked') to UI status
             if (status.status === 'ready') {
                 setIndexingStatus('ready');
+            } else if (status.status === 'blocked') {
+                setIndexingStatus('blocked');
             } else {
                 // 'not_ready' means still indexing
                 setIndexingStatus('indexing');
@@ -270,9 +272,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setIsEmbedModelValid(null);
             const ready = await checkEmbedModelReady(activeThread.embed_model, ragApiUrl);
             setIsEmbedModelValid(ready);
+            if (!ready) {
+                setIndexingStatus('blocked');
+            }
         } catch (error) {
             console.error('Failed to check embed model status:', error);
             setIsEmbedModelValid(false);
+            setIndexingStatus('blocked');
         }
     };
 
@@ -441,6 +447,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     // Polling for indexing and embedding model status
     useEffect(() => {
         if (!activeThread) return;
+        if (indexingStatus === 'blocked' || isEmbedModelValid === false) return;
         // Keep polling if either indexing is in progress OR embed model is not yet valid/checked
         if (indexingStatus !== 'indexing' && isEmbedModelValid === true) return;
 
@@ -451,6 +458,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 // Update indexing status
                 if (status.status === 'ready') {
                     setIndexingStatus('ready');
+                } else if (status.status === 'blocked') {
+                    setIndexingStatus('blocked');
                 }
 
                 // Update embedding model status
@@ -458,8 +467,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setIsEmbedModelValid(status.embed_model_ready);
                 }
 
-                // If both are resolved, stop polling
-                if (status.status === 'ready' && status.embed_model_ready === true) {
+                // If resolved, stop polling
+                if (
+                    (status.status === 'ready' && status.embed_model_ready === true) ||
+                    status.status === 'blocked' ||
+                    status.embed_model_ready === false
+                ) {
                     clearInterval(intervalId);
                 }
             } catch (error) {
@@ -768,7 +781,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <Tooltip title={
                         isEmbedModelValid === null ? "Checking embedding model status on server..." :
                             isEmbedModelValid ? `Embedding model locked: ${activeThread.embed_model}` :
-                                `Error: Embedding model "${activeThread.embed_model}" is offline or still initializing. Retrying...`
+                                `Blocked: Embedding model "${activeThread.embed_model}" is unavailable on server.`
                     }>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                             <LockIcon
@@ -1212,13 +1225,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         multiline
                         maxRows={10}
                         placeholder={
-                            indexingStatus !== 'ready'
-                                ? "Indexing your document. This may take a moment..."
-                                : isEmbedModelValid === null
+                            (indexingStatus === 'blocked' || isEmbedModelValid === false)
+                                ? "Blocked: Selected embedding model is unavailable on server."
+                                : indexingStatus !== 'ready'
+                                    ? "Indexing your document. This may take a moment..."
+                                    : isEmbedModelValid === null
                                     ? "Checking embedding model..."
-                                    : isEmbedModelValid === false
-                                        ? "Selected embedding model is missing from server."
-                                        : (llmModel && isLlmModelValid === null)
+                                    : (llmModel && isLlmModelValid === null)
                                             ? "Checking chat model..."
                                             : isLlmModelValid === false
                                                 ? "Selected model is not a valid chat model."
@@ -1256,7 +1269,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         onClick={handleSend}
                         disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                     >
-                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || indexingStatus !== 'ready') ? <CircularProgress size={24} /> : <SendIcon />}
+                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false)) ? <CircularProgress size={24} /> : <SendIcon />}
                     </IconButton>
                 </Box>
             </Box>

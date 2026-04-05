@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import logging
@@ -15,6 +16,7 @@ from app.agent.agent import (
 from app.db.database import (
     MessageRole,
     add_file_to_thread,
+    count_threads_with_file_for_model,
     create_message,
     create_or_get_file,
     create_thread,
@@ -38,7 +40,7 @@ from app.db.database import (
     update_thread_settings,
     upsert_thread_stats_document,
 )
-from app.db.qdrant import get_qdrant
+from app.db.vector_db import get_vector_db
 from app.models.llm_server_client import (
     DEFAULT_EMBEDDING_MODEL,
     INTENT_AGENT_MAX_ITERATIONS,
@@ -64,7 +66,11 @@ from app.models.requests import (
     WebSourceRequest,
 )
 from app.rag.chat_service import handle_thread_chat
-from app.rag.indexer import index_document_for_thread, index_webpage_for_thread
+from app.rag.indexer import (
+    index_document_for_thread,
+    index_webpage_for_thread,
+    trigger_reembed_for_missing_sources,
+)
 from app.services.nlp_service import split_into_sentences
 from app.services.parsing_service import extract_text_with_coordinates
 from app.services.web_capture_service import capture_webpage
@@ -156,7 +162,6 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
 async def create_thread_endpoint(req: ThreadCreateRequest):
     """
     Create a new chat thread.
-    Also creates the Qdrant collection for this thread.
     """
     try:
         embed_model = (req.embed_model or "").strip() or DEFAULT_EMBEDDING_MODEL
@@ -167,11 +172,6 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
             )
         # Create thread in SQLite
         thread = await create_thread(req.name, embed_model)
-
-        # Create Qdrant collection for the thread
-        db = get_qdrant()
-        # Default vector size will be determined when first embeddings are added
-        # For now, we'll create it on first index
 
         return {
             "id": thread.id,
@@ -208,9 +208,19 @@ async def get_thread_endpoint(thread_id: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
+        asyncio.create_task(
+            trigger_reembed_for_missing_sources(
+                thread_id=thread_id,
+                embedding_model_name=thread.embed_model,
+            )
+        )
         files = await get_thread_files(thread_id)
-        db = get_qdrant()
-        stats = await db.get_thread_stats(thread_id)
+        db = get_vector_db()
+        stats = await db.get_thread_stats(
+            thread_id=thread_id,
+            file_hashes=[f.file_hash for f in files],
+            embedding_model_name=thread.embed_model,
+        )
         return {
             "id": thread.id,
             "name": thread.name,
@@ -233,7 +243,6 @@ async def get_thread_endpoint(thread_id: str):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.put("/threads/{thread_id}")
 async def update_thread_endpoint(thread_id: str, req: ThreadUpdateRequest):
@@ -312,12 +321,12 @@ async def update_thread_settings_endpoint(
 @router.delete("/threads/{thread_id}")
 async def delete_thread_endpoint(thread_id: str):
     """
-    Delete a thread, its messages, file associations, and Qdrant collection.
+    Delete a thread, its messages, file associations, and vector data.
     """
     try:
-        # Delete Qdrant collection first
-        db = get_qdrant()
-        await db.delete_thread_collection(thread_id)
+        # Delete thread-scoped vector data first
+        db = get_vector_db()
+        await db.delete_thread_data(thread_id)
 
         # Delete from SQLite
         deleted = await delete_thread(thread_id)
@@ -361,10 +370,6 @@ async def add_file_to_thread_endpoint(
             file_name=req.file_name,
             source_type="pdf",
         )
-
-        # Check if already indexed in this thread's collection
-        db = get_qdrant()
-        collection_exists = await db.thread_collection_exists(thread_id)
 
         # Trigger background indexing
         background_tasks.add_task(
@@ -486,16 +491,26 @@ async def add_web_source_to_thread_endpoint(
 async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
     """
     Remove a PDF or web source from a thread.
-    Deletes vectors from Qdrant and removes the file-thread association from the DB.
+    Deletes vectors from Weaviate and removes the file-thread association from the DB.
     """
     try:
         thread = await get_thread(thread_id)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        # Delete vectors from Qdrant
-        qdrant = get_qdrant()
-        await qdrant.delete_source_chunks_by_file_hash(thread_id, file_hash)
+        # Delete vectors from Weaviate
+        vector_db = get_vector_db()
+        remaining_refs = await count_threads_with_file_for_model(
+            file_hash=file_hash,
+            embed_model=thread.embed_model,
+            exclude_thread_id=thread_id,
+        )
+        if remaining_refs == 0:
+            await vector_db.delete_source_chunks_by_file_hash(
+                thread_id=thread_id,
+                file_hash=file_hash,
+                embedding_model_name=thread.embed_model,
+            )
 
         # Remove from SQLite
         removed = await remove_file_from_thread(thread_id, file_hash)
@@ -531,7 +546,7 @@ async def refresh_web_source_endpoint(
       - If changed  → return status="confirmation_required" so the caller can show
                        a dialog warning about data replacement.
 
-    Phase 2 (confirmed=True): purge stale Qdrant vectors and re-index fresh content.
+    Phase 2 (confirmed=True): purge stale vector chunks and re-index fresh content.
 
     This ensures resources are only spent when page content actually changed, and
     the user gets a chance to acknowledge that old indexed data will be replaced.
@@ -574,8 +589,12 @@ async def refresh_web_source_endpoint(
             }
 
         # ── Phase 2: confirmed — purge and re-index ────────────────────────
-        qdrant = get_qdrant()
-        await qdrant.delete_source_chunks_by_file_hash(thread_id, file_hash)
+        vector_db = get_vector_db()
+        await vector_db.delete_source_chunks_by_file_hash(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            embedding_model_name=thread.embed_model,
+        )
 
         # Reset thread_stats to pending; store new content_hash immediately
         await upsert_thread_stats_document(
@@ -653,7 +672,7 @@ async def get_thread_messages_endpoint(
 @router.delete("/messages/{message_id}")
 async def delete_message_endpoint(message_id: str):
     """
-    Delete a message and its associated chat memory from Qdrant.
+    Delete a message and its associated chat memory from Weaviate.
     If it's part of a QA pair, deletes both messages, their chat-memory vector,
     and any web search chunks (web_search type) whose URLs are no longer referenced
     by any other message in the thread.
@@ -695,11 +714,11 @@ async def delete_message_endpoint(message_id: str):
                     if url:
                         urls_to_check.add(url)
 
-        db = get_qdrant()
+        db = get_vector_db()
 
         # ── Delete chat-memory vector ──
-        qdrant_msg_id = assistant_msg_id or message_id
-        await db.delete_chat_memory_by_message_id(message.thread_id, qdrant_msg_id)
+        vector_message_id = assistant_msg_id or message_id
+        await db.delete_chat_memory_by_message_id(message.thread_id, vector_message_id)
 
         # ── Delete orphaned web_search chunks ──
         if urls_to_check:
@@ -791,11 +810,12 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        db = get_qdrant()
+        db = get_vector_db()
+        embed_model_ready = await check_embed_model_ready(thread.embed_model)
 
         if file_hash:
             # Check specific file
-            is_indexed = await db.has_file_indexed(thread_id, file_hash)
+            is_indexed = await db.has_file_indexed(thread_id, file_hash, thread.embed_model)
             status = "ready" if is_indexed else "not_ready"
         else:
             # Check all files in thread
@@ -806,15 +826,20 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
                 all_indexed = True
                 for f in files:
                     # Check if file chunks exist for this thread
-                    if not await db.has_file_indexed(thread_id, f.file_hash):
+                    if not await db.has_file_indexed(thread_id, f.file_hash, thread.embed_model):
                         all_indexed = False
                         break
                 status = "ready" if all_indexed else "not_ready"
 
-        stats = await db.get_thread_stats(thread_id)
+        stats = await db.get_thread_stats(
+            thread_id=thread_id,
+            file_hashes=[f.file_hash for f in files] if not file_hash else [file_hash],
+            embedding_model_name=thread.embed_model,
+        )
 
-        # Check embedding model readiness (using cached check)
-        embed_model_ready = await check_embed_model_ready(thread.embed_model)
+        # If vectors are missing and embedding model is offline, surface as blocked
+        if status != "ready" and not embed_model_ready:
+            status = "blocked"
 
         return {
             "thread_id": thread_id,

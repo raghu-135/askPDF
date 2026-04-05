@@ -271,7 +271,7 @@ export interface RefreshWebSourceResult {
  *   - "unchanged"            → page content hasn't changed, skip re-indexing.
  *   - "confirmation_required" → content changed, show dialog before proceeding.
  *
- * Phase 2 (confirmed=true): purges old Qdrant chunks and re-indexes fresh content.
+ * Phase 2 (confirmed=true): purges old Weaviate chunks and re-indexes fresh content.
  *   - "accepted"             → re-indexing kicked off in the background.
  */
 export async function refreshWebSource(
@@ -455,7 +455,7 @@ export async function threadChat(
 
 export async function getThreadIndexStatus(threadId: string): Promise<{
   thread_id: string;
-  status: 'ready' | 'not_ready';
+  status: 'ready' | 'not_ready' | 'blocked';
   stats: any;
   embed_model_ready?: boolean;
 }> {

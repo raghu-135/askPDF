@@ -27,7 +27,7 @@ A full-stack PDF Document and Webpages research assistant with **Text-to-Speech 
 
 ### 💬 RAG-Powered Chat, Threads & Semantic Memory
 - **Threaded Chat**: Organize conversations into threads with persistent SQLite storage for messages and file associations
-- **Per-Thread Collections**: Each thread has its own isolated vector collection in Qdrant, locked to a specific embedding model
+- **Per-Thread Collections**: Each thread has its own isolated vector collection in Weaviate, locked to a specific embedding model
 - **Comprehensive Retrieval**: AI searches context from multiple sources, retrieving PDF chunks, captured web pages, AND past Q&A pairs (semantic memory) simultaneously.
 - **Semantic Recollection**: The UI highlights which past chat messages were "recalled" and used by the AI to answer the current question
 - **Quick Actions**: "Read Aloud" and "Copy" buttons integrated right into each assistant bubble for quick convenience.
@@ -53,8 +53,8 @@ You can enable **Internet Search** in the chat panel to let the AI answer questi
 **How it works:**
 - When enabled, the app performs a DuckDuckGo search for your question and injects the top results into the LLM's context window, along with your Document content.
 - The LLM then answers using both sources.
-- Web search results (source URLs and snippets) are stored in SQLite and Qdrant, so they are still visible in the chat after a page reload.
-- When a message is deleted, its associated web search results are also removed from SQLite and Qdrant.
+- Web search results (source URLs and snippets) are stored in SQLite and Weaviate, so they are still visible in the chat after a page reload.
+- When a message is deleted, its associated web search results are also removed from SQLite and Weaviate.
 
 **Privacy:**
 - All queries are sent to DuckDuckGo only when Internet Search is enabled.
@@ -89,9 +89,9 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Docker Compose                                 │
 ├─────────────────┬─────────────────┬─────────────────┬───────────────────────┤
-│    Frontend     │    Backend      │   RAG Service   │       Qdrant          │
+│    Frontend     │    Backend      │   RAG Service   │       Weaviate          │
 │   (Next.js)     │    (FastAPI)    │    (FastAPI)    │   (Vector DB)         │
-│   Port: 3000    │   Port: 8000    │   Port: 8001    │   Port: 6333          │
+│   Port: 3000    │   Port: 8000    │   Port: 8001    │   Port: 8080          │
 └─────────────────┴─────────────────┴─────────────────┴───────────────────────┘
                                           │
                                           ▼
@@ -109,7 +109,7 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, and thread management |
 | **Backend** | 8000 | FastAPI server for PDF processing and TTS |
 | **RAG Service** | 8001 | FastAPI server for document indexing, AI chat, thread/message/file management |
-| **Qdrant** | 6333 | Vector database for semantic and memory search |
+| **Weaviate** | 8080 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
 
@@ -218,7 +218,7 @@ docker-compose up --build
 - **Main App**: http://localhost:3000
 - **Backend API**: http://localhost:8000
 - **RAG API**: http://localhost:8001
-- **Qdrant Dashboard**: http://localhost:6333/dashboard
+- **Weaviate API**: http://localhost:8080/v1/.well-known/ready
 
 ## 📖 Usage
 
@@ -276,7 +276,7 @@ docker-compose up --build
 | **FastAPI** | Web framework |
 | **LangChain** | LLM/Embedding integration |
 | **LangGraph** | Stateful multi-agent workflow (Orchestrator + Intent Agent) |
-| **Qdrant Client** | Vector database operations |
+| **Weaviate Client** | Vector database operations |
 | **aiosqlite** | Async SQLite for threads, messages, settings, and web sources |
 
 ### Frontend
@@ -310,9 +310,8 @@ askpdf/
 │   ├── reasoning.py            # Multi-provider reasoning/thinking trace extraction
 │   ├── models.py               # LLM/Embedding model clients, constants, and config helpers
 │   ├── database.py             # SQLite thread/message/file/settings management
-│   └── vectordb/
-│       ├── base.py             # Abstract vector DB interface
-│       └── qdrant.py           # Qdrant adapter implementation (threaded collections, web-source storage)
+│   └── app/db/
+│       └── vector_db.py        # Weaviate adapter (DocumentChunk, ChatMemoryChunk, WebSearchChunk)
 └── frontend/
   ├── Dockerfile
   ├── package.json
@@ -476,7 +475,7 @@ Returns the fully composed system prompt that will be sent to the LLM, given a s
 ```
 
 #### `GET /threads/{thread_id}/messages` / `DELETE /messages/{message_id}`
-List and delete messages in a thread. Deleting a message also removes associated web-search results from Qdrant.
+List and delete messages in a thread. Deleting a message also removes associated web-search results from Weaviate.
 
 #### `GET /models`
 Fetch available models from LLM server.
@@ -493,8 +492,8 @@ Health check endpoint.
 | `NEXT_PUBLIC_API_URL` | Frontend | `http://localhost:8000` | Backend API URL |
 | `NEXT_PUBLIC_RAG_API_URL` | Frontend | `http://localhost:8001` | RAG API URL |
 | `RAG_SERVICE_URL` | Backend | `http://rag-service:8000` | Internal RAG service URL |
-| `QDRANT_HOST` | RAG Service | `qdrant` | Qdrant hostname |
-| `QDRANT_PORT` | RAG Service | `6333` | Qdrant port |
+| `WEAVIATE_URL` | RAG Service | `http://weaviate:8080` | Weaviate endpoint URL |
+| `WEAVIATE_HYBRID_ALPHA` | RAG Service | `0.5` | Hybrid search alpha (query-vs-vector blend) |
 | `LLM_API_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (Change to `...:11434` for default Ollama) |
 | `DEFAULT_EMBEDDING_MODEL` | RAG Service | `BAAI/bge-m3` | Default embedding model used for new threads when not explicitly chosen |
 | `LOCAL_EMBEDDING_MODELS` | RAG Service | `BAAI/bge-m3` | Comma-separated list of embedding models that should be run locally in the RAG service |
@@ -508,6 +507,12 @@ Health check endpoint.
 | `MIN_MAX_ITERATIONS` | RAG Service | `1` | Minimum allowed value for max iterations |
 | `MAX_MAX_ITERATIONS` | RAG Service | `30` | Maximum allowed value for max iterations |
 | `INTENT_AGENT_MAX_ITERATIONS` | RAG Service | `1` | Default iteration budget for the Intent Agent |
+
+### Vector Storage Behavior
+
+- Weaviate uses three independent collections: `DocumentChunk`, `ChatMemoryChunk`, and `WebSearchChunk` (all thread-filtered).
+- No Qdrant migration is required. If a thread has files in SQLite but vectors are missing in Weaviate, the app triggers lazy async re-embedding.
+- For webpages, re-embedding is snapshot-first (`/static/webpages/<file_hash>.html`), then falls back to live recapture if snapshot content is missing.
 | `MAX_CUSTOM_INSTRUCTIONS_CHARS` | RAG Service | `2000` | Max characters for custom instructions |
 | `MAX_SYSTEM_ROLE_CHARS` | RAG Service | `500` | Max characters for system role override |
 | `MAX_TOOL_INSTRUCTION_CHARS` | RAG Service | `500` | Max characters per tool instruction override |
@@ -539,7 +544,7 @@ Backend: Map sentences to bounding boxes
   ↓
 Backend: Trigger async RAG indexing (per-thread if using threads)
   ↓
-RAG Service: Chunk text → Generate embeddings → Store in Qdrant (threaded collections)
+RAG Service: Chunk text → Generate embeddings → Store in Weaviate (global separated collections, thread-filtered)
   ↓
 Frontend: Display PDF with clickable sentence overlays
 ```
@@ -554,9 +559,9 @@ RAG Service: [Optional] Intent Agent rewrites / clarifies question
   ↓
 RAG Service: Orchestrator Agent begins tool-call loop (up to max_iterations)
   ↓
-  ├── search_documents          → Qdrant: top-K PDF chunks for thread
-  ├── search_conversation_history → Qdrant: semantic memory recall
-  ├── search_web                → DuckDuckGo (if enabled); stored in SQLite + Qdrant
+  ├── search_documents          → Weaviate: top-K PDF chunks for thread
+  ├── search_conversation_history → Weaviate: semantic memory recall
+  ├── search_web                → DuckDuckGo (if enabled); stored in SQLite + Weaviate
   ├── search_document_by_id     → targeted per-document search
   ├── list_uploaded_documents   → enumerate PDFs in thread
   └── ask_for_clarification     → present choices to user
@@ -590,10 +595,10 @@ The application uses Docker Compose with four services:
 1. **frontend**: Next.js dev server with hot reload
 2. **backend**: FastAPI with TTS models mounted (Supertonic cloned from HuggingFace at build)
 3. **rag-service**: FastAPI with LangChain/LangGraph
-4. **qdrant**: Official Qdrant image with persistent storage
+4. **weaviate**: Official Weaviate image with persistent storage
 
 ### Volumes
-- \`qdrant_data\`: Persistent vector storage
+- \`weaviate_data\`: Persistent vector storage
 - Source directories mounted for development hot-reload
 
 ## 🤝 Contributing
@@ -607,7 +612,7 @@ This project uses the following third-party technologies:
 - [spaCy](https://spacy.io/) - Natural language processing
 - [LangChain](https://langchain.com/) - LLM framework
 - [LangGraph](https://github.com/langchain-ai/langgraph) - Stateful AI workflows
-- [Qdrant](https://qdrant.tech/) - Vector database
+- [Weaviate](https://weaviate.tech/) - Vector database
 - [FastAPI](https://fastapi.tiangolo.com/) - Web framework
 - [Next.js](https://nextjs.org/) - React framework
 
@@ -616,7 +621,7 @@ This project uses the following third-party technologies:
 - **hexgrad** for the amazing Kokoro-82M model
 - **spaCy** for robust NLP capabilities
 - **LangChain** team for the excellent LLM framework
-- **Qdrant** for the powerful vector database
+- **Weaviate** for the powerful vector database
 - The open-source community for all the amazing tools
 
 ## 📧 Contact

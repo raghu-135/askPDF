@@ -187,7 +187,7 @@ export default function Home() {
     setActiveSource('pdf');
   };
 
-  // Handle remove source from thread (deletes from DB + Qdrant, closes tab)
+  // Handle remove source from thread (deletes from DB + Weaviate, closes tab)
   const handleTabRemove = async (tabId: string) => {
     if (!activeThread) return;
     const tab = pdfTabs.find(t => t.id === tabId);

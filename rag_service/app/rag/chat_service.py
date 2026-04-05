@@ -66,7 +66,7 @@ async def prefetch_context(
     - Both agents receive the same bundle; no re-fetching between Intent and
       Orchestrator for the same raw question.
     """
-    from app.db.qdrant import get_qdrant
+    from app.db.vector_db import get_vector_db
     from app.agent.agent import invoke_with_retry
 
     budget = compute_prefetch_budget(context_window)
@@ -126,15 +126,30 @@ async def prefetch_context(
 
     async def _fetch_documents() -> tuple:
         try:
-            db = get_qdrant()
+            db = get_vector_db()
             limit = budget["document_limit"]
             rerank_fetch_k = limit
+            shape = await get_thread_shape(thread_id)
+            thread_file_hashes = list(shape.get("documents", {}).keys())
+            if not thread_file_hashes:
+                return "", []
             raw_chunks = await db.search_knowledge_sources(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
+                embedding_model_name=embed_model_name,
                 limit=rerank_fetch_k,
+                file_hashes=thread_file_hashes,
+                query_text=raw_question,
             )
-
+            if not raw_chunks:
+                logger.error(
+                    "Missing document vectors for thread %s (files=%d, embed_model=%s). "
+                    "Recovery is only triggered on thread open.",
+                    thread_id,
+                    len(thread_file_hashes),
+                    embed_model_name,
+                )
+                return "", []
             hash_to_name = await get_document_name_lookup(thread_id)
             if use_reranker:
                 raw_chunks = await rerank_document_chunks(raw_question, raw_chunks)
