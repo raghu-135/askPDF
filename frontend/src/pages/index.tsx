@@ -13,10 +13,12 @@ import ForumIcon from '@mui/icons-material/Forum';
 declare const process: {
   env: Record<string, string | undefined>;
 };
+import dynamic from "next/dynamic";
 import PdfUploader from "../components/PdfUploader";
 import WebUploader from "../components/WebUploader";
-import PdfViewer from "../components/PdfViewer";
 import WebViewer from "../components/WebViewer";
+
+const PdfViewer = dynamic(() => import("../components/PdfViewer"), { ssr: false });
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
