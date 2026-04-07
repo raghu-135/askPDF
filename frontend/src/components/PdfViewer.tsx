@@ -7,6 +7,7 @@ import React, {
 } from "react";
 import { createPluginRegistration } from "@embedpdf/core";
 import { EmbedPDF, type PDFContextState } from "@embedpdf/core/react";
+import { PdfAnnotationObject } from "@embedpdf/models";
 import { usePdfiumEngine } from "@embedpdf/engines/react";
 import {
   DocumentContent,
@@ -71,7 +72,26 @@ import StrikethroughSIcon from "@mui/icons-material/StrikethroughS";
 import FormatUnderlinedIcon from "@mui/icons-material/FormatUnderlined";
 import GestureIcon from "@mui/icons-material/Gesture";
 import DeleteIcon from "@mui/icons-material/Delete";
+import UndoIcon from "@mui/icons-material/Undo";
+import RedoIcon from "@mui/icons-material/Redo";
+import CircleIcon from "@mui/icons-material/Circle";
+import { Slider } from "@mui/material";
+import { useHistoryCapability } from "@embedpdf/plugin-history/react";
 import { PdfSidebar } from "./PdfSidebar";
+
+const MARKUP_TOOLS = ["highlight", "underline", "strikeout", "squiggly"];
+const SHAPE_TOOLS = ["ink", "line", "square", "circle"];
+
+const STANDARD_COLORS = [
+  "#ffeb3b", // Yellow
+  "#4caf50", // Green
+  "#2196f3", // Blue
+  "#f44336", // Red
+  "#e91e63", // Pink
+  "#ff9800", // Orange
+  "#00bcd4", // Cyan
+  "#9c27b0", // Purple
+];
 
 type BBox = {
   page: number;
@@ -146,11 +166,45 @@ function sentencesByPageMap(sentences: Sentence[]) {
 
 
 
-function AnnotationToolStrip({ documentId }: { documentId: string }) {
+function AnnotationToolStrip({
+  documentId,
+  showSidebar,
+  onToggleSidebar,
+  isHistoryProcessingRef,
+}: {
+  documentId: string;
+  showSidebar: boolean;
+  onToggleSidebar: () => void;
+  isHistoryProcessingRef: React.MutableRefObject<boolean>;
+}) {
   const { provides } = useAnnotation(documentId);
+  const { provides: annotationCapability } = useAnnotationCapability();
+  const { provides: history } = useHistoryCapability();
+  const { provides: scrollApi } = useScroll(documentId);
   const active = provides?.getActiveTool();
-  const activeId =
-    active && "id" in active ? (active as { id: string }).id : null;
+  const activeId = active && "id" in active ? (active as { id: string }).id : null;
+
+  // Per-category settings state
+  const [markupSettings, setMarkupSettings] = useState({
+    strokeColor: "#ffeb3b",
+    opacity: 0.3,
+  });
+  const [shapeSettings, setShapeSettings] = useState({
+    strokeColor: "#f44336",
+    strokeWidth: 2,
+    opacity: 1,
+  });
+
+  // Sync settings with tool defaults whenever they change or tool is activated
+  useEffect(() => {
+    if (!annotationCapability || !activeId) return;
+
+    if (MARKUP_TOOLS.includes(activeId)) {
+      annotationCapability.setToolDefaults(activeId, markupSettings);
+    } else if (SHAPE_TOOLS.includes(activeId)) {
+      annotationCapability.setToolDefaults(activeId, shapeSettings);
+    }
+  }, [annotationCapability, activeId, markupSettings, shapeSettings]);
 
   const tool = (id: string | null, icon: React.ReactNode, title: string) => (
     <Tooltip title={title} key={title + (id || "select")}>
@@ -164,40 +218,227 @@ function AnnotationToolStrip({ documentId }: { documentId: string }) {
     </Tooltip>
   );
 
+  const isMarkup = activeId && MARKUP_TOOLS.includes(activeId);
+  const isShape = activeId && SHAPE_TOOLS.includes(activeId);
+  const currentSettings = isMarkup ? markupSettings : isShape ? shapeSettings : null;
+  const rawSetSettings = isMarkup ? setMarkupSettings : isShape ? setShapeSettings : null;
+
+  const updateSelection = useCallback(
+    (patch: Partial<PdfAnnotationObject>) => {
+      const selectedIds = provides?.getSelectedAnnotationIds() || [];
+      if (selectedIds.length === 0 || !annotationCapability) return;
+
+      const selectedAnnotations = provides?.getSelectedAnnotations() || [];
+      const patches = selectedAnnotations
+        .map((ta) => {
+          return {
+            pageIndex: ta.object.pageIndex,
+            id: ta.object.id,
+            patch,
+          };
+        });
+
+      if (patches.length > 0) {
+        annotationCapability.updateAnnotations(patches);
+      }
+    },
+    [provides, annotationCapability]
+  );
+
+  const setSettings = useCallback(
+    (updater: (prev: any) => any) => {
+      if (!rawSetSettings) return;
+      rawSetSettings((prev: any) => {
+        const next = updater(prev);
+        // Compare keys to find what changed
+        const patch: any = {};
+        for (const key in next) {
+          if (next[key] !== prev[key]) {
+            patch[key] = next[key];
+          }
+        }
+        if (Object.keys(patch).length > 0) {
+          updateSelection(patch);
+        }
+        return next;
+      });
+    },
+    [rawSetSettings, updateSelection]
+  );
+
+  const handleUndo = useCallback(() => {
+    if (isHistoryProcessingRef) isHistoryProcessingRef.current = true;
+    history?.undo();
+    setTimeout(() => {
+      if (isHistoryProcessingRef) isHistoryProcessingRef.current = false;
+    }, 100);
+  }, [history, isHistoryProcessingRef]);
+
+  const handleRedo = useCallback(() => {
+    if (isHistoryProcessingRef) isHistoryProcessingRef.current = true;
+    history?.redo();
+    setTimeout(() => {
+      if (isHistoryProcessingRef) isHistoryProcessingRef.current = false;
+    }, 100);
+  }, [history, isHistoryProcessingRef]);
+
   return (
-    <Stack
-      direction="row"
-      spacing={0.5}
-      alignItems="center"
-      sx={{
-        flexShrink: 0,
-        px: 1,
-        py: 0.5,
-        borderBottom: 1,
-        borderColor: "divider",
-        bgcolor: "background.paper",
-        width: "100%",
-        justifyContent: "space-between",
-      }}
-    >
-      <Stack direction="row" spacing={0.5} alignItems="center">
-        {tool(null, <NearMeIcon fontSize="small" />, "Select")}
-        <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
+    <Stack direction="column" sx={{ width: "100%" }}>
+      <Stack
+        direction="row"
+        spacing={0.5}
+        alignItems="center"
+        sx={{
+          flexShrink: 0,
+          px: 1,
+          py: 0.5,
+          borderBottom: 1,
+          borderColor: "divider",
+          bgcolor: "background.paper",
+          width: "100%",
+          justifyContent: "space-between",
+        }}
+      >
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <Tooltip title="Toggle Sidebar">
+            <IconButton onClick={onToggleSidebar} size="small" sx={{ mr: 0.5 }}>
+              <ViewSidebarIcon
+                fontSize="small"
+                color={showSidebar ? "primary" : "inherit"}
+              />
+            </IconButton>
+          </Tooltip>
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
 
-        {/* Markup Tools */}
-        {tool("highlight", <BorderColorIcon fontSize="small" />, "Highlight")}
-        {tool("underline", <FormatUnderlinedIcon fontSize="small" />, "Underline")}
-        {tool("strikeout", <StrikethroughSIcon fontSize="small" />, "Strikeout")}
-        {tool("squiggly", <GestureIcon fontSize="small" sx={{ transform: "rotate(90deg)" }} />, "Squiggly")}
+          {tool(null, <NearMeIcon fontSize="small" />, "Select")}
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
 
-        <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
+          {/* Markup Tools */}
+          {tool("highlight", <BorderColorIcon fontSize="small" />, "Highlight")}
+          {tool("underline", <FormatUnderlinedIcon fontSize="small" />, "Underline")}
+          {tool(
+            "strikeout",
+            <StrikethroughSIcon fontSize="small" />,
+            "Strikeout"
+          )}
+          {tool(
+            "squiggly",
+            <GestureIcon
+              fontSize="small"
+              sx={{ transform: "rotate(90deg)" }}
+            />,
+            "Squiggly"
+          )}
 
-        {/* Shape Tools */}
-        {tool("ink", <DrawIcon fontSize="small" />, "Draw")}
-        {tool("line", <GestureIcon fontSize="small" />, "Line")}
-        {tool("square", <CropSquareIcon fontSize="small" />, "Rectangle")}
-        {tool("circle", <RadioButtonUncheckedIcon fontSize="small" />, "Ellipse")}
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
+
+          {/* Shape Tools */}
+          {tool("ink", <DrawIcon fontSize="small" />, "Draw")}
+          {tool("line", <GestureIcon fontSize="small" />, "Line")}
+          {tool("square", <CropSquareIcon fontSize="small" />, "Rectangle")}
+          {tool(
+            "circle",
+            <RadioButtonUncheckedIcon fontSize="small" />,
+            "Ellipse"
+          )}
+        </Stack>
+
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <Tooltip title="Undo">
+            <span>
+              <IconButton
+                size="small"
+                onClick={handleUndo}
+                disabled={!history?.canUndo()}
+              >
+                <UndoIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Redo">
+            <span>
+              <IconButton
+                size="small"
+                onClick={handleRedo}
+                disabled={!history?.canRedo()}
+              >
+                <RedoIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Stack>
       </Stack>
+
+      {(isMarkup || isShape) && currentSettings && setSettings && (
+        <Stack
+          direction="row"
+          spacing={2}
+          alignItems="center"
+          sx={{
+            px: 2,
+            py: 0.5,
+            borderBottom: 1,
+            borderColor: "divider",
+            bgcolor: "background.default",
+            height: 40,
+          }}
+        >
+          <Stack direction="row" spacing={0.5}>
+            {STANDARD_COLORS.map((color) => (
+              <IconButton
+                key={color}
+                size="small"
+                onClick={() =>
+                  setSettings((prev: any) => ({ ...prev, strokeColor: color }))
+                }
+                sx={{
+                  p: 0.25,
+                  border: "2px solid",
+                  borderColor:
+                    currentSettings.strokeColor === color
+                      ? "primary.main"
+                      : "transparent",
+                }}
+              >
+                <CircleIcon sx={{ color, fontSize: 18 }} />
+              </IconButton>
+            ))}
+          </Stack>
+
+          {isShape && (
+            <Stack direction="row" spacing={1} alignItems="center" sx={{ width: 150 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ minWidth: 60 }}>
+                Width: {(currentSettings as any).strokeWidth}px
+              </Typography>
+              <Slider
+                size="small"
+                value={(currentSettings as any).strokeWidth}
+                min={1}
+                max={12}
+                onChange={(_, val) =>
+                  setSettings((prev: any) => ({ ...prev, strokeWidth: val as number }))
+                }
+              />
+            </Stack>
+          )}
+
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ width: 120 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ minWidth: 60 }}>
+              Opacity: {Math.round(currentSettings.opacity * 100)}%
+            </Typography>
+            <Slider
+              size="small"
+              value={currentSettings.opacity}
+              min={0.1}
+              max={1}
+              step={0.1}
+              onChange={(_, val) =>
+                setSettings((prev: any) => ({ ...prev, opacity: val as number }))
+              }
+            />
+          </Stack>
+        </Stack>
+      )}
     </Stack>
   );
 }
@@ -279,10 +520,12 @@ function EmbedPdfDocumentBody({
   darkMode,
   pdfLoaded,
   setPdfLoaded,
+  isHistoryProcessingRef,
 }: Props & {
   documentId: string;
   pdfLoaded: boolean;
   setPdfLoaded: (v: boolean) => void;
+  isHistoryProcessingRef: React.MutableRefObject<boolean>;
 }) {
   const theme = useTheme();
   const [showSidebar, setShowSidebar] = useState(true);
@@ -304,6 +547,9 @@ function EmbedPdfDocumentBody({
   const pendingScrollIdRef = useRef<number | null>(null);
 
   useEffect(() => {
+    // Priority: Don't let TTS scroll fight with a manual history undo/redo
+    if (isHistoryProcessingRef.current) return;
+
     if (!autoScroll || currentId === null) {
       pendingScrollIdRef.current = null;
       return;
@@ -317,23 +563,99 @@ function EmbedPdfDocumentBody({
     } else {
       scrollRef.current?.scrollToPage({
         pageNumber: s.bboxes[0].page,
+        behavior: "smooth",
       });
       pendingScrollIdRef.current = currentId;
     }
-  }, [currentId, autoScroll, sentences]);
+  }, [currentId, autoScroll, sentences, isHistoryProcessingRef]);
+
+  const scrollToAnnotation = useCallback(
+    (anno: PdfAnnotationObject) => {
+      if (!scrollApi) return;
+      scrollApi.scrollToPage({
+        pageNumber: anno.pageIndex + 1,
+        pageCoordinates: {
+          x: anno.rect.origin.x,
+          y: anno.rect.origin.y,
+        },
+        alignY: 50,
+        behavior: "smooth",
+      });
+    },
+    [scrollApi]
+  );
+
+  const { provides: historyApi } = useHistoryCapability();
+  const historyRef = useRef({ provides: historyApi });
+  historyRef.current = { provides: historyApi };
+
+  // Persistence / DB Sync & Auto-scroll on all committed changes (Undo/Redo/etc)
+  useEffect(() => {
+    if (!annotationApi) return;
+    const sub = annotationApi.onAnnotationEvent((event) => {
+      if (event.type === "loaded") return;
+
+      // 1. Persistence logging
+      if (
+        ["create", "update", "delete"].includes(event.type) &&
+        (event as any).committed
+      ) {
+        console.log(
+          `[Persistence] Syncing ${event.type} for document ${documentId}`
+        );
+      }
+
+      // 2. Auto-scroll on Undo/Redo
+      // Only scroll during history actions to avoid locking the scroll during normal interaction.
+      if (
+        ["create", "update", "delete"].includes(event.type) &&
+        (event as any).committed &&
+        isHistoryProcessingRef.current
+      ) {
+        scrollToAnnotation((event as any).annotation);
+      }
+    });
+    return () => sub();
+  }, [annotationApi, documentId, scrollToAnnotation]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Handle Delete/Backspace
       if (e.key === "Delete" || e.key === "Backspace") {
         const target = e.target as HTMLElement;
         if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) {
           return;
         }
-        const selection = annotationApi?.getSelectedAnnotation();
-        if (selection) {
+        const selection = annotationApi?.getSelectedAnnotations() || [];
+        if (selection.length > 0) {
           e.preventDefault();
-          annotationApi.deleteAnnotation(selection.object.pageIndex, selection.object.id);
+          annotationApi?.deleteAnnotations(
+            selection.map((s) => ({
+              pageIndex: s.object.pageIndex,
+              id: s.object.id,
+            }))
+          );
         }
+        return;
+      }
+
+      // Handle Undo/Redo shortcuts (Cmd+Z / Cmd+Shift+Z)
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        const { provides: history } = historyRef.current;
+        if (!history) return;
+
+        e.preventDefault();
+        isHistoryProcessingRef.current = true;
+        
+        if (e.shiftKey) {
+          if (history.canRedo()) history.redo();
+        } else {
+          if (history.canUndo()) history.undo();
+        }
+
+        setTimeout(() => {
+          isHistoryProcessingRef.current = false;
+        }, 150);
       }
     };
 
@@ -572,18 +894,12 @@ function EmbedPdfDocumentBody({
               setPdfLoaded={setPdfLoaded}
             />
 
-            <Stack direction="row" sx={{ flexShrink: 0 }}>
-              <Tooltip title="Toggle Sidebar">
-                <IconButton
-                  onClick={() => setShowSidebar(!showSidebar)}
-                  size="small"
-                  sx={{ ml: 1, mt: 0.5 }}
-                >
-                  <ViewSidebarIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-              <AnnotationToolStrip documentId={documentId} />
-            </Stack>
+            <AnnotationToolStrip
+              documentId={documentId}
+              showSidebar={showSidebar}
+              onToggleSidebar={() => setShowSidebar(!showSidebar)}
+              isHistoryProcessingRef={isHistoryProcessingRef}
+            />
 
             <Box
               sx={{
@@ -682,6 +998,7 @@ const PdfViewer = React.memo(function PdfViewer({
   const { engine, isLoading, error } = usePdfiumEngine();
   const plugins = useMemo(() => buildPlugins(pdfUrl), [pdfUrl]);
   const [pdfLoaded, setPdfLoaded] = useState(false);
+  const isHistoryProcessingRef = useRef(false);
 
   useEffect(() => {
     setPdfLoaded(false);
@@ -742,6 +1059,7 @@ const PdfViewer = React.memo(function PdfViewer({
               darkMode={darkMode}
               pdfLoaded={pdfLoaded}
               setPdfLoaded={setPdfLoaded}
+              isHistoryProcessingRef={isHistoryProcessingRef}
             />
           ) : null
         }
