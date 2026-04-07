@@ -43,15 +43,35 @@ import {
   AnnotationLayer,
   AnnotationPluginPackage,
   useAnnotation,
+  useAnnotationCapability,
+  type AnnotationSelectionMenuProps,
 } from "@embedpdf/plugin-annotation/react";
 import { HistoryPluginPackage } from "@embedpdf/plugin-history";
-import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
-import { useTheme } from "@mui/material/styles";
+import {
+  ThumbnailPluginPackage,
+} from "@embedpdf/plugin-thumbnail/react";
+import {
+  Box,
+  IconButton,
+  Stack,
+  Tooltip,
+  Typography,
+  Tabs,
+  Tab,
+  Divider,
+} from "@mui/material";
+import { useTheme, styled } from "@mui/material/styles";
 import BorderColorIcon from "@mui/icons-material/BorderColor";
 import DrawIcon from "@mui/icons-material/Draw";
 import CropSquareIcon from "@mui/icons-material/CropSquare";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import NearMeIcon from "@mui/icons-material/NearMe";
+import ViewSidebarIcon from "@mui/icons-material/ViewSidebar";
+import StrikethroughSIcon from "@mui/icons-material/StrikethroughS";
+import FormatUnderlinedIcon from "@mui/icons-material/FormatUnderlined";
+import GestureIcon from "@mui/icons-material/Gesture";
+import DeleteIcon from "@mui/icons-material/Delete";
+import { PdfSidebar } from "./PdfSidebar";
 
 type BBox = {
   page: number;
@@ -102,6 +122,7 @@ function buildPlugins(pdfUrl: string) {
     createPluginRegistration(AnnotationPluginPackage, {
       annotationAuthor: "AskPDF",
     }),
+    createPluginRegistration(ThumbnailPluginPackage),
   ];
 }
 
@@ -123,36 +144,7 @@ function sentencesByPageMap(sentences: Sentence[]) {
   return map;
 }
 
-function TtsScrollSync({
-  documentId,
-  currentId,
-  sentences,
-  autoScroll,
-}: {
-  documentId: string;
-  currentId: number | null;
-  sentences: Sentence[];
-  autoScroll: boolean;
-}) {
-  const { provides: scroll } = useScroll(documentId);
-  const scrollRef = useRef(scroll);
-  scrollRef.current = scroll;
 
-  useEffect(() => {
-    if (!autoScroll || currentId === null) return;
-    const s = sentences[currentId];
-    if (!s?.bboxes?.length) return;
-    const page = s.bboxes[0].page;
-    scrollRef.current?.scrollToPage({
-      pageNumber: page,
-      behavior: "smooth",
-      alignY: 50,
-    });
-    /** `scroll` from useScroll is not referentially stable; omitting it avoids re-scrolling every render (flicker). */
-  }, [documentId, currentId, autoScroll, sentences]);
-
-  return null;
-}
 
 function AnnotationToolStrip({ documentId }: { documentId: string }) {
   const { provides } = useAnnotation(documentId);
@@ -161,7 +153,7 @@ function AnnotationToolStrip({ documentId }: { documentId: string }) {
     active && "id" in active ? (active as { id: string }).id : null;
 
   const tool = (id: string | null, icon: React.ReactNode, title: string) => (
-    <Tooltip title={title} key={title}>
+    <Tooltip title={title} key={title + (id || "select")}>
       <IconButton
         size="small"
         onClick={() => provides?.setActiveTool(id)}
@@ -184,14 +176,76 @@ function AnnotationToolStrip({ documentId }: { documentId: string }) {
         borderBottom: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
+        width: "100%",
+        justifyContent: "space-between",
       }}
     >
-      {tool(null, <NearMeIcon fontSize="small" />, "Select")}
-      {tool("highlight", <BorderColorIcon fontSize="small" />, "Highlight")}
-      {tool("ink", <DrawIcon fontSize="small" />, "Draw")}
-      {tool("square", <CropSquareIcon fontSize="small" />, "Rectangle")}
-      {tool("circle", <RadioButtonUncheckedIcon fontSize="small" />, "Ellipse")}
+      <Stack direction="row" spacing={0.5} alignItems="center">
+        {tool(null, <NearMeIcon fontSize="small" />, "Select")}
+        <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
+
+        {/* Markup Tools */}
+        {tool("highlight", <BorderColorIcon fontSize="small" />, "Highlight")}
+        {tool("underline", <FormatUnderlinedIcon fontSize="small" />, "Underline")}
+        {tool("strikeout", <StrikethroughSIcon fontSize="small" />, "Strikeout")}
+        {tool("squiggly", <GestureIcon fontSize="small" sx={{ transform: "rotate(90deg)" }} />, "Squiggly")}
+
+        <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
+
+        {/* Shape Tools */}
+        {tool("ink", <DrawIcon fontSize="small" />, "Draw")}
+        {tool("line", <GestureIcon fontSize="small" />, "Line")}
+        {tool("square", <CropSquareIcon fontSize="small" />, "Rectangle")}
+        {tool("circle", <RadioButtonUncheckedIcon fontSize="small" />, "Ellipse")}
+      </Stack>
     </Stack>
+  );
+}
+
+function AnnotationSelectionMenu({
+  selected,
+  context,
+  menuWrapperProps,
+  rect,
+  documentId,
+}: AnnotationSelectionMenuProps & { documentId: string }) {
+  const { provides: annotationCapability } = useAnnotationCapability();
+
+  const handleDelete = () => {
+    if (!context?.annotation?.object) return;
+    const { pageIndex, id } = context.annotation.object;
+    annotationCapability?.forDocument(documentId).deleteAnnotation(pageIndex, id);
+  };
+
+  if (!selected || !context?.annotation) return null;
+
+  return (
+    <div {...menuWrapperProps} style={{ ...menuWrapperProps?.style, zIndex: 100 }}>
+      <Tooltip title="Delete">
+        <Box
+          sx={{
+            position: "absolute",
+            top: rect.size.height + 8,
+            left: 0,
+            pointerEvents: "auto",
+            minWidth: "max-content",
+          }}
+        >
+          <IconButton
+            size="small"
+            color="error"
+            onClick={handleDelete}
+            sx={{
+              bgcolor: "background.paper",
+              boxShadow: 1,
+              "&:hover": { bgcolor: "background.default" },
+            }}
+          >
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      </Tooltip>
+    </div>
   );
 }
 
@@ -231,6 +285,7 @@ function EmbedPdfDocumentBody({
   setPdfLoaded: (v: boolean) => void;
 }) {
   const theme = useTheme();
+  const [showSidebar, setShowSidebar] = useState(true);
   const containerRef = useRef<HTMLDivElement>(null);
   const sentenceRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
 
@@ -242,26 +297,70 @@ function EmbedPdfDocumentBody({
 
   const byPage = useMemo(() => sentencesByPageMap(sentences), [sentences]);
 
+  const { provides: annotationApi } = useAnnotation(documentId);
+  const { provides: scrollApi } = useScroll(documentId);
+  const scrollRef = useRef(scrollApi);
+  scrollRef.current = scrollApi;
+  const pendingScrollIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!autoScroll || currentId === null) {
+      pendingScrollIdRef.current = null;
+      return;
+    }
+    const s = sentences[currentId];
+    if (!s?.bboxes?.length) return;
+
+    const el = sentenceRefs.current[currentId];
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      scrollRef.current?.scrollToPage({
+        pageNumber: s.bboxes[0].page,
+      });
+      pendingScrollIdRef.current = currentId;
+    }
+  }, [currentId, autoScroll, sentences]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const target = e.target as HTMLElement;
+        if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) {
+          return;
+        }
+        const selection = annotationApi?.getSelectedAnnotation();
+        if (selection) {
+          e.preventDefault();
+          annotationApi.deleteAnnotation(selection.object.pageIndex, selection.object.id);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [annotationApi]);
+
   /** Panel split drag ended — refit once. Do not depend on `zoomScope` identity (it changes every render and would refit every frame → scroll flicker). */
   useEffect(() => {
     if (isResizing) return;
     zoomRef.current?.requestZoom(ZoomMode.FitWidth);
   }, [isResizing]);
 
-  /** Refit when the viewer container width changes (window/panel resize), not on every scroll. Debounced; ignores sub-pixel noise. */
+  /** Refit when the viewer container width changes (window/panel resize), not on every scroll. */
   useEffect(() => {
     const el = containerRef.current;
     if (typeof ResizeObserver === "undefined" || !el) return;
 
     let lastWidth = Math.round(el.getBoundingClientRect().width);
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let rafId: number | null = null;
 
     const scheduleFit = () => {
-      if (debounceTimer !== null) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null;
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
         zoomRef.current?.requestZoom(ZoomMode.FitWidth);
-      }, 120);
+      });
     };
 
     const ro = new ResizeObserver((entries) => {
@@ -270,25 +369,17 @@ function EmbedPdfDocumentBody({
       const w = Math.round(entry.contentRect.width);
       if (Math.abs(w - lastWidth) < 2) return;
       lastWidth = w;
-      if (isResizingRef.current) return;
       scheduleFit();
     });
 
     ro.observe(el);
     return () => {
       ro.disconnect();
-      if (debounceTimer !== null) clearTimeout(debounceTimer);
+      if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [documentId]);
 
-  useEffect(() => {
-    if (autoScroll && currentId !== null && sentenceRefs.current[currentId]) {
-      sentenceRefs.current[currentId]?.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
-    }
-  }, [currentId, autoScroll]);
+
 
   const handlePageDoubleClickCapture = useCallback(
     (e: React.MouseEvent, pageNumber: number) => {
@@ -328,9 +419,10 @@ function EmbedPdfDocumentBody({
       pageIndex: number;
       width: number;
       height: number;
-      scale: number;
     }) => {
-      const { pageIndex, width, height, scale } = props;
+      const { pageIndex, width, height } = props;
+      const zoomState = zoomRef.current?.getState();
+      const scale = zoomState?.currentZoomLevel || 1;
       const pageNumber = pageIndex + 1;
 
       if (!highlightEnabled) {
@@ -356,15 +448,18 @@ function EmbedPdfDocumentBody({
                 pageIndex={pageIndex}
                 scale={scale}
               />
-              <AnnotationLayer
-                documentId={documentId}
-                pageIndex={pageIndex}
-                scale={scale}
-              />
               <SelectionLayer
                 documentId={documentId}
                 pageIndex={pageIndex}
                 scale={scale}
+              />
+              <AnnotationLayer
+                documentId={documentId}
+                pageIndex={pageIndex}
+                scale={scale}
+                selectionMenu={(props) => (
+                  <AnnotationSelectionMenu {...props} documentId={documentId} />
+                )}
               />
             </PagePointerProvider>
           </div>
@@ -396,15 +491,18 @@ function EmbedPdfDocumentBody({
               pageIndex={pageIndex}
               scale={scale}
             />
-            <AnnotationLayer
-              documentId={documentId}
-              pageIndex={pageIndex}
-              scale={scale}
-            />
             <SelectionLayer
               documentId={documentId}
               pageIndex={pageIndex}
               scale={scale}
+            />
+            <AnnotationLayer
+              documentId={documentId}
+              pageIndex={pageIndex}
+              scale={scale}
+              selectionMenu={(props) => (
+                <AnnotationSelectionMenu {...props} documentId={documentId} />
+              )}
             />
             {activeSentence ? (
               <div
@@ -421,6 +519,13 @@ function EmbedPdfDocumentBody({
                     ref={(el) => {
                       if (idx === 0) {
                         sentenceRefs.current[activeSentence.id] = el;
+                        
+                        if (el && pendingScrollIdRef.current === activeSentence.id) {
+                          pendingScrollIdRef.current = null;
+                          requestAnimationFrame(() => {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          });
+                        }
                       }
                     }}
                     style={{
@@ -466,71 +571,94 @@ function EmbedPdfDocumentBody({
               isLoaded={isLoaded}
               setPdfLoaded={setPdfLoaded}
             />
-            <TtsScrollSync
-              documentId={documentId}
-              currentId={currentId}
-              sentences={sentences}
-              autoScroll={autoScroll}
-            />
-            <AnnotationToolStrip documentId={documentId} />
+
+            <Stack direction="row" sx={{ flexShrink: 0 }}>
+              <Tooltip title="Toggle Sidebar">
+                <IconButton
+                  onClick={() => setShowSidebar(!showSidebar)}
+                  size="small"
+                  sx={{ ml: 1, mt: 0.5 }}
+                >
+                  <ViewSidebarIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <AnnotationToolStrip documentId={documentId} />
+            </Stack>
+
             <Box
-              ref={containerRef}
               sx={{
-                position: "relative",
+                display: "flex",
                 flex: 1,
                 minHeight: 0,
                 width: "100%",
-                display: "flex",
-                flexDirection: "column",
+                overflow: "hidden",
               }}
             >
-              {darkMode && !pdfLoaded && (
-                <Box
-                  sx={{
-                    position: "absolute",
-                    inset: 0,
-                    zIndex: 100,
-                    bgcolor: theme.palette.background.default,
-                    color: theme.palette.text.primary,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexDirection: "column",
-                  }}
-                >
-                  <Typography variant="h6" sx={{ mb: 2 }}>
-                    Rendering PDF...
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    Preparing dark mode view
-                  </Typography>
-                </Box>
-              )}
+              {showSidebar && <PdfSidebar documentId={documentId} />}
               <Box
+                ref={containerRef}
+                onDragStart={(e) => e.preventDefault()}
                 sx={{
+                  position: "relative",
                   flex: 1,
                   minHeight: 0,
-                  position: "relative",
-                  filter:
-                    darkMode && pdfLoaded
-                      ? "invert(0.92) hue-rotate(180deg) brightness(0.85)"
-                      : undefined,
-                  /** Own compositor layer to reduce full-layer repaints while scrolling with CSS filter. */
-                  transform:
-                    darkMode && pdfLoaded ? "translateZ(0)" : undefined,
-                  visibility: darkMode && !pdfLoaded ? "hidden" : "visible",
+                  minWidth: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  "& img, & svg, & canvas": {
+                    WebkitUserDrag: "none",
+                    userDrag: "none",
+                  },
                 }}
               >
-                <Viewport
-                  documentId={documentId}
-                  style={{
-                    height: "100%",
-                    width: "100%",
-                    backgroundColor: viewportBg,
+                {darkMode && !pdfLoaded && (
+                  <Box
+                    sx={{
+                      position: "absolute",
+                      inset: 0,
+                      zIndex: 100,
+                      bgcolor: theme.palette.background.default,
+                      color: theme.palette.text.primary,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexDirection: "column",
+                    }}
+                  >
+                    <Typography variant="h6" sx={{ mb: 2 }}>
+                      Rendering PDF...
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Preparing dark mode view
+                    </Typography>
+                  </Box>
+                )}
+                <Box
+                  sx={{
+                    flex: 1,
+                    minHeight: 0,
+                    position: "relative",
+                    filter:
+                      darkMode && pdfLoaded
+                        ? "invert(0.92) hue-rotate(180deg) brightness(0.85)"
+                        : undefined,
+                    /** Own compositor layer to reduce full-layer repaints while scrolling with CSS filter. */
+                    transform:
+                      darkMode && pdfLoaded ? "translateZ(0)" : undefined,
+                    visibility: darkMode && !pdfLoaded ? "hidden" : "visible",
                   }}
                 >
-                  <Scroller documentId={documentId} renderPage={renderPage} />
-                </Viewport>
+                  <Viewport
+                    documentId={documentId}
+                    style={{
+                      height: "100%",
+                      width: "100%",
+                      backgroundColor: viewportBg,
+                    }}
+                  >
+                    <Scroller documentId={documentId} renderPage={renderPage} />
+                  </Viewport>
+                </Box>
               </Box>
             </Box>
           </>
