@@ -39,16 +39,23 @@ import {
 import {
   SelectionLayer,
   SelectionPluginPackage,
+  type SelectionSelectionMenuProps,
 } from "@embedpdf/plugin-selection/react";
 import {
   AnnotationLayer,
   AnnotationPluginPackage,
   useAnnotation,
   useAnnotationCapability,
+  LockModeType,
   type AnnotationSelectionMenuProps,
 } from "@embedpdf/plugin-annotation/react";
 import { HistoryPluginPackage } from "@embedpdf/plugin-history";
 import { ThumbnailPluginPackage } from "@embedpdf/plugin-thumbnail/react";
+import {
+  useInteractionManager,
+  useInteractionManagerCapability,
+} from "@embedpdf/plugin-interaction-manager/react";
+import { useSelectionCapability } from "@embedpdf/plugin-selection/react";
 import {
   Box,
   IconButton,
@@ -62,7 +69,6 @@ import BorderColorIcon from "@mui/icons-material/BorderColor";
 import DrawIcon from "@mui/icons-material/Draw";
 import CropSquareIcon from "@mui/icons-material/CropSquare";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
-import NearMeIcon from "@mui/icons-material/NearMe";
 import ViewSidebarIcon from "@mui/icons-material/ViewSidebar";
 import StrikethroughSIcon from "@mui/icons-material/StrikethroughS";
 import FormatUnderlinedIcon from "@mui/icons-material/FormatUnderlined";
@@ -72,6 +78,9 @@ import UndoIcon from "@mui/icons-material/Undo";
 import RedoIcon from "@mui/icons-material/Redo";
 import CircleIcon from "@mui/icons-material/Circle";
 import AddCommentIcon from "@mui/icons-material/AddComment";
+import PanToolAltIcon from "@mui/icons-material/PanToolAlt";
+import EditNoteIcon from "@mui/icons-material/EditNote";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import { Slider } from "@mui/material";
 import { useHistoryCapability } from "@embedpdf/plugin-history/react";
 import { PdfSidebar, type SidebarTab } from "./PdfSidebar";
@@ -79,6 +88,7 @@ import { usePersistAnnotations } from "../hooks/usePersistAnnotations";
 
 const MARKUP_TOOLS = ["highlight", "underline", "strikeout", "squiggly"];
 const SHAPE_TOOLS = ["ink", "line", "square", "circle"];
+const VIEW_ONLY_MODE_ID = "view-only";
 
 const STANDARD_COLORS = [
   "#ffeb3b", // Yellow
@@ -181,9 +191,16 @@ function AnnotationToolStrip({
 }) {
   const { provides } = useAnnotation(documentId);
   const { provides: annotationCapability } = useAnnotationCapability();
+  const { provides: interactionCapability } = useInteractionManagerCapability();
+  const { provides: selectionCapability } = useSelectionCapability();
+  const { provides: interactionScope } = useInteractionManager(documentId);
   const { provides: history } = useHistoryCapability();
   const active = provides?.getActiveTool();
   const activeId = active && "id" in active ? (active as { id: string }).id : null;
+  const defaultModeId = interactionCapability?.getDefaultMode() ?? "default";
+  const activeModeId =
+    interactionScope?.getActiveInteractionMode()?.id ?? defaultModeId;
+  const isViewOnly = activeModeId === VIEW_ONLY_MODE_ID;
 
   // Per-category settings state
   const [markupSettings, setMarkupSettings] = useState({
@@ -207,6 +224,72 @@ function AnnotationToolStrip({
     }
   }, [annotationCapability, activeId, markupSettings, shapeSettings]);
 
+  useEffect(() => {
+    if (!interactionCapability) return;
+    interactionCapability.registerMode({
+      id: VIEW_ONLY_MODE_ID,
+      scope: "page",
+      exclusive: false,
+      cursor: "default",
+    });
+  }, [interactionCapability]);
+
+  useEffect(() => {
+    if (!selectionCapability) return;
+
+    selectionCapability.enableForMode(
+      defaultModeId,
+      {
+        enableSelection: true,
+        showSelectionRects: true,
+        enableMarquee: false,
+      },
+      documentId
+    );
+
+    selectionCapability.enableForMode(
+      VIEW_ONLY_MODE_ID,
+      {
+        enableSelection: false,
+        showSelectionRects: false,
+        enableMarquee: false,
+      },
+      documentId
+    );
+  }, [defaultModeId, documentId, selectionCapability]);
+
+  const clearCurrentSelection = useCallback(() => {
+    selectionCapability?.clear(documentId);
+    provides?.deselectAnnotation();
+  }, [documentId, provides, selectionCapability]);
+
+  const activateSelectMode = useCallback(() => {
+    interactionScope?.activateDefaultMode();
+    clearCurrentSelection();
+  }, [clearCurrentSelection, interactionScope]);
+
+  const activateViewOnlyMode = useCallback(() => {
+    interactionScope?.activate(VIEW_ONLY_MODE_ID);
+    clearCurrentSelection();
+  }, [clearCurrentSelection, interactionScope]);
+
+  useEffect(() => {
+    if (!annotationCapability) return;
+    annotationCapability.setLocked({
+      type: isViewOnly ? LockModeType.All : LockModeType.None,
+    });
+  }, [annotationCapability, isViewOnly]);
+
+  useEffect(() => {
+    if (!activeId || !isViewOnly) return;
+    activateSelectMode();
+  }, [activeId, activateSelectMode, isViewOnly]);
+
+  useEffect(() => {
+    if (activeId || isViewOnly) return;
+    interactionScope?.activateDefaultMode();
+  }, [activeId, interactionScope, isViewOnly]);
+
   const tool = (id: string | null, icon: React.ReactNode, title: string) => (
     <Tooltip title={title} key={title + (id || "select")}>
       <IconButton
@@ -223,6 +306,21 @@ function AnnotationToolStrip({
   const isShape = activeId && SHAPE_TOOLS.includes(activeId);
   const currentSettings = isMarkup ? markupSettings : isShape ? shapeSettings : null;
   const rawSetSettings = isMarkup ? setMarkupSettings : isShape ? setShapeSettings : null;
+
+  const handleSelectToggle = useCallback(() => {
+    if (activeId) {
+      provides?.setActiveTool(null);
+      activateSelectMode();
+      return;
+    }
+
+    if (isViewOnly) {
+      activateSelectMode();
+      return;
+    }
+
+    activateViewOnlyMode();
+  }, [activeId, activateSelectMode, activateViewOnlyMode, isViewOnly, provides]);
 
   const updateSelection = useCallback(
     (patch: Partial<PdfAnnotationObject>) => {
@@ -316,7 +414,15 @@ function AnnotationToolStrip({
           </Tooltip>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
 
-          {tool(null, <NearMeIcon fontSize="small" />, "Select")}
+          <Tooltip title={isViewOnly ? "Select" : "View only"}>
+            <IconButton
+              size="small"
+              onClick={handleSelectToggle}
+              color={isViewOnly ? "primary" : "default"}
+            >
+              {isViewOnly ? <EditNoteIcon fontSize="small" /> : <PanToolAltIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
 
           {/* Markup Tools */}
@@ -512,6 +618,47 @@ function AnnotationSelectionMenu({
   );
 }
 
+function SelectionCopyMenu({
+  selected,
+  menuWrapperProps,
+  rect,
+  documentId,
+}: SelectionSelectionMenuProps & { documentId: string }) {
+  const { provides: selectionCapability } = useSelectionCapability();
+
+  if (!selected) return null;
+
+  return (
+    <div {...menuWrapperProps} style={{ ...menuWrapperProps?.style, zIndex: 100 }}>
+      <Box
+        sx={{
+          position: "absolute",
+          top: rect.size.height + 8,
+          left: 0,
+          pointerEvents: "auto",
+          minWidth: "max-content",
+          display: "flex",
+          gap: 0.5,
+        }}
+      >
+        <Tooltip title="Copy selected text">
+          <IconButton
+            size="small"
+            onClick={() => selectionCapability?.copyToClipboard(documentId)}
+            sx={{
+              bgcolor: "background.paper",
+              boxShadow: 1,
+              "&:hover": { bgcolor: "background.default" },
+            }}
+          >
+            <ContentCopyIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Box>
+    </div>
+  );
+}
+
 function DocumentLoadedSync({
   isLoaded,
   setPdfLoaded,
@@ -568,6 +715,7 @@ function EmbedPdfDocumentBody({
   const byPage = useMemo(() => sentencesByPageMap(sentences), [sentences]);
 
   const { provides: annotationApi } = useAnnotation(documentId);
+  const { provides: selectionCapability } = useSelectionCapability();
   const { provides: scrollApi } = useScroll(documentId);
   const scrollRef = useRef(scrollApi);
   scrollRef.current = scrollApi;
@@ -692,6 +840,20 @@ function EmbedPdfDocumentBody({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+        const target = e.target as HTMLElement;
+        if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) {
+          return;
+        }
+
+        const selectionState = selectionCapability?.getState(documentId);
+        if (selectionState?.selection) {
+          e.preventDefault();
+          selectionCapability?.copyToClipboard(documentId);
+        }
+        return;
+      }
+
       // Handle Delete/Backspace
       if (e.key === "Delete" || e.key === "Backspace") {
         const target = e.target as HTMLElement;
@@ -733,7 +895,18 @@ function EmbedPdfDocumentBody({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [annotationApi]);
+  }, [annotationApi, documentId, selectionCapability]);
+
+  const handlePageContextMenuCapture = useCallback(
+    (e: React.MouseEvent) => {
+      const selectionState = selectionCapability?.getState(documentId);
+      if (!selectionState?.selection) return;
+
+      e.preventDefault();
+      selectionCapability?.copyToClipboard(documentId);
+    },
+    [documentId, selectionCapability]
+  );
 
   /** Panel split drag ended — refit once. Do not depend on `zoomScope` identity (it changes every render and would refit every frame → scroll flicker). */
   useEffect(() => {
@@ -831,6 +1004,7 @@ function EmbedPdfDocumentBody({
             onDoubleClickCapture={(e) =>
               handlePageDoubleClickCapture(e, pageNumber)
             }
+            onContextMenuCapture={handlePageContextMenuCapture}
           >
             <PagePointerProvider
               documentId={documentId}
@@ -846,6 +1020,9 @@ function EmbedPdfDocumentBody({
                 documentId={documentId}
                 pageIndex={pageIndex}
                 scale={scale}
+                selectionMenu={(props) => (
+                  <SelectionCopyMenu {...props} documentId={documentId} />
+                )}
               />
               <AnnotationLayer
                 documentId={documentId}
@@ -878,6 +1055,7 @@ function EmbedPdfDocumentBody({
           onDoubleClickCapture={(e) =>
             handlePageDoubleClickCapture(e, pageNumber)
           }
+          onContextMenuCapture={handlePageContextMenuCapture}
         >
           <PagePointerProvider
             documentId={documentId}
@@ -893,6 +1071,9 @@ function EmbedPdfDocumentBody({
               documentId={documentId}
               pageIndex={pageIndex}
               scale={scale}
+              selectionMenu={(props) => (
+                <SelectionCopyMenu {...props} documentId={documentId} />
+              )}
             />
             <AnnotationLayer
               documentId={documentId}
@@ -951,7 +1132,9 @@ function EmbedPdfDocumentBody({
       byPage,
       currentId,
       highlightEnabled,
+      handlePageContextMenuCapture,
       handlePageDoubleClickCapture,
+      openCommentsPane,
     ],
   );
 
