@@ -48,20 +48,16 @@ import {
   type AnnotationSelectionMenuProps,
 } from "@embedpdf/plugin-annotation/react";
 import { HistoryPluginPackage } from "@embedpdf/plugin-history";
-import {
-  ThumbnailPluginPackage,
-} from "@embedpdf/plugin-thumbnail/react";
+import { ThumbnailPluginPackage } from "@embedpdf/plugin-thumbnail/react";
 import {
   Box,
   IconButton,
   Stack,
   Tooltip,
   Typography,
-  Tabs,
-  Tab,
   Divider,
 } from "@mui/material";
-import { useTheme, styled } from "@mui/material/styles";
+import { useTheme } from "@mui/material/styles";
 import BorderColorIcon from "@mui/icons-material/BorderColor";
 import DrawIcon from "@mui/icons-material/Draw";
 import CropSquareIcon from "@mui/icons-material/CropSquare";
@@ -75,9 +71,10 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import UndoIcon from "@mui/icons-material/Undo";
 import RedoIcon from "@mui/icons-material/Redo";
 import CircleIcon from "@mui/icons-material/Circle";
+import AddCommentIcon from "@mui/icons-material/AddComment";
 import { Slider } from "@mui/material";
 import { useHistoryCapability } from "@embedpdf/plugin-history/react";
-import { PdfSidebar } from "./PdfSidebar";
+import { PdfSidebar, type SidebarTab } from "./PdfSidebar";
 
 const MARKUP_TOOLS = ["highlight", "underline", "strikeout", "squiggly"];
 const SHAPE_TOOLS = ["ink", "line", "square", "circle"];
@@ -170,17 +167,18 @@ function AnnotationToolStrip({
   documentId,
   showSidebar,
   onToggleSidebar,
+  onOpenComments,
   isHistoryProcessingRef,
 }: {
   documentId: string;
   showSidebar: boolean;
   onToggleSidebar: () => void;
+  onOpenComments: () => void;
   isHistoryProcessingRef: React.MutableRefObject<boolean>;
 }) {
   const { provides } = useAnnotation(documentId);
   const { provides: annotationCapability } = useAnnotationCapability();
   const { provides: history } = useHistoryCapability();
-  const { provides: scrollApi } = useScroll(documentId);
   const active = provides?.getActiveTool();
   const activeId = active && "id" in active ? (active as { id: string }).id : null;
 
@@ -306,6 +304,11 @@ function AnnotationToolStrip({
                 fontSize="small"
                 color={showSidebar ? "primary" : "inherit"}
               />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Comments">
+            <IconButton onClick={onOpenComments} size="small" sx={{ mr: 0.5 }}>
+              <AddCommentIcon fontSize="small" color="inherit" />
             </IconButton>
           </Tooltip>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
@@ -449,7 +452,8 @@ function AnnotationSelectionMenu({
   menuWrapperProps,
   rect,
   documentId,
-}: AnnotationSelectionMenuProps & { documentId: string }) {
+  onOpenComments,
+}: AnnotationSelectionMenuProps & { documentId: string; onOpenComments: () => void }) {
   const { provides: annotationCapability } = useAnnotationCapability();
 
   const handleDelete = () => {
@@ -462,16 +466,31 @@ function AnnotationSelectionMenu({
 
   return (
     <div {...menuWrapperProps} style={{ ...menuWrapperProps?.style, zIndex: 100 }}>
-      <Tooltip title="Delete">
-        <Box
-          sx={{
-            position: "absolute",
-            top: rect.size.height + 8,
-            left: 0,
-            pointerEvents: "auto",
-            minWidth: "max-content",
-          }}
-        >
+      <Box
+        sx={{
+          position: "absolute",
+          top: rect.size.height + 8,
+          left: 0,
+          pointerEvents: "auto",
+          minWidth: "max-content",
+          display: "flex",
+          gap: 0.5,
+        }}
+      >
+        <Tooltip title="Comment">
+          <IconButton
+            size="small"
+            onClick={onOpenComments}
+            sx={{
+              bgcolor: "background.paper",
+              boxShadow: 1,
+              "&:hover": { bgcolor: "background.default" },
+            }}
+          >
+            <AddCommentIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Delete">
           <IconButton
             size="small"
             color="error"
@@ -484,8 +503,8 @@ function AnnotationSelectionMenu({
           >
             <DeleteIcon fontSize="small" />
           </IconButton>
-        </Box>
-      </Tooltip>
+        </Tooltip>
+      </Box>
     </div>
   );
 }
@@ -529,6 +548,9 @@ function EmbedPdfDocumentBody({
 }) {
   const theme = useTheme();
   const [showSidebar, setShowSidebar] = useState(true);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("thumbnails");
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [commentComposerRequest, setCommentComposerRequest] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const sentenceRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
 
@@ -545,6 +567,33 @@ function EmbedPdfDocumentBody({
   const scrollRef = useRef(scrollApi);
   scrollRef.current = scrollApi;
   const pendingScrollIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const savedWidth = window.localStorage.getItem("askpdf.pdfSidebarWidth");
+    const parsedWidth = savedWidth ? Number(savedWidth) : NaN;
+    if (Number.isFinite(parsedWidth) && parsedWidth > 0) {
+      setSidebarWidth(Math.min(520, Math.max(220, parsedWidth)));
+    }
+
+    const savedTab = window.localStorage.getItem("askpdf.pdfSidebarTab");
+    if (savedTab === "comments" || savedTab === "thumbnails") {
+      setSidebarTab(savedTab);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("askpdf.pdfSidebarWidth", String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem("askpdf.pdfSidebarTab", sidebarTab);
+  }, [sidebarTab]);
+
+  const openCommentsPane = useCallback(() => {
+    setShowSidebar(true);
+    setSidebarTab("comments");
+    setCommentComposerRequest((value) => value + 1);
+  }, []);
 
   useEffect(() => {
     // Priority: Don't let TTS scroll fight with a manual history undo/redo
@@ -780,7 +829,11 @@ function EmbedPdfDocumentBody({
                 pageIndex={pageIndex}
                 scale={scale}
                 selectionMenu={(props) => (
-                  <AnnotationSelectionMenu {...props} documentId={documentId} />
+                  <AnnotationSelectionMenu
+                    {...props}
+                    documentId={documentId}
+                    onOpenComments={openCommentsPane}
+                  />
                 )}
               />
             </PagePointerProvider>
@@ -823,7 +876,11 @@ function EmbedPdfDocumentBody({
               pageIndex={pageIndex}
               scale={scale}
               selectionMenu={(props) => (
-                <AnnotationSelectionMenu {...props} documentId={documentId} />
+                <AnnotationSelectionMenu
+                  {...props}
+                  documentId={documentId}
+                  onOpenComments={openCommentsPane}
+                />
               )}
             />
             {activeSentence ? (
@@ -897,7 +954,8 @@ function EmbedPdfDocumentBody({
             <AnnotationToolStrip
               documentId={documentId}
               showSidebar={showSidebar}
-              onToggleSidebar={() => setShowSidebar(!showSidebar)}
+              onToggleSidebar={() => setShowSidebar((value) => !value)}
+              onOpenComments={openCommentsPane}
               isHistoryProcessingRef={isHistoryProcessingRef}
             />
 
@@ -910,7 +968,17 @@ function EmbedPdfDocumentBody({
                 overflow: "hidden",
               }}
             >
-              {showSidebar && <PdfSidebar documentId={documentId} />}
+              {showSidebar && (
+                <PdfSidebar
+                  documentId={documentId}
+                  width={sidebarWidth}
+                  activeTab={sidebarTab}
+                  onTabChange={setSidebarTab}
+                  onWidthChange={setSidebarWidth}
+                  onToggleSidebar={() => setShowSidebar(false)}
+                  commentComposerRequest={commentComposerRequest}
+                />
+              )}
               <Box
                 ref={containerRef}
                 onDragStart={(e) => e.preventDefault()}
