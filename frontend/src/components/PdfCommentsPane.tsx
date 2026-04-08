@@ -3,7 +3,6 @@ import {
   Box,
   Button,
   Chip,
-  Divider,
   IconButton,
   Stack,
   TextField,
@@ -110,8 +109,6 @@ function AnnotationBadge({
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        border: "1px solid",
-        borderColor: selected ? "primary.main" : "divider",
         color: selected ? "primary.main" : "text.secondary",
         bgcolor: selected ? "rgba(66, 133, 244, 0.08)" : "background.paper",
       }}
@@ -329,28 +326,26 @@ function CommentHeader({
   );
 }
 
-function ThreadCommentBody({
-  annotation,
-  onSave,
-  onDelete,
-  autoFocus,
+function CommentRow({
+  children,
+  selected,
 }: {
-  annotation: TrackedAnnotation<PdfTextAnnoObject>;
-  onSave: (next: string) => void;
-  onDelete: () => void;
-  autoFocus?: boolean;
+  children: React.ReactNode;
+  selected?: boolean;
 }) {
   return (
-    <Box sx={{ pl: 1, pt: 1 }}>
-      <InlineEditableText
-        value={annotation.object.contents || ""}
-        placeholder="Write a reply..."
-        onSave={onSave}
-        onDelete={onDelete}
-        autoFocus={autoFocus}
-        minRows={2}
-        emptyLabel="Reply"
-      />
+    <Box
+      sx={{
+        px: 1,
+        py: 0.35,
+        bgcolor: "transparent",
+        transition: "background-color 120ms ease",
+        "&:hover": {
+          bgcolor: "rgba(66, 133, 244, 0.12)",
+        },
+      }}
+    >
+      {children}
     </Box>
   );
 }
@@ -380,6 +375,7 @@ function CommentThreadCard({
   const selected =
     selectedAnnotationId === root.object.id ||
     entry.replies.some((reply) => reply.object.id === selectedAnnotationId);
+  const replySelected = entry.replies.some((reply) => reply.object.id === selectedAnnotationId);
   const [replyDraft, setReplyDraft] = useState("");
 
   const handleCreateReply = useCallback(() => {
@@ -393,11 +389,20 @@ function CommentThreadCard({
     <Box
       ref={threadRef}
       sx={{
-        px: 0.5,
-        py: 1,
-        borderRadius: 1,
-        bgcolor: selected ? "rgba(66, 133, 244, 0.08)" : "transparent",
+        py: 0.5,
+        bgcolor: selected
+          ? replySelected
+            ? "rgba(66, 133, 244, 0.22)"
+            : "rgba(66, 133, 244, 0.18)"
+          : "transparent",
         transition: "background-color 120ms ease",
+        "&:hover": {
+          bgcolor: selected
+            ? replySelected
+              ? "rgba(66, 133, 244, 0.30)"
+              : "rgba(66, 133, 244, 0.26)"
+            : "rgba(66, 133, 244, 0.14)",
+        },
       }}
       onClick={(event) => {
         const target = event.target as HTMLElement | null;
@@ -405,7 +410,7 @@ function CommentThreadCard({
         onJump(root.object);
       }}
     >
-      <Box sx={{ cursor: "pointer" }}>
+      <CommentRow>
         <CommentHeader
           annotation={root.object}
           selected={selected}
@@ -416,11 +421,11 @@ function CommentThreadCard({
           }
           onSaveTitle={(next) => onUpdateTitle(root.object, next)}
         />
-      </Box>
+      </CommentRow>
 
-      <Box sx={{ mt: 1 }}>
+      <Box sx={{ mt: 0.25 }}>
         {isRootText ? (
-          <Stack spacing={1} data-comment-interactive="true">
+          <CommentRow>
             <InlineEditableText
               value={root.object.contents || ""}
               placeholder="Write a comment..."
@@ -428,47 +433,44 @@ function CommentThreadCard({
               minRows={3}
               emptyLabel={`Page ${root.object.pageIndex + 1}`}
             />
-          </Stack>
+          </CommentRow>
         ) : (
           summarizeAnnotation(root.object) ? (
-            <Typography
-              variant="body2"
-              color="text.primary"
-              sx={{ lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-            >
-              {summarizeAnnotation(root.object)}
-            </Typography>
+            <CommentRow>
+              <Typography
+                variant="body2"
+                color="text.primary"
+                sx={{ lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+              >
+                {summarizeAnnotation(root.object)}
+              </Typography>
+            </CommentRow>
           ) : null
         )}
       </Box>
 
       {entry.replies.length > 0 ? (
-        <Box sx={{ mt: 1.25 }}>
+        <Box sx={{ mt: 0.35 }}>
           {entry.replies.map((reply, index) => (
-            <Box key={reply.object.id}>
-              {index > 0 ? (
-                <Divider
-                  sx={{
-                    my: 1,
-                    mx: 2.5,
-                    borderColor: "divider",
-                    borderBottomWidth: 1,
-                    opacity: 0.55,
-                  }}
+            <React.Fragment key={reply.object.id}>
+              {index > 0 ? <Box sx={{ height: 1, mx: 1, bgcolor: "divider", opacity: 0.35 }} /> : null}
+              <CommentRow>
+                <InlineEditableText
+                  value={reply.object.contents || ""}
+                  placeholder="Write a reply..."
+                  onSave={(next) => onUpdateText(reply, next)}
+                  onDelete={() => onDeleteText(reply)}
+                  minRows={2}
+                  emptyLabel="Reply"
                 />
-              ) : null}
-              <ThreadCommentBody
-                annotation={reply}
-                onSave={(next) => onUpdateText(reply, next)}
-                onDelete={() => onDeleteText(reply)}
-              />
-            </Box>
+              </CommentRow>
+            </React.Fragment>
           ))}
         </Box>
       ) : null}
 
-      <Box sx={{ pt: 1.25 }} data-comment-interactive="true">
-        <Stack direction="row" spacing={1} alignItems="flex-start">
+      <Box sx={{ pt: 0.5, px: 1 }} data-comment-interactive="true">
+        <Stack direction="row" spacing={1} alignItems="flex-end">
           <TextField
             value={replyDraft}
             onChange={(event) => setReplyDraft(event.target.value)}
@@ -493,7 +495,9 @@ function CommentThreadCard({
             }}
           />
           {replyDraft.trim() ? (
-            <SaveActionButton onClick={handleCreateReply} title="Save reply" />
+            <Box sx={{ pb: 0.15 }}>
+              <SaveActionButton onClick={handleCreateReply} title="Save reply" />
+            </Box>
           ) : null}
         </Stack>
       </Box>
@@ -676,9 +680,10 @@ export function PdfCommentsPane({
         flexDirection: "column",
         minHeight: 0,
         overflow: "hidden",
+        bgcolor: "background.paper",
       }}
     >
-      <Box sx={{ p: 1.25, borderBottom: 1, borderColor: "divider" }}>
+      <Box sx={{ px: 1, py: 1.25, borderBottom: 1, borderColor: "divider" }}>
         <Stack spacing={1}>
           <Stack direction="row" alignItems="center" spacing={1}>
             <CommentIcon fontSize="small" color="primary" />
@@ -746,22 +751,22 @@ export function PdfCommentsPane({
         </Stack>
       </Box>
 
-      <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", p: 1 }}>
+      <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0, py: 1 }}>
         {threads.length === 0 ? (
-          <Box sx={{ p: 1.5, color: "text.secondary" }}>
+          <Box sx={{ px: 1, py: 1.5, color: "text.secondary" }}>
             <Typography variant="body2">
               No comments yet. Select an annotation and add a note to start a thread.
             </Typography>
           </Box>
         ) : (
-          <Stack spacing={1.5}>
+          <Stack spacing={1.25}>
             {groupedThreads.map((section: PageSection) => {
               const commentLabel = section.commentCount === 1 ? "1 comment" : `${section.commentCount} comments`;
               const replyLabel = section.replyCount === 1 ? "1 reply" : `${section.replyCount} replies`;
 
               return (
-                <Box key={section.pageIndex}>
-                  <Stack direction="row" alignItems="flex-start" spacing={1} sx={{ px: 0.5, mb: 0.75 }}>
+                <Box key={section.pageIndex} sx={{ px: 0 }}>
+                  <Stack direction="row" alignItems="flex-start" spacing={1} sx={{ px: 1, mb: 0.5 }}>
                     <AnnotationBadge
                       annotation={section.threads[0].entry.annotation.object}
                       selected={selectedAnnotationId === section.threads[0].entry.annotation.object.id}
@@ -778,18 +783,11 @@ export function PdfCommentsPane({
                     </Box>
                   </Stack>
 
-                  <Divider
-                    sx={{
-                      mx: 0.5,
-                      mb: 1,
-                      borderBottomWidth: 2,
-                      opacity: 0.8,
-                    }}
-                  />
+                  <Box sx={{ mx: 0, mb: 0.35, height: 2, bgcolor: "divider", opacity: 0.6 }} />
 
                   <Stack spacing={0}>
                     {section.threads.map((thread, threadIndex) => (
-                      <Box key={thread.entry.annotation.object.id}>
+                      <Box key={thread.entry.annotation.object.id} sx={{ px: 0 }}>
                         <CommentThreadCard
                           thread={thread}
                           selectedAnnotationId={selectedAnnotationId}
@@ -803,14 +801,7 @@ export function PdfCommentsPane({
                           }}
                         />
                         {threadIndex < section.threads.length - 1 ? (
-                          <Divider
-                            sx={{
-                              mx: 0.75,
-                              my: 0.75,
-                              borderBottomWidth: 1,
-                              opacity: 0.35,
-                            }}
-                          />
+                          <Box sx={{ height: 1, bgcolor: "divider", opacity: 0.24 }} />
                         ) : null}
                       </Box>
                     ))}
