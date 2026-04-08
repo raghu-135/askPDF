@@ -1,0 +1,138 @@
+import { useCallback, useEffect, useRef } from "react";
+import { getThreadFileAnnotations, updateThreadFileAnnotations } from "../lib/api";
+import { serializeAnnotationItems } from "../lib/annotation-utils";
+
+type AnnotationApi = {
+  importAnnotations: (annotations: any[]) => void;
+  exportAnnotations: () => { toPromise: () => Promise<any[]> };
+};
+
+type UsePersistAnnotationsParams = {
+  annotationApi: AnnotationApi | null | undefined;
+  threadId?: string | null;
+  fileHash?: string | null;
+};
+
+/**
+ * Hydrate, debounce-save, and flush EmbedPDF annotations for a single thread/file pair.
+ *
+ * The hook owns the persistence lifecycle so the viewer can stay focused on rendering
+ * and event wiring.
+ */
+export function usePersistAnnotations({
+  annotationApi,
+  threadId,
+  fileHash,
+}: UsePersistAnnotationsParams) {
+  const hydrateAnnotationsRef = useRef(false);
+  const hydratedAnnotationKeyRef = useRef<string | null>(null);
+  const persistTimerRef = useRef<number | null>(null);
+  const lastPersistedSnapshotRef = useRef<string | null>(null);
+
+  /** Clear any pending debounce timer for annotation persistence. */
+  const clearPersistTimer = useCallback(() => {
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Reset transient persistence state when the active thread or file changes.
+   *
+   * This clears hydration and dedupe state so the next PDF context starts cleanly.
+   */
+  const resetForContextChange = useCallback(() => {
+    hydrateAnnotationsRef.current = false;
+    hydratedAnnotationKeyRef.current = null;
+    lastPersistedSnapshotRef.current = null;
+    clearPersistTimer();
+  }, [clearPersistTimer]);
+
+  /** Clear cached persistence state whenever the active thread/file identity changes. */
+  useEffect(() => {
+    resetForContextChange();
+  }, [resetForContextChange, threadId, fileHash]);
+
+  /**
+   * Export the current annotation graph from EmbedPDF and persist it if it changed.
+   */
+  const persistAnnotations = useCallback(async () => {
+    if (!annotationApi || !threadId || !fileHash) return;
+
+    try {
+      const exported = await annotationApi.exportAnnotations().toPromise();
+      const snapshot = JSON.stringify(serializeAnnotationItems(exported as any));
+      if (snapshot === lastPersistedSnapshotRef.current) {
+        return;
+      }
+
+      await updateThreadFileAnnotations(threadId, fileHash, exported as any);
+      lastPersistedSnapshotRef.current = snapshot;
+    } catch (error) {
+      console.warn("Failed to persist annotations:", error);
+    }
+  }, [annotationApi, fileHash, threadId]);
+
+  /**
+   * Load persisted annotations for the active thread/file pair and import them into EmbedPDF.
+   *
+   * The key guard prevents repeated hydration for the same document identity.
+   */
+  const loadPersistedAnnotations = useCallback(async () => {
+    if (!annotationApi || !threadId || !fileHash) return;
+
+    const key = `${threadId}:${fileHash}`;
+    if (hydratedAnnotationKeyRef.current === key) return;
+    hydratedAnnotationKeyRef.current = key;
+
+    try {
+      const payload = await getThreadFileAnnotations(threadId, fileHash);
+
+      const annotations = payload.annotations || [];
+      if (annotations.length === 0) {
+        return;
+      }
+
+      const serializedSnapshot = JSON.stringify(serializeAnnotationItems(annotations));
+      lastPersistedSnapshotRef.current = serializedSnapshot;
+      hydrateAnnotationsRef.current = true;
+      annotationApi.importAnnotations(annotations);
+    } catch (error: any) {
+      const message = String(error?.message || error || "");
+      if (!message.includes("404")) {
+        console.warn("Failed to load persisted annotations:", error);
+      }
+    } finally {
+      hydrateAnnotationsRef.current = false;
+    }
+  }, [annotationApi, fileHash, threadId]);
+
+  /**
+   * Schedule a persistence write after a short debounce window.
+   *
+   * This reduces backend chatter during rapid annotation edits and undo/redo bursts.
+   */
+  const schedulePersistAnnotations = useCallback(() => {
+    clearPersistTimer();
+
+    persistTimerRef.current = window.setTimeout(() => {
+      persistTimerRef.current = null;
+      void persistAnnotations();
+    }, 400);
+  }, [clearPersistTimer, persistAnnotations]);
+
+  /** Flush any pending save when the hook unmounts or the active PDF context changes. */
+  useEffect(() => {
+    return () => {
+      clearPersistTimer();
+      void persistAnnotations();
+    };
+  }, [clearPersistTimer, persistAnnotations, threadId, fileHash]);
+
+  return {
+    hydrateAnnotationsRef,
+    loadPersistedAnnotations,
+    schedulePersistAnnotations,
+  };
+}

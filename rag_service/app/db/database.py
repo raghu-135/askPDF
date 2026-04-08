@@ -76,6 +76,14 @@ class ThreadFile(BaseModel):
     file_hash: str
 
 
+class ThreadFileAnnotation(BaseModel):
+    thread_id: str
+    file_hash: str
+    annotations_json: str
+    created_at: datetime
+    updated_at: datetime
+
+
 class Message(BaseModel):
     id: str
     thread_id: str
@@ -115,6 +123,18 @@ CREATE TABLE IF NOT EXISTS thread_files (
     FOREIGN KEY (file_hash) REFERENCES files(file_hash)
 );
 
+CREATE TABLE IF NOT EXISTS thread_file_annotations (
+    thread_id TEXT NOT NULL,
+    file_hash TEXT NOT NULL,
+    annotations_json TEXT NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (thread_id, file_hash),
+    FOREIGN KEY (thread_id, file_hash)
+        REFERENCES thread_files(thread_id, file_hash)
+        ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS messages (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL,
@@ -145,6 +165,7 @@ CREATE TABLE IF NOT EXISTS thread_stats (
 async def init_db():
     """Initialize the database with the schema."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
         await db.executescript(SCHEMA)
 
         # Lightweight migration for existing installations.
@@ -173,6 +194,7 @@ async def get_db():
     """Get a database connection."""
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
+    await db.execute("PRAGMA foreign_keys = ON")
     return db
 
 
@@ -184,6 +206,7 @@ async def create_thread(name: str, embed_model: str) -> Thread:
     created_at = datetime.utcnow()
     
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
         await db.execute(
             "INSERT INTO threads (id, name, embed_model, settings, created_at) VALUES (?, ?, ?, ?, ?)",
             (thread_id, name, embed_model, "{}", created_at)
@@ -197,6 +220,7 @@ async def get_thread(thread_id: str) -> Optional[Thread]:
     """Get a thread by ID."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
         cursor = await db.execute(
             "SELECT id, name, embed_model, settings, created_at FROM threads WHERE id = ?",
             (thread_id,)
@@ -217,6 +241,7 @@ async def get_thread_settings(thread_id: str) -> Dict[str, Any]:
     """Get persisted settings for a thread."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
         cursor = await db.execute(
             "SELECT settings FROM threads WHERE id = ?",
             (thread_id,)
@@ -231,6 +256,7 @@ async def update_thread_settings(thread_id: str, settings: Dict[str, Any]) -> Op
     """Replace persisted settings for a thread."""
     payload = json.dumps(settings or {})
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
         cursor = await db.execute(
             "UPDATE threads SET settings = ? WHERE id = ?",
             (payload, thread_id)
@@ -245,6 +271,7 @@ async def list_threads() -> List[Dict[str, Any]]:
     """List all threads with message counts and file counts."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
         cursor = await db.execute("""
             SELECT 
                 t.id, t.name, t.embed_model, t.settings, t.created_at,
@@ -275,6 +302,7 @@ async def list_threads() -> List[Dict[str, Any]]:
 async def update_thread(thread_id: str, name: str) -> Optional[Thread]:
     """Update a thread's name."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
         await db.execute(
             "UPDATE threads SET name = ? WHERE id = ?",
             (name, thread_id)
@@ -286,8 +314,10 @@ async def update_thread(thread_id: str, name: str) -> Optional[Thread]:
 async def delete_thread(thread_id: str) -> bool:
     """Delete a thread and all associated data."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
         # Delete messages first (cascade should handle this, but being explicit)
         await db.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
+        await db.execute("DELETE FROM thread_file_annotations WHERE thread_id = ?", (thread_id,))
         # Delete thread_files associations
         await db.execute("DELETE FROM thread_files WHERE thread_id = ?", (thread_id,))
         # Delete the thread
@@ -306,6 +336,7 @@ async def create_or_get_file(
 ) -> File:
     """Create a new file record or return existing one."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
         # Try to insert, ignore if exists
         await db.execute(
             "INSERT OR IGNORE INTO files (file_hash, file_name, file_path, source_type) VALUES (?, ?, ?, ?)",
@@ -331,6 +362,7 @@ async def get_file(file_hash: str) -> Optional[File]:
     """Get a file by hash."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
         cursor = await db.execute(
             "SELECT file_hash, file_name, file_path, source_type FROM files WHERE file_hash = ?",
             (file_hash,)
@@ -352,6 +384,7 @@ async def add_file_to_thread(thread_id: str, file_hash: str) -> bool:
     """Associate a file with a thread."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
             await db.execute(
                 "INSERT OR IGNORE INTO thread_files (thread_id, file_hash) VALUES (?, ?)",
                 (thread_id, file_hash)
@@ -367,6 +400,7 @@ async def get_thread_files(thread_id: str) -> List[File]:
     """Get all files associated with a thread."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
         cursor = await db.execute("""
             SELECT f.file_hash, f.file_name, f.file_path, f.source_type
             FROM files f
@@ -390,6 +424,11 @@ async def remove_file_from_thread(thread_id: str, file_hash: str) -> bool:
     """Remove a file association from a thread (does not delete the file record itself)."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
+            await db.execute(
+                "DELETE FROM thread_file_annotations WHERE thread_id = ? AND file_hash = ?",
+                (thread_id, file_hash)
+            )
             cursor = await db.execute(
                 "DELETE FROM thread_files WHERE thread_id = ? AND file_hash = ?",
                 (thread_id, file_hash)
@@ -404,6 +443,7 @@ async def remove_file_from_thread(thread_id: str, file_hash: str) -> bool:
 async def is_file_in_thread(thread_id: str, file_hash: str) -> bool:
     """Check if a file is associated with a thread."""
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
         cursor = await db.execute(
             "SELECT 1 FROM thread_files WHERE thread_id = ? AND file_hash = ?",
             (thread_id, file_hash)
@@ -422,6 +462,7 @@ async def count_threads_with_file_for_model(
     Optionally exclude one thread (useful after detaching a file from that thread).
     """
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
         if exclude_thread_id:
             cursor = await db.execute(
                 """
@@ -444,6 +485,110 @@ async def count_threads_with_file_for_model(
             )
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
+
+
+def _load_thread_file_annotations(raw: Optional[str]) -> List[Dict[str, Any]]:
+    """Deserialize the annotation snapshot list from SQLite."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
+def _serialize_thread_file_annotation_row(row: ThreadFileAnnotation) -> Dict[str, Any]:
+    """Convert an annotation row into the API payload shape."""
+    return {
+        "thread_id": row.thread_id,
+        "file_hash": row.file_hash,
+        "annotations": _load_thread_file_annotations(row.annotations_json),
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+async def get_thread_file_annotation_row(
+    thread_id: str,
+    file_hash: str,
+) -> Optional[ThreadFileAnnotation]:
+    """Load the persisted row for a thread/file annotation snapshot."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
+        cursor = await db.execute(
+            """
+            SELECT thread_id, file_hash, annotations_json, created_at, updated_at
+            FROM thread_file_annotations
+            WHERE thread_id = ? AND file_hash = ?
+            """,
+            (thread_id, file_hash),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return ThreadFileAnnotation(
+            thread_id=row["thread_id"],
+            file_hash=row["file_hash"],
+            annotations_json=row["annotations_json"] or "[]",
+            created_at=datetime.fromisoformat(row["created_at"]) if isinstance(row["created_at"], str) else row["created_at"],
+            updated_at=datetime.fromisoformat(row["updated_at"]) if isinstance(row["updated_at"], str) else row["updated_at"],
+        )
+
+
+async def get_thread_file_annotations(thread_id: str, file_hash: str) -> Optional[Dict[str, Any]]:
+    """Get the persisted annotation payload for a thread/file pair."""
+    row = await get_thread_file_annotation_row(thread_id, file_hash)
+    if not row:
+        return None
+    return _serialize_thread_file_annotation_row(row)
+
+
+async def upsert_thread_file_annotations(
+    thread_id: str,
+    file_hash: str,
+    annotations: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Insert or replace the full annotation snapshot for a thread/file pair."""
+    annotations_json = json.dumps(annotations or [])
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """
+            INSERT INTO thread_file_annotations (
+                thread_id, file_hash, annotations_json, created_at, updated_at
+            ) VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(thread_id, file_hash) DO UPDATE SET
+                annotations_json = excluded.annotations_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (thread_id, file_hash, annotations_json),
+        )
+        await db.commit()
+
+    row = await get_thread_file_annotation_row(thread_id, file_hash)
+    if not row:
+        raise RuntimeError("Failed to persist annotation snapshot")
+    return _serialize_thread_file_annotation_row(row)
+
+
+async def delete_thread_file_annotations(thread_id: str, file_hash: Optional[str] = None) -> int:
+    """Delete persisted annotations for a thread or thread/file pair."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        if file_hash:
+            cursor = await db.execute(
+                "DELETE FROM thread_file_annotations WHERE thread_id = ? AND file_hash = ?",
+                (thread_id, file_hash),
+            )
+        else:
+            cursor = await db.execute(
+                "DELETE FROM thread_file_annotations WHERE thread_id = ?",
+                (thread_id,),
+            )
+        await db.commit()
+        return cursor.rowcount or 0
 
 
 # ============ Message Operations ============

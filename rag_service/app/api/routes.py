@@ -28,6 +28,7 @@ from app.db.database import (
     get_recent_messages,
     get_thread,
     get_thread_files,
+    get_thread_file_annotations,
     get_thread_messages,
     get_thread_settings,
     get_thread_shape,
@@ -39,6 +40,7 @@ from app.db.database import (
     update_thread,
     update_thread_settings,
     upsert_thread_stats_document,
+    upsert_thread_file_annotations,
 )
 from app.db.vector_db import get_vector_db
 from app.models.llm_server_client import (
@@ -58,6 +60,8 @@ from app.models.requests import (
     ThreadChatRequest,
     ThreadCreateRequest,
     ThreadFileRequest,
+    ThreadFileAnnotationsResponse,
+    ThreadFileAnnotationsUpdateRequest,
     ThreadSettingsResponse,
     ThreadSettingsUpdateRequest,
     ThreadUpdateRequest,
@@ -416,6 +420,73 @@ async def get_thread_files_endpoint(thread_id: str):
                 for f in files
             ],
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/threads/{thread_id}/files/{file_hash}/annotations")
+async def get_thread_file_annotations_endpoint(thread_id: str, file_hash: str):
+    """
+    Get the persisted annotation snapshot for a thread/file pair.
+    """
+    try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        if not await is_file_in_thread(thread_id, file_hash):
+            raise HTTPException(status_code=404, detail="File is not attached to this thread")
+
+        row = await get_thread_file_annotations(thread_id, file_hash)
+        if not row:
+            return ThreadFileAnnotationsResponse(
+                thread_id=thread_id,
+                file_hash=file_hash,
+                annotations=[],
+            ).dict()
+
+        return ThreadFileAnnotationsResponse(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            annotations=row["annotations"],
+            created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
+            updated_at=row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else row["updated_at"],
+        ).dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/threads/{thread_id}/files/{file_hash}/annotations")
+async def update_thread_file_annotations_endpoint(
+    thread_id: str,
+    file_hash: str,
+    req: ThreadFileAnnotationsUpdateRequest,
+):
+    """
+    Replace the persisted annotation snapshot for a thread/file pair.
+    """
+    try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        if not await is_file_in_thread(thread_id, file_hash):
+            raise HTTPException(status_code=404, detail="File is not attached to this thread")
+
+        row = await upsert_thread_file_annotations(thread_id, file_hash, req.annotations)
+        return ThreadFileAnnotationsResponse(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            annotations=row["annotations"],
+            created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
+            updated_at=row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else row["updated_at"],
+        ).dict()
     except HTTPException:
         raise
     except Exception as e:

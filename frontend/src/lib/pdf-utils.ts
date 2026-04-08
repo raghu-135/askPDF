@@ -98,7 +98,7 @@ export function getActiveTab(pdfTabs: PdfTab[], activeTabId: string | null): Pdf
  * @returns An object containing pdfSentences, pdfUrl, fileHash, and fileName.
  */
 export function getActiveTabData(activeTab: PdfTab | null): {
-  pdfSentences: string[];
+  pdfSentences: any[];
   pdfUrl: string | null;
   fileHash: string | null;
   fileName: string | null;

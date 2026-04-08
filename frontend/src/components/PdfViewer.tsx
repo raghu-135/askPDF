@@ -75,6 +75,7 @@ import AddCommentIcon from "@mui/icons-material/AddComment";
 import { Slider } from "@mui/material";
 import { useHistoryCapability } from "@embedpdf/plugin-history/react";
 import { PdfSidebar, type SidebarTab } from "./PdfSidebar";
+import { usePersistAnnotations } from "../hooks/usePersistAnnotations";
 
 const MARKUP_TOOLS = ["highlight", "underline", "strikeout", "squiggly"];
 const SHAPE_TOOLS = ["ink", "line", "square", "circle"];
@@ -115,6 +116,8 @@ type Props = {
   isResizing?: boolean;
   highlightEnabled?: boolean;
   darkMode?: boolean;
+  threadId?: string | null;
+  fileHash?: string | null;
 };
 
 function buildPlugins(pdfUrl: string) {
@@ -537,6 +540,8 @@ function EmbedPdfDocumentBody({
   isResizing,
   highlightEnabled,
   darkMode,
+  threadId,
+  fileHash,
   pdfLoaded,
   setPdfLoaded,
   isHistoryProcessingRef,
@@ -567,6 +572,22 @@ function EmbedPdfDocumentBody({
   const scrollRef = useRef(scrollApi);
   scrollRef.current = scrollApi;
   const pendingScrollIdRef = useRef<number | null>(null);
+  const { provides: historyApi } = useHistoryCapability();
+  const historyRef = useRef({ provides: historyApi });
+  historyRef.current = { provides: historyApi };
+  const {
+    hydrateAnnotationsRef,
+    loadPersistedAnnotations,
+    schedulePersistAnnotations,
+  } = usePersistAnnotations({
+    annotationApi,
+    threadId,
+    fileHash,
+  });
+
+  useEffect(() => {
+    void loadPersistedAnnotations();
+  }, [loadPersistedAnnotations]);
 
   useEffect(() => {
     const savedWidth = window.localStorage.getItem("askpdf.pdfSidebarWidth");
@@ -634,9 +655,12 @@ function EmbedPdfDocumentBody({
     [scrollApi]
   );
 
-  const { provides: historyApi } = useHistoryCapability();
-  const historyRef = useRef({ provides: historyApi });
-  historyRef.current = { provides: historyApi };
+  const isCommittedMutationEvent = useCallback((event: any) => {
+    return (
+      ["create", "update", "delete"].includes(event.type) &&
+      Boolean(event.committed)
+    );
+  }, []);
 
   // Persistence / DB Sync & Auto-scroll on all committed changes (Undo/Redo/etc)
   useEffect(() => {
@@ -645,27 +669,26 @@ function EmbedPdfDocumentBody({
       if (event.type === "loaded") return;
 
       // 1. Persistence logging
-      if (
-        ["create", "update", "delete"].includes(event.type) &&
-        (event as any).committed
-      ) {
-        console.log(
-          `[Persistence] Syncing ${event.type} for document ${documentId}`
-        );
+      if (isCommittedMutationEvent(event)) {
+        if (!hydrateAnnotationsRef.current) {
+          schedulePersistAnnotations();
+        }
       }
 
       // 2. Auto-scroll on Undo/Redo
       // Only scroll during history actions to avoid locking the scroll during normal interaction.
-      if (
-        ["create", "update", "delete"].includes(event.type) &&
-        (event as any).committed &&
-        isHistoryProcessingRef.current
-      ) {
+      if (isCommittedMutationEvent(event) && isHistoryProcessingRef.current) {
         scrollToAnnotation((event as any).annotation);
       }
     });
     return () => sub();
-  }, [annotationApi, documentId, scrollToAnnotation]);
+  }, [
+    annotationApi,
+    documentId,
+    isCommittedMutationEvent,
+    schedulePersistAnnotations,
+    scrollToAnnotation,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1061,6 +1084,8 @@ const PdfViewer = React.memo(function PdfViewer({
   isResizing,
   highlightEnabled = true,
   darkMode = false,
+  threadId = null,
+  fileHash = null,
 }: Props) {
   const theme = useTheme();
   const { engine, isLoading, error } = usePdfiumEngine();
@@ -1125,6 +1150,8 @@ const PdfViewer = React.memo(function PdfViewer({
               isResizing={isResizing}
               highlightEnabled={highlightEnabled}
               darkMode={darkMode}
+              threadId={threadId}
+              fileHash={fileHash}
               pdfLoaded={pdfLoaded}
               setPdfLoaded={setPdfLoaded}
               isHistoryProcessingRef={isHistoryProcessingRef}

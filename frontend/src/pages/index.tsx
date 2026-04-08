@@ -420,6 +420,8 @@ export default function Home() {
                 isResizing={isResizing}
                 highlightEnabled={highlightEnabled}
                 darkMode={pdfDarkMode}
+                threadId={activeThread?.id ?? null}
+                fileHash={activeTab?.fileHash ?? null}
               />
             ) : (
               <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit', p: 4 }}>
