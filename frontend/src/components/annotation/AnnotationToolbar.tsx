@@ -258,8 +258,8 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
       <Stack
         direction="row"
         spacing={0.5}
-        alignItems="center"
         sx={{
+          alignItems: "center",
           flexShrink: 0,
           px: 1,
           py: 0.5,
@@ -271,7 +271,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
         }}
       >
         {/* Left section - Tools and controls */}
-        <Stack direction="row" spacing={0.5} alignItems="center">
+        <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
           <Tooltip title="Toggle Sidebar">
             <IconButton onClick={onToggleSidebar} size="small" sx={{ mr: 0.5 }}>
               <ViewSidebarIcon
@@ -325,7 +325,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
         </Stack>
 
         {/* Right section - History controls */}
-        <Stack direction="row" spacing={0.5} alignItems="center">
+        <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
           <Tooltip title="Undo">
             <span>
               <IconButton
@@ -355,8 +355,8 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
       <Stack
         direction="row"
         spacing={2}
-        alignItems="center"
         sx={{
+          alignItems: "center",
           px: 2,
           py: 0.5,
           borderBottom: 1,
@@ -391,7 +391,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
 
         {/* Width slider - shown conditionally but container remains */}
         {showWidthSlider && (
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ width: 150 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center", width: 150 }}>
             <Typography variant="caption" color="text.secondary" sx={{ minWidth: 60 }}>
               Width: {displayValues.strokeWidth}px
             </Typography>
@@ -413,7 +413,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
         )}
 
         {/* Opacity slider - always visible */}
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ width: 120 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center", width: 120 }}>
           <Typography variant="caption" color="text.secondary" sx={{ minWidth: 60 }}>
             Opacity: {Math.round(displayValues.opacity * 100)}%
           </Typography>

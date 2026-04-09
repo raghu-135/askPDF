@@ -231,9 +231,13 @@ function InlineEditableText({
       >
         <Typography
           variant={emphasized ? "subtitle2" : "body2"}
-          fontWeight={emphasized ? 700 : 400}
-          color={value.trim() ? "text.primary" : "text.secondary"}
-          sx={{ lineHeight: 1.45, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          sx={{ 
+            fontWeight: emphasized ? 700 : 400,
+            color: value.trim() ? "text.primary" : "text.secondary",
+            lineHeight: 1.45, 
+            whiteSpace: "pre-wrap", 
+            wordBreak: "break-word" 
+          }}
         >
           {value.trim() || emptyLabel || placeholder}
         </Typography>
@@ -267,7 +271,7 @@ function InlineEditableText({
           },
         }}
       />
-      <Stack direction="row" justifyContent="flex-end" spacing={0.5}>
+      <Stack direction="row" sx={{ justifyContent: "flex-end" }} spacing={0.5}>
         <SaveActionButton onClick={commit} disabled={!canSave} />
         <Tooltip title="Cancel">
           <span>
@@ -308,9 +312,8 @@ function CommentHeader({
   return (
     <Stack
       direction="row"
-      alignItems="center"
       spacing={1}
-      sx={{ minWidth: 0 }}
+      sx={{ alignItems: "center", minWidth: 0 }}
     >
       <AnnotationBadge annotation={annotation} selected={selected} />
       <InlineEditableText
@@ -685,7 +688,7 @@ export function PdfCommentsPane({
     >
       <Box sx={{ px: 1, py: 1.25, borderBottom: 1, borderColor: "divider" }}>
         <Stack spacing={1}>
-          <Stack direction="row" alignItems="center" spacing={1}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             <CommentIcon fontSize="small" color="primary" />
             <Typography variant="subtitle2" fontWeight={700}>
               New comment

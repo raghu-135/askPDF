@@ -132,7 +132,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [copiedId, setCopiedId] = useState<string | null>(null);
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
-    const messageRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
+    const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
     const lastClarificationIdsRef = useRef<{ userId: string | null; assistantId: string | null } | null>(null);
 
     // Load messages when thread changes
@@ -761,7 +761,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     if (!activeThread) {
         return (
             <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: theme.palette.background.default, color: theme.palette.text.primary }}>
-                <Box textAlign="center">
+                <Box sx={{ textAlign: "center" }}>
                     <Typography variant="h6" color="text.secondary" gutterBottom>
                         No Thread Selected
                     </Typography>
@@ -818,7 +818,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <Tooltip
                         title={
                             <Box sx={{ p: 0.5 }}>
-                                <Typography variant="caption" display="block">
+                                <Typography variant="caption" sx={{ display: "block" }}>
                                     Set context window size for the LLM.
                                 </Typography>
                                 <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
@@ -873,7 +873,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     },
                                 },
                             }}
-                            inputProps={{ min: 1, step: 1, style: { textAlign: 'right' } }}
+                            slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
                         />
                     </Tooltip>
                     <FormControl fullWidth size="small">
@@ -901,7 +901,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     return (
                         <ListItem
                             key={msg.id}
-                            ref={el => messageRefs.current[idx] = el}
+                            ref={el => { messageRefs.current[idx] = el; }}
                             alignItems="flex-start"
                             sx={{
                                 flexDirection: 'column',
@@ -1082,7 +1082,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     borderRadius: 1,
                                                     whiteSpace: 'pre-wrap',
                                                     wordBreak: 'break-word',
-                                                    bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.04)'
+                                                    bgcolor: 'rgba(0,0,0,0.04)'
                                                 }}
                                             >
                                                 {msg.reasoning}
@@ -1306,7 +1306,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             type="number"
                             value={maxIterations}
                             onChange={(e) => setMaxIterations(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
-                            inputProps={{ min: minMaxIterations, max: maxMaxIterations }}
+                            slotProps={{ htmlInput: { min: minMaxIterations, max: maxMaxIterations } }}
                             helperText="Lower is faster; higher allows deeper research."
                         />
                     ) : (
@@ -1330,7 +1330,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             }
                             label={
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <Typography variant="body2" fontWeight={500}>Reasoning mode</Typography>
+                                    <Typography variant="body2" sx={{ fontWeight: 500 }}>Reasoning mode</Typography>
                                 </Box>
                             }
                         />
@@ -1350,7 +1350,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             }
                             label={
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <Typography variant="body2" fontWeight={500} color={!reasoningMode ? "text.disabled" : "text.primary"}>Intent Agent</Typography>
+                                    <Typography variant="body2" sx={{ fontWeight: 500, color: (!reasoningMode ? "text.disabled" : "text.primary") }}>Intent Agent</Typography>
                                 </Box>
                             }
                         />
@@ -1375,7 +1375,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             }
                             label={
                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <Typography variant="body2" fontWeight={500}>Reranker</Typography>
+                                    <Typography variant="body2" sx={{ fontWeight: 500 }}>Reranker</Typography>
                                 </Box>
                             }
                         />
@@ -1462,7 +1462,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         multiline
                         minRows={14}
                         maxRows={24}
-                        InputProps={{ readOnly: true }}
+                        slotProps={{ input: { readOnly: true } }}
                     />
                 </DialogContent>
                 <DialogActions>
