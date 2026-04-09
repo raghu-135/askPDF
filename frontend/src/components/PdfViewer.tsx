@@ -182,12 +182,14 @@ function AnnotationToolStrip({
   onToggleSidebar,
   onOpenComments,
   isHistoryProcessingRef,
+  showAnnotationProperties,
 }: {
   documentId: string;
   showSidebar: boolean;
   onToggleSidebar: () => void;
   onOpenComments: () => void;
   isHistoryProcessingRef: React.MutableRefObject<boolean>;
+  showAnnotationProperties: boolean;
 }) {
   const { provides } = useAnnotation(documentId);
   const { provides: annotationCapability } = useAnnotationCapability();
@@ -213,6 +215,34 @@ function AnnotationToolStrip({
     opacity: 1,
   });
 
+  // Update settings to match selected annotation when annotation is selected
+  useEffect(() => {
+    if (!showAnnotationProperties || !provides) return;
+
+    const selectedAnnotations = provides.getSelectedAnnotations() || [];
+    if (selectedAnnotations.length === 0) return;
+
+    const selectedAnnotation = selectedAnnotations[0];
+    const annotation = selectedAnnotation.object;
+
+    
+    // Update settings based on annotation type and properties
+    const annotationType = annotation.type as unknown as string;
+    if (MARKUP_TOOLS.includes(annotationType)) {
+      setMarkupSettings({
+        strokeColor: (annotation as any).strokeColor || "#ffeb3b",
+        opacity: (annotation as any).opacity || 0.3,
+      });
+    } else if (SHAPE_TOOLS.includes(annotationType)) {
+      setShapeSettings({
+        strokeColor: (annotation as any).strokeColor || "#f44336",
+        strokeWidth: (annotation as any).strokeWidth || 2,
+        opacity: (annotation as any).opacity || 1,
+      });
+    }
+  }, [showAnnotationProperties, provides]);
+
+  
   // Sync settings with tool defaults whenever they change or tool is activated
   useEffect(() => {
     if (!annotationCapability || !activeId) return;
@@ -481,7 +511,7 @@ function AnnotationToolStrip({
         </Stack>
       </Stack>
 
-      {(isMarkup || isShape) && currentSettings && setSettings && (
+      {((isMarkup || isShape) && currentSettings && setSettings) || showAnnotationProperties ? (
         <Stack
           direction="row"
           spacing={2}
@@ -500,16 +530,34 @@ function AnnotationToolStrip({
               <IconButton
                 key={color}
                 size="small"
-                onClick={() =>
-                  setSettings((prev: any) => ({ ...prev, strokeColor: color }))
-                }
+                onClick={() => {
+                  setSettings((prev: any) => ({ ...prev, strokeColor: color }));
+                  
+                  // Also update selected annotation directly
+                  if (showAnnotationProperties && provides && annotationCapability) {
+                    const selectedAnnotations = provides.getSelectedAnnotations() || [];
+                    if (selectedAnnotations.length > 0) {
+                      const selectedAnnotation = selectedAnnotations[0];
+                      annotationCapability.updateAnnotation(selectedAnnotation.object.pageIndex, selectedAnnotation.object.id, {
+                        strokeColor: color,
+                      });
+                    }
+                  }
+                }}
                 sx={{
                   p: 0.25,
                   border: "2px solid",
-                  borderColor:
-                    currentSettings.strokeColor === color
-                      ? "primary.main"
-                      : "transparent",
+                  borderColor: (() => {
+                    if (showAnnotationProperties && provides) {
+                      const selectedAnnotations = provides.getSelectedAnnotations() || [];
+                      if (selectedAnnotations.length > 0) {
+                        const selectedAnnotation = selectedAnnotations[0];
+                        const annotationColor = (selectedAnnotation.object as any).strokeColor;
+                        return annotationColor === color ? "primary.main" : "transparent";
+                      }
+                    }
+                    return currentSettings?.strokeColor === color ? "primary.main" : "transparent";
+                  })(),
                 }}
               >
                 <CircleIcon sx={{ color, fontSize: 18 }} />
@@ -517,40 +565,109 @@ function AnnotationToolStrip({
             ))}
           </Stack>
 
-          {isShape && (
+          {(isShape || (showAnnotationProperties && provides && (() => {
+            const selectedAnnotations = provides.getSelectedAnnotations() || [];
+            if (selectedAnnotations.length > 0) {
+              const selectedAnnotation = selectedAnnotations[0];
+              return 'strokeWidth' in selectedAnnotation.object;
+            }
+            return false;
+          })())) && (
             <Stack direction="row" spacing={1} alignItems="center" sx={{ width: 150 }}>
               <Typography variant="caption" color="text.secondary" sx={{ minWidth: 60 }}>
-                Width: {(currentSettings as any).strokeWidth}px
+                Width: {(() => {
+                if (showAnnotationProperties && provides) {
+                  const selectedAnnotations = provides.getSelectedAnnotations() || [];
+                  if (selectedAnnotations.length > 0) {
+                    const selectedAnnotation = selectedAnnotations[0];
+                    if ('strokeWidth' in selectedAnnotation.object) {
+                      return (selectedAnnotation.object as any).strokeWidth;
+                    }
+                  }
+                }
+                return isShape && currentSettings && 'strokeWidth' in currentSettings ? (currentSettings as any).strokeWidth : 2;
+              })()}px
               </Typography>
               <Slider
                 size="small"
-                value={(currentSettings as any).strokeWidth}
+                value={(() => {
+                if (showAnnotationProperties && provides) {
+                  const selectedAnnotations = provides.getSelectedAnnotations() || [];
+                  if (selectedAnnotations.length > 0) {
+                    const selectedAnnotation = selectedAnnotations[0];
+                    if ('strokeWidth' in selectedAnnotation.object) {
+                      return (selectedAnnotation.object as any).strokeWidth;
+                    }
+                  }
+                }
+                return isShape && currentSettings && 'strokeWidth' in currentSettings ? (currentSettings as any).strokeWidth : 2;
+              })()}
                 min={1}
                 max={12}
-                onChange={(_, val) =>
-                  setSettings((prev: any) => ({ ...prev, strokeWidth: val as number }))
-                }
+                onChange={(_, val) => {
+                  setSettings((prev: any) => ({ ...prev, strokeWidth: val as number }));
+                  
+                  // Also update selected annotation directly
+                  if (showAnnotationProperties && provides && annotationCapability) {
+                    const selectedAnnotations = provides.getSelectedAnnotations() || [];
+                    if (selectedAnnotations.length > 0) {
+                      const selectedAnnotation = selectedAnnotations[0];
+                      annotationCapability.updateAnnotation(selectedAnnotation.object.pageIndex, selectedAnnotation.object.id, {
+                        strokeWidth: val as number,
+                      });
+                    }
+                  }
+                }}
               />
             </Stack>
           )}
 
           <Stack direction="row" spacing={1} alignItems="center" sx={{ width: 120 }}>
             <Typography variant="caption" color="text.secondary" sx={{ minWidth: 60 }}>
-              Opacity: {Math.round(currentSettings.opacity * 100)}%
+              Opacity: {Math.round(((() => {
+                if (showAnnotationProperties && provides) {
+                  const selectedAnnotations = provides.getSelectedAnnotations() || [];
+                  if (selectedAnnotations.length > 0) {
+                    const selectedAnnotation = selectedAnnotations[0];
+                    return (selectedAnnotation.object as any).opacity || 1;
+                  }
+                }
+                return currentSettings?.opacity || 1;
+              })()) * 100)}%
             </Typography>
             <Slider
               size="small"
-              value={currentSettings.opacity}
+              value={(() => {
+                if (showAnnotationProperties && provides) {
+                  const selectedAnnotations = provides.getSelectedAnnotations() || [];
+                  if (selectedAnnotations.length > 0) {
+                    const selectedAnnotation = selectedAnnotations[0];
+                    return (selectedAnnotation.object as any).opacity || 1;
+                  }
+                }
+                return currentSettings?.opacity || 1;
+              })()}
               min={0.1}
               max={1}
               step={0.1}
-              onChange={(_, val) =>
-                setSettings((prev: any) => ({ ...prev, opacity: val as number }))
-              }
+              onChange={(_, val) => {
+                setSettings((prev: any) => ({ ...prev, opacity: val as number }));
+                
+                // Also update selected annotation directly
+                if (showAnnotationProperties && provides && annotationCapability) {
+                  const selectedAnnotations = provides.getSelectedAnnotations() || [];
+                  if (selectedAnnotations.length > 0) {
+                    const selectedAnnotation = selectedAnnotations[0];
+                    annotationCapability.updateAnnotation(selectedAnnotation.object.pageIndex, selectedAnnotation.object.id, {
+                      opacity: val as number,
+                    });
+                  }
+                }
+              }}
             />
           </Stack>
         </Stack>
-      )}
+      ) : null}
     </Stack>
   );
 }
@@ -703,6 +820,7 @@ function EmbedPdfDocumentBody({
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("thumbnails");
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [commentComposerRequest, setCommentComposerRequest] = useState(0);
+  const [showAnnotationProperties, setShowAnnotationProperties] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const sentenceRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
 
@@ -736,6 +854,39 @@ function EmbedPdfDocumentBody({
   useEffect(() => {
     void loadPersistedAnnotations();
   }, [loadPersistedAnnotations]);
+
+  // Monitor annotation selection to show/hide properties toolbar
+  useEffect(() => {
+    if (!annotationApi) return;
+
+    let interval: NodeJS.Timeout | null = null;
+
+    const checkSelection = () => {
+      const selectedAnnotations = annotationApi.getSelectedAnnotations() || [];
+      setShowAnnotationProperties(selectedAnnotations.length > 0);
+    };
+
+    // Initial check
+    checkSelection();
+
+    // Only run interval when we expect selection changes
+    const startMonitoring = () => {
+      if (interval) clearInterval(interval);
+      interval = setInterval(checkSelection, 100);
+    };
+
+    const stopMonitoring = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+
+    // Start monitoring
+    startMonitoring();
+
+    return () => stopMonitoring();
+  }, [annotationApi]);
 
   useEffect(() => {
     const savedWidth = window.localStorage.getItem("askpdf.pdfSidebarWidth");
@@ -981,6 +1132,35 @@ function EmbedPdfDocumentBody({
     [byPage, onJump],
   );
 
+  const handlePageClick = useCallback(
+    (e: React.MouseEvent) => {
+      const target = e.target as HTMLElement;
+      
+      // Don't deselect if clicking on obvious UI elements
+      if (
+        target.tagName === 'BUTTON' ||
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'A' ||
+        target.closest('button, input, textarea, a, [role="button"]')
+      ) {
+        return;
+      }
+
+      // If clicking on canvas, svg, or img (the actual PDF content), deselect annotation
+      // This is the most reliable way to detect clicks on the page background
+      if (
+        target.tagName === 'CANVAS' ||
+        target.tagName === 'SVG' ||
+        target.tagName === 'IMG' ||
+        target.closest('canvas, svg, img')
+      ) {
+        annotationApi?.deselectAnnotation();
+      }
+    },
+    [annotationApi]
+  );
+
   const renderPage = useCallback(
     (props: {
       pageIndex: number;
@@ -1005,6 +1185,7 @@ function EmbedPdfDocumentBody({
               handlePageDoubleClickCapture(e, pageNumber)
             }
             onContextMenuCapture={handlePageContextMenuCapture}
+            onClick={handlePageClick}
           >
             <PagePointerProvider
               documentId={documentId}
@@ -1056,6 +1237,7 @@ function EmbedPdfDocumentBody({
             handlePageDoubleClickCapture(e, pageNumber)
           }
           onContextMenuCapture={handlePageContextMenuCapture}
+          onClick={handlePageClick}
         >
           <PagePointerProvider
             documentId={documentId}
@@ -1134,6 +1316,7 @@ function EmbedPdfDocumentBody({
       highlightEnabled,
       handlePageContextMenuCapture,
       handlePageDoubleClickCapture,
+      handlePageClick,
       openCommentsPane,
     ],
   );
@@ -1163,6 +1346,7 @@ function EmbedPdfDocumentBody({
               onToggleSidebar={() => setShowSidebar((value) => !value)}
               onOpenComments={openCommentsPane}
               isHistoryProcessingRef={isHistoryProcessingRef}
+              showAnnotationProperties={showAnnotationProperties}
             />
 
             <Box
