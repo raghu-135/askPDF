@@ -250,7 +250,8 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
   }, [hasSelection, annotationProperties, currentSettings, markupSettings, shapeSettings]);
 
   // Determine if width slider should be shown
-  const showWidthSlider = isShape || (hasSelection && annotationProperties && 'strokeWidth' in annotationProperties && !isMarkup);
+  const hasShapeSelection = hasSelection && annotationProperties && 'strokeWidth' in annotationProperties;
+  const showWidthSlider = isShape || (hasShapeSelection && !isMarkup && !hasActiveTool);
 
   return (
     <Stack direction="column" sx={{ width: "100%" }}>
