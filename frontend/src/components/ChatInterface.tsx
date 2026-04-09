@@ -835,7 +835,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             </Box>
                         }
                         placement="top"
-                        interactive
                         open={tooltipOpen}
                         onOpen={() => setTooltipOpen(true)}
                         onClose={() => {
