@@ -1,9 +1,9 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import {
   useAnnotationCapability,
   type AnnotationSelectionMenuProps,
 } from "@embedpdf/plugin-annotation/react";
-import { PdfAnnotationObject } from "@embedpdf/models";
+import { PdfAnnotationObject, PdfAnnotationSubtypeName } from "@embedpdf/models";
 import { Box, IconButton, Stack, Slider, Tooltip } from "@mui/material";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -15,7 +15,7 @@ export const AnnotationSelectionMenu: React.FC<
 > = ({ selected, context, menuWrapperProps, rect, documentId, onOpenComments }) => {
   const { provides: annotationCapability } = useAnnotationCapability();
   const annotationScope = annotationCapability?.forDocument(documentId);
-  const annotation = context?.annotation?.object as PdfAnnotationObject | undefined;
+  const annotation = context?.annotation?.object;
 
   // Local state for property inputs (with type guards)
   const [localColor, setLocalColor] = useState(
@@ -27,6 +27,14 @@ export const AnnotationSelectionMenu: React.FC<
   const [localOpacity, setLocalOpacity] = useState(
     annotation && "opacity" in annotation ? annotation.opacity : 1
   );
+
+  // Sync local state when annotation changes externally (e.g., undo/redo)
+  useEffect(() => {
+    if (!annotation) return;
+    setLocalColor(annotation && "strokeColor" in annotation ? annotation.strokeColor : undefined);
+    setLocalWidth(annotation && "strokeWidth" in annotation ? annotation.strokeWidth : 2);
+    setLocalOpacity(annotation && "opacity" in annotation ? annotation.opacity : 1);
+  }, [annotation]);
 
   // Update annotation properties
   const handlePropertyChange = useCallback(
@@ -42,7 +50,7 @@ export const AnnotationSelectionMenu: React.FC<
     (patch: Partial<PdfAnnotationObject>) => {
       handlePropertyChange(patch);
       // Update tool defaults for future annotations
-      const toolId = annotation?.type as unknown as string;
+      const toolId = annotation?.type ? PdfAnnotationSubtypeName[annotation.type] : undefined;
       if (toolId) {
         annotationCapability?.setToolDefaults(toolId, patch);
       }

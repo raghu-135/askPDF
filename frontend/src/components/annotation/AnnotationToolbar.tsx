@@ -82,15 +82,10 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
     );
   }, [state.activeToolId, annotationApi, isViewOnly]);
 
-  // Delete selected annotation
-  const handleDelete = useCallback(() => {
-    const selection = annotationApi?.getSelectedAnnotation();
-    if (selection) {
-      annotationApi?.deleteAnnotation(selection.object.pageIndex, selection.object.id);
-    }
-  }, [annotationApi]);
-
   // History handlers
+  // Note: isHistoryProcessingRef is used to prevent auto-scroll conflicts with TTS and comments
+  // When history actions (undo/redo) occur, we set this flag to temporarily disable auto-scroll
+  // This prevents the scroll system from fighting with the history navigation
   const handleUndo = useCallback(() => {
     if (isHistoryProcessingRef) isHistoryProcessingRef.current = true;
     history?.undo();

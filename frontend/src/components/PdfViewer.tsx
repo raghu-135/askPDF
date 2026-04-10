@@ -9,6 +9,12 @@ import { createPluginRegistration } from "@embedpdf/core";
 import { EmbedPDF, type PDFContextState } from "@embedpdf/core/react";
 import { PdfAnnotationObject } from "@embedpdf/models";
 import { usePdfiumEngine } from "@embedpdf/engines/react";
+
+type AnnotationEvent = {
+  type: string;
+  committed?: boolean;
+  annotation?: PdfAnnotationObject;
+};
 import {
   DocumentContent,
   DocumentManagerPluginPackage,
@@ -398,7 +404,7 @@ function EmbedPdfDocumentBody({
     [scrollApi]
   );
 
-  const isCommittedMutationEvent = useCallback((event: any) => {
+  const isCommittedMutationEvent = useCallback((event: AnnotationEvent) => {
     return (
       ["create", "update", "delete"].includes(event.type) &&
       Boolean(event.committed)
@@ -421,7 +427,9 @@ function EmbedPdfDocumentBody({
       // 2. Auto-scroll on Undo/Redo
       // Only scroll during history actions to avoid locking the scroll during normal interaction.
       if (isCommittedMutationEvent(event) && isHistoryProcessingRef.current) {
-        scrollToAnnotation((event as any).annotation);
+        if (event.annotation) {
+          scrollToAnnotation(event.annotation);
+        }
       }
     });
     return () => sub();
