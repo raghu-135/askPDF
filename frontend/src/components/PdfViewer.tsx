@@ -302,7 +302,7 @@ function EmbedPdfDocumentBody({
   isHistoryProcessingRef: React.MutableRefObject<boolean>;
 }) {
   const theme = useTheme();
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("thumbnails");
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [commentComposerRequest, setCommentComposerRequest] = useState(0);
