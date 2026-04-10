@@ -78,6 +78,7 @@ export const AnnotationSelectionMenu: React.FC<
           minWidth: "max-content",
           display: "flex",
           flexDirection: "column",
+          alignItems: "center",
           gap: 1,
           bgcolor: "background.paper",
           p: 1.5,
@@ -86,18 +87,12 @@ export const AnnotationSelectionMenu: React.FC<
           zIndex: 100,
         }}
       >
-        {/* Comment button */}
-        <Tooltip title="Add Comment">
-          <IconButton size="small" onClick={onOpenComments}>
-            <AddCommentIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-
-        {/* Color picker */}
-        <Stack direction="row" spacing={0.5}>
-          {STANDARD_COLORS.map((color) => (
-            <Tooltip key={color} title={color}>
+        {/* Color picker - two rows for compact layout */}
+        <Stack spacing={0.5} justifyContent="center">
+          <Stack direction="row" spacing={0.5} justifyContent="center">
+            {STANDARD_COLORS.slice(0, 4).map((color) => (
               <IconButton
+                key={color}
                 size="small"
                 onClick={() => handlePropertyChangeWithDefaults({ strokeColor: color })}
                 sx={{
@@ -108,52 +103,79 @@ export const AnnotationSelectionMenu: React.FC<
               >
                 <CircleIcon sx={{ color, fontSize: 16 }} />
               </IconButton>
-            </Tooltip>
-          ))}
+            ))}
+          </Stack>
+          <Stack direction="row" spacing={0.5} justifyContent="center">
+            {STANDARD_COLORS.slice(4).map((color) => (
+              <IconButton
+                key={color}
+                size="small"
+                onClick={() => handlePropertyChangeWithDefaults({ strokeColor: color })}
+                sx={{
+                  border: localColor === color ? 2 : 1,
+                  borderColor: localColor === color ? "primary.main" : "grey.300",
+                  p: 0.25,
+                }}
+              >
+                <CircleIcon sx={{ color, fontSize: 16 }} />
+              </IconButton>
+            ))}
+          </Stack>
         </Stack>
 
         {/* Width slider (only for shapes) */}
         {hasWidth && (
-          <Box sx={{ width: 120, px: 1 }}>
-            <Slider
-              value={localWidth || 2}
-              min={1}
-              max={12}
-              step={1}
-              size="small"
-              onChange={(_, val) => setLocalWidth(val as number)}
-              onChangeCommitted={() =>
-                handlePropertyChangeWithDefaults({ strokeWidth: localWidth })
-              }
-              valueLabelDisplay="auto"
-              valueLabelFormat={(val) => `${val}px`}
-            />
-          </Box>
+          <Tooltip title={`Width: ${localWidth}px`} placement="top">
+            <Box sx={{ width: 120, px: 1 }}>
+              <Slider
+                value={localWidth || 2}
+                min={1}
+                max={12}
+                step={1}
+                size="small"
+                onChange={(_, val) => setLocalWidth(val as number)}
+                onChangeCommitted={() =>
+                  handlePropertyChangeWithDefaults({ strokeWidth: localWidth })
+                }
+                valueLabelDisplay="auto"
+                valueLabelFormat={(val) => `${val}px`}
+              />
+            </Box>
+          </Tooltip>
         )}
 
         {/* Opacity slider */}
-        <Box sx={{ width: 120, px: 1 }}>
-          <Slider
-            value={localOpacity || 1}
-            min={0.1}
-            max={1}
-            step={0.1}
-            size="small"
-            onChange={(_, val) => setLocalOpacity(val as number)}
-            onChangeCommitted={() =>
-              handlePropertyChangeWithDefaults({ opacity: localOpacity })
-            }
-            valueLabelDisplay="auto"
-            valueLabelFormat={(val) => `${Math.round(val * 100)}%`}
-          />
-        </Box>
-
-        {/* Delete button */}
-        <Tooltip title="Delete">
-          <IconButton size="small" onClick={handleDelete} color="error">
-            <DeleteIcon fontSize="small" />
-          </IconButton>
+        <Tooltip title={`Opacity: ${Math.round((localOpacity || 1) * 100)}%`} placement="top">
+          <Box sx={{ width: 120, px: 1 }}>
+            <Slider
+              value={localOpacity || 1}
+              min={0.1}
+              max={1}
+              step={0.1}
+              size="small"
+              onChange={(_, val) => setLocalOpacity(val as number)}
+              onChangeCommitted={() =>
+                handlePropertyChangeWithDefaults({ opacity: localOpacity })
+              }
+              valueLabelDisplay="auto"
+              valueLabelFormat={(val) => `${Math.round(val * 100)}%`}
+            />
+          </Box>
         </Tooltip>
+
+        {/* Action buttons - comment and delete */}
+        <Stack direction="row" spacing={0.5}>
+          <Tooltip title="Add Comment">
+            <IconButton size="small" onClick={onOpenComments}>
+              <AddCommentIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Delete">
+            <IconButton size="small" onClick={handleDelete} color="error">
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
       </Box>
     </div>
   );
