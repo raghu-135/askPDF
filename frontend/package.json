@@ -8,29 +8,40 @@
     "export": "next export"
   },
   "dependencies": {
-    "@emotion/react": "11.11.4",
-    "@emotion/styled": "11.11.0",
-    "@mui/icons-material": "6.1.4",
-    "@mui/material": "6.1.4",
-    "@mui/system": "6.1.4",
-    "@mui/types": "7.2.3",
+    "@embedpdf/core": "2.14.0",
+    "@embedpdf/engines": "2.14.0",
+    "@embedpdf/plugin-annotation": "2.14.0",
+    "@embedpdf/plugin-document-manager": "2.14.0",
+    "@embedpdf/plugin-history": "2.14.0",
+    "@embedpdf/plugin-interaction-manager": "2.14.0",
+    "@embedpdf/plugin-render": "2.14.0",
+    "@embedpdf/plugin-scroll": "2.14.0",
+    "@embedpdf/plugin-selection": "2.14.0",
+    "@embedpdf/plugin-thumbnail": "2.14.0",
+    "@embedpdf/plugin-viewport": "2.14.0",
+    "@embedpdf/plugin-zoom": "2.14.0",
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^7.0.0",
+    "@mui/material": "^7.0.0",
+    "@mui/system": "^7.0.0",
+    "@mui/types": "^7.0.0",
     "kokoro-js": "^1.2.1",
-    "next": "14.2.15",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
+    "next": "^15.5.15",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
     "react-markdown": "^10.1.0",
-    "react-pdf": "^9.1.0",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@types/node": "25.0.3",
-    "@types/react": "19.2.7",
-    "typescript": "5.6.3"
+    "@types/node": "^25.5.2",
+    "@types/react": "^19.2.14",
+    "typescript": "^6.0.2"
   },
   "optionalDependencies": {
-    "@next/swc-linux-arm64-gnu": "14.2.15",
-    "@next/swc-linux-arm64-musl": "14.2.15",
-    "@next/swc-linux-x64-gnu": "14.2.15",
-    "@next/swc-linux-x64-musl": "14.2.15"
+    "@next/swc-linux-arm64-gnu": "15.1.6",
+    "@next/swc-linux-arm64-musl": "15.1.6",
+    "@next/swc-linux-x64-gnu": "15.1.6",
+    "@next/swc-linux-x64-musl": "15.1.6"
   }
 }

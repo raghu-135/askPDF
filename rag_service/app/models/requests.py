@@ -43,6 +43,22 @@ class WebSourceRequest(BaseModel):
     url: str
 
 
+class ThreadFileAnnotationsUpdateRequest(BaseModel):
+    """Request body for persisting a thread/file annotation snapshot."""
+
+    annotations: List[Dict[str, object]] = Field(default_factory=list)
+
+
+class ThreadFileAnnotationsResponse(BaseModel):
+    """Response body for a persisted thread/file annotation snapshot."""
+
+    thread_id: str
+    file_hash: str
+    annotations: List[Dict[str, object]] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class ThreadChatRequest(BaseModel):
     """Request body for thread-based chat."""
 

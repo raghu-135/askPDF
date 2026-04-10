@@ -1,3 +1,9 @@
+import {
+  deserializeAnnotationItems,
+  serializeAnnotationItems,
+  type AnnotationTransferItem,
+} from "./annotation-utils";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const RAG_API_BASE = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
 
@@ -237,6 +243,47 @@ export async function getThreadFiles(threadId: string): Promise<{ files: ThreadF
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/files`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export interface ThreadFileAnnotationsResponse {
+  thread_id: string;
+  file_hash: string;
+  annotations: AnnotationTransferItem[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function getThreadFileAnnotations(
+  threadId: string,
+  fileHash: string
+): Promise<ThreadFileAnnotationsResponse> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/files/${fileHash}/annotations`);
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return {
+    ...data,
+    annotations: deserializeAnnotationItems((data.annotations || []) as AnnotationTransferItem[]),
+  };
+}
+
+export async function updateThreadFileAnnotations(
+  threadId: string,
+  fileHash: string,
+  annotations: AnnotationTransferItem[]
+): Promise<ThreadFileAnnotationsResponse> {
+  const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/files/${fileHash}/annotations`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      annotations: serializeAnnotationItems(annotations),
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return {
+    ...data,
+    annotations: deserializeAnnotationItems((data.annotations || []) as AnnotationTransferItem[]),
+  };
 }
 
 export async function addWebSourceToThread(

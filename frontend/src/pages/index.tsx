@@ -1,22 +1,25 @@
-import VerticalAlignCenterIcon from '@mui/icons-material/VerticalAlignCenter';
+import AutoStoriesIcon from '@mui/icons-material/AutoStories';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
-import SpeakerNotesIcon from '@mui/icons-material/SpeakerNotes';
-import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff';
+import LightModeIcon from '@mui/icons-material/LightMode';
+import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
+import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../theme';
-import FluorescentIcon from '@mui/icons-material/Fluorescent';
+import EditNoteIcon from '@mui/icons-material/EditNote';
 import ChatIcon from '@mui/icons-material/Chat';
 import ForumIcon from '@mui/icons-material/Forum';
 
 declare const process: {
   env: Record<string, string | undefined>;
 };
+import dynamic from "next/dynamic";
 import PdfUploader from "../components/PdfUploader";
 import WebUploader from "../components/WebUploader";
-import PdfViewer from "../components/PdfViewer";
 import WebViewer from "../components/WebViewer";
+
+const PdfViewer = dynamic(() => import("../components/PdfViewer"), { ssr: false });
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
@@ -314,46 +317,31 @@ export default function Home() {
                 <IconButton
                   color={autoScroll ? "primary" : "default"}
                   onClick={() => setAutoScroll(a => !a)}
-                  sx={{ border: autoScroll ? 1 : 0, borderColor: autoScroll ? 'primary.main' : 'transparent' }}
                   size="small"
                 >
-                  <VerticalAlignCenterIcon />
+                  <AutoStoriesIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
 
               {/* Highlight Toggle */}
-              <Tooltip title={highlightEnabled ? "Disable Highlighting" : "Enable Highlighting"}>
+              <Tooltip title={highlightEnabled ? "Disable TTS Highlighting" : "Enable TTS Highlighting"}>
                 <IconButton
                   color={highlightEnabled ? "primary" : "default"}
                   onClick={() => setHighlightEnabled(h => !h)}
-                  sx={{ border: highlightEnabled ? 1 : 0, borderColor: highlightEnabled ? 'primary.main' : 'transparent' }}
                   size="small"
                 >
-                  <FluorescentIcon />
+                  <EditNoteIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
 
               {/* PDF Dark Mode Toggle */}
-              <Tooltip title={pdfDarkMode ? "Disable PDF Dark Mode" : "Enable PDF Dark Mode"}>
+              <Tooltip title={pdfDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
                 <IconButton
                   color={pdfDarkMode ? "primary" : "default"}
                   onClick={() => setPdfDarkMode(d => !d)}
-                  sx={{ border: pdfDarkMode ? 1 : 0, borderColor: pdfDarkMode ? 'primary.main' : 'transparent' }}
                   size="small"
                 >
-                  <DarkModeIcon />
-                </IconButton>
-              </Tooltip>
-
-              {/* Right Panel Toggle */}
-              <Tooltip title={isRightPanelOpen ? "Hide Threads" : "Show Threads"}>
-                <IconButton
-                  color="primary"
-                  size="small"
-                  onClick={() => setIsRightPanelOpen(open => !open)}
-                  sx={{ border: 1, borderColor: 'primary.main' }}
-                >
-                  {isRightPanelOpen ? <SpeakerNotesOffIcon fontSize="small" /> : <SpeakerNotesIcon fontSize="small" />}
+                  {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
                 </IconButton>
               </Tooltip>
 
@@ -373,6 +361,18 @@ export default function Home() {
                   playRequestId={playRequestId}
                 />
               )}
+
+              {/* Right Panel Toggle - Always visible on extreme right */}
+              <Tooltip title={isRightPanelOpen ? "Hide Threads" : "Show Threads"}>
+                <IconButton
+                  color="primary"
+                  size="small"
+                  onClick={() => setIsRightPanelOpen(open => !open)}
+                  sx={{ ml: 'auto' }}
+                >
+                  {isRightPanelOpen ? <KeyboardDoubleArrowRightIcon fontSize="small" /> : <KeyboardDoubleArrowLeftIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
             </Stack>
           </Box>
 
@@ -418,6 +418,8 @@ export default function Home() {
                 isResizing={isResizing}
                 highlightEnabled={highlightEnabled}
                 darkMode={pdfDarkMode}
+                threadId={activeThread?.id ?? null}
+                fileHash={activeTab?.fileHash ?? null}
               />
             ) : (
               <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit', p: 4 }}>

@@ -47,7 +47,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       const wav = await fs.readFile(audioPath);
       res.setHeader("Content-Type", "audio/wav");
       res.setHeader("Cache-Control", "no-store");
-      return res.status(200).send(wav);
+      return res.status(200).end(wav);
     } catch (error) {
       console.error("Failed to read synthesized audio", error);
       return res.status(404).json({ error: "Audio not found" });
