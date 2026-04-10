@@ -1,12 +1,13 @@
-import VerticalAlignCenterIcon from '@mui/icons-material/VerticalAlignCenter';
+import AutoStoriesIcon from '@mui/icons-material/AutoStories';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
+import LightModeIcon from '@mui/icons-material/LightMode';
 import SpeakerNotesIcon from '@mui/icons-material/SpeakerNotes';
 import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff';
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../theme';
-import FluorescentIcon from '@mui/icons-material/Fluorescent';
+import EditNoteIcon from '@mui/icons-material/EditNote';
 import ChatIcon from '@mui/icons-material/Chat';
 import ForumIcon from '@mui/icons-material/Forum';
 
@@ -316,34 +317,31 @@ export default function Home() {
                 <IconButton
                   color={autoScroll ? "primary" : "default"}
                   onClick={() => setAutoScroll(a => !a)}
-                  sx={{ border: autoScroll ? 1 : 0, borderColor: autoScroll ? 'primary.main' : 'transparent' }}
                   size="small"
                 >
-                  <VerticalAlignCenterIcon />
+                  <AutoStoriesIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
 
               {/* Highlight Toggle */}
-              <Tooltip title={highlightEnabled ? "Disable Highlighting" : "Enable Highlighting"}>
+              <Tooltip title={highlightEnabled ? "Disable TTS Highlighting" : "Enable TTS Highlighting"}>
                 <IconButton
                   color={highlightEnabled ? "primary" : "default"}
                   onClick={() => setHighlightEnabled(h => !h)}
-                  sx={{ border: highlightEnabled ? 1 : 0, borderColor: highlightEnabled ? 'primary.main' : 'transparent' }}
                   size="small"
                 >
-                  <FluorescentIcon />
+                  <EditNoteIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
 
               {/* PDF Dark Mode Toggle */}
-              <Tooltip title={pdfDarkMode ? "Disable PDF Dark Mode" : "Enable PDF Dark Mode"}>
+              <Tooltip title={pdfDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
                 <IconButton
                   color={pdfDarkMode ? "primary" : "default"}
                   onClick={() => setPdfDarkMode(d => !d)}
-                  sx={{ border: pdfDarkMode ? 1 : 0, borderColor: pdfDarkMode ? 'primary.main' : 'transparent' }}
                   size="small"
                 >
-                  <DarkModeIcon />
+                  {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
                 </IconButton>
               </Tooltip>
 

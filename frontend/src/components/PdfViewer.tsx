@@ -799,7 +799,6 @@ function EmbedPdfDocumentBody({
               documentId={documentId}
               showSidebar={showSidebar}
               onToggleSidebar={() => setShowSidebar((value) => !value)}
-              onOpenComments={openCommentsPane}
               isHistoryProcessingRef={isHistoryProcessingRef}
             />
 

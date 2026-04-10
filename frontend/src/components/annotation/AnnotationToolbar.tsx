@@ -19,17 +19,16 @@ import ViewSidebarIcon from "@mui/icons-material/ViewSidebar";
 import StrikethroughSIcon from "@mui/icons-material/StrikethroughS";
 import FormatUnderlinedIcon from "@mui/icons-material/FormatUnderlined";
 import GestureIcon from "@mui/icons-material/Gesture";
+import ArrowRightAltIcon from "@mui/icons-material/ArrowRightAlt";
 import UndoIcon from "@mui/icons-material/Undo";
 import RedoIcon from "@mui/icons-material/Redo";
-import AddCommentIcon from "@mui/icons-material/AddComment";
-import PanToolAltIcon from "@mui/icons-material/PanToolAlt";
-import EditNoteIcon from "@mui/icons-material/EditNote";
+import NearMeIcon from "@mui/icons-material/NearMe";
+import NearMeDisabledIcon from "@mui/icons-material/NearMeDisabled";
 
 export interface AnnotationToolbarProps {
   documentId: string;
   showSidebar: boolean;
   onToggleSidebar: () => void;
-  onOpenComments: () => void;
   isHistoryProcessingRef: React.MutableRefObject<boolean>;
 }
 
@@ -41,7 +40,6 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
   documentId,
   showSidebar,
   onToggleSidebar,
-  onOpenComments,
   isHistoryProcessingRef,
 }) {
   // EmbedPDF hooks
@@ -59,7 +57,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
     strikeout: <StrikethroughSIcon fontSize="small" />,
     squiggly: <GestureIcon fontSize="small" sx={{ transform: "rotate(90deg)" }} />,
     ink: <DrawIcon fontSize="small" />,
-    line: <GestureIcon fontSize="small" />,
+    line: <ArrowRightAltIcon fontSize="small" />,
     square: <CropSquareIcon fontSize="small" />,
     circle: <RadioButtonUncheckedIcon fontSize="small" />,
   }), []);
@@ -143,20 +141,15 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
               />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Comments">
-            <IconButton onClick={onOpenComments} size="small" sx={{ mr: 0.5 }}>
-              <AddCommentIcon fontSize="small" color="inherit" />
-            </IconButton>
-          </Tooltip>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
 
-          <Tooltip title={isViewOnly ? "Select" : "View only"}>
+          <Tooltip title={isViewOnly ? "Edit PDF" : "View only"}>
             <IconButton
               size="small"
               onClick={toggleViewOnly}
               color={isViewOnly ? "primary" : "default"}
             >
-              {isViewOnly ? <EditNoteIcon fontSize="small" /> : <PanToolAltIcon fontSize="small" />}
+              {isViewOnly ? <NearMeIcon fontSize="small" /> : <NearMeDisabledIcon fontSize="small" />}
             </IconButton>
           </Tooltip>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
