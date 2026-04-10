@@ -11,7 +11,6 @@ import { useScroll } from "@embedpdf/plugin-scroll/react";
 import { ThumbnailsPane, ThumbImg } from "@embedpdf/plugin-thumbnail/react";
 import CollectionsIcon from "@mui/icons-material/Collections";
 import CommentIcon from "@mui/icons-material/Comment";
-import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import { PdfCommentsPane } from "./PdfCommentsPane";
 
 export type SidebarTab = "thumbnails" | "comments";
@@ -138,12 +137,6 @@ export const PdfSidebar: React.FC<PdfSidebarProps> = ({
             />
           ))}
         </Tabs>
-
-        <Tooltip title="Hide sidebar">
-          <IconButton size="small" onClick={onToggleSidebar}>
-            <MenuOpenIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
       </Box>
 
       <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
