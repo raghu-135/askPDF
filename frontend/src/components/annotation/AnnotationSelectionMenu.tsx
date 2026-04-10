@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
   useAnnotationCapability,
   type AnnotationSelectionMenuProps,
@@ -9,6 +9,23 @@ import AddCommentIcon from "@mui/icons-material/AddComment";
 import DeleteIcon from "@mui/icons-material/Delete";
 import CircleIcon from "@mui/icons-material/Circle";
 import { STANDARD_COLORS } from "./constants";
+
+// Memoized color button component to prevent recreation on every render
+const ColorButton = React.memo(({ color, localColor, onClick }: { color: string; localColor: string | undefined; onClick: () => void }) => (
+  <IconButton
+    size="small"
+    onClick={onClick}
+    sx={{
+      border: localColor === color ? 2 : 1,
+      borderColor: localColor === color ? "primary.main" : "grey.300",
+      p: 0.25,
+    }}
+  >
+    <CircleIcon sx={{ color, fontSize: 16 }} />
+  </IconButton>
+));
+
+ColorButton.displayName = "ColorButton";
 
 export const AnnotationSelectionMenu: React.FC<
   AnnotationSelectionMenuProps & { documentId: string; onOpenComments: () => void }
@@ -63,6 +80,12 @@ export const AnnotationSelectionMenu: React.FC<
     annotationScope.deleteAnnotation(annotation.pageIndex, annotation.id);
   }, [annotation, annotationScope]);
 
+  // Memoize action icons to prevent recreation on every render
+  const actionIcons = useMemo(() => ({
+    addComment: <AddCommentIcon fontSize="small" />,
+    delete: <DeleteIcon fontSize="small" />,
+  }), []);
+
   if (!selected || !annotation) return null;
 
   const hasWidth = "strokeWidth" in annotation;
@@ -91,34 +114,22 @@ export const AnnotationSelectionMenu: React.FC<
         <Stack spacing={0.5} justifyContent="center">
           <Stack direction="row" spacing={0.5} justifyContent="center">
             {STANDARD_COLORS.slice(0, 4).map((color) => (
-              <IconButton
+              <ColorButton
                 key={color}
-                size="small"
+                color={color}
+                localColor={localColor}
                 onClick={() => handlePropertyChangeWithDefaults({ strokeColor: color })}
-                sx={{
-                  border: localColor === color ? 2 : 1,
-                  borderColor: localColor === color ? "primary.main" : "grey.300",
-                  p: 0.25,
-                }}
-              >
-                <CircleIcon sx={{ color, fontSize: 16 }} />
-              </IconButton>
+              />
             ))}
           </Stack>
           <Stack direction="row" spacing={0.5} justifyContent="center">
             {STANDARD_COLORS.slice(4).map((color) => (
-              <IconButton
+              <ColorButton
                 key={color}
-                size="small"
+                color={color}
+                localColor={localColor}
                 onClick={() => handlePropertyChangeWithDefaults({ strokeColor: color })}
-                sx={{
-                  border: localColor === color ? 2 : 1,
-                  borderColor: localColor === color ? "primary.main" : "grey.300",
-                  p: 0.25,
-                }}
-              >
-                <CircleIcon sx={{ color, fontSize: 16 }} />
-              </IconButton>
+              />
             ))}
           </Stack>
         </Stack>
@@ -167,12 +178,12 @@ export const AnnotationSelectionMenu: React.FC<
         <Stack direction="row" spacing={0.5}>
           <Tooltip title="Add Comment">
             <IconButton size="small" onClick={onOpenComments}>
-              <AddCommentIcon fontSize="small" />
+              {actionIcons.addComment}
             </IconButton>
           </Tooltip>
           <Tooltip title="Delete">
             <IconButton size="small" onClick={handleDelete} color="error">
-              <DeleteIcon fontSize="small" />
+              {actionIcons.delete}
             </IconButton>
           </Tooltip>
         </Stack>

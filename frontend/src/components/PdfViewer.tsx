@@ -111,6 +111,70 @@ type Props = {
   fileHash?: string | null;
 };
 
+// Memoize tool configuration outside buildPlugins to prevent recreation
+const ANNOTATION_TOOLS = [
+  {
+    id: 'highlight',
+    defaults: {
+      strokeColor: '#ffeb3b',
+      opacity: 0.3,
+    },
+  },
+  {
+    id: 'underline',
+    defaults: {
+      strokeColor: '#2196f3',
+      opacity: 1,
+    },
+  },
+  {
+    id: 'strikeout',
+    defaults: {
+      strokeColor: '#f44336',
+      opacity: 1,
+    },
+  },
+  {
+    id: 'squiggly',
+    defaults: {
+      strokeColor: '#ff9800',
+      opacity: 1,
+    },
+  },
+  {
+    id: 'ink',
+    defaults: {
+      strokeColor: '#f44336',
+      strokeWidth: 2,
+      opacity: 1,
+    },
+  },
+  {
+    id: 'line',
+    defaults: {
+      strokeColor: '#f44336',
+      strokeWidth: 2,
+      opacity: 1,
+    },
+  },
+  {
+    id: 'square',
+    defaults: {
+      strokeColor: '#f44336',
+      strokeWidth: 2,
+      opacity: 1,
+    },
+  },
+  {
+    id: 'circle',
+    defaults: {
+      strokeColor: '#f44336',
+      strokeWidth: 2,
+      opacity: 1,
+    },
+  },
+];
+
 function buildPlugins(pdfUrl: string) {
   return [
     createPluginRegistration(DocumentManagerPluginPackage, {
@@ -133,68 +197,7 @@ function buildPlugins(pdfUrl: string) {
     createPluginRegistration(AnnotationPluginPackage, {
       annotationAuthor: "AskPDF",
       colorPresets: [...STANDARD_COLORS],
-      tools: [
-        {
-          id: 'highlight',
-          defaults: {
-            strokeColor: '#ffeb3b',
-            opacity: 0.3,
-          },
-        },
-        {
-          id: 'underline',
-          defaults: {
-            strokeColor: '#2196f3',
-            opacity: 1,
-          },
-        },
-        {
-          id: 'strikeout',
-          defaults: {
-            strokeColor: '#f44336',
-            opacity: 1,
-          },
-        },
-        {
-          id: 'squiggly',
-          defaults: {
-            strokeColor: '#ff9800',
-            opacity: 1,
-          },
-        },
-        {
-          id: 'ink',
-          defaults: {
-            strokeColor: '#f44336',
-            strokeWidth: 2,
-            opacity: 1,
-          },
-        },
-        {
-          id: 'line',
-          defaults: {
-            strokeColor: '#f44336',
-            strokeWidth: 2,
-            opacity: 1,
-          },
-        },
-        {
-          id: 'square',
-          defaults: {
-            strokeColor: '#f44336',
-            strokeWidth: 2,
-            opacity: 1,
-          },
-        },
-        {
-          id: 'circle',
-          defaults: {
-            strokeColor: '#f44336',
-            strokeWidth: 2,
-            opacity: 1,
-          },
-        },
-      ],
+      tools: ANNOTATION_TOOLS,
     }),
     createPluginRegistration(ThumbnailPluginPackage),
   ];

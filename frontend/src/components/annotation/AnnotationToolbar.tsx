@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useState, useMemo } from "react";
 import {
   IconButton,
   Stack,
@@ -52,6 +52,18 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
   // View-only mode state (simple boolean, no custom interaction mode)
   const [isViewOnly, setIsViewOnly] = useState(false);
 
+  // Memoize icon JSX elements to prevent recreation on every render
+  const icons = useMemo(() => ({
+    highlight: <BorderColorIcon fontSize="small" />,
+    underline: <FormatUnderlinedIcon fontSize="small" />,
+    strikeout: <StrikethroughSIcon fontSize="small" />,
+    squiggly: <GestureIcon fontSize="small" sx={{ transform: "rotate(90deg)" }} />,
+    ink: <DrawIcon fontSize="small" />,
+    line: <GestureIcon fontSize="small" />,
+    square: <CropSquareIcon fontSize="small" />,
+    circle: <RadioButtonUncheckedIcon fontSize="small" />,
+  }), []);
+
   // Toggle view-only mode
   const toggleViewOnly = useCallback(() => {
     const next = !isViewOnly;
@@ -59,9 +71,10 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
     annotationCapability?.setLocked({
       type: next ? LockModeType.All : LockModeType.None,
     });
-    // Clear selection when switching modes
+    // Clear selection and deactivate active tool when switching to view-only mode
     if (next) {
       annotationApi?.deselectAnnotation();
+      annotationApi?.setActiveTool(null);
     }
   }, [isViewOnly, annotationCapability, annotationApi]);
 
@@ -149,29 +162,18 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
 
           {/* Markup Tools */}
-          {toolButton("highlight", <BorderColorIcon fontSize="small" />, "Highlight")}
-          {toolButton("underline", <FormatUnderlinedIcon fontSize="small" />, "Underline")}
-          {toolButton("strikeout", <StrikethroughSIcon fontSize="small" />, "Strikeout")}
-          {toolButton(
-            "squiggly",
-            <GestureIcon
-              fontSize="small"
-              sx={{ transform: "rotate(90deg)" }}
-            />,
-            "Squiggly"
-          )}
+          {toolButton("highlight", icons.highlight, "Highlight")}
+          {toolButton("underline", icons.underline, "Underline")}
+          {toolButton("strikeout", icons.strikeout, "Strikeout")}
+          {toolButton("squiggly", icons.squiggly, "Squiggly")}
 
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />
 
           {/* Shape Tools */}
-          {toolButton("ink", <DrawIcon fontSize="small" />, "Draw")}
-          {toolButton("line", <GestureIcon fontSize="small" />, "Line")}
-          {toolButton("square", <CropSquareIcon fontSize="small" />, "Rectangle")}
-          {toolButton(
-            "circle",
-            <RadioButtonUncheckedIcon fontSize="small" />,
-            "Ellipse"
-          )}
+          {toolButton("ink", icons.ink, "Draw")}
+          {toolButton("line", icons.line, "Line")}
+          {toolButton("square", icons.square, "Rectangle")}
+          {toolButton("circle", icons.circle, "Ellipse")}
         </Stack>
 
         {/* Right section - History controls */}
