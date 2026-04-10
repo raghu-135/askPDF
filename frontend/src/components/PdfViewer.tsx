@@ -69,6 +69,8 @@ import { useHistoryCapability } from "@embedpdf/plugin-history/react";
 import { PdfSidebar, type SidebarTab } from "./PdfSidebar";
 import { usePersistAnnotations } from "../hooks/usePersistAnnotations";
 import { AnnotationToolbar } from "./annotation/AnnotationToolbar";
+import { AnnotationSelectionMenu } from "./annotation/AnnotationSelectionMenu";
+import { STANDARD_COLORS } from "./annotation/constants";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import DeleteIcon from "@mui/icons-material/Delete";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -124,6 +126,69 @@ function buildPlugins(pdfUrl: string) {
     createPluginRegistration(HistoryPluginPackage),
     createPluginRegistration(AnnotationPluginPackage, {
       annotationAuthor: "AskPDF",
+      colorPresets: [...STANDARD_COLORS],
+      tools: [
+        {
+          id: 'highlight',
+          defaults: {
+            strokeColor: '#ffeb3b',
+            opacity: 0.3,
+          },
+        },
+        {
+          id: 'underline',
+          defaults: {
+            strokeColor: '#2196f3',
+            opacity: 1,
+          },
+        },
+        {
+          id: 'strikeout',
+          defaults: {
+            strokeColor: '#f44336',
+            opacity: 1,
+          },
+        },
+        {
+          id: 'squiggly',
+          defaults: {
+            strokeColor: '#ff9800',
+            opacity: 1,
+          },
+        },
+        {
+          id: 'ink',
+          defaults: {
+            strokeColor: '#f44336',
+            strokeWidth: 2,
+            opacity: 1,
+          },
+        },
+        {
+          id: 'line',
+          defaults: {
+            strokeColor: '#f44336',
+            strokeWidth: 2,
+            opacity: 1,
+          },
+        },
+        {
+          id: 'square',
+          defaults: {
+            strokeColor: '#f44336',
+            strokeWidth: 2,
+            opacity: 1,
+          },
+        },
+        {
+          id: 'circle',
+          defaults: {
+            strokeColor: '#f44336',
+            strokeWidth: 2,
+            opacity: 1,
+          },
+        },
+      ],
     }),
     createPluginRegistration(ThumbnailPluginPackage),
   ];
@@ -145,72 +210,6 @@ function sentencesByPageMap(sentences: Sentence[]) {
     });
   });
   return map;
-}
-
-
-
-
-function AnnotationSelectionMenu({
-  selected,
-  context,
-  menuWrapperProps,
-  rect,
-  documentId,
-  onOpenComments,
-}: AnnotationSelectionMenuProps & { documentId: string; onOpenComments: () => void }) {
-  const { provides: annotationCapability } = useAnnotationCapability();
-
-  const handleDelete = () => {
-    if (!context?.annotation?.object) return;
-    const { pageIndex, id } = context.annotation.object;
-    annotationCapability?.forDocument(documentId).deleteAnnotation(pageIndex, id);
-  };
-
-  if (!selected || !context?.annotation) return null;
-
-  return (
-    <div {...menuWrapperProps} style={{ ...menuWrapperProps?.style, zIndex: 100 }}>
-      <Box
-        sx={{
-          position: "absolute",
-          top: rect.size.height + 8,
-          left: 0,
-          pointerEvents: "auto",
-          minWidth: "max-content",
-          display: "flex",
-          gap: 0.5,
-        }}
-      >
-        <Tooltip title="Comment">
-          <IconButton
-            size="small"
-            onClick={onOpenComments}
-            sx={{
-              bgcolor: "background.paper",
-              boxShadow: 1,
-              "&:hover": { bgcolor: "background.default" },
-            }}
-          >
-            <AddCommentIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Delete">
-          <IconButton
-            size="small"
-            color="error"
-            onClick={handleDelete}
-            sx={{
-              bgcolor: "background.paper",
-              boxShadow: 1,
-              "&:hover": { bgcolor: "background.default" },
-            }}
-          >
-            <DeleteIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      </Box>
-    </div>
-  );
 }
 
 function SelectionCopyMenu({
