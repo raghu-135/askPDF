@@ -1,8 +1,8 @@
 import AutoStoriesIcon from '@mui/icons-material/AutoStories';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
-import SpeakerNotesIcon from '@mui/icons-material/SpeakerNotes';
-import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff';
+import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
+import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
@@ -345,18 +345,6 @@ export default function Home() {
                 </IconButton>
               </Tooltip>
 
-              {/* Right Panel Toggle */}
-              <Tooltip title={isRightPanelOpen ? "Hide Threads" : "Show Threads"}>
-                <IconButton
-                  color="primary"
-                  size="small"
-                  onClick={() => setIsRightPanelOpen(open => !open)}
-                  sx={{ border: 1, borderColor: 'primary.main' }}
-                >
-                  {isRightPanelOpen ? <SpeakerNotesOffIcon fontSize="small" /> : <SpeakerNotesIcon fontSize="small" />}
-                </IconButton>
-              </Tooltip>
-
               {/* Player Controls */}
               {(((pdfSentences.length > 0 && pdfUrl) || chatSentences.length > 0) && activeThread && rightPanelTab === 1) && (
                 <PlayerControls
@@ -373,6 +361,18 @@ export default function Home() {
                   playRequestId={playRequestId}
                 />
               )}
+
+              {/* Right Panel Toggle - Always visible on extreme right */}
+              <Tooltip title={isRightPanelOpen ? "Hide Threads" : "Show Threads"}>
+                <IconButton
+                  color="primary"
+                  size="small"
+                  onClick={() => setIsRightPanelOpen(open => !open)}
+                  sx={{ ml: 'auto' }}
+                >
+                  {isRightPanelOpen ? <KeyboardDoubleArrowRightIcon fontSize="small" /> : <KeyboardDoubleArrowLeftIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
             </Stack>
           </Box>
 

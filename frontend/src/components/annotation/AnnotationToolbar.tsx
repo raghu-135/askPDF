@@ -138,6 +138,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
               <ViewSidebarIcon
                 fontSize="small"
                 color={showSidebar ? "primary" : "inherit"}
+                sx={{ transform: "scaleX(-1)" }}
               />
             </IconButton>
           </Tooltip>
