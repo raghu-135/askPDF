@@ -22,7 +22,8 @@ import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
 import SendIcon from '@mui/icons-material/Send';
 import DeleteIcon from '@mui/icons-material/Delete';
 import MemoryIcon from '@mui/icons-material/Memory';
-import LockIcon from '@mui/icons-material/Lock';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
@@ -773,15 +774,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                     <Tooltip title={
-                        isEmbedModelValid === null ? "Checking embedding model status on server..." :
-                            isEmbedModelValid ? `Embedding model locked: ${activeThread.embed_model}` :
-                                `Blocked: Embedding model "${activeThread.embed_model}" is unavailable on server.`
+                        isEmbedModelValid === null ? "Checking embedding model status..." :
+                            isEmbedModelValid ? `Embedding model: ${activeThread.embed_model}` :
+                                `Embedding model ${activeThread.embed_model} not found`
                     }>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            <LockIcon
-                                fontSize="medium"
-                                color={isEmbedModelValid === false ? "error" : isEmbedModelValid === null ? "warning" : "action"}
-                            />
+                            {isEmbedModelValid === true ? (
+                                <CheckCircleIcon fontSize="medium" color="success" />
+                            ) : isEmbedModelValid === false ? (
+                                <ErrorIcon fontSize="medium" color="error" />
+                            ) : (
+                                <CircularProgress size={20} />
+                            )}
                             {isEmbedModelValid === null && (
                                 <Typography variant="caption" color="warning.main" sx={{ ml: 0.5, fontWeight: 'bold' }}>CHECKING...</Typography>
                             )}
