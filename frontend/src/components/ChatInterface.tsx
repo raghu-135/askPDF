@@ -27,8 +27,9 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import CheckIcon from '@mui/icons-material/Check';
-import ReactMarkdown from 'react-markdown';
+import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
+const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
 import {
     Thread,

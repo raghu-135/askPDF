@@ -1,8 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   devIndicators: false,
-  // Enable SWC minification for faster builds and smaller bundles
-  swcMinify: true,
   // Enable gzip compression for API responses
   compress: true,
   // Optimize package imports for better tree-shaking
@@ -26,4 +24,9 @@ const nextConfig = {
   ],
 };
 
-module.exports = nextConfig;
+// Bundle analyzer configuration
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+});
+
+module.exports = withBundleAnalyzer(nextConfig);
