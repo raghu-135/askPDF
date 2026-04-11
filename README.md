@@ -11,6 +11,7 @@ A full-stack PDF Document and Webpages research assistant with **Text-to-Speech 
 - **High-Quality TTS**: Local speech synthesis using [Kokoro-82M](https://github.com/hexgrad/kokoro)
 - **Visual Tracking**: Synchronized sentence highlighting in PDF and message highlighting in Chat
 - **Interactive Navigation**: Double-click any sentence in the PDF or any message in the Chat to start playback
+- **PDF Annotations**: Add highlights, underlines, strikeouts, shapes, freehand drawings, and comments directly on PDFs. Annotations are persisted per-thread and synchronized across sessions.
 - **Centralized Controls**: Unified player in the footer manages all audio sources (Speed 0.5x - 2.0x)
 
 ### 🤖 Multi-Agent AI Architecture
@@ -71,6 +72,8 @@ You can enable **Internet Search** in the chat panel to let the AI answer questi
 - **Unified Navigation**: Double-click sentences or chat bubbles to start reading immediately
 - **Dynamic Visual Feedback**: PDF sentence highlighting and Chat bubble illumination during playback
 - **Resizable Chat Panel**: Drag to adjust the chat interface width (300-800px)
+- **Annotation Toolbar**: Contextual toolbar for creating and managing PDF annotations with color, opacity, and stroke width controls
+- **Annotation Sidebar**: Dedicated panel for viewing all annotations with comment threads
 - **Auto-Scroll**: Both PDF and Chat automatically keep the active being-read content in view
 - **Model Selection & Caching**: Centralized embedding model selection and dynamic, cached LLM discovery that securely persists your preferred models via local storage.
 
@@ -283,8 +286,8 @@ docker-compose up --build
 | Technology | Purpose |
 |------------|---------|
 | **Next.js** | React framework |
-| **Material-UI (MUI)** | UI components |
-| **react-pdf** | PDF rendering |
+| **Material-UI (MUI)** | UI components (v7) |
+| **EmbedPDF** | Headless PDF rendering with annotation support |
 | **react-markdown** | Chat message rendering |
 
 ## 📁 Project Structure
@@ -313,23 +316,29 @@ askpdf/
 │   └── app/db/
 │       └── vector_db.py        # Weaviate adapter (DocumentChunk, ChatMemoryChunk, WebSearchChunk)
 └── frontend/
-  ├── Dockerfile
-  ├── package.json
-  └── src/
-    ├── pages/
-    │   └── index.tsx       # Main application page
-    ├── components/
-    │   ├── PdfUploader.tsx     # File upload with model selection
-    │   ├── PdfViewer.tsx       # PDF rendering with overlays
-    │   ├── WebUploader.tsx     # Webpage URL uploader
-    │   ├── WebViewer.tsx       # Webpage reader
-    │   ├── PlayerControls.tsx  # Audio playback controls
-    │   ├── ChatInterface.tsx   # RAG chat UI (thread-aware, settings dialog, reasoning panel)
-    │   ├── ThreadSidebar.tsx   # Thread management UI
-    │   └── TextViewer.tsx      # Alternative text display
-    └── lib/
-      ├── api.ts          # Backend & RAG API client (thread/message/file/settings/prompt)
-      └── tts-api.ts      # TTS API client
+    ├── Dockerfile
+    ├── package.json
+    └── src/
+        ├── pages/
+        │   └── index.tsx           # Main application page
+        ├── components/
+        │   ├── PdfUploader.tsx     # File upload with model selection
+        │   ├── PdfViewer.tsx       # PDF rendering with embedpdf and annotations
+        │   ├── annotation/         # Annotation components
+        │   │   ├── AnnotationToolbar.tsx      # Annotation tool selector
+        │   │   ├── AnnotationSelectionMenu.tsx  # Contextual annotation properties
+        │   │   └── constants.ts     # Annotation color presets
+        │   ├── WebUploader.tsx     # Webpage URL uploader
+        │   ├── WebViewer.tsx       # Webpage reader
+        │   ├── PlayerControls.tsx  # Audio playback controls
+        │   ├── ChatInterface.tsx   # RAG chat UI (thread-aware, settings dialog, reasoning panel)
+        │   ├── ThreadSidebar.tsx   # Thread management UI
+        │   └── TextViewer.tsx      # Alternative text display
+        ├── hooks/
+        │   └── usePersistAnnotations.ts  # Annotation persistence hook
+        └── lib/
+            ├── api.ts          # Backend & RAG API client (thread/message/file/settings/prompt)
+            └── tts-api.ts      # TTS API client
 ```
 The application expects an OpenAI-compatible API at the URL specified by `LLM_API_URL` in your `.env` file (default: `http://host.docker.internal:12434`).
 ## 📝 API Reference
