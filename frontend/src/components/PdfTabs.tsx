@@ -27,7 +27,7 @@ type Props = {
   darkMode?: boolean;
 };
 
-export default function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, onTabRemove, darkMode = false }: Props) {
+const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, onTabRemove, darkMode = false }: Props) {
   if (tabs.length === 0) {
     return null;
   }
@@ -174,4 +174,6 @@ export default function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, on
       </Box>
     </Box>
   );
-}
+});
+
+export default PdfTabs;

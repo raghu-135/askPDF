@@ -28,7 +28,7 @@ interface PdfSidebarProps {
   commentComposerRequest: number;
 }
 
-export const PdfSidebar: React.FC<PdfSidebarProps> = ({
+export const PdfSidebar = React.memo(function PdfSidebar({
   documentId,
   width,
   activeTab,
@@ -36,7 +36,7 @@ export const PdfSidebar: React.FC<PdfSidebarProps> = ({
   onWidthChange,
   onToggleSidebar,
   commentComposerRequest,
-}) => {
+}: PdfSidebarProps) {
   const { provides: scrollPlugin } = useScroll(documentId);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [isResizing, setIsResizing] = useState(false);
@@ -231,4 +231,4 @@ export const PdfSidebar: React.FC<PdfSidebarProps> = ({
       </Tooltip>
     </Box>
   );
-};
+});

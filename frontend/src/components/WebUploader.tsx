@@ -31,7 +31,7 @@ type Props = {
   tooltipText?: string;
 };
 
-export default function WebUploader({ threadId, onIndexed, disabled, tooltipText }: Props) {
+const WebUploader = React.memo(function WebUploader({ threadId, onIndexed, disabled, tooltipText }: Props) {
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,4 +132,6 @@ export default function WebUploader({ threadId, onIndexed, disabled, tooltipText
   }
 
   return inner;
-}
+});
+
+export default WebUploader;

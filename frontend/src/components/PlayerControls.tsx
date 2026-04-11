@@ -16,7 +16,7 @@ type Props = {
   playRequestId: number | null;            // explicit command to play now
 };
 
-export default function PlayerControls({ sentences, currentId, onCurrentChange, playRequestId }: Props) {
+const PlayerControls = React.memo(function PlayerControls({ sentences, currentId, onCurrentChange, playRequestId }: Props) {
   // Ref to the audio element for playback control
   const audioRef = useRef<HTMLAudioElement>(null);
   // Playback state
@@ -275,4 +275,6 @@ export default function PlayerControls({ sentences, currentId, onCurrentChange, 
       <audio ref={audioRef} />
     </Stack>
   );
-}
+});
+
+export default PlayerControls;

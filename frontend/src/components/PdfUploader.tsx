@@ -14,7 +14,7 @@ type Props = {
   tooltipText?: string;
 };
 
-export default function PdfUploader({ onUploaded, onIndexingComplete, disabled, tooltipText }: Props) {
+const PdfUploader = React.memo(function PdfUploader({ onUploaded, onIndexingComplete, disabled, tooltipText }: Props) {
   const inputId = "pdf-upload-input";
   const [isUploading, setIsUploading] = React.useState(false);
   const [indexingState, setIndexingState] = React.useState<{
@@ -118,4 +118,6 @@ export default function PdfUploader({ onUploaded, onIndexingComplete, disabled, 
   }
 
   return content;
-}
+});
+
+export default PdfUploader;
