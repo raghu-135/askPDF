@@ -17,7 +17,6 @@ except Exception:
     SentenceTransformer = None
     CrossEncoder = None
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Cache for model readiness checks

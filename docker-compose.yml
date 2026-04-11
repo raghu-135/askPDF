@@ -35,6 +35,7 @@ services:
     environment:
       - PROCESSING_SERVICE_URL=http://rag-service:8000
       - BACKEND_INTERNAL_URL=http://backend:8000
+      - LOG_LEVEL=INFO
     depends_on:
       rag-service:
         condition: service_healthy
@@ -86,6 +87,7 @@ services:
       - DOCLING_TABLE_MODE=ACCURATE # ACCURATE is better for tables but slower.
       - DOCLING_FORCE_FULL_PAGE_OCR=False # KEEP FALSE for digital PDFs to avoid noise and degradation.
       - DOCLING_DO_FORMULA_ENRICHMENT=False # use when you have formulas in your PDFs
+      - LOG_LEVEL=INFO
     env_file:
       - .env
     depends_on:
