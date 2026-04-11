@@ -1,6 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   devIndicators: false,
+  // Enable SWC minification for faster builds and smaller bundles
+  swcMinify: true,
+  // Enable gzip compression for API responses
+  compress: true,
+  // Optimize package imports for better tree-shaking
+  experimental: {
+    optimizePackageImports: ['@mui/material', '@mui/icons-material', '@mui/system', '@embedpdf/core'],
+  },
   transpilePackages: [
     '@embedpdf/core',
     '@embedpdf/engines',

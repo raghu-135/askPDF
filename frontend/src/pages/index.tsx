@@ -3,7 +3,7 @@ import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
 import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../theme';
@@ -283,11 +283,14 @@ export default function Home() {
     : 0;
 
 
+  // Memoize theme to prevent recreation on every render
+  const theme = useMemo(() => getTheme(pdfDarkMode), [pdfDarkMode]);
+
   // Don't render until pdfDarkMode is determined (prevents hydration mismatch)
   if (pdfDarkMode === undefined) return null;
 
   return (
-    <ThemeProvider theme={getTheme(pdfDarkMode)}>
+    <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box sx={{ height: "100vh", display: "flex", flexDirection: "row", overflow: "hidden", bgcolor: 'background.default' }}>
 

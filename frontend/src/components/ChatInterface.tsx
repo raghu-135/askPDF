@@ -13,16 +13,9 @@ import {
     FormControl,
     InputLabel,
     IconButton,
-    Divider,
-    FormControlLabel,
-    Switch,
     Tooltip,
     Chip,
     CircularProgress,
-    Dialog,
-    DialogTitle,
-    DialogContent,
-    DialogActions,
 } from '@mui/material';
 import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
 import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
@@ -31,7 +24,6 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import MemoryIcon from '@mui/icons-material/Memory';
 import LockIcon from '@mui/icons-material/Lock';
 import SettingsIcon from '@mui/icons-material/Settings';
-import ReplayIcon from '@mui/icons-material/Replay';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import CheckIcon from '@mui/icons-material/Check';
@@ -53,6 +45,7 @@ import {
     getPromptPreview
 } from '../lib/api';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/chat-utils';
+import ChatSettingsDialog from './ChatSettingsDialog';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -1273,207 +1266,45 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 </Box>
             </Box>
 
-            <Dialog
+            <ChatSettingsDialog
                 open={settingsDialogOpen}
-                onClose={() => !savingSettings && setSettingsDialogOpen(false)}
-                maxWidth="md"
-                fullWidth
-            >
-                <DialogTitle>AI Prompt Settings</DialogTitle>
-                <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
-                        <Typography variant="body2" color="text.secondary">
-                            These settings are saved per thread and used by default for every message.
-                        </Typography>
-                        <Tooltip title="Reset all settings to default">
-                            <IconButton
-                                size="medium"
-                                onClick={resetAllSettingsToDefault}
-                                sx={{
-                                    width: 36,
-                                    height: 36,
-                                    border: 1,
-                                    borderColor: 'divider',
-                                }}
-                            >
-                                <ReplayIcon fontSize="medium" />
-                            </IconButton>
-                        </Tooltip>
-                    </Box>
-                    {minMaxIterations !== null && maxMaxIterations !== null ? (
-                        <TextField
-                            label="Max tool iterations"
-                            type="number"
-                            value={maxIterations}
-                            onChange={(e) => setMaxIterations(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
-                            slotProps={{ htmlInput: { min: minMaxIterations, max: maxMaxIterations } }}
-                            helperText="Lower is faster; higher allows deeper research."
-                        />
-                    ) : (
-                        <Typography variant="caption" color="error">Iteration limits not loaded from server.</Typography>
-                    )}
-                    <Divider />
-                    <Box>
-                        <FormControlLabel
-                            control={
-                                <Switch
-                                    checked={reasoningMode}
-                                    onChange={(e) => {
-                                        const isChecked = e.target.checked;
-                                        setReasoningMode(isChecked);
-                                        // If reasoning mode is disabled, also disable the intent agent
-                                        if (!isChecked) {
-                                            setUseIntentAgent(false);
-                                        }
-                                    }}
-                                />
-                            }
-                            label={
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 500 }}>Reasoning mode</Typography>
-                                </Box>
-                            }
-                        />
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
-                            Uses detailed multi-step prompts for reasoning-capable models. Turn off for compact prompts that
-                            perform better on non-reasoning models.
-                        </Typography>
-                    </Box>
-                    <Box>
-                        <FormControlLabel
-                            control={
-                                <Switch
-                                    checked={useIntentAgent}
-                                    disabled={!reasoningMode}
-                                    onChange={(e) => setUseIntentAgent(e.target.checked)}
-                                />
-                            }
-                            label={
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 500, color: (!reasoningMode ? "text.disabled" : "text.primary") }}>Intent Agent</Typography>
-                                </Box>
-                            }
-                        />
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25, opacity: !reasoningMode ? 0.6 : 1 }}>
-                            Before answering, runs a lightweight LLM pass to detect ambiguity, rewrite follow-up questions
-                            into standalone queries, and estimate whether the pre-fetched context is sufficient — reducing
-                            unnecessary tool calls.
-                            {!reasoningMode && (
-                                <Box component="span" sx={{ display: 'block', mt: 0.5, color: 'warning.main', fontWeight: 500 }}>
-                                    Requires Reasoning mode to be enabled.
-                                </Box>
-                            )}
-                        </Typography>
-                    </Box>
-                    <Box>
-                        <FormControlLabel
-                            control={
-                                <Switch
-                                    checked={useReranker}
-                                    onChange={(e) => setUseReranker(e.target.checked)}
-                                />
-                            }
-                            label={
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                    <Typography variant="body2" sx={{ fontWeight: 500 }}>Reranker</Typography>
-                                </Box>
-                            }
-                        />
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
-                            Reorders retrieved chunks for documents, web results, and chat memory using the reranker model.
-                        </Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-                        <TextField
-                            fullWidth
-                            label="System role"
-                            value={systemRole}
-                            onChange={(e) => setSystemRole(e.target.value)}
-                            multiline
-                            minRows={2}
-                            maxRows={4}
-                            helperText="Defines the assistant's role for this thread."
-                        />
-                        <Tooltip title="Reset System role to default">
-                            <IconButton
-                                size="small"
-                                sx={{ mt: 1 }}
-                                onClick={resetSystemRoleToDefault}
-                            >
-                                <ReplayIcon fontSize="small" />
-                            </IconButton>
-                        </Tooltip>
-                    </Box>
-                    <Typography variant="body2" color="text.secondary">
-                        These are the tools available in the app. You can configure how the assistant should use each one.
-                    </Typography>
-                    {toolCatalog.map((toolDef) => (
-                        <Box key={toolDef.id} sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-                            <TextField
-                                fullWidth
-                                label={toolDef.display_name}
-                                value={effectiveToolInstructions[toolDef.id] || ''}
-                                onChange={(e) =>
-                                    setToolInstructions((prev) => ({
-                                        ...prev,
-                                        [toolDef.id]: e.target.value,
-                                    }))
-                                }
-                                multiline
-                                minRows={2}
-                                maxRows={6}
-                                helperText={toolDef.description}
-                            />
-                            <Tooltip title={`Reset ${toolDef.display_name} to default`}>
-                                <IconButton
-                                    size="small"
-                                    sx={{ mt: 1 }}
-                                    onClick={() => resetToolInstructionToDefault(toolDef.id)}
-                                >
-                                    <ReplayIcon fontSize="small" />
-                                </IconButton>
-                            </Tooltip>
-                        </Box>
-                    ))}
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
-                        <TextField
-                            fullWidth
-                            label="Custom instructions"
-                            value={customInstructions}
-                            onChange={(e) => setCustomInstructions(e.target.value)}
-                            multiline
-                            minRows={4}
-                            maxRows={10}
-                            helperText="Locked tool and context constraints still apply."
-                        />
-                        <Tooltip title="Reset Custom instructions to default">
-                            <IconButton
-                                size="small"
-                                sx={{ mt: 1 }}
-                                onClick={resetCustomInstructionsToDefault}
-                            >
-                                <ReplayIcon fontSize="small" />
-                            </IconButton>
-                        </Tooltip>
-                    </Box>
-                    <TextField
-                        label="Full Prompt Preview"
-                        value={promptPreview}
-                        multiline
-                        minRows={14}
-                        maxRows={24}
-                        slotProps={{ input: { readOnly: true } }}
-                    />
-                </DialogContent>
-                <DialogActions>
-                    <Button onClick={() => setSettingsDialogOpen(false)} disabled={savingSettings}>
-                        Cancel
-                    </Button>
-                    <Button onClick={handleSaveThreadSettings} variant="contained" disabled={savingSettings}>
-                        {savingSettings ? 'Saving...' : 'Save'}
-                    </Button>
-                </DialogActions>
-            </Dialog>
+                onClose={() => setSettingsDialogOpen(false)}
+                onSave={handleSaveThreadSettings}
+                saving={savingSettings}
+                maxIterations={maxIterations}
+                minMaxIterations={minMaxIterations}
+                maxMaxIterations={maxMaxIterations}
+                reasoningMode={reasoningMode}
+                useIntentAgent={useIntentAgent}
+                useReranker={useReranker}
+                systemRole={systemRole}
+                toolInstructions={toolInstructions}
+                customInstructions={customInstructions}
+                toolCatalog={toolCatalog}
+                effectiveToolInstructions={effectiveToolInstructions}
+                promptPreview={promptPreview}
+                onMaxIterationsChange={(value) => setMaxIterations(value)}
+                onReasoningModeChange={(checked) => {
+                    setReasoningMode(checked);
+                    if (!checked) {
+                        setUseIntentAgent(false);
+                    }
+                }}
+                onIntentAgentChange={(checked) => setUseIntentAgent(checked)}
+                onRerankerChange={(checked) => setUseReranker(checked)}
+                onSystemRoleChange={(value) => setSystemRole(value)}
+                onToolInstructionChange={(toolId, value) =>
+                    setToolInstructions((prev) => ({
+                        ...prev,
+                        [toolId]: value,
+                    }))
+                }
+                onCustomInstructionsChange={(value) => setCustomInstructions(value)}
+                onResetAll={resetAllSettingsToDefault}
+                onResetSystemRole={resetSystemRoleToDefault}
+                onResetToolInstruction={resetToolInstructionToDefault}
+                onResetCustomInstructions={resetCustomInstructionsToDefault}
+            />
         </Paper>
     );
 };
