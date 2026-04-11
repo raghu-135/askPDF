@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Stack, Select, MenuItem, Slider, Typography, FormControl, InputLabel, IconButton, Popover, Box } from "@mui/material";
+import { Stack, Select, MenuItem, Slider, Typography, FormControl, InputLabel, IconButton, Popover, Box, Tooltip } from "@mui/material";
 import { PlayArrow, Pause, SkipPrevious, SkipNext } from '@mui/icons-material';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
+import AutoStoriesIcon from '@mui/icons-material/AutoStories';
+import EditNoteIcon from '@mui/icons-material/EditNote';
 
 import { ttsSentence, getVoices } from "../lib/tts-api";
 import { useTtsPrefetchCache } from "../hooks/useTtsPrefetchCache";
@@ -14,9 +16,13 @@ type Props = {
   currentId: number | null;                // highlight only
   onCurrentChange: (id: number | null) => void;
   playRequestId: number | null;            // explicit command to play now
+  autoScroll: boolean;
+  onAutoScrollChange: (value: boolean) => void;
+  highlightEnabled: boolean;
+  onHighlightEnabledChange: (value: boolean) => void;
 };
 
-const PlayerControls = React.memo(function PlayerControls({ sentences, currentId, onCurrentChange, playRequestId }: Props) {
+const PlayerControls = React.memo(function PlayerControls({ sentences, currentId, onCurrentChange, playRequestId, autoScroll, onAutoScrollChange, highlightEnabled, onHighlightEnabledChange }: Props) {
   // Ref to the audio element for playback control
   const audioRef = useRef<HTMLAudioElement>(null);
   // Playback state
@@ -201,6 +207,26 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
         <IconButton onClick={() => currentId !== null && currentId < sentences.length - 1 && playSentence(currentId + 1)} disabled={currentId === null || currentId >= sentences.length - 1} size="small">
           <SkipNext fontSize="small" />
         </IconButton>
+
+        <Tooltip title={autoScroll ? "Disable Auto-Scroll" : "Enable Auto-Scroll"}>
+          <IconButton
+            color={autoScroll ? "primary" : "default"}
+            onClick={() => onAutoScrollChange(!autoScroll)}
+            size="small"
+          >
+            <AutoStoriesIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+
+        <Tooltip title={highlightEnabled ? "Disable TTS Highlighting" : "Enable TTS Highlighting"}>
+          <IconButton
+            color={highlightEnabled ? "primary" : "default"}
+            onClick={() => onHighlightEnabledChange(!highlightEnabled)}
+            size="small"
+          >
+            <EditNoteIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       </Stack>
 
       <IconButton

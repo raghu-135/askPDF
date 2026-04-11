@@ -315,39 +315,6 @@ export default function Home() {
                 tooltipText={!activeThread ? "Select or create a thread first" : undefined}
               />
 
-              {/* Auto-scroll Toggle */}
-              <Tooltip title={autoScroll ? "Disable Auto-Scroll" : "Enable Auto-Scroll"}>
-                <IconButton
-                  color={autoScroll ? "primary" : "default"}
-                  onClick={() => setAutoScroll(a => !a)}
-                  size="small"
-                >
-                  <AutoStoriesIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-
-              {/* Highlight Toggle */}
-              <Tooltip title={highlightEnabled ? "Disable TTS Highlighting" : "Enable TTS Highlighting"}>
-                <IconButton
-                  color={highlightEnabled ? "primary" : "default"}
-                  onClick={() => setHighlightEnabled(h => !h)}
-                  size="small"
-                >
-                  <EditNoteIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-
-              {/* PDF Dark Mode Toggle */}
-              <Tooltip title={pdfDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
-                <IconButton
-                  color={pdfDarkMode ? "primary" : "default"}
-                  onClick={() => setPdfDarkMode(d => !d)}
-                  size="small"
-                >
-                  {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
-                </IconButton>
-              </Tooltip>
-
               {/* Player Controls */}
               {(((pdfSentences.length > 0 && pdfUrl) || chatSentences.length > 0) && activeThread && rightPanelTab === 1) && (
                 <PlayerControls
@@ -362,8 +329,24 @@ export default function Home() {
                     setPlayRequestId(null);
                   }}
                   playRequestId={playRequestId}
+                  autoScroll={autoScroll}
+                  onAutoScrollChange={setAutoScroll}
+                  highlightEnabled={highlightEnabled}
+                  onHighlightEnabledChange={setHighlightEnabled}
                 />
               )}
+
+              {/* PDF Dark Mode Toggle */}
+              <Tooltip title={pdfDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
+                <IconButton
+                  color={pdfDarkMode ? "primary" : "default"}
+                  onClick={() => setPdfDarkMode(d => !d)}
+                  size="small"
+                  sx={{ ml: 'auto' }}
+                >
+                  {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
 
               {/* Right Panel Toggle - Always visible on extreme right */}
               <Tooltip title={isRightPanelOpen ? "Hide Threads" : "Show Threads"}>
@@ -371,7 +354,6 @@ export default function Home() {
                   color="primary"
                   size="small"
                   onClick={() => setIsRightPanelOpen(open => !open)}
-                  sx={{ ml: 'auto' }}
                 >
                   {isRightPanelOpen ? <KeyboardDoubleArrowRightIcon fontSize="small" /> : <KeyboardDoubleArrowLeftIcon fontSize="small" />}
                 </IconButton>
