@@ -776,6 +776,10 @@ function EmbedPdfDocumentBody({
     ],
   );
 
+  // Use function ref pattern for stable callback identity
+  const renderPageRef = useRef(renderPage);
+  renderPageRef.current = renderPage;
+
   const viewportBg = darkMode ? theme.palette.background.default : "#f1f3f5";
 
   return (
@@ -883,7 +887,7 @@ function EmbedPdfDocumentBody({
                       backgroundColor: viewportBg,
                     }}
                   >
-                    <Scroller documentId={documentId} renderPage={renderPage} />
+                    <Scroller documentId={documentId} renderPage={renderPageRef.current} />
                   </Viewport>
                 </Box>
               </Box>
