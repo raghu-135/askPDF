@@ -17,7 +17,11 @@ COPY package.json package-lock.json* ./
 
 RUN npm install --include=optional
 
-COPY . .
+COPY src ./src
+COPY scripts ./scripts
+COPY tsconfig.json ./
+COPY next.config.js ./
+COPY next-env.d.ts ./
 
 RUN mkdir -p /models/hf /models/cache \
     && node scripts/prefetch-kokoro.mjs

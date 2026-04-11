@@ -780,7 +780,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     }>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                             {isEmbedModelValid === true ? (
-                                <CheckCircleIcon fontSize="medium" color="success" />
+                                <CheckCircleIcon fontSize="medium" color="primary" />
                             ) : isEmbedModelValid === false ? (
                                 <ErrorIcon fontSize="medium" color="error" />
                             ) : (
