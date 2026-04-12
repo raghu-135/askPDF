@@ -621,26 +621,15 @@ async def trigger_reembed_for_missing_sources(
                     break
                 if await db.has_file_indexed(thread_id, f.file_hash, embedding_model_name):
                     continue
-                if f.source_type == "web":
-                    url = (f.file_path or f.file_name or "").strip()
-                    if not url:
-                        continue
-                    result = await index_webpage_for_thread(
-                        thread_id=thread_id,
-                        url=url,
-                        file_hash=f.file_hash,
-                        embedding_model_name=embedding_model_name,
-                    )
-                    if result.get("status") == "success":
-                        reindexed_files.append({"file_hash": f.file_hash, "source_type": "web"})
-                else:
-                    result = await index_document_for_thread(
-                        thread_id=thread_id,
-                        file_hash=f.file_hash,
-                        embedding_model_name=embedding_model_name,
-                    )
-                    if result.get("status") == "success":
-                        reindexed_files.append({"file_hash": f.file_hash, "source_type": "pdf"})
+                # Unified PDF flow - all sources (uploaded PDFs and web-converted PDFs)
+                # are indexed using the same function
+                result = await index_document_for_thread(
+                    thread_id=thread_id,
+                    file_hash=f.file_hash,
+                    embedding_model_name=embedding_model_name,
+                )
+                if result.get("status") == "success":
+                    reindexed_files.append({"file_hash": f.file_hash, "source_type": "pdf"})
             except Exception as item_err:
                 logger.warning("Skipping re-embed for file %s: %s", f.file_hash, item_err)
 

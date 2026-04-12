@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import traceback
 from typing import Any, Dict, List, Optional
 
@@ -72,12 +73,11 @@ from app.models.requests import (
 from app.rag.chat_service import handle_thread_chat
 from app.rag.indexer import (
     index_document_for_thread,
-    index_webpage_for_thread,
     trigger_reembed_for_missing_sources,
 )
 from app.services.nlp_service import split_into_sentences
 from app.services.parsing_service import extract_text_with_coordinates
-from app.services.web_capture_service import capture_webpage
+from app.services.web_capture_service import capture_webpage, capture_webpage_as_pdf, get_webpage_pdf_by_url_hash
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -501,7 +501,10 @@ async def add_web_source_to_thread_endpoint(
     background_tasks: BackgroundTasks,
 ):
     """
-    Add a webpage URL to a thread: record it in the DB and trigger background indexing.
+    Add a webpage URL to a thread: capture as PDF, record in DB, and trigger background indexing.
+
+    Uses the unified PDF flow - web sources are converted to PDFs and processed
+    identically to uploaded PDFs, enabling full annotation support.
     """
     import hashlib
 
@@ -515,40 +518,47 @@ async def add_web_source_to_thread_endpoint(
                 status_code=400, detail="URL must start with http:// or https://"
             )
 
-        # Stable hash for this URL
-        file_hash = hashlib.md5(req.url.encode()).hexdigest()
+        # Capture webpage and convert to PDF
+        capture = await capture_webpage_as_pdf(req.url, force=False)
 
-        # Record in files table with source_type='web'
+        # Use the PDF hash as the file identifier
+        pdf_hash = capture["file_hash"]
+        url_hash = capture["url_hash"]
+
+        # Record in files table with source_type='pdf' (unified with uploaded PDFs)
         await create_or_get_file(
-            file_hash=file_hash,
-            file_name=req.url,
-            file_path=req.url,
-            source_type="web",
+            file_hash=pdf_hash,
+            file_name=capture["title"],
+            file_path=capture["pdf_path"],
+            source_type="pdf",  # Unified type
         )
-        await add_file_to_thread(thread_id, file_hash)
+        await add_file_to_thread(thread_id, pdf_hash)
 
         # Seed stats row with pending status immediately
         await upsert_thread_stats_document(
             thread_id=thread_id,
-            file_hash=file_hash,
-            file_name=req.url,
-            source_type="web",
+            file_hash=pdf_hash,
+            file_name=capture["title"],
+            source_type="pdf",
         )
 
-        # Background indexing
+        # Use unified PDF indexing (same as uploaded PDFs)
         background_tasks.add_task(
-            index_webpage_for_thread,
+            index_document_for_thread,
             thread_id=thread_id,
-            url=req.url,
-            file_hash=file_hash,
+            file_hash=pdf_hash,
             embedding_model_name=thread.embed_model,
+            metadata={"original_url": req.url, "url_hash": url_hash},
         )
 
         return {
             "status": "accepted",
             "thread_id": thread_id,
-            "file_hash": file_hash,
+            "file_hash": pdf_hash,
+            "url_hash": url_hash,
             "url": req.url,
+            "title": capture["title"],
+            "source_type": "pdf",
             "indexing": "in_progress",
         }
     except HTTPException:
@@ -602,44 +612,42 @@ async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/threads/{thread_id}/web-sources/{file_hash}/refresh")
+@router.post("/threads/{thread_id}/web-sources/{url_hash}/refresh")
 async def refresh_web_source_endpoint(
     thread_id: str,
-    file_hash: str,
+    url_hash: str,
     req: RefreshWebSourceRequest,
     background_tasks: BackgroundTasks,
 ):
     """
-    Smart re-index for a web source after a forced visual recapture.
+    Refresh a web source by recapturing it as a new PDF.
 
-    Phase 1 (confirmed=False): compare new content_hash against the stored one.
-      - If unchanged → return status="unchanged" (caller should skip re-indexing).
-      - If changed  → return status="confirmation_required" so the caller can show
-                       a dialog warning about data replacement.
+    With the unified PDF flow, refresh means:
+    1. Look up the URL from the mapping file using url_hash
+    2. Remove the old PDF from the thread (uses existing remove flow)
+    3. Recapture the URL to a new PDF
+    4. Add the new PDF to the thread (uses existing add flow)
 
-    Phase 2 (confirmed=True): purge stale vector chunks and re-index fresh content.
-
-    This ensures resources are only spent when page content actually changed, and
-    the user gets a chance to acknowledge that old indexed data will be replaced.
+    This is atomic and clean - no partial states.
     """
     try:
         thread = await get_thread(thread_id)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        file = await get_file(file_hash)
-        if not file:
-            raise HTTPException(status_code=404, detail="Web source not found")
+        # Look up the URL from the mapping file
+        mapping = await get_webpage_pdf_by_url_hash(url_hash)
+        if not mapping:
+            raise HTTPException(status_code=404, detail="Web source mapping not found. The page may not have been captured yet.")
 
-        url = (
-            file.file_path or file.file_name
-        )  # file_path holds the URL for web sources
+        url = mapping["url"]
+        old_pdf_hash = mapping["pdf_hash"]
 
-        # ── Phase 1: content-change check ──────────────────────────────────
+        # ── Phase 1: content-change check (compare PDF content hashes) ──────
         if req.content_hash and not req.confirmed:
-            # Read stored content_hash from thread_stats
+            # Read stored content_hash from thread_stats for the old PDF
             shape = await get_thread_shape(thread_id)
-            stored_meta = shape["documents"].get(file_hash, {})
+            stored_meta = shape["documents"].get(old_pdf_hash, {})
             stored_hash = stored_meta.get("content_hash")
 
             if stored_hash and stored_hash == req.content_hash:
@@ -647,48 +655,58 @@ async def refresh_web_source_endpoint(
                     "status": "unchanged",
                     "message": "Page content has not changed since last index. No re-indexing needed.",
                     "thread_id": thread_id,
-                    "file_hash": file_hash,
+                    "url_hash": url_hash,
+                    "file_hash": old_pdf_hash,
                 }
 
-            # Content changed (or no stored hash yet) → ask for confirmation
+            # Content changed → ask for confirmation
             return {
                 "status": "confirmation_required",
-                "message": "Page content has changed. Re-indexing will remove the current indexed data for this page and replace it with the new content.",
+                "message": "Page content has changed. Re-indexing will remove the current indexed data and replace it with the new content.",
                 "thread_id": thread_id,
-                "file_hash": file_hash,
+                "url_hash": url_hash,
+                "file_hash": old_pdf_hash,
                 "new_content_hash": req.content_hash,
             }
 
-        # ── Phase 2: confirmed — purge and re-index ────────────────────────
-        vector_db = get_vector_db()
-        await vector_db.delete_source_chunks_by_file_hash(
+        # ── Phase 2: confirmed — remove old, recapture, add new ─────────────
+
+        # 1. Remove old PDF from thread (reuse existing endpoint logic)
+        await remove_source_from_thread_endpoint(thread_id, old_pdf_hash)
+
+        # 2. Recapture to new PDF
+        new_capture = await capture_webpage_as_pdf(url, force=True)
+        new_pdf_hash = new_capture["file_hash"]
+
+        # 3. Add new PDF to thread (reuse existing endpoint logic)
+        add_result = await add_web_source_to_thread_endpoint(
             thread_id=thread_id,
-            file_hash=file_hash,
-            embedding_model_name=thread.embed_model,
+            req=WebSourceRequest(url=url),
+            background_tasks=background_tasks,
         )
 
-        # Reset thread_stats to pending; store new content_hash immediately
-        await upsert_thread_stats_document(
-            thread_id=thread_id,
-            file_hash=file_hash,
-            file_name=file.file_name,
-            source_type="web",
-            content_hash=req.content_hash,
+        # 4. Clean up old PDF file if no longer referenced
+        remaining_refs = await count_threads_with_file_for_model(
+            file_hash=old_pdf_hash,
+            embed_model=thread.embed_model,
         )
-
-        background_tasks.add_task(
-            index_webpage_for_thread,
-            thread_id=thread_id,
-            url=url,
-            file_hash=file_hash,
-            embedding_model_name=thread.embed_model,
-        )
+        if remaining_refs == 0:
+            try:
+                old_pdf_path = mapping["pdf_path"]
+                if os.path.exists(old_pdf_path):
+                    os.remove(old_pdf_path)
+                    logger.info(f"Cleaned up old PDF: {old_pdf_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up old PDF {old_pdf_hash}: {e}")
 
         return {
-            "status": "accepted",
+            "status": "refreshed",
             "thread_id": thread_id,
-            "file_hash": file_hash,
+            "url_hash": url_hash,
+            "old_file_hash": old_pdf_hash,
+            "new_file_hash": new_pdf_hash,
             "url": url,
+            "title": new_capture["title"],
             "indexing": "in_progress",
         }
     except HTTPException:

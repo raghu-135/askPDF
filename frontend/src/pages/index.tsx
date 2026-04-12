@@ -17,7 +17,6 @@ declare const process: {
 import dynamic from "next/dynamic";
 import PdfUploader from "../components/PdfUploader";
 import WebUploader from "../components/WebUploader";
-import WebViewer from "../components/WebViewer";
 
 const PdfViewer = dynamic(() => import("../components/PdfViewer"), { ssr: false });
 import PlayerControls from "../components/PlayerControls";
@@ -164,10 +163,30 @@ export default function Home() {
   };
 
   // Handle web source indexed
-  const handleWebIndexed = async (data: { fileHash: string; url: string; status: string; message?: string }) => {
+  const handleWebIndexed = async (data: { fileHash: string; url: string; title?: string; status: string; message?: string }) => {
     if (data.status !== 'accepted' || !activeThread || !data.fileHash) return;
 
-    const newTab = createWebTabFromIndexed(data.fileHash, data.url);
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+    // Fetch PDF data immediately so PdfViewer has sentences on first load
+    let pdfData;
+    try {
+      const { getPdfByHash } = await import("../lib/api");
+      pdfData = await getPdfByHash(data.fileHash);
+    } catch (err) {
+      console.warn('PDF data not yet available, creating tab with empty sentences:', err);
+    }
+
+    const newTab: PdfTab = {
+      id: data.fileHash,
+      fileHash: data.fileHash,
+      fileName: data.title || data.url,
+      pdfUrl: `${apiBase}/api/pdf-file/${data.fileHash}?t=${Date.now()}`,
+      sentences: pdfData?.sentences || [],
+      text: pdfData?.sentences ? extractTextFromSentences(pdfData.sentences) : '',
+      sourceType: 'pdf',
+      sourceUrl: data.url,
+    };
 
     // Only add if not already present
     setPdfTabs(prev => {
@@ -373,22 +392,13 @@ export default function Home() {
             />
           )}
 
-          {/* PDF / Web Viewer Area */}
+          {/* PDF Viewer Area - unified for both PDFs and web-converted PDFs */}
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
             {isPdfLoading ? (
               <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
                 <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
                 <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
               </Box>
-            ) : activeTab?.sourceType === 'web' && activeTab.sourceUrl && activeTab.fileHash ? (
-              /* Web source view — rendered as a self-contained saved HTML page */
-              <WebViewer
-                url={activeTab.sourceUrl}
-                fileHash={activeTab.fileHash}
-                threadId={activeThread?.id}
-                darkMode={pdfDarkMode}
-                isResizing={isResizing}
-              />
             ) : (pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
               <PdfViewer
                 pdfUrl={pdfUrl}

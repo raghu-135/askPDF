@@ -299,36 +299,36 @@ export async function addWebSourceToThread(
   return res.json();
 }
 
-export type RefreshStatus = 'unchanged' | 'confirmation_required' | 'accepted';
+export type RefreshStatus = 'unchanged' | 'confirmation_required' | 'accepted' | 'refreshed';
 
 export interface RefreshWebSourceResult {
   status: RefreshStatus;
   message?: string;
   thread_id: string;
-  file_hash: string;
+  url_hash?: string;
+  file_hash?: string;
+  old_file_hash?: string;
+  new_file_hash?: string;
   url?: string;
+  title?: string;
   indexing?: string;
   new_content_hash?: string;
 }
 
 /**
- * Re-index a web source after a forced recapture.
+ * Refresh a web source by recapturing it as a new PDF.
  *
- * Phase 1 (confirmed=false): compares content_hash with the stored one.
- *   - "unchanged"            → page content hasn't changed, skip re-indexing.
- *   - "confirmation_required" → content changed, show dialog before proceeding.
- *
- * Phase 2 (confirmed=true): purges old Weaviate chunks and re-indexes fresh content.
- *   - "accepted"             → re-indexing kicked off in the background.
+ * With unified PDF flow, this removes the old PDF, recaptures the URL,
+ * and adds the new PDF to the thread.
  */
 export async function refreshWebSource(
   threadId: string,
-  fileHash: string,
+  urlHash: string,
   contentHash: string | null,
   confirmed: boolean,
 ): Promise<RefreshWebSourceResult> {
   const res = await fetch(
-    `${RAG_API_BASE}/threads/${threadId}/web-sources/${fileHash}/refresh`,
+    `${RAG_API_BASE}/threads/${threadId}/web-sources/${urlHash}/refresh`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -337,45 +337,6 @@ export async function refreshWebSource(
   );
   if (!res.ok) throw new Error(await res.text());
   return res.json();
-}
-
-// ============ Web Capture ============
-
-export interface WebCaptureResult {
-  file_hash: string;
-  title: string;
-  cached: boolean;
-  /** MD5 hash of the page's extracted text content — changes when the page content changes. */
-  content_hash: string | null;
-}
-
-/**
- * Ask the backend to fetch a URL, inline its assets, and save a self-contained
- * HTML file.  Returns the file_hash you can pass to fetchWebPageHtml().
- */
-export async function captureWebPage(url: string, force = false): Promise<WebCaptureResult> {
-  const res = await fetch(`${API_BASE}/api/web-capture`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, force }),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-/**
- * Fetch the saved HTML for a captured page as raw text.
- * The caller can wrap it in a Blob URL for use as an iframe src.
- */
-export async function fetchWebPageHtml(fileHash: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/web-page/${fileHash}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.text();
-}
-
-/** Convenience: return the direct URL to the saved HTML (for FileResponse). */
-export function webPageUrl(fileHash: string): string {
-  return `${API_BASE}/api/web-page/${fileHash}`;
 }
 
 export async function removeSourceFromThread(

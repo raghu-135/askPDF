@@ -28,3 +28,4 @@ docling>=2.0.0
 numpy
 pydub
 trafilatura
+playwright
