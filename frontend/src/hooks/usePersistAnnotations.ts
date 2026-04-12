@@ -62,12 +62,16 @@ export function usePersistAnnotations({
 
     try {
       const exported = await annotationApi.exportAnnotations().toPromise();
-      const snapshot = JSON.stringify(serializeAnnotationItems(exported as any));
+      // Deduplicate before saving to clean up stale duplicate data
+      const uniqueExported = Array.from(
+        new Map((exported as any[]).map((a: any) => [a.id, a])).values()
+      );
+      const snapshot = JSON.stringify(serializeAnnotationItems(uniqueExported));
       if (snapshot === lastPersistedSnapshotRef.current) {
         return;
       }
 
-      await updateThreadFileAnnotations(threadId, fileHash, exported as any);
+      await updateThreadFileAnnotations(threadId, fileHash, uniqueExported as any);
       lastPersistedSnapshotRef.current = snapshot;
     } catch (error) {
       console.warn("Failed to persist annotations:", error);
@@ -94,10 +98,15 @@ export function usePersistAnnotations({
         return;
       }
 
-      const serializedSnapshot = JSON.stringify(serializeAnnotationItems(annotations));
+      // Deduplicate by annotation ID to prevent React key errors in AnnotationLayer
+      const uniqueAnnotations = Array.from(
+        new Map(annotations.map((a: any) => [a.id, a])).values()
+      );
+
+      const serializedSnapshot = JSON.stringify(serializeAnnotationItems(uniqueAnnotations));
       lastPersistedSnapshotRef.current = serializedSnapshot;
       hydrateAnnotationsRef.current = true;
-      annotationApi.importAnnotations(annotations);
+      annotationApi.importAnnotations(uniqueAnnotations);
     } catch (error: any) {
       const message = String(error?.message || error || "");
       if (!message.includes("404")) {
