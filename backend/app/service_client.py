@@ -2,7 +2,7 @@ import os
 import httpx
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +10,7 @@ class ProcessingService(ABC):
     """
     Interface defining the contract for the core processing service.
     Implementations of this interface should handle communication with specialized
-    services for PDF parsing, indexing, TTS synthesis, and web capture.
+    services for PDF parsing and indexing.
     """
     @abstractmethod
     async def parse_pdf(self, file_hash: str, filename: str, backend_url: str) -> List[dict]:
@@ -18,10 +18,6 @@ class ProcessingService(ABC):
 
     @abstractmethod
     async def index_document(self, metadata: dict, emb_model: str) -> bool:
-        pass
-
-    @abstractmethod
-    async def web_capture(self, url: str, force: bool = False) -> Dict[str, Any]:
         pass
 
 class RestProcessingServiceClient(ProcessingService):
@@ -79,20 +75,3 @@ class RestProcessingServiceClient(ProcessingService):
                 logger.error(f"Failed to index document: {e}")
                 return False
 
-    async def web_capture(self, url: str, force: bool = False) -> Dict[str, Any]:
-        """
-        Request a self-contained web capture from the processing service.
-        """
-        payload = {"url": url, "force": force}
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.service_url}/web-capture",
-                    json=payload,
-                    timeout=60.0
-                )
-                response.raise_for_status()
-                return response.json()
-            except httpx.HTTPError as e:
-                logger.error(f"Web capture failed: {e}")
-                raise

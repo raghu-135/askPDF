@@ -67,7 +67,6 @@ from app.models.requests import (
     ThreadSettingsUpdateRequest,
     ThreadUpdateRequest,
     ToolCatalogEntry,
-    WebCaptureRequest,
     WebSourceRequest,
 )
 from app.rag.chat_service import handle_thread_chat
@@ -77,7 +76,7 @@ from app.rag.indexer import (
 )
 from app.services.nlp_service import split_into_sentences
 from app.services.parsing_service import extract_text_with_coordinates
-from app.services.web_capture_service import capture_webpage, capture_webpage_as_pdf, get_webpage_pdf_by_url_hash
+from app.services.web_capture_service import capture_webpage_as_pdf, get_webpage_pdf_by_url_hash
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -107,18 +106,6 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
-
-
-@router.post("/web-capture")
-async def web_capture_endpoint(req: WebCaptureRequest):
-    """
-    Capture a webpage, inline assets, and save to the shared webpages volume.
-    """
-    try:
-        result = await capture_webpage(req.url, force=req.force)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Web capture failed: {str(e)}")
 
 
 # ============ Thread Endpoints ============

@@ -160,10 +160,3 @@ class PdfParseRequest(BaseModel):
     file_hash: str
     file_name: str
     backend_url: str
-
-
-class WebCaptureRequest(BaseModel):
-    """Request body for web capture."""
-
-    url: str
-    force: bool = False
