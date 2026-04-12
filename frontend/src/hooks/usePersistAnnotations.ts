@@ -73,8 +73,12 @@ export function usePersistAnnotations({
 
       await updateThreadFileAnnotations(threadId, fileHash, uniqueExported as any);
       lastPersistedSnapshotRef.current = snapshot;
-    } catch (error) {
-      console.warn("Failed to persist annotations:", error);
+    } catch (error: any) {
+      // "Document not found" is expected during cleanup/unmount - don't spam console
+      const message = String(error?.message || error || "");
+      if (!message.includes("Document not found")) {
+        console.warn("Failed to persist annotations:", error);
+      }
     }
   }, [annotationApi, fileHash, threadId]);
 
