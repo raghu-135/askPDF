@@ -40,6 +40,8 @@ type Props = {
   onClear?: () => void;
   /** External control: callback when user presses Enter */
   onSubmit?: () => void;
+  /** External control: loading state during submission */
+  isLoading?: boolean;
 };
 
 const WebUploader = React.memo(function WebUploader({ 
@@ -50,10 +52,11 @@ const WebUploader = React.memo(function WebUploader({
   value,
   onChange,
   onClear,
-  onSubmit
+  onSubmit,
+  isLoading: externalLoading
 }: Props) {
   const [internalUrl, setInternalUrl] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [internalLoading, setInternalLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Use controlled value if provided, otherwise internal state
@@ -63,6 +66,14 @@ const WebUploader = React.memo(function WebUploader({
       onChange(newUrl);
     } else {
       setInternalUrl(newUrl);
+    }
+  };
+
+  // Use external loading state if provided, otherwise internal
+  const isLoading = externalLoading !== undefined ? externalLoading : internalLoading;
+  const setIsLoading = (loading: boolean) => {
+    if (externalLoading === undefined) {
+      setInternalLoading(loading);
     }
   };
 

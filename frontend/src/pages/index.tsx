@@ -358,6 +358,7 @@ export default function Home() {
                 onChange={setWebUrl}
                 onClear={() => setWebUrl("")}
                 onSubmit={handleWebSubmit}
+                isLoading={isWebLoading}
               />
 
               {/* PDF Uploader (Unified Button) - Now on the right */}
