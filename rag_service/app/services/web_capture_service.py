@@ -5,6 +5,10 @@ import json
 from datetime import datetime
 from typing import Optional
 
+import trafilatura
+import markdown
+from weasyprint import HTML, CSS
+
 logger = logging.getLogger(__name__)
 
 # Base directories for shared web captures and PDFs
@@ -13,20 +17,192 @@ STATIC_DIR = "/static"
 os.makedirs(WEBPAGES_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
+# CSS styling for clean PDF output
+PDF_STYLES = """
+@page {
+    size: A4;
+    margin: 2cm;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.6;
+    color: #333;
+}
+
+h1 {
+    font-size: 18pt;
+    font-weight: 600;
+    color: #1a1a1a;
+    border-bottom: 2px solid #e0e0e0;
+    padding-bottom: 0.3em;
+    margin-top: 1.5em;
+    margin-bottom: 0.8em;
+}
+
+h2 {
+    font-size: 14pt;
+    font-weight: 600;
+    color: #2a2a2a;
+    margin-top: 1.3em;
+    margin-bottom: 0.6em;
+}
+
+h3 {
+    font-size: 12pt;
+    font-weight: 600;
+    color: #3a3a3a;
+    margin-top: 1.2em;
+    margin-bottom: 0.5em;
+}
+
+p {
+    margin-bottom: 0.8em;
+    text-align: left;
+}
+
+a {
+    color: #2563eb;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+ul, ol {
+    margin-left: 1.5em;
+    margin-bottom: 0.8em;
+}
+
+li {
+    margin-bottom: 0.3em;
+}
+
+code {
+    background-color: #f3f4f6;
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-family: "SF Mono", Monaco, Inconsolata, "Fira Code", Consolas, monospace;
+    font-size: 0.9em;
+}
+
+pre {
+    background-color: #f3f4f6;
+    padding: 1em;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin-bottom: 1em;
+}
+
+pre code {
+    background: none;
+    padding: 0;
+}
+
+blockquote {
+    border-left: 4px solid #e0e0e0;
+    padding-left: 1em;
+    margin-left: 0;
+    color: #666;
+    font-style: italic;
+}
+
+img {
+    max-width: 100%;
+    height: auto;
+    margin: 1em 0;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+}
+
+th, td {
+    border: 1px solid #e0e0e0;
+    padding: 0.5em;
+    text-align: left;
+}
+
+th {
+    background-color: #f9fafb;
+    font-weight: 600;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid #e0e0e0;
+    margin: 2em 0;
+}
+
+/* Page header with source URL */
+.page-header {
+    font-size: 8pt;
+    color: #666;
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 0.5em;
+    margin-bottom: 1.5em;
+}
+"""
+
 
 def _url_to_hash(url: str) -> str:
     """Generate a stable MD5 hash of a URL for file naming."""
     return hashlib.md5(url.encode()).hexdigest()
 
 
+def _markdown_to_pdf(markdown_content: str, url: str, title: str) -> bytes:
+    """
+    Convert markdown content to PDF bytes.
+
+    Args:
+        markdown_content: The markdown text to convert
+        url: Source URL for the header
+        title: Page title
+
+    Returns:
+        PDF as bytes
+    """
+    # Convert markdown to HTML
+    html_content = markdown.markdown(
+        markdown_content,
+        extensions=['extra', 'codehilite', 'tables', 'fenced_code']
+    )
+
+    # Wrap with full HTML structure and header
+    full_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{title}</title>
+</head>
+<body>
+    <div class="page-header">
+        <strong>Source:</strong> {url}
+    </div>
+    {html_content}
+</body>
+</html>"""
+
+    # Convert HTML to PDF using weasyprint
+    pdf_bytes = HTML(string=full_html).write_pdf(
+        stylesheets=[CSS(string=PDF_STYLES)]
+    )
+
+    return pdf_bytes
+
+
 async def capture_webpage_as_pdf(url: str, force: bool = False) -> dict:
     """
     Capture a webpage and convert it to PDF for unified processing.
 
-    Uses Playwright to render the page and convert to PDF. The PDF is stored
-    in the same location as uploaded PDFs (/static/{hash}.pdf) for display
-    and reindexing purposes. A mapping file is also saved to track URL->PDF
-    relationships for refresh operations.
+    Uses trafilatura to extract clean markdown from the webpage, then
+    converts to PDF via weasyprint. The PDF is stored in the same location
+    as uploaded PDFs (/static/{hash}.pdf) for display and reindexing purposes.
+    A mapping file is also saved to track URL->PDF relationships for refresh operations.
 
     Args:
         url: The URL to capture
@@ -35,8 +211,6 @@ async def capture_webpage_as_pdf(url: str, force: bool = False) -> dict:
     Returns:
         dict with file_hash (PDF hash), url_hash, title, pdf_path, original_url, source_type
     """
-    from playwright.async_api import async_playwright
-
     url_hash = _url_to_hash(url)
     mapping_path = os.path.join(WEBPAGES_DIR, f"{url_hash}.mapping.json")
 
@@ -63,31 +237,34 @@ async def capture_webpage_as_pdf(url: str, force: bool = False) -> dict:
     # Capture and convert to PDF
     logger.info(f"Capturing webpage to PDF: {url}")
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page()
+    # Fetch and extract markdown content using trafilatura
+    downloaded = trafilatura.fetch_url(url)
+    if downloaded is None:
+        raise RuntimeError(f"Failed to fetch URL: {url}")
 
-        try:
-            # Navigate and wait for network idle
-            await page.goto(url, wait_until="networkidle", timeout=30000)
+    # Extract clean markdown
+    markdown_content = trafilatura.extract(
+        downloaded,
+        output_format='markdown',
+        include_comments=False,
+        include_tables=True,
+        include_images=True,
+        include_links=True,
+        deduplicate=True,
+    )
 
-            # Extract title
-            title = await page.title()
-            if not title or title.strip() == "":
-                title = url
+    if not markdown_content:
+        markdown_content = f"# {url}\n\nNo content could be extracted from this page."
 
-            # Get HTML content for metadata extraction
-            html_content = await page.content()
+    # Get title from the page metadata using bare_extraction
+    metadata = trafilatura.bare_extraction(downloaded, only_with_metadata=True)
+    if metadata and hasattr(metadata, 'title') and metadata.title:
+        title = metadata.title
+    else:
+        title = url
 
-            # Generate PDF
-            pdf_bytes = await page.pdf(
-                format='A4',
-                print_background=True,
-                margin={'top': '20px', 'right': '20px', 'bottom': '20px', 'left': '20px'}
-            )
-
-        finally:
-            await browser.close()
+    # Convert markdown to PDF
+    pdf_bytes = _markdown_to_pdf(markdown_content, url, title)
 
     # Calculate PDF hash and save
     pdf_hash = hashlib.md5(pdf_bytes).hexdigest()

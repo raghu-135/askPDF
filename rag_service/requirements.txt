@@ -28,4 +28,6 @@ docling>=2.0.0
 numpy
 pydub
 trafilatura
+weasyprint
+markdown
 playwright
