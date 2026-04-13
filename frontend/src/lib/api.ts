@@ -15,6 +15,7 @@ export interface UploadResponse {
   sentences: any[];
   pdfUrl: string;
   fileHash: string;
+  fileName: string;
   indexingStatus: IndexingStatus;
 }
 
@@ -289,7 +290,7 @@ export async function updateThreadFileAnnotations(
 export async function addWebSourceToThread(
   threadId: string,
   url: string
-): Promise<{ status: string; file_hash: string; url: string; indexing: string }> {
+): Promise<{ status: string; file_hash: string; url: string; title?: string; indexing: string }> {
   const res = await fetch(`${RAG_API_BASE}/threads/${threadId}/web-sources`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

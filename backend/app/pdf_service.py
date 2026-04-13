@@ -128,6 +128,7 @@ class PDFService:
             "sentences": enriched_sentences,
             "pdfUrl": f"/api/pdf-file/{file_hash}",
             "fileHash": file_hash,
+            "fileName": file.filename,
             "indexingStatus": IndexingStatus.PENDING.value
         }
 

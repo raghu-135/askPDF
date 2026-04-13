@@ -22,6 +22,14 @@ type IndexedData = {
   message?: string;
 };
 
+type AddWebSourceResult = {
+  status: string;
+  file_hash: string;
+  url: string;
+  title?: string;
+  indexing: string;
+};
+
 type Props = {
   /** Active thread ID — indexing is disabled when null. */
   threadId: string | null;
@@ -57,6 +65,7 @@ const WebUploader = React.memo(function WebUploader({ threadId, onIndexed, disab
       onIndexed({
         fileHash: result.file_hash,
         url: trimmed,
+        title: result.title,
         status: "accepted",
       });
     } catch (err: any) {
