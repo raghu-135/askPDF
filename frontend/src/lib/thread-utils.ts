@@ -22,7 +22,7 @@ export async function loadThreadTabs(thread: Thread, apiBase: string): Promise<P
         pdfUrl: `${apiBase}${pdfData.pdfUrl}?t=${Date.now()}`,
         sentences: pdfData.sentences,
         text: extractTextFromSentences(pdfData.sentences),
-        sourceType: 'pdf',  // Unified type
+        sourceType: file.source_type === 'web' ? 'web' : 'pdf',
         sourceUrl: file.source_type === 'web' ? file.file_path || file.file_name : undefined,
       });
     } catch (err) {
@@ -62,7 +62,7 @@ export function createWebTabFromIndexed(fileHash: string, url: string, apiBase: 
     pdfUrl: `${apiBase}/api/pdf-file/${fileHash}?t=${Date.now()}`,
     sentences: [],  // Will be populated by getPdfByHash on thread load
     text: '',
-    sourceType: 'pdf',  // Unified as PDF
+    sourceType: 'web',
     sourceUrl: url,  // Original URL for reference
   };
 }

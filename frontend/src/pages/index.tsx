@@ -188,7 +188,7 @@ export default function Home() {
       pdfUrl: `${apiBase}/api/pdf-file/${data.fileHash}?t=${Date.now()}`,
       sentences: pdfData?.sentences || [],
       text: pdfData?.sentences ? extractTextFromSentences(pdfData.sentences) : '',
-      sourceType: 'pdf',
+      sourceType: 'web',
       sourceUrl: data.url,
     };
 
