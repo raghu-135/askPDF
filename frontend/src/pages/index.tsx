@@ -74,6 +74,10 @@ export default function Home() {
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
 
+  // Unified upload state
+  const [webUrl, setWebUrl] = useState("");
+  const [isWebLoading, setIsWebLoading] = useState(false);
+
   // Right panel tab state (0 = Threads, 1 = Chat)
   const [rightPanelTab, setRightPanelTab] = useState(0);
 
@@ -209,6 +213,28 @@ export default function Home() {
     setActiveSource('pdf');
   };
 
+  // Shared web submit handler (used by both WebUploader Enter key and PdfUploader button)
+  const handleWebSubmit = async () => {
+    if (!webUrl.trim() || !activeThread) return;
+    setIsWebLoading(true);
+    try {
+      const { addWebSourceToThread } = await import("../lib/api");
+      const result = await addWebSourceToThread(activeThread.id, webUrl.trim());
+      handleWebIndexed({
+        fileHash: result.file_hash,
+        url: webUrl.trim(),
+        title: result.title,
+        status: "accepted",
+      });
+      setWebUrl("");
+    } catch (err: any) {
+      const msg = err?.message || "Failed to index webpage";
+      handleWebIndexed({ fileHash: "", url: webUrl.trim(), status: "error", message: msg });
+    } finally {
+      setIsWebLoading(false);
+    }
+  };
+
   // Handle remove source from thread (deletes from DB + Weaviate, closes tab)
   const handleTabRemove = async (tabId: string) => {
     if (!activeThread) return;
@@ -317,21 +343,31 @@ export default function Home() {
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, borderRight: 1, borderColor: 'divider' }}>
           {/* Top Controls Bar */}
           <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit' }}>
-            <Stack direction="row" spacing={2} alignItems="center" justifyContent="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={2} alignItems="center" justifyContent="flex-start" flexWrap="wrap" useFlexGap>
 
-              {/* PDF Uploader */}
+              {/* Web Uploader (Search Box) - Now on the left */}
+              <WebUploader
+                threadId={activeThread?.id ?? null}
+                onIndexed={(data) => {
+                  handleWebIndexed(data);
+                  setWebUrl("");
+                }}
+                disabled={!activeThread}
+                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
+                value={webUrl}
+                onChange={setWebUrl}
+                onClear={() => setWebUrl("")}
+                onSubmit={handleWebSubmit}
+              />
+
+              {/* PDF Uploader (Unified Button) - Now on the right */}
               <PdfUploader
                 onUploaded={handlePdfUploaded}
                 disabled={!activeThread}
                 tooltipText={!activeThread ? "Select or create a thread first" : undefined}
-              />
-
-              {/* Web Uploader */}
-              <WebUploader
-                threadId={activeThread?.id ?? null}
-                onIndexed={handleWebIndexed}
-                disabled={!activeThread}
-                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
+                webUrl={webUrl}
+                onWebSubmit={handleWebSubmit}
+                isWebLoading={isWebLoading}
               />
 
               {/* Player Controls */}
