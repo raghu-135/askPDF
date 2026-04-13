@@ -154,6 +154,12 @@ def _url_to_hash(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse boolean from environment variable."""
+    value = os.getenv(name, str(default))
+    return value.lower() == 'true'
+
+
 def _markdown_to_pdf(markdown_content: str, url: str, title: str) -> bytes:
     """
     Convert markdown content to PDF bytes.
@@ -242,15 +248,19 @@ async def capture_webpage_as_pdf(url: str, force: bool = False) -> dict:
     if downloaded is None:
         raise RuntimeError(f"Failed to fetch URL: {url}")
 
-    # Extract clean markdown
+    # Extract clean markdown with configurable parameters from environment
     markdown_content = trafilatura.extract(
         downloaded,
         output_format='markdown',
-        include_comments=False,
-        include_tables=True,
-        include_images=True,
-        include_links=True,
-        deduplicate=True,
+        include_comments=_env_bool('TRAFILATURA_INCLUDE_COMMENTS', False),
+        include_tables=_env_bool('TRAFILATURA_INCLUDE_TABLES', True),
+        include_images=_env_bool('TRAFILATURA_INCLUDE_IMAGES', True),
+        include_links=_env_bool('TRAFILATURA_INCLUDE_LINKS', True),
+        include_formatting=_env_bool('TRAFILATURA_INCLUDE_FORMATTING', True),
+        deduplicate=_env_bool('TRAFILATURA_DEDUPLICATE', True),
+        favor_recall=_env_bool('TRAFILATURA_FAVOR_RECALL', True),
+        fast=_env_bool('TRAFILATURA_FAST', False),
+        url=url,
     )
 
     if not markdown_content:

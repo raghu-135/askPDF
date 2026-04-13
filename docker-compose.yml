@@ -58,6 +58,7 @@ services:
     ports:
       - "8001:8000"
     environment:
+      - LOG_LEVEL=INFO
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=0.7
       - DATA_DIR=/data
@@ -87,7 +88,15 @@ services:
       - DOCLING_TABLE_MODE=ACCURATE # ACCURATE is better for tables but slower.
       - DOCLING_FORCE_FULL_PAGE_OCR=False # KEEP FALSE for digital PDFs to avoid noise and degradation.
       - DOCLING_DO_FORMULA_ENRICHMENT=False # use when you have formulas in your PDFs
-      - LOG_LEVEL=INFO
+      # Web capture extraction tuning
+      - TRAFILATURA_INCLUDE_TABLES=True
+      - TRAFILATURA_INCLUDE_IMAGES=True
+      - TRAFILATURA_INCLUDE_LINKS=True
+      - TRAFILATURA_INCLUDE_FORMATTING=True
+      - TRAFILATURA_INCLUDE_COMMENTS=False
+      - TRAFILATURA_DEDUPLICATE=True
+      - TRAFILATURA_FAVOR_RECALL=True
+      - TRAFILATURA_FAST=False
     env_file:
       - .env
     depends_on:

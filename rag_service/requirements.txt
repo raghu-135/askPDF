@@ -30,4 +30,3 @@ pydub
 trafilatura
 weasyprint
 markdown
-playwright
