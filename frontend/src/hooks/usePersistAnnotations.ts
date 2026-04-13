@@ -5,6 +5,7 @@ import { serializeAnnotationItems } from "../lib/annotation-utils";
 type AnnotationApi = {
   importAnnotations: (annotations: any[]) => void;
   exportAnnotations: () => { toPromise: () => Promise<any[]> };
+  deleteAnnotations: (selection: { pageIndex: number; id: string }[]) => void;
 };
 
 type UsePersistAnnotationsParams = {
@@ -98,6 +99,15 @@ export function usePersistAnnotations({
       const payload = await getThreadFileAnnotations(threadId, fileHash);
 
       const annotations = payload.annotations || [];
+
+      // Clear existing annotations first to prevent duplicate React keys
+      const existing = await annotationApi.exportAnnotations().toPromise();
+      if ((existing as any[]).length > 0) {
+        annotationApi.deleteAnnotations(
+          (existing as any[]).map((a: any) => ({ pageIndex: a.pageIndex, id: a.id }))
+        );
+      }
+
       if (annotations.length === 0) {
         return;
       }
