@@ -2,12 +2,12 @@ import os
 import hashlib
 import logging
 import json
+import asyncio
 from datetime import datetime
 from typing import Optional
 
-import trafilatura
-import markdown
-from weasyprint import HTML, CSS
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from markitdown import MarkItDown
 
 logger = logging.getLogger(__name__)
 
@@ -17,136 +17,39 @@ STATIC_DIR = "/static"
 os.makedirs(WEBPAGES_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-# CSS styling for clean PDF output
-PDF_STYLES = """
-@page {
-    size: A4;
-    margin: 2cm;
+# Common tracker/cookie banner domains to block
+BLOCKED_DOMAINS = {
+    "google-analytics.com",
+    "googletagmanager.com",
+    "googleadservices.com",
+    "doubleclick.net",
+    "facebook.com",
+    "fbcdn.net",
+    "twitter.com",
+    "analytics.twitter.com",
+    "linkedin.com",
+    "licdn.com",
+    "hotjar.com",
+    "optimizely.com",
+    "segment.com",
+    "mixpanel.com",
+    "amplitude.com",
+    "intercom.io",
+    "driftt.com",
+    "zendesk.com",
+    "zdassets.com",
+    "cookiebot.com",
+    "onetrust.com",
+    "trustarc.com",
+    "quantserve.com",
+    "scorecardresearch.com",
+    "moatads.com",
+    "outbrain.com",
+    "taboola.com",
+    "revcontent.com",
+    "adsystem.amazon.com",
+    "amazon-adsystem.com",
 }
-
-body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    font-size: 11pt;
-    line-height: 1.6;
-    color: #333;
-}
-
-h1 {
-    font-size: 18pt;
-    font-weight: 600;
-    color: #1a1a1a;
-    border-bottom: 2px solid #e0e0e0;
-    padding-bottom: 0.3em;
-    margin-top: 1.5em;
-    margin-bottom: 0.8em;
-}
-
-h2 {
-    font-size: 14pt;
-    font-weight: 600;
-    color: #2a2a2a;
-    margin-top: 1.3em;
-    margin-bottom: 0.6em;
-}
-
-h3 {
-    font-size: 12pt;
-    font-weight: 600;
-    color: #3a3a3a;
-    margin-top: 1.2em;
-    margin-bottom: 0.5em;
-}
-
-p {
-    margin-bottom: 0.8em;
-    text-align: left;
-}
-
-a {
-    color: #2563eb;
-    text-decoration: none;
-}
-
-a:hover {
-    text-decoration: underline;
-}
-
-ul, ol {
-    margin-left: 1.5em;
-    margin-bottom: 0.8em;
-}
-
-li {
-    margin-bottom: 0.3em;
-}
-
-code {
-    background-color: #f3f4f6;
-    padding: 0.2em 0.4em;
-    border-radius: 3px;
-    font-family: "SF Mono", Monaco, Inconsolata, "Fira Code", Consolas, monospace;
-    font-size: 0.9em;
-}
-
-pre {
-    background-color: #f3f4f6;
-    padding: 1em;
-    border-radius: 6px;
-    overflow-x: auto;
-    margin-bottom: 1em;
-}
-
-pre code {
-    background: none;
-    padding: 0;
-}
-
-blockquote {
-    border-left: 4px solid #e0e0e0;
-    padding-left: 1em;
-    margin-left: 0;
-    color: #666;
-    font-style: italic;
-}
-
-img {
-    max-width: 100%;
-    height: auto;
-    margin: 1em 0;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 1em 0;
-}
-
-th, td {
-    border: 1px solid #e0e0e0;
-    padding: 0.5em;
-    text-align: left;
-}
-
-th {
-    background-color: #f9fafb;
-    font-weight: 600;
-}
-
-hr {
-    border: none;
-    border-top: 1px solid #e0e0e0;
-    margin: 2em 0;
-}
-
-/* Page header with source URL */
-.page-header {
-    font-size: 8pt;
-    color: #666;
-    border-bottom: 1px solid #e0e0e0;
-    padding-bottom: 0.5em;
-    margin-bottom: 1.5em;
-}
-"""
 
 
 def _url_to_hash(url: str) -> str:
@@ -154,68 +57,121 @@ def _url_to_hash(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    """Parse boolean from environment variable."""
-    value = os.getenv(name, str(default))
-    return value.lower() == 'true'
+def _should_block_url(url: str) -> bool:
+    """Check if URL should be blocked (trackers, ads, etc)."""
+    url_lower = url.lower()
+    for blocked in BLOCKED_DOMAINS:
+        if blocked in url_lower:
+            return True
+    return False
 
 
-def _markdown_to_pdf(markdown_content: str, url: str, title: str) -> bytes:
+async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
     """
-    Convert markdown content to PDF bytes.
+    Render a webpage using Playwright with Chromium.
+    Blocks trackers, cookie banners, and other junk.
 
     Args:
-        markdown_content: The markdown text to convert
-        url: Source URL for the header
-        title: Page title
+        url: The URL to render
 
     Returns:
-        PDF as bytes
+        tuple of (html_content: str, pdf_bytes: bytes, title: str)
     """
-    # Convert markdown to HTML
-    html_content = markdown.markdown(
-        markdown_content,
-        extensions=['extra', 'codehilite', 'tables', 'fenced_code']
-    )
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
 
-    # Wrap with full HTML structure and header
-    full_html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>{title}</title>
-</head>
-<body>
-    <div class="page-header">
-        <strong>Source:</strong> {url}
-    </div>
-    {html_content}
-</body>
-</html>"""
+        # Block unwanted resources
+        async def route_handler(route, request):
+            if _should_block_url(request.url):
+                await route.abort()
+            else:
+                await route.continue_()
 
-    # Convert HTML to PDF using weasyprint
-    pdf_bytes = HTML(string=full_html).write_pdf(
-        stylesheets=[CSS(string=PDF_STYLES)]
-    )
+        page = await context.new_page()
+        await page.route("**/*", route_handler)
 
-    return pdf_bytes
+        try:
+            # Navigate with a generous timeout
+            await page.goto(url, wait_until="networkidle", timeout=30000)
+
+            # Wait a moment for any lazy-loaded content
+            await asyncio.sleep(2)
+
+            # Get page title
+            title = await page.title()
+            if not title or title.strip() in ("", "about:blank"):
+                title = url
+
+            # Get HTML content
+            html_content = await page.content()
+
+            # Generate PDF (high-fidelity for display)
+            pdf_bytes = await page.pdf(
+                format="A4",
+                print_background=True,
+                margin={"top": "2cm", "bottom": "2cm", "left": "2cm", "right": "2cm"}
+            )
+
+            return html_content, pdf_bytes, title
+
+        except PlaywrightTimeout:
+            logger.warning(f"Timeout loading {url}, returning partial content")
+            html_content = await page.content()
+            title = await page.title() or url
+            pdf_bytes = await page.pdf(format="A4", print_background=True)
+            return html_content, pdf_bytes, title
+
+        finally:
+            await context.close()
+            await browser.close()
 
 
-async def capture_webpage_as_pdf(url: str, force: bool = False) -> dict:
+def _extract_clean_markdown(html_content: str, url: str) -> str:
     """
-    Capture a webpage and convert it to PDF for unified processing.
+    Extract clean markdown from HTML using MarkItDown.
 
-    Uses trafilatura to extract clean markdown from the webpage, then
-    converts to PDF via weasyprint. The PDF is stored in the same location
-    as uploaded PDFs (/static/{hash}.pdf) for display and reindexing purposes.
-    A mapping file is also saved to track URL->PDF relationships for refresh operations.
+    Args:
+        html_content: Raw HTML string
+        url: Source URL for context
+
+    Returns:
+        Clean markdown string
+    """
+    try:
+        md = MarkItDown()
+        result = md.convert_string(html_content)
+        if result and result.text_content.strip():
+            logger.info(f"MarkItDown successfully extracted markdown from {url}")
+            return result.text_content
+    except Exception as e:
+        logger.warning(f"MarkItDown extraction failed: {e}")
+
+    # Fallback if extraction fails
+    return f"# {url}\n\nContent could not be extracted from this page."
+
+
+async def capture_webpage(url: str, force: bool = False) -> dict:
+    """
+    Capture a webpage using Playwright and extract clean markdown.
+
+    Pipeline:
+    1. Playwright (Chromium) renders the page with JS, blocks trackers
+    2. Extract HTML snapshot + PDF (for display)
+    3. HTML → MarkItDown → clean Markdown (for vector DB)
+    4. Save PDF to /static/{hash}.pdf
+    5. Save mapping file for URL→PDF lookup
 
     Args:
         url: The URL to capture
         force: If True, force recapture even if already cached
 
     Returns:
-        dict with file_hash (PDF hash), url_hash, title, pdf_path, original_url, source_type
+        dict with file_hash (PDF hash), url_hash, title, pdf_path, original_url,
+        source_type, markdown_content, and cached flag
     """
     url_hash = _url_to_hash(url)
     mapping_path = os.path.join(WEBPAGES_DIR, f"{url_hash}.mapping.json")
@@ -227,84 +183,71 @@ async def capture_webpage_as_pdf(url: str, force: bool = False) -> dict:
                 mapping = json.load(f)
             pdf_path = mapping.get("pdf_path")
             if pdf_path and os.path.exists(pdf_path):
-                logger.info(f"Using cached PDF for {url}")
+                logger.info(f"Using cached capture for {url}")
                 return {
                     "file_hash": mapping["pdf_hash"],
                     "url_hash": url_hash,
                     "title": mapping["title"],
                     "pdf_path": pdf_path,
                     "original_url": url,
-                    "source_type": "pdf",
+                    "source_type": "web",
+                    "markdown_content": mapping.get("markdown_content", ""),
                     "cached": True,
                 }
         except Exception as e:
             logger.warning(f"Failed to read cached mapping for {url}: {e}")
 
-    # Capture and convert to PDF
-    logger.info(f"Capturing webpage to PDF: {url}")
+    # Capture webpage
+    logger.info(f"Capturing webpage: {url}")
 
-    # Fetch and extract markdown content using trafilatura
-    downloaded = trafilatura.fetch_url(url)
-    if downloaded is None:
-        raise RuntimeError(f"Failed to fetch URL: {url}")
+    try:
+        # Step 1: Render with Playwright
+        html_content, pdf_bytes, title = await _render_page_with_playwright(url)
 
-    # Extract clean markdown with configurable parameters from environment
-    markdown_content = trafilatura.extract(
-        downloaded,
-        output_format='markdown',
-        include_comments=_env_bool('TRAFILATURA_INCLUDE_COMMENTS', False),
-        include_tables=_env_bool('TRAFILATURA_INCLUDE_TABLES', True),
-        include_images=_env_bool('TRAFILATURA_INCLUDE_IMAGES', True),
-        include_links=_env_bool('TRAFILATURA_INCLUDE_LINKS', True),
-        include_formatting=_env_bool('TRAFILATURA_INCLUDE_FORMATTING', True),
-        deduplicate=_env_bool('TRAFILATURA_DEDUPLICATE', True),
-        favor_recall=_env_bool('TRAFILATURA_FAVOR_RECALL', True),
-        fast=_env_bool('TRAFILATURA_FAST', False),
-        url=url,
-    )
+        # Step 2: Extract clean markdown
+        markdown_content = _extract_clean_markdown(html_content, url)
 
-    if not markdown_content:
-        markdown_content = f"# {url}\n\nNo content could be extracted from this page."
+        # Step 3: Calculate PDF hash and save
+        pdf_hash = hashlib.md5(pdf_bytes).hexdigest()
+        pdf_path = os.path.join(STATIC_DIR, f"{pdf_hash}.pdf")
 
-    # Get title from the page metadata using bare_extraction
-    metadata = trafilatura.bare_extraction(downloaded, only_with_metadata=True)
-    if metadata and hasattr(metadata, 'title') and metadata.title:
-        title = metadata.title
-    else:
-        title = url
+        with open(pdf_path, "wb") as f:
+            f.write(pdf_bytes)
 
-    # Convert markdown to PDF
-    pdf_bytes = _markdown_to_pdf(markdown_content, url, title)
+        # Step 4: Save mapping file
+        mapping = {
+            "url": url,
+            "pdf_hash": pdf_hash,
+            "pdf_path": pdf_path,
+            "title": title,
+            "markdown_content": markdown_content,
+            "captured_at": datetime.utcnow().isoformat(),
+        }
+        with open(mapping_path, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, indent=2)
 
-    # Calculate PDF hash and save
-    pdf_hash = hashlib.md5(pdf_bytes).hexdigest()
-    pdf_path = os.path.join(STATIC_DIR, f"{pdf_hash}.pdf")
+        logger.info(f"Captured {url} to {pdf_path} (hash: {pdf_hash})")
 
-    with open(pdf_path, "wb") as f:
-        f.write(pdf_bytes)
+        return {
+            "file_hash": pdf_hash,
+            "url_hash": url_hash,
+            "title": title,
+            "pdf_path": pdf_path,
+            "original_url": url,
+            "source_type": "web",
+            "markdown_content": markdown_content,
+            "cached": False,
+        }
 
-    # Save mapping file for URL->PDF lookup (for refresh operations)
-    mapping = {
-        "url": url,
-        "pdf_hash": pdf_hash,
-        "pdf_path": pdf_path,
-        "title": title,
-        "captured_at": datetime.utcnow().isoformat(),
-    }
-    with open(mapping_path, "w", encoding="utf-8") as f:
-        json.dump(mapping, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to capture {url}: {e}", exc_info=True)
+        raise RuntimeError(f"Failed to capture webpage: {str(e)}")
 
-    logger.info(f"Captured {url} to PDF: {pdf_path} (hash: {pdf_hash})")
 
-    return {
-        "file_hash": pdf_hash,
-        "url_hash": url_hash,
-        "title": title,
-        "pdf_path": pdf_path,
-        "original_url": url,
-        "source_type": "pdf",
-        "cached": False,
-    }
+# Alias for backward compatibility during transition
+async def capture_webpage_as_pdf(url: str, force: bool = False) -> dict:
+    """Backward-compatible alias for capture_webpage."""
+    return await capture_webpage(url, force)
 
 
 async def get_webpage_pdf_by_url_hash(url_hash: str) -> Optional[dict]:
@@ -316,7 +259,7 @@ async def get_webpage_pdf_by_url_hash(url_hash: str) -> Optional[dict]:
         url_hash: The MD5 hash of the URL
 
     Returns:
-        dict with pdf_hash, pdf_path, url, title or None if not found
+        dict with pdf_hash, pdf_path, url, title, markdown_content or None if not found
     """
     mapping_path = os.path.join(WEBPAGES_DIR, f"{url_hash}.mapping.json")
     if not os.path.exists(mapping_path):
@@ -335,6 +278,7 @@ async def get_webpage_pdf_by_url_hash(url_hash: str) -> Optional[dict]:
             "pdf_path": mapping["pdf_path"],
             "url": mapping["url"],
             "title": mapping["title"],
+            "markdown_content": mapping.get("markdown_content", ""),
         }
     except Exception as e:
         logger.warning(f"Failed to read mapping for {url_hash}: {e}")

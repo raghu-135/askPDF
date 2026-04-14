@@ -27,6 +27,6 @@ spacy>=3.7.0
 docling>=2.0.0
 numpy
 pydub
-trafilatura
-weasyprint
+playwright
+markitdown
 markdown

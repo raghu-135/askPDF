@@ -8,12 +8,14 @@ This module handles:
 """
 
 import os
+import json
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional
 
 import httpx
 from unstructured.partition.pdf import partition_pdf
+from unstructured.partition.md import partition_md
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -117,6 +119,43 @@ async def get_chunks(file_hash: str) -> List[str]:
     return []
 
 
+def parse_markdown_to_chunks(markdown_content: str) -> List[str]:
+    """
+    Parse markdown content into text chunks using Unstructured.
+
+    Args:
+        markdown_content: The markdown text to parse
+
+    Returns:
+        List of text chunks
+    """
+    from unstructured.chunking.title import chunk_by_title
+    from io import StringIO
+
+    try:
+        # Use Unstructured to partition the markdown
+        elements = partition_md(text=markdown_content)
+
+        # Chunk by title for semantic coherence
+        chunked_elements = chunk_by_title(
+            elements,
+            multipage_sections=True,
+            combine_text_under_n_chars=200,
+            max_characters=500,
+            new_after_n_chars=400,
+            overlap=0
+        )
+        chunks = [str(c) for c in chunked_elements]
+        return chunks
+    except Exception as e:
+        logger.error(f"Markdown chunking failed: {e}")
+        # Fallback to simple text splitting
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        docs = splitter.create_documents([markdown_content])
+        return [d.page_content for d in docs]
+
+
 async def get_chat_chunks(
     question: str, 
     answer: str, 
@@ -184,24 +223,27 @@ async def index_document_for_thread(
     thread_id: str,
     file_hash: str,
     embedding_model_name: str,
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    markdown_content: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Index a document into the vector database.
     The PDF is fetched from the backend and parsed using Unstructured.
-    
+    For web sources, markdown_content is used instead of PDF parsing.
+
     Args:
         thread_id: The thread ID to index into
         file_hash: Unique hash of the file
         embedding_model_name: The embedding model to use
         metadata: Additional metadata to store with chunks
-    
+        markdown_content: Optional markdown content for web sources (bypasses PDF parsing)
+
     Returns:
         Status dict with indexing results
     """
     db_client = get_vector_db()
     metadata = metadata or {}
-    
+
     try:
         if await db_client.has_file_indexed(thread_id, file_hash, embedding_model_name):
             try:
@@ -224,11 +266,15 @@ async def index_document_for_thread(
                 "reused_existing_embeddings": True,
             }
 
-        # 1. Get chunks from PDF
-        chunks = await get_chunks(file_hash)
+        # 1. Get chunks - use markdown for web sources, PDF for uploaded files
+        if markdown_content:
+            logger.info(f"Using markdown content for web source indexing: {file_hash}")
+            chunks = parse_markdown_to_chunks(markdown_content)
+        else:
+            chunks = await get_chunks(file_hash)
         if not chunks:
             logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
-            return {"status": "error", "message": "No text extracted from PDF"}
+            return {"status": "error", "message": "No text extracted from document"}
         
         logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
         
@@ -425,12 +471,35 @@ async def index_web_search_for_thread(
 
 _reembed_locks: Dict[str, asyncio.Lock] = {}
 
+WEBPAGES_DIR = "/static/webpages"
+
 
 def _thread_reembed_lock(thread_id: str) -> asyncio.Lock:
     """Return the per-thread lock used to avoid concurrent re-embed runs."""
     if thread_id not in _reembed_locks:
         _reembed_locks[thread_id] = asyncio.Lock()
     return _reembed_locks[thread_id]
+
+
+def _get_markdown_for_pdf_hash(pdf_hash: str) -> Optional[str]:
+    """
+    Look up markdown content for a PDF hash by scanning web capture mapping files.
+    Returns markdown content if found, None otherwise.
+    """
+    try:
+        if not os.path.exists(WEBPAGES_DIR):
+            return None
+        for filename in os.listdir(WEBPAGES_DIR):
+            if not filename.endswith(".mapping.json"):
+                continue
+            mapping_path = os.path.join(WEBPAGES_DIR, filename)
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                mapping = json.load(f)
+            if mapping.get("pdf_hash") == pdf_hash:
+                return mapping.get("markdown_content")
+    except Exception as e:
+        logger.warning(f"Failed to lookup markdown for PDF hash {pdf_hash}: {e}")
+    return None
 
 
 async def trigger_reembed_for_missing_sources(
@@ -471,15 +540,18 @@ async def trigger_reembed_for_missing_sources(
                     break
                 if await db.has_file_indexed(thread_id, f.file_hash, embedding_model_name):
                     continue
-                # Unified PDF flow - all sources (uploaded PDFs and web-converted PDFs)
-                # are indexed using the same function
+                # Check if this is a web source (has markdown content in mapping)
+                markdown_content = _get_markdown_for_pdf_hash(f.file_hash)
+                # Unified flow - web sources use markdown, uploaded PDFs use PDF parsing
                 result = await index_document_for_thread(
                     thread_id=thread_id,
                     file_hash=f.file_hash,
                     embedding_model_name=embedding_model_name,
+                    markdown_content=markdown_content,
                 )
                 if result.get("status") == "success":
-                    reindexed_files.append({"file_hash": f.file_hash, "source_type": "pdf"})
+                    source_type = "web" if markdown_content else "pdf"
+                    reindexed_files.append({"file_hash": f.file_hash, "source_type": source_type})
             except Exception as item_err:
                 logger.warning("Skipping re-embed for file %s: %s", f.file_hash, item_err)
 

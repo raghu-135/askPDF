@@ -529,13 +529,14 @@ async def add_web_source_to_thread_endpoint(
             source_type="pdf",
         )
 
-        # Use unified PDF indexing (same as uploaded PDFs)
+        # Use markdown for vector DB indexing (cleaner than PDF extraction)
         background_tasks.add_task(
             index_document_for_thread,
             thread_id=thread_id,
             file_hash=pdf_hash,
             embedding_model_name=thread.embed_model,
             metadata={"original_url": req.url, "url_hash": url_hash},
+            markdown_content=capture.get("markdown_content"),
         )
 
         return {
