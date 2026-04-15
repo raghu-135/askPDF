@@ -30,3 +30,4 @@ pydub
 playwright
 markitdown
 markdown
+nodriver>=0.39.0

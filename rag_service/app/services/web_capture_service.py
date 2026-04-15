@@ -3,10 +3,12 @@ import hashlib
 import logging
 import json
 import asyncio
+import base64
 from datetime import datetime
 from typing import Optional
 
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+import nodriver as uc
+from nodriver import cdp
 from markitdown import MarkItDown
 
 logger = logging.getLogger(__name__)
@@ -66,10 +68,61 @@ def _should_block_url(url: str) -> bool:
     return False
 
 
-async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
+async def _dismiss_cookie_banner(tab) -> bool:
     """
-    Render a webpage using Playwright with Chromium.
-    Blocks trackers, cookie banners, and other junk.
+    Attempt to find and click cookie consent buttons.
+    Returns True if a button was clicked.
+    """
+    cookie_texts = [
+        "accept all", "agree", "accept", "allow all", "ok",
+        "i agree", "consent", "accept cookies", "allow cookies",
+        "got it", "i understand", "agree to all", "enable all",
+        "yes, accept", "accept all cookies", "allow all cookies"
+    ]
+
+    for text in cookie_texts:
+        try:
+            button = await tab.find(text, timeout=1.5)
+            if button:
+                await button.click()
+                await tab.sleep(0.5)
+                logger.info(f"Clicked cookie banner button: '{text}'")
+                return True
+        except Exception:
+            continue
+
+    return False
+
+
+async def _scroll_to_lazy_load(tab) -> None:
+    """
+    Scroll the page gradually to trigger lazy-loaded images and content.
+    """
+    # Get page height
+    try:
+        page_height = await tab.evaluate("document.body.scrollHeight")
+        viewport_height = await tab.evaluate("window.innerHeight")
+
+        if page_height and viewport_height:
+            scroll_steps = max(5, min(15, page_height // viewport_height))
+            for i in range(scroll_steps):
+                await tab.evaluate(f"window.scrollBy(0, {viewport_height * 0.8})")
+                await tab.sleep(0.3)
+            # Scroll back to top
+            await tab.evaluate("window.scrollTo(0, 0)")
+            await tab.sleep(0.3)
+    except Exception as e:
+        logger.warning(f"Error during lazy-load scrolling: {e}")
+        # Fallback simple scroll
+        for _ in range(5):
+            await tab.evaluate("window.scrollBy(0, 500)")
+            await tab.sleep(0.3)
+
+
+async def _render_page_with_nodriver(url: str) -> tuple[str, bytes, str]:
+    """
+    Render a webpage using nodriver with Chrome.
+    Handles cookie banners, lazy-loaded images, and generates PDF.
 
     Args:
         url: The URL to render
@@ -77,6 +130,143 @@ async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
     Returns:
         tuple of (html_content: str, pdf_bytes: bytes, title: str)
     """
+    browser = None
+    try:
+        # Start browser with anti-detection settings
+        browser = await uc.start(
+            headless=True,
+            browser_executable_path="/usr/bin/chromium",
+            browser_args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-web-security",
+                "--disable-features=IsolateOrigins,site-per-process",
+                "--disable-blink-features=AutomationControlled",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ]
+        )
+
+        tab = await browser.get(url)
+
+        # Wait for page to load
+        await tab.sleep(2)
+
+        # Try to dismiss cookie banner
+        await _dismiss_cookie_banner(tab)
+
+        # Scroll to trigger lazy-loaded content
+        await _scroll_to_lazy_load(tab)
+
+        # Wait a bit more for any triggered content to load
+        await tab.sleep(1.5)
+
+        # Get page title
+        try:
+            title = await tab.evaluate("document.title")
+            if not title or title.strip() in ("", "about:blank"):
+                title = url
+        except Exception:
+            title = url
+
+        # Inject CSS for continuous/scrollable PDF (no page breaks)
+        print_css = """
+        @page {
+            margin: 0 !important;
+            size: auto !important;
+        }
+
+        * {
+            page-break-inside: auto !important;
+            break-inside: auto !important;
+            page-break-before: auto !important;
+            break-before: auto !important;
+            page-break-after: auto !important;
+            break-after: auto !important;
+        }
+
+        @media print {
+            body {
+                margin: 0 !important;
+                padding: 0 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+        }
+        """
+        try:
+            await tab.evaluate(f"""
+                const style = document.createElement('style');
+                style.textContent = `{print_css}`;
+                document.head.appendChild(style);
+            """)
+            await tab.sleep(0.5)
+        except Exception as e:
+            logger.warning(f"Failed to inject print CSS: {e}")
+
+        # Get HTML content
+        try:
+            html_content = await tab.evaluate("document.documentElement.outerHTML")
+        except Exception as e:
+            logger.warning(f"Failed to get HTML content: {e}")
+            html_content = f"<html><body><p>Failed to retrieve content from {url}</p></body></html>"
+
+        # Generate PDF using Chrome's CDP via tab connection
+        pdf_bytes = b""
+        try:
+            # Use tab's connection to send CDP command
+            pdf_response = await tab.send(
+                cdp.page.print_to_pdf(
+                    landscape=False,
+                    print_background=True,
+                    margin_top=0,
+                    margin_bottom=0,
+                    margin_left=0,
+                    margin_right=0,
+                    paper_width=8.27,  # A4 width in inches
+                    paper_height=11.69,  # A4 height in inches
+                    prefer_css_page_size=False,  # Use explicit paper size
+                )
+            )
+            # CDP returns a response object with 'data' attribute
+            if pdf_response:
+                if hasattr(pdf_response, 'data'):
+                    pdf_bytes = base64.b64decode(pdf_response.data)
+                elif isinstance(pdf_response, (list, tuple)) and len(pdf_response) > 0:
+                    # Sometimes CDP returns a tuple/list
+                    pdf_bytes = base64.b64decode(pdf_response[0])
+                else:
+                    logger.warning(f"Unexpected PDF response: {type(pdf_response)} - {pdf_response}")
+        except Exception as e:
+            logger.error(f"Failed to generate PDF with CDP: {e}", exc_info=True)
+
+        if not pdf_bytes:
+            logger.error("PDF generation failed - empty PDF bytes")
+            raise RuntimeError("Failed to generate PDF from webpage")
+
+        return html_content, pdf_bytes, title
+
+    except Exception as e:
+        logger.error(f"Error rendering page with nodriver: {e}", exc_info=True)
+        raise RuntimeError(f"Failed to capture webpage: {str(e)}")
+
+    finally:
+        if browser:
+            try:
+                browser.stop()
+            except Exception:
+                pass
+
+
+# Legacy Playwright implementation kept as fallback
+async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
+    """
+    [LEGACY] Render a webpage using Playwright with Chromium.
+    Kept as fallback in case nodriver has issues.
+    """
+    from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -84,32 +274,17 @@ async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
 
-        # Block unwanted resources
-        async def route_handler(route, request):
-            if _should_block_url(request.url):
-                await route.abort()
-            else:
-                await route.continue_()
-
         page = await context.new_page()
-        await page.route("**/*", route_handler)
 
         try:
-            # Navigate with a generous timeout
             await page.goto(url, wait_until="networkidle", timeout=30000)
-
-            # Wait a moment for any lazy-loaded content
             await asyncio.sleep(2)
 
-            # Get page title
             title = await page.title()
             if not title or title.strip() in ("", "about:blank"):
                 title = url
 
-            # Get HTML content
             html_content = await page.content()
-
-            # Generate PDF (high-fidelity for display)
             pdf_bytes = await page.pdf(
                 format="A4",
                 print_background=True,
@@ -156,10 +331,10 @@ def _extract_clean_markdown(html_content: str, url: str) -> str:
 
 async def capture_webpage(url: str, force: bool = False) -> dict:
     """
-    Capture a webpage using Playwright and extract clean markdown.
+    Capture a webpage using nodriver (Chrome) and extract clean markdown.
 
     Pipeline:
-    1. Playwright (Chromium) renders the page with JS, blocks trackers
+    1. nodriver (Chrome) renders the page with JS, handles cookie banners
     2. Extract HTML snapshot + PDF (for display)
     3. HTML → MarkItDown → clean Markdown (for vector DB)
     4. Save PDF to /static/{hash}.pdf
@@ -201,8 +376,8 @@ async def capture_webpage(url: str, force: bool = False) -> dict:
     logger.info(f"Capturing webpage: {url}")
 
     try:
-        # Step 1: Render with Playwright
-        html_content, pdf_bytes, title = await _render_page_with_playwright(url)
+        # Step 1: Render with nodriver (Chrome)
+        html_content, pdf_bytes, title = await _render_page_with_nodriver(url)
 
         # Step 2: Extract clean markdown
         markdown_content = _extract_clean_markdown(html_content, url)
