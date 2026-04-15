@@ -19,23 +19,29 @@ RUN apt-get update && apt-get install -y \
     espeak-ng \
     curl \
     git \
-    # Playwright/Chromium dependencies
-    libdbus-1-3 \
-    libx11-xcb1 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libasound2 \
-    libpangocairo-1.0-0 \
-    libgtk-3-0 \
+    # Chromium dependencies for SingleFile
+    chromium \
+    chromium-sandbox \
+    # Node.js dependencies
+    ca-certificates \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20.x (required for SingleFile CLI)
+RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 COPY rag_service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Install Playwright Chromium browser
-RUN playwright install chromium
+# Install SingleFile CLI globally via npm
+RUN npm install -g single-file-cli
+
+# Create symlink for chromium to common location
+RUN ln -sf /usr/bin/chromium /usr/bin/chromium-browser || true
 
 ARG DOWNLOAD_LOCAL_MODELS=true
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
