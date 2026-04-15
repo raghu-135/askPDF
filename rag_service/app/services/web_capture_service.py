@@ -259,52 +259,6 @@ async def _render_page_with_nodriver(url: str) -> tuple[str, bytes, str]:
                 pass
 
 
-# Legacy Playwright implementation kept as fallback
-async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
-    """
-    [LEGACY] Render a webpage using Playwright with Chromium.
-    Kept as fallback in case nodriver has issues.
-    """
-    from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-
-        page = await context.new_page()
-
-        try:
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-            await asyncio.sleep(2)
-
-            title = await page.title()
-            if not title or title.strip() in ("", "about:blank"):
-                title = url
-
-            html_content = await page.content()
-            pdf_bytes = await page.pdf(
-                format="A4",
-                print_background=True,
-                margin={"top": "2cm", "bottom": "2cm", "left": "2cm", "right": "2cm"}
-            )
-
-            return html_content, pdf_bytes, title
-
-        except PlaywrightTimeout:
-            logger.warning(f"Timeout loading {url}, returning partial content")
-            html_content = await page.content()
-            title = await page.title() or url
-            pdf_bytes = await page.pdf(format="A4", print_background=True)
-            return html_content, pdf_bytes, title
-
-        finally:
-            await context.close()
-            await browser.close()
-
-
 def _extract_clean_markdown(html_content: str, url: str) -> str:
     """
     Extract clean markdown from HTML using MarkItDown.

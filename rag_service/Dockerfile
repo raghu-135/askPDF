@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
     ca-certificates \
-    # Playwright/Chromium dependencies
+    # Chrome/Chromium dependencies for nodriver
     libdbus-1-3 \
     libx11-xcb1 \
     libxcomposite1 \
@@ -32,7 +32,6 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     libpangocairo-1.0-0 \
     libgtk-3-0 \
-    # Chrome dependencies for nodriver
     fonts-liberation \
     libappindicator3-1 \
     libatk-bridge2.0-0 \
@@ -53,9 +52,6 @@ RUN apt-get update \
 
 COPY rag_service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
-
-# Install Playwright Chromium browser
-RUN playwright install chromium
 
 ARG DOWNLOAD_LOCAL_MODELS=true
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
