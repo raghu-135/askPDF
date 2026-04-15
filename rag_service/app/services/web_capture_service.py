@@ -18,6 +18,105 @@ os.makedirs(WEBPAGES_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
 # Common tracker/cookie banner domains to block
+
+# Common cookie/consent banner button selectors to auto-accept/close
+CONSENT_BUTTON_SELECTORS = [
+    # High-priority specific selectors (fast path)
+    "#onetrust-accept-btn-handler",  # OneTrust
+    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",  # Cookiebot
+    "#accept-recommended-btn-handler",  # OneTrust alternative
+    ".fc-cta-consent",  # Funding Choices
+    "button.fc-cta-consent",
+    "[data-testid='accept-cookies']",
+    "[data-testid='cookie-accept']",
+    "[data-testid='consent-accept']",
+    "[data-cookiebanner='accept']",
+    "[data-action='accept']",
+    "[data-action='accept-all']",
+    # Modern privacy-focused sites (jina.ai, etc)
+    "[class*='privacy'] button[class*='accept']",
+    "[class*='privacy'] button[id*='accept']",
+    "[class*='cookie'] button[class*='accept']",
+    "[class*='cookie'] button[id*='accept']",
+    "[class*='consent'] button[class*='accept']",
+    "[class*='consent'] button[id*='accept']",
+    "div[class*='banner'] button[class*='accept']",
+    "div[class*='banner'] button[id*='accept']",
+    "div[class*='popup'] button[class*='accept']",
+    "div[class*='popup'] button[id*='accept']",
+    "div[class*='modal'] button[class*='accept']",
+    "div[class*='modal'] button[id*='accept']",
+    "div[class*='overlay'] button[class*='accept']",
+    "div[class*='overlay'] button[id*='accept']",
+    # Shadow DOM piercing selectors (deeper penetration)
+    "*:shadow(button[class*='accept'])",
+    "*:shadow(button[id*='accept'])",
+    "*:shadow([class*='accept-all'])",
+    # Cookie consent buttons (general patterns)
+    "button[id*='accept']",
+    "button[class*='accept']",
+    "button[aria-label*='accept' i]",
+    "button[aria-label*='cookie' i]",
+    "button[aria-label*='consent' i]",
+    "button[data-testid*='accept']",
+    "button[data-testid*='cookie']",
+    "a[id*='accept']",
+    "a[class*='accept']",
+    # Generic cookie/consent class patterns
+    ".cookie-banner .accept",
+    ".cookie-banner .accept-all",
+    ".cookie-consent .accept",
+    ".cc-accept",  # Cookie Consent
+    ".cc-allow",
+    ".js-accept-cookies",
+    ".accept-cookies",
+    ".accept-all-cookies",
+    "#accept-cookies",
+    "#accept-all-cookies",
+    # Generic text-based selectors (broader matching)
+    "button:has-text('Accept')",
+    "button:has-text('Accept all')",
+    "button:has-text('Accept cookies')",
+    "button:has-text('Allow')",
+    "button:has-text('Allow all')",
+    "button:has-text('Agree')",
+    "button:has-text('I accept')",
+    "button:has-text('Yes, accept')",
+    "button:has-text('Yes, I accept')",
+    "button:has-text('Got it')",
+    "button:has-text('OK')",
+    "button:has-text('Okay')",
+    "button:has-text('Continue')",
+    "button:has-text('I understand')",
+    "button:has-text('Dismiss')",
+    "button:has-text('Close')",
+    "a:has-text('Accept')",
+    "a:has-text('Accept all')",
+    "a:has-text('Allow')",
+    "a:has-text('Allow all')",
+    "a:has-text('Agree')",
+    "a:has-text('Continue')",
+    "a:has-text('Dismiss')",
+    "a:has-text('Close')",
+    # Alternative paths: "Necessary only" buttons (often preferred)
+    "button:has-text('Only necessary')",
+    "button:has-text('Necessary only')",
+    "button:has-text('Reject all')",
+    "button:has-text('Decline')",
+    "button:has-text('No, thanks')",
+    "button:has-text('Dismiss')",
+    "a:has-text('Only necessary')",
+    "a:has-text('Reject all')",
+    "[class*='reject']",
+    "[class*='decline']",
+    "[class*='necessary']",
+    # Form/submit patterns
+    "input[type='submit'][value*='accept' i]",
+    "input[type='button'][value*='accept' i]",
+    "input[type='submit'][value*='agree' i]",
+    "input[type='button'][value*='agree' i]",
+]
+
 BLOCKED_DOMAINS = {
     "google-analytics.com",
     "googletagmanager.com",
@@ -66,6 +165,152 @@ def _should_block_url(url: str) -> bool:
     return False
 
 
+async def _try_click_consent_button(page) -> bool:
+    """
+    Try to find and click a consent button on the page.
+
+    Args:
+        page: Playwright page object
+
+    Returns:
+        True if a consent button was clicked, False otherwise
+    """
+    for selector in CONSENT_BUTTON_SELECTORS:
+        try:
+            # Check if element exists and is visible
+            element = page.locator(selector).first
+            if element:
+                # Check if element is visible (short timeout)
+                try:
+                    is_visible = await element.is_visible(timeout=50)
+                    if not is_visible:
+                        continue
+                except Exception:
+                    continue
+
+                # Scroll element into view
+                try:
+                    await element.scroll_into_view_if_needed(timeout=500)
+                except Exception:
+                    pass  # Continue even if scroll fails
+
+                # Click the accept button
+                try:
+                    await element.click(timeout=1000)
+                    logger.info(f"Clicked consent button: {selector}")
+                    # Wait briefly for banner to disappear/animate
+                    await asyncio.sleep(0.3)
+                    return True
+                except Exception:
+                    continue
+        except Exception:
+            # Element not found or not clickable, continue to next selector
+            continue
+    return False
+
+
+async def _try_click_iframe_consent(page) -> bool:
+    """
+    Try to find and click consent buttons inside iframes (common for CMPs).
+
+    Args:
+        page: Playwright page object
+
+    Returns:
+        True if a consent button was clicked, False otherwise
+    """
+    try:
+        # Get all iframes
+        iframes = await page.locator("iframe").all()
+        for iframe in iframes:
+            try:
+                # Check if iframe is visible
+                if not await iframe.is_visible(timeout=50):
+                    continue
+
+                # Get frame content
+                frame = await iframe.content_frame()
+                if not frame:
+                    continue
+
+                # Try consent selectors in the iframe
+                for selector in CONSENT_BUTTON_SELECTORS:
+                    try:
+                        element = frame.locator(selector).first
+                        if not element:
+                            continue
+
+                        # Check visibility
+                        try:
+                            is_visible = await element.is_visible(timeout=50)
+                            if not is_visible:
+                                continue
+                        except Exception:
+                            continue
+
+                        # Click the button
+                        await element.click(timeout=1000)
+                        logger.info(f"Clicked iframe consent button: {selector}")
+                        await asyncio.sleep(0.3)
+                        return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+async def _accept_cookie_consent(page) -> bool:
+    """
+    Attempt to auto-accept cookie/consent banners on the page.
+    Tries multiple times with increasing delays to catch late-loading banners.
+
+    Args:
+        page: Playwright page object
+
+    Returns:
+        True if a consent button was clicked, False otherwise
+    """
+    clicked = False
+
+    # Try immediately first
+    if await _try_click_consent_button(page):
+        clicked = True
+
+    # Try iframe consent if main page didn't work
+    if not clicked:
+        if await _try_click_iframe_consent(page):
+            clicked = True
+
+    # Multiple retry attempts with increasing delays
+    # Banners often animate in or load after initial paint
+    retry_delays = [0.5, 1.0, 1.5]
+
+    for delay in retry_delays:
+        if clicked:
+            break
+
+        await asyncio.sleep(delay)
+
+        # Try main page again
+        if await _try_click_consent_button(page):
+            clicked = True
+            break
+
+        # Try iframes again
+        if await _try_click_iframe_consent(page):
+            clicked = True
+            break
+
+    if clicked:
+        # Final wait for any animations/transitions
+        await asyncio.sleep(0.5)
+
+    return clicked
+
+
 async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
     """
     Render a webpage using Playwright with Chromium.
@@ -98,8 +343,11 @@ async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
             # Navigate with a generous timeout
             await page.goto(url, wait_until="networkidle", timeout=30000)
 
-            # Wait a moment for any lazy-loaded content
-            await asyncio.sleep(2)
+            # Wait for lazy-loaded content (cookie banner handling has its own delays)
+            await asyncio.sleep(1)
+
+            # Attempt to auto-accept cookie/consent banners (with retry logic)
+            await _accept_cookie_consent(page)
 
             # Get page title
             title = await page.title()
@@ -109,11 +357,11 @@ async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
             # Get HTML content
             html_content = await page.content()
 
-            # Generate PDF (high-fidelity for display)
+            # Generate PDF (high-fidelity for display, no margins for continuous appearance)
             pdf_bytes = await page.pdf(
                 format="A4",
                 print_background=True,
-                margin={"top": "2cm", "bottom": "2cm", "left": "2cm", "right": "2cm"}
+                margin={"top": "0", "bottom": "0", "left": "0", "right": "0"}
             )
 
             return html_content, pdf_bytes, title
@@ -122,7 +370,7 @@ async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
             logger.warning(f"Timeout loading {url}, returning partial content")
             html_content = await page.content()
             title = await page.title() or url
-            pdf_bytes = await page.pdf(format="A4", print_background=True)
+            pdf_bytes = await page.pdf(format="A4", print_background=True, margin={"top": "0", "bottom": "0", "left": "0", "right": "0"})
             return html_content, pdf_bytes, title
 
         finally:
