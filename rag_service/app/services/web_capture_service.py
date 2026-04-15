@@ -3,11 +3,15 @@ import hashlib
 import logging
 import json
 import asyncio
+import httpx
+import time
 from datetime import datetime
 from typing import Optional
+from pathlib import Path
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 from markitdown import MarkItDown
+from adblockparser import AdblockRules
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +154,13 @@ BLOCKED_DOMAINS = {
     "amazon-adsystem.com",
 }
 
+# Filter list configuration
+FILTER_LIST_URL = "https://secure.fanboy.co.nz/fanboy-cookiemonster.txt"
+FILTER_LIST_CACHE_PATH = "/tmp/fanboy-cookiemonster.txt"
+FILTER_LIST_CACHE_DURATION = 86400  # 24 hours in seconds
+_adblock_rules: Optional[AdblockRules] = None
+_filter_list_last_update = 0
+
 
 def _url_to_hash(url: str) -> str:
     """Generate a stable MD5 hash of a URL for file naming."""
@@ -163,6 +174,81 @@ def _should_block_url(url: str) -> bool:
         if blocked in url_lower:
             return True
     return False
+
+
+def _download_filter_list() -> bool:
+    """Download filter list from remote URL and cache it locally."""
+    global _filter_list_last_update
+    try:
+        logger.info(f"Downloading filter list from {FILTER_LIST_URL}")
+        response = httpx.get(FILTER_LIST_URL, timeout=30)
+        response.raise_for_status()
+
+        # Write to cache
+        Path(FILTER_LIST_CACHE_PATH).write_text(response.text, encoding='utf-8')
+        _filter_list_last_update = time.time()
+        logger.info(f"Filter list downloaded and cached to {FILTER_LIST_CACHE_PATH}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to download filter list: {e}")
+        return False
+
+
+def _load_filter_list() -> Optional[AdblockRules]:
+    """Load filter list from cache or download if needed."""
+    global _adblock_rules, _filter_list_last_update
+
+    current_time = time.time()
+    cache_exists = Path(FILTER_LIST_CACHE_PATH).exists()
+
+    # Check if we need to download (cache expired or doesn't exist)
+    if not cache_exists or (current_time - _filter_list_last_update > FILTER_LIST_CACHE_DURATION):
+        if not _download_filter_list():
+            logger.warning("Using existing cache or empty rules due to download failure")
+            if not cache_exists:
+                return None
+
+    # Load from cache
+    try:
+        filter_text = Path(FILTER_LIST_CACHE_PATH).read_text(encoding='utf-8')
+        raw_rules = []
+
+        # Parse filter list (skip comments and empty lines)
+        for line in filter_text.split('\n'):
+            line = line.strip()
+            # Skip comments, metadata, and empty lines
+            if not line or line.startswith('!') or line.startswith('[Adblock'):
+                continue
+            # Skip exception rules (whitelisting)
+            if line.startswith('@@'):
+                continue
+            raw_rules.append(line)
+
+        # Create AdblockRules instance
+        _adblock_rules = AdblockRules(raw_rules)
+        logger.info(f"Loaded {len(raw_rules)} filter rules from {FILTER_LIST_CACHE_PATH}")
+        return _adblock_rules
+    except Exception as e:
+        logger.error(f"Failed to load filter list: {e}")
+        return None
+
+
+def _should_block_with_filter_list(url: str) -> bool:
+    """Check if URL should be blocked based on filter list rules."""
+    global _adblock_rules
+
+    # Load filter list if not already loaded
+    if _adblock_rules is None:
+        _adblock_rules = _load_filter_list()
+        if _adblock_rules is None:
+            return False
+
+    try:
+        # Check if URL should be blocked
+        return _adblock_rules.should_block(url)
+    except Exception as e:
+        logger.warning(f"Error checking filter list for {url}: {e}")
+        return False
 
 
 async def _try_click_consent_button(page) -> bool:
@@ -331,10 +417,18 @@ async def _render_page_with_playwright(url: str) -> tuple[str, bytes, str]:
 
         # Block unwanted resources
         async def route_handler(route, request):
+            # Check against blocked domains
             if _should_block_url(request.url):
                 await route.abort()
-            else:
-                await route.continue_()
+                return
+
+            # Check against filter list (cookie banners, ads, etc.)
+            if _should_block_with_filter_list(request.url):
+                logger.debug(f"Blocked by filter list: {request.url}")
+                await route.abort()
+                return
+
+            await route.continue_()
 
         page = await context.new_page()
         await page.route("**/*", route_handler)
