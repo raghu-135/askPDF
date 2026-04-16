@@ -9,12 +9,15 @@ import hashlib
 import logging
 import json
 import re
+import base64
 from datetime import datetime
 from io import BytesIO
-from typing import Optional
+from typing import Optional, List
 
 import httpx
 from markitdown import MarkItDown
+
+from app.services.cookie_presets import get_consent_cookies_for_url, cookies_to_json, Cookie
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +36,33 @@ def _url_to_hash(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()
 
 
-async def _convert_url_to_pdf_with_gotenberg(url: str) -> bytes:
+def _cookies_to_header_string(cookies: List[Cookie]) -> str:
+    """Convert cookies to a Cookie header string format."""
+    return "; ".join([f"{c.name}={c.value}" for c in cookies])
+
+
+# Banner suppression CSS to hide common cookie banners via emulateScreenMediaType
+deviceType = "screen"
+
+
+async def _convert_url_to_pdf_with_gotenberg(
+    url: str,
+    custom_cookies: Optional[List[Cookie]] = None,
+    wait_delay: str = "4s",
+) -> bytes:
     """
     Convert URL to PDF using Gotenberg's /forms/chromium/convert/url endpoint.
     
+    Uses a 4-layer approach to suppress cookie banners:
+    1. Proper domain-matched cookies via 'cookies' parameter
+    2. Cookie header via 'extraHttpHeaders' as backup
+    3. JavaScript suppression via 'waitForExpression' (sets localStorage, hides banners)
+    4. Extended wait delay for banner animations
+    
     Args:
         url: The URL to convert
+        custom_cookies: Optional list of custom Cookie objects to use instead of presets
+        wait_delay: Duration to wait before capturing (default: "4s")
         
     Returns:
         PDF bytes
@@ -50,6 +74,29 @@ async def _convert_url_to_pdf_with_gotenberg(url: str) -> bytes:
         async with httpx.AsyncClient() as client:
             # Gotenberg requires multipart/form-data encoding
             # We use files= with BytesIO to force multipart encoding for form fields
+            
+            # Get consent cookies - use custom if provided, otherwise use presets
+            if custom_cookies is not None:
+                cookies = custom_cookies
+                logger.info(f"Using {len(cookies)} custom cookies for {url}")
+            else:
+                cookies = get_consent_cookies_for_url(url)
+                logger.info(f"Using {len(cookies)} preset consent cookies for {url}")
+            
+            # Convert cookies to Gotenberg's JSON format
+            cookies_json = cookies_to_json(cookies)
+            
+            # Layer 2: Also send as Cookie header via extraHttpHeaders
+            cookie_header = _cookies_to_header_string(cookies)
+            extra_headers = {"Cookie": cookie_header}
+            
+            # Layer 3: Inject JavaScript to hide banners and set localStorage
+            # Uses extraScriptTags to inject early in page load
+            banner_suppression_script = """document.addEventListener('DOMContentLoaded',function(){try{localStorage.setItem('uc_settings','{"isValidConsent":true,"isFirstVisit":false}'),localStorage.setItem('uc_user_interaction','true'),localStorage.setItem('OptanonConsent','true'),localStorage.setItem('OptanonAlertBoxClosed','true'),localStorage.setItem('CookieConsent','{"necessary":true,"marketing":true}'),localStorage.setItem('cookieyes-consent','yes'),localStorage.setItem('cookie_consent','accepted');var e=document.createElement('style');e.textContent='#usercentrics-root,#onetrust-consent-sdk,#CybotCookiebotDialog,.cookie-banner,.cookie-consent,#gdpr-banner,#osano-cm-manage-dialog,.cc-window,.cc-banner,.didomi-popup-container,#sp-cc,.borlabs-cookie-preference,.iubenda-cs-container,.moove_gdpr_cookie_info_bar{display:none!important;visibility:hidden!important;opacity:0!important}',document.head.appendChild(e)}catch(e){}});"""
+            
+            script_b64 = base64.b64encode(banner_suppression_script.encode()).decode()
+            extra_scripts = [{"src": f"data:text/javascript;base64,{script_b64}"}]
+            
             form_fields = {
                 "url": (None, url),
                 "paperWidth": (None, "8.27"),
@@ -60,13 +107,22 @@ async def _convert_url_to_pdf_with_gotenberg(url: str) -> bytes:
                 "marginRight": (None, "0"),
                 "printBackground": (None, "true"),
                 "preferCssPageSize": (None, "false"),
+                "cookies": (None, cookies_json),
+                "extraHttpHeaders": (None, json.dumps(extra_headers)),
+                "waitDelay": (None, wait_delay),
+                "emulatedMediaType": (None, "screen"),
+                "extraScriptTags": (None, json.dumps(extra_scripts)),
             }
+            
+            logger.info(f"PDF conversion request: url={url}, cookies={len(cookies)}, waitDelay={wait_delay}")
+            
             response = await client.post(
                 f"{GOTENBERG_URL}/forms/chromium/convert/url",
                 files=form_fields,
                 timeout=60.0
             )
             response.raise_for_status()
+            logger.info(f"Successfully generated PDF for {url} ({len(response.content)} bytes)")
             return response.content
     except httpx.HTTPError as e:
         logger.error(f"Gotenberg HTTP error for {url}: {e}")
@@ -131,7 +187,12 @@ def _extract_clean_markdown(html_content: str, url: str) -> str:
     return f"# {url}\n\nContent could not be extracted from this page."
 
 
-async def capture_webpage(url: str, force: bool = False) -> dict:
+async def capture_webpage(
+    url: str,
+    force: bool = False,
+    custom_cookies: Optional[List[Cookie]] = None,
+    wait_delay: str = "4s",
+) -> dict:
     """
     Capture a webpage using Gotenberg for PDF and simple HTTP fetch for HTML.
 
@@ -142,9 +203,13 @@ async def capture_webpage(url: str, force: bool = False) -> dict:
     4. Save PDF to /static/{hash}.pdf
     5. Save mapping file for URL→PDF lookup
 
+    Uses preset consent cookies to suppress cookie banners by default.
+
     Args:
         url: The URL to capture
         force: If True, force recapture even if already cached
+        custom_cookies: Optional list of custom Cookie objects to override presets
+        wait_delay: Duration to wait for cookie banners to settle (default: "4s")
 
     Returns:
         dict with file_hash (PDF hash), url_hash, title, pdf_path, original_url,
@@ -175,11 +240,15 @@ async def capture_webpage(url: str, force: bool = False) -> dict:
             logger.warning(f"Failed to read cached mapping for {url}: {e}")
 
     # Capture webpage
-    logger.info(f"Capturing webpage: {url}")
+    logger.info(f"Capturing webpage: {url} (wait_delay={wait_delay})")
 
     try:
         # Step 1: Get PDF from Gotenberg (runs Chromium internally)
-        pdf_bytes = await _convert_url_to_pdf_with_gotenberg(url)
+        pdf_bytes = await _convert_url_to_pdf_with_gotenberg(
+            url,
+            custom_cookies=custom_cookies,
+            wait_delay=wait_delay,
+        )
         
         # Step 2: Fetch HTML separately for markdown extraction
         html_content, title = await _fetch_html_and_title(url)
@@ -225,9 +294,14 @@ async def capture_webpage(url: str, force: bool = False) -> dict:
 
 
 # Alias for backward compatibility during transition
-async def capture_webpage_as_pdf(url: str, force: bool = False) -> dict:
+async def capture_webpage_as_pdf(
+    url: str,
+    force: bool = False,
+    custom_cookies: Optional[List[Cookie]] = None,
+    wait_delay: str = "4s",
+) -> dict:
     """Backward-compatible alias for capture_webpage."""
-    return await capture_webpage(url, force)
+    return await capture_webpage(url, force, custom_cookies, wait_delay)
 
 
 async def get_webpage_pdf_by_url_hash(url_hash: str) -> Optional[dict]:
