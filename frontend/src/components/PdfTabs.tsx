@@ -1,6 +1,7 @@
 import React from 'react';
 import { truncateFileName } from '../lib/pdf-utils';
 import { Box, Tabs, Tab, IconButton, Tooltip, Typography } from '@mui/material';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
@@ -92,7 +93,22 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
                 label={
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                     {isWeb
-                      ? <LanguageIcon fontSize="small" sx={{ color: 'primary.main', opacity: 0.8 }} />
+                      ? (
+                        <Tooltip title="Open source webpage">
+                          <IconButton
+                            size="small"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (tab.sourceUrl) {
+                                window.open(tab.sourceUrl, '_blank', 'noopener,noreferrer');
+                              }
+                            }}
+                            sx={{ p: 0.3, color: 'primary.main' }}
+                          >
+                            <LanguageIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )
                       : <PictureAsPdfIcon fontSize="small" sx={{ color: 'error.main', opacity: 0.7 }} />
                     }
                     <Tooltip title={fullTitle} placement="bottom">

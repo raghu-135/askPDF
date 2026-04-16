@@ -8,12 +8,14 @@ This module handles:
 """
 
 import os
+import json
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional
 
 import httpx
 from unstructured.partition.pdf import partition_pdf
+from unstructured.partition.md import partition_md
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -117,6 +119,43 @@ async def get_chunks(file_hash: str) -> List[str]:
     return []
 
 
+def parse_markdown_to_chunks(markdown_content: str) -> List[str]:
+    """
+    Parse markdown content into text chunks using Unstructured.
+
+    Args:
+        markdown_content: The markdown text to parse
+
+    Returns:
+        List of text chunks
+    """
+    from unstructured.chunking.title import chunk_by_title
+    from io import StringIO
+
+    try:
+        # Use Unstructured to partition the markdown
+        elements = partition_md(text=markdown_content)
+
+        # Chunk by title for semantic coherence
+        chunked_elements = chunk_by_title(
+            elements,
+            multipage_sections=True,
+            combine_text_under_n_chars=200,
+            max_characters=500,
+            new_after_n_chars=400,
+            overlap=0
+        )
+        chunks = [str(c) for c in chunked_elements]
+        return chunks
+    except Exception as e:
+        logger.error(f"Markdown chunking failed: {e}")
+        # Fallback to simple text splitting
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+        docs = splitter.create_documents([markdown_content])
+        return [d.page_content for d in docs]
+
+
 async def get_chat_chunks(
     question: str, 
     answer: str, 
@@ -184,24 +223,27 @@ async def index_document_for_thread(
     thread_id: str,
     file_hash: str,
     embedding_model_name: str,
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    markdown_content: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Index a document into the vector database.
     The PDF is fetched from the backend and parsed using Unstructured.
-    
+    For web sources, markdown_content is used instead of PDF parsing.
+
     Args:
         thread_id: The thread ID to index into
         file_hash: Unique hash of the file
         embedding_model_name: The embedding model to use
         metadata: Additional metadata to store with chunks
-    
+        markdown_content: Optional markdown content for web sources (bypasses PDF parsing)
+
     Returns:
         Status dict with indexing results
     """
     db_client = get_vector_db()
     metadata = metadata or {}
-    
+
     try:
         if await db_client.has_file_indexed(thread_id, file_hash, embedding_model_name):
             try:
@@ -224,11 +266,15 @@ async def index_document_for_thread(
                 "reused_existing_embeddings": True,
             }
 
-        # 1. Get chunks from PDF
-        chunks = await get_chunks(file_hash)
+        # 1. Get chunks - use markdown for web sources, PDF for uploaded files
+        if markdown_content:
+            logger.info(f"Using markdown content for web source indexing: {file_hash}")
+            chunks = parse_markdown_to_chunks(markdown_content)
+        else:
+            chunks = await get_chunks(file_hash)
         if not chunks:
             logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
-            return {"status": "error", "message": "No text extracted from PDF"}
+            return {"status": "error", "message": "No text extracted from document"}
         
         logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
         
@@ -383,156 +429,6 @@ async def index_chat_memory_from_compact_for_thread(
         return {"status": "error", "message": str(e)}
 
 
-async def index_webpage_for_thread(
-    thread_id: str,
-    url: str,
-    file_hash: str,
-    embedding_model_name: str,
-) -> Dict[str, Any]:
-    """
-    Index a webpage into vector storage.
-    Snapshot-first behavior:
-    1) Try `/static/webpages/{file_hash}.html` if present.
-    2) Fallback to live URL fetch when snapshot is missing/unusable.
-
-    Args:
-        thread_id: The thread to index into.
-        url: The full URL of the page to fetch.
-        file_hash: MD5 hash of the URL (used as the stable identifier).
-        embedding_model_name: Embedding model to use.
-
-    Returns:
-        Status dict with indexed chunk count, page title, and any error.
-    """
-    from bs4 import BeautifulSoup
-
-    def _extract_text_and_title_from_html(html: str, fallback_title: str) -> tuple[str, str]:
-        soup = BeautifulSoup(html, "lxml")
-        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
-            tag.decompose()
-        title = soup.title.get_text(strip=True) if soup.title else fallback_title
-        content_tag = soup.find("main") or soup.find("article") or soup.body or soup
-        raw_text = content_tag.get_text(separator="\n", strip=True)
-        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        return "\n".join(lines), title
-
-    db_client = get_vector_db()
-    try:
-        if await db_client.has_file_indexed(thread_id, file_hash, embedding_model_name):
-            try:
-                from app.db.database import update_document_indexing_status
-                shared_chunks = await db_client.get_file_chunk_count(file_hash, embedding_model_name)
-                await update_document_indexing_status(
-                    thread_id=thread_id,
-                    file_hash=file_hash,
-                    status="indexed",
-                    chunk_count=shared_chunks,
-                    total_chars=0,
-                )
-            except Exception:
-                pass
-            return {
-                "status": "success",
-                "thread_id": thread_id,
-                "file_hash": file_hash,
-                "url": url,
-                "title": url,
-                "chunks_count": await db_client.get_file_chunk_count(file_hash, embedding_model_name),
-                "reused_existing_embeddings": True,
-            }
-
-        html = ""
-        title = url
-        snapshot_path = f"/static/webpages/{file_hash}.html"
-        if os.path.exists(snapshot_path):
-            try:
-                with open(snapshot_path, "r", encoding="utf-8", errors="replace") as f:
-                    html = f.read()
-                text, title = _extract_text_and_title_from_html(html, url)
-                logger.info("Using captured snapshot for web re-embed: %s", snapshot_path)
-            except Exception as snapshot_err:
-                logger.warning("Failed reading snapshot %s: %s", snapshot_path, snapshot_err)
-                text = ""
-        else:
-            text = ""
-
-        if not text:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-                resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; AskPDF bot)"})
-                resp.raise_for_status()
-                html = resp.text
-            text, title = _extract_text_and_title_from_html(html, url)
-
-        if not text:
-            return {"status": "error", "message": "No text content found on page"}
-
-        # Chunk the text
-        doc = Document(page_content=text)
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=50,
-            separators=["\n\n", "\n", ". ", " ", ""],
-        )
-        chunks = [c.page_content for c in splitter.split_documents([doc])]
-
-        if not chunks:
-            return {"status": "error", "message": "No chunks produced from page text"}
-
-        vectors = await generate_embeddings(chunks, embedding_model_name)
-
-        indexed_count = await db_client.index_web_source_chunks(
-            thread_id=thread_id,
-            embedding_model_name=embedding_model_name,
-            file_hash=file_hash,
-            url=url,
-            title=title,
-            texts=chunks,
-            embeddings=vectors,
-        )
-
-        logger.info(f"Indexed {indexed_count} web source chunks for thread {thread_id}, url {url}")
-
-        # Update thread stats snapshot
-        try:
-            from app.db.database import update_document_indexing_status
-            await update_document_indexing_status(
-                thread_id=thread_id,
-                file_hash=file_hash,
-                status="indexed",
-                chunk_count=indexed_count,
-                total_chars=sum(len(c) for c in chunks),
-            )
-        except Exception as stats_err:
-            logger.warning(f"thread_stats update skipped after web indexing: {stats_err}")
-
-        return {
-            "status": "success",
-            "thread_id": thread_id,
-            "file_hash": file_hash,
-            "url": url,
-            "title": title,
-            "chunks_count": indexed_count,
-        }
-
-    except httpx.HTTPStatusError as e:
-        msg = f"HTTP error fetching {url}: {e.response.status_code}"
-        logger.error(msg)
-        try:
-            from app.db.database import update_document_indexing_status
-            await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
-        except Exception:
-            pass
-        return {"status": "error", "message": msg}
-    except Exception as e:
-        logger.error(f"Error indexing webpage for thread {thread_id}: {e}", exc_info=True)
-        try:
-            from app.db.database import update_document_indexing_status
-            await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
-        except Exception:
-            pass
-        return {"status": "error", "message": str(e)}
-
-
 async def index_web_search_for_thread(
     thread_id: str,
     query: str,
@@ -575,12 +471,35 @@ async def index_web_search_for_thread(
 
 _reembed_locks: Dict[str, asyncio.Lock] = {}
 
+WEBPAGES_DIR = "/static/webpages"
+
 
 def _thread_reembed_lock(thread_id: str) -> asyncio.Lock:
     """Return the per-thread lock used to avoid concurrent re-embed runs."""
     if thread_id not in _reembed_locks:
         _reembed_locks[thread_id] = asyncio.Lock()
     return _reembed_locks[thread_id]
+
+
+def _get_markdown_for_pdf_hash(pdf_hash: str) -> Optional[str]:
+    """
+    Look up markdown content for a PDF hash by scanning web capture mapping files.
+    Returns markdown content if found, None otherwise.
+    """
+    try:
+        if not os.path.exists(WEBPAGES_DIR):
+            return None
+        for filename in os.listdir(WEBPAGES_DIR):
+            if not filename.endswith(".mapping.json"):
+                continue
+            mapping_path = os.path.join(WEBPAGES_DIR, filename)
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                mapping = json.load(f)
+            if mapping.get("pdf_hash") == pdf_hash:
+                return mapping.get("markdown_content")
+    except Exception as e:
+        logger.warning(f"Failed to lookup markdown for PDF hash {pdf_hash}: {e}")
+    return None
 
 
 async def trigger_reembed_for_missing_sources(
@@ -621,26 +540,18 @@ async def trigger_reembed_for_missing_sources(
                     break
                 if await db.has_file_indexed(thread_id, f.file_hash, embedding_model_name):
                     continue
-                if f.source_type == "web":
-                    url = (f.file_path or f.file_name or "").strip()
-                    if not url:
-                        continue
-                    result = await index_webpage_for_thread(
-                        thread_id=thread_id,
-                        url=url,
-                        file_hash=f.file_hash,
-                        embedding_model_name=embedding_model_name,
-                    )
-                    if result.get("status") == "success":
-                        reindexed_files.append({"file_hash": f.file_hash, "source_type": "web"})
-                else:
-                    result = await index_document_for_thread(
-                        thread_id=thread_id,
-                        file_hash=f.file_hash,
-                        embedding_model_name=embedding_model_name,
-                    )
-                    if result.get("status") == "success":
-                        reindexed_files.append({"file_hash": f.file_hash, "source_type": "pdf"})
+                # Check if this is a web source (has markdown content in mapping)
+                markdown_content = _get_markdown_for_pdf_hash(f.file_hash)
+                # Unified flow - web sources use markdown, uploaded PDFs use PDF parsing
+                result = await index_document_for_thread(
+                    thread_id=thread_id,
+                    file_hash=f.file_hash,
+                    embedding_model_name=embedding_model_name,
+                    markdown_content=markdown_content,
+                )
+                if result.get("status") == "success":
+                    source_type = "web" if markdown_content else "pdf"
+                    reindexed_files.append({"file_hash": f.file_hash, "source_type": source_type})
             except Exception as item_err:
                 logger.warning("Skipping re-embed for file %s: %s", f.file_hash, item_err)
 

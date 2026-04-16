@@ -218,40 +218,6 @@ class WeaviateAdapter:
             )
         return await self._insert_many(DOCUMENT_COLLECTION, points)
 
-    async def index_web_source_chunks(
-        self,
-        thread_id: str,
-        embedding_model_name: str,
-        file_hash: str,
-        url: str,
-        title: str,
-        texts: List[str],
-        embeddings: List[List[float]],
-        metadatas: Optional[List[Dict[str, Any]]] = None,
-    ) -> int:
-        """Index captured webpage chunks into `DocumentChunk`."""
-        points: List[Dict[str, Any]] = []
-        for i, (text, vector) in enumerate(zip(texts, embeddings)):
-            md = metadatas[i] if metadatas and i < len(metadatas) else {}
-            points.append(
-                {
-                    "vector": vector,
-                    "properties": {
-                        "thread_id": thread_id,
-                        "type": "knowledge_source",
-                        "embed_model": embedding_model_name,
-                        "source_kind": "webpage",
-                        "file_hash": file_hash,
-                        "chunk_id": i,
-                        "text": text,
-                        "url": url,
-                        "title": title,
-                        "metadata_json": self._metadata_json(md),
-                    },
-                }
-            )
-        return await self._insert_many(DOCUMENT_COLLECTION, points)
-
     async def index_chat_memory(
         self,
         thread_id: str,

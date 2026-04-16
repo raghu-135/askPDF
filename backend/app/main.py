@@ -6,7 +6,6 @@ FastAPI entry point for the AskPDF backend service.
 This service acts as a coordinator and API gateway for:
 - PDF uploads and metadata management
 - Coordination of PDF parsing and indexing tasks (delegated to the processing service)
-- Proxying Web Capture requests to the processing service
 - Managing indexing status and serving processed assets
 """
 import os
@@ -133,47 +132,6 @@ async def get_file_index_status(file_hash: str):
         "file_hash": file_hash,
         **status.to_dict()
     }
-
-
-class WebCaptureRequest(BaseModel):
-    url: str
-    force: bool = False
-
-
-@app.post(f"{API_PREFIX}/web-capture")
-async def web_capture(req: WebCaptureRequest):
-    """
-    Proxy a webpage capture request to the processing service.
-    The processing service performs the capture, inlines assets, and saves the 
-    resulting self-contained HTML file to the shared volume (/static/webpages).
-    """
-    try:
-        return await service_client.web_capture(url=req.url, force=req.force)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to capture page: {exc}")
-
-
-@app.get(f"{API_PREFIX}/web-page/{{file_hash}}")
-async def get_web_page(file_hash: str):
-    """
-    Return the saved self-contained HTML for a captured webpage.
-
-    The frontend fetches this as text, wraps it in a Blob URL, and renders
-    it inside an <iframe> — bypassing any X-Frame-Options / CSP from the
-    original site entirely.
-    """
-    html_path = f"/static/webpages/{file_hash}.html"
-    if not os.path.exists(html_path):
-        raise HTTPException(status_code=404, detail="Web page capture not found.")
-    return FileResponse(
-        html_path,
-        media_type="text/html",
-        headers={
-            # Explicitly allow framing from our own frontend origin
-            "X-Frame-Options": "ALLOWALL",
-            "Content-Security-Policy": "frame-ancestors *",
-        },
-    )
 
 
 @app.get("/health")

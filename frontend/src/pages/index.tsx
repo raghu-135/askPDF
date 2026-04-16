@@ -17,7 +17,6 @@ declare const process: {
 import dynamic from "next/dynamic";
 import PdfUploader from "../components/PdfUploader";
 import WebUploader from "../components/WebUploader";
-import WebViewer from "../components/WebViewer";
 
 const PdfViewer = dynamic(() => import("../components/PdfViewer"), { ssr: false });
 import PlayerControls from "../components/PlayerControls";
@@ -74,6 +73,10 @@ export default function Home() {
 
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
+
+  // Unified upload state
+  const [webUrl, setWebUrl] = useState("");
+  const [isWebLoading, setIsWebLoading] = useState(false);
 
   // Right panel tab state (0 = Threads, 1 = Chat)
   const [rightPanelTab, setRightPanelTab] = useState(0);
@@ -164,10 +167,30 @@ export default function Home() {
   };
 
   // Handle web source indexed
-  const handleWebIndexed = async (data: { fileHash: string; url: string; status: string; message?: string }) => {
+  const handleWebIndexed = async (data: { fileHash: string; url: string; title?: string; status: string; message?: string }) => {
     if (data.status !== 'accepted' || !activeThread || !data.fileHash) return;
 
-    const newTab = createWebTabFromIndexed(data.fileHash, data.url);
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+    // Fetch PDF data immediately so PdfViewer has sentences on first load
+    let pdfData;
+    try {
+      const { getPdfByHash } = await import("../lib/api");
+      pdfData = await getPdfByHash(data.fileHash);
+    } catch (err) {
+      console.warn('PDF data not yet available, creating tab with empty sentences:', err);
+    }
+
+    const newTab: PdfTab = {
+      id: data.fileHash,
+      fileHash: data.fileHash,
+      fileName: data.title || data.url,
+      pdfUrl: `${apiBase}/api/pdf-file/${data.fileHash}?t=${Date.now()}`,
+      sentences: pdfData?.sentences || [],
+      text: pdfData?.sentences ? extractTextFromSentences(pdfData.sentences) : '',
+      sourceType: 'web',
+      sourceUrl: data.url,
+    };
 
     // Only add if not already present
     setPdfTabs(prev => {
@@ -188,6 +211,28 @@ export default function Home() {
     setCurrentChatId(null);
     setPlayRequestId(null);
     setActiveSource('pdf');
+  };
+
+  // Shared web submit handler (used by both WebUploader Enter key and PdfUploader button)
+  const handleWebSubmit = async () => {
+    if (!webUrl.trim() || !activeThread) return;
+    setIsWebLoading(true);
+    try {
+      const { addWebSourceToThread } = await import("../lib/api");
+      const result = await addWebSourceToThread(activeThread.id, webUrl.trim());
+      handleWebIndexed({
+        fileHash: result.file_hash,
+        url: webUrl.trim(),
+        title: result.title,
+        status: "accepted",
+      });
+      setWebUrl("");
+    } catch (err: any) {
+      const msg = err?.message || "Failed to index webpage";
+      handleWebIndexed({ fileHash: "", url: webUrl.trim(), status: "error", message: msg });
+    } finally {
+      setIsWebLoading(false);
+    }
   };
 
   // Handle remove source from thread (deletes from DB + Weaviate, closes tab)
@@ -298,21 +343,32 @@ export default function Home() {
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, borderRight: 1, borderColor: 'divider' }}>
           {/* Top Controls Bar */}
           <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit' }}>
-            <Stack direction="row" spacing={2} alignItems="center" justifyContent="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={2} alignItems="center" justifyContent="flex-start" flexWrap="wrap" useFlexGap>
 
-              {/* PDF Uploader */}
+              {/* Web Uploader (Search Box) - Now on the left */}
+              <WebUploader
+                threadId={activeThread?.id ?? null}
+                onIndexed={(data) => {
+                  handleWebIndexed(data);
+                  setWebUrl("");
+                }}
+                disabled={!activeThread}
+                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
+                value={webUrl}
+                onChange={setWebUrl}
+                onClear={() => setWebUrl("")}
+                onSubmit={handleWebSubmit}
+                isLoading={isWebLoading}
+              />
+
+              {/* PDF Uploader (Unified Button) - Now on the right */}
               <PdfUploader
                 onUploaded={handlePdfUploaded}
                 disabled={!activeThread}
                 tooltipText={!activeThread ? "Select or create a thread first" : undefined}
-              />
-
-              {/* Web Uploader */}
-              <WebUploader
-                threadId={activeThread?.id ?? null}
-                onIndexed={handleWebIndexed}
-                disabled={!activeThread}
-                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
+                webUrl={webUrl}
+                onWebSubmit={handleWebSubmit}
+                isWebLoading={isWebLoading}
               />
 
               {/* Player Controls */}
@@ -373,22 +429,13 @@ export default function Home() {
             />
           )}
 
-          {/* PDF / Web Viewer Area */}
+          {/* PDF Viewer Area - unified for both PDFs and web-converted PDFs */}
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
             {isPdfLoading ? (
               <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
                 <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
                 <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
               </Box>
-            ) : activeTab?.sourceType === 'web' && activeTab.sourceUrl && activeTab.fileHash ? (
-              /* Web source view — rendered as a self-contained saved HTML page */
-              <WebViewer
-                url={activeTab.sourceUrl}
-                fileHash={activeTab.fileHash}
-                threadId={activeThread?.id}
-                darkMode={pdfDarkMode}
-                isResizing={isResizing}
-              />
             ) : (pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
               <PdfViewer
                 pdfUrl={pdfUrl}

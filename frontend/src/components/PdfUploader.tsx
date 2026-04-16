@@ -12,9 +12,23 @@ type Props = {
   onIndexingComplete?: (fileHash: string) => void;
   disabled?: boolean;
   tooltipText?: string;
+  /** Current web URL value - when provided, button switches to web mode */
+  webUrl?: string;
+  /** Handler for web URL submission when in web mode */
+  onWebSubmit?: () => void;
+  /** Loading state for web submission */
+  isWebLoading?: boolean;
 };
 
-const PdfUploader = React.memo(function PdfUploader({ onUploaded, onIndexingComplete, disabled, tooltipText }: Props) {
+const PdfUploader = React.memo(function PdfUploader({ 
+  onUploaded, 
+  onIndexingComplete, 
+  disabled, 
+  tooltipText,
+  webUrl,
+  onWebSubmit,
+  isWebLoading = false 
+}: Props) {
   const inputId = "pdf-upload-input";
   const [isUploading, setIsUploading] = React.useState(false);
   const [indexingState, setIndexingState] = React.useState<{
@@ -24,7 +38,8 @@ const PdfUploader = React.memo(function PdfUploader({ onUploaded, onIndexingComp
     error?: string;
   } | null>(null);
 
-  const isDisabled = disabled || isUploading;
+  const isWebMode = !!webUrl?.trim();
+  const isDisabled = disabled || isUploading || isWebLoading;
 
   // Poll for indexing status
   React.useEffect(() => {
@@ -89,6 +104,21 @@ const PdfUploader = React.memo(function PdfUploader({ onUploaded, onIndexingComp
   };
 
 
+  const handleButtonClick = () => {
+    if (isWebMode && onWebSubmit) {
+      onWebSubmit();
+    }
+    // If not in web mode, the label click will trigger file input
+  };
+
+  const buttonLabel = isWebLoading 
+    ? "Uploading..." 
+    : isWebMode 
+      ? "Upload webpage" 
+      : isUploading 
+        ? "Uploading..." 
+        : "Upload PDF";
+
   const button = (
     <>
       <input
@@ -97,15 +127,16 @@ const PdfUploader = React.memo(function PdfUploader({ onUploaded, onIndexingComp
         accept="application/pdf"
         onChange={handleChange}
         style={{ display: "none" }}
-        disabled={isDisabled}
+        disabled={isDisabled || isWebMode}
       />
-      <label htmlFor={inputId}>
+      <label htmlFor={inputId} style={{ cursor: isWebMode ? 'default' : 'pointer' }}>
         <Button
           variant="contained"
           component="span"
           disabled={isDisabled}
+          onClick={isWebMode ? handleButtonClick : undefined}
         >
-          {isUploading ? "Uploading..." : "Upload PDF"}
+          {buttonLabel}
         </Button>
       </label>
     </>

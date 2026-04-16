@@ -454,7 +454,7 @@ function CommentThreadCard({
 
       {entry.replies.length > 0 ? (
         <Box sx={{ mt: 0.35 }}>
-          {entry.replies.map((reply, index) => (
+          {Array.from(new Map(entry.replies.map(r => [r.object.id, r])).values()).map((reply, index) => (
             <React.Fragment key={reply.object.id}>
               {index > 0 ? <Box sx={{ height: 1, mx: 1, bgcolor: "divider", opacity: 0.35 }} /> : null}
               <CommentRow>
@@ -789,7 +789,7 @@ export function PdfCommentsPane({
                   <Box sx={{ mx: 0, mb: 0.35, height: 2, bgcolor: "divider", opacity: 0.6 }} />
 
                   <Stack spacing={0}>
-                    {section.threads.map((thread, threadIndex) => (
+                    {Array.from(new Map(section.threads.map(t => [t.entry.annotation.object.id, t])).values()).map((thread, threadIndex) => (
                       <Box key={thread.entry.annotation.object.id} sx={{ px: 0 }}>
                         <CommentThreadCard
                           thread={thread}

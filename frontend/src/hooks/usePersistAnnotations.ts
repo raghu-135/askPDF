@@ -5,6 +5,7 @@ import { serializeAnnotationItems } from "../lib/annotation-utils";
 type AnnotationApi = {
   importAnnotations: (annotations: any[]) => void;
   exportAnnotations: () => { toPromise: () => Promise<any[]> };
+  deleteAnnotations: (selection: { pageIndex: number; id: string }[]) => void;
 };
 
 type UsePersistAnnotationsParams = {
@@ -62,15 +63,23 @@ export function usePersistAnnotations({
 
     try {
       const exported = await annotationApi.exportAnnotations().toPromise();
-      const snapshot = JSON.stringify(serializeAnnotationItems(exported as any));
+      // Deduplicate before saving to clean up stale duplicate data
+      const uniqueExported = Array.from(
+        new Map((exported as any[]).map((a: any) => [a.id, a])).values()
+      );
+      const snapshot = JSON.stringify(serializeAnnotationItems(uniqueExported));
       if (snapshot === lastPersistedSnapshotRef.current) {
         return;
       }
 
-      await updateThreadFileAnnotations(threadId, fileHash, exported as any);
+      await updateThreadFileAnnotations(threadId, fileHash, uniqueExported as any);
       lastPersistedSnapshotRef.current = snapshot;
-    } catch (error) {
-      console.warn("Failed to persist annotations:", error);
+    } catch (error: any) {
+      // "Document not found" is expected during cleanup/unmount - don't spam console
+      const message = String(error?.message || error || "");
+      if (!message.includes("Document not found")) {
+        console.warn("Failed to persist annotations:", error);
+      }
     }
   }, [annotationApi, fileHash, threadId]);
 
@@ -90,14 +99,28 @@ export function usePersistAnnotations({
       const payload = await getThreadFileAnnotations(threadId, fileHash);
 
       const annotations = payload.annotations || [];
+
+      // Clear existing annotations first to prevent duplicate React keys
+      const existing = await annotationApi.exportAnnotations().toPromise();
+      if ((existing as any[]).length > 0) {
+        annotationApi.deleteAnnotations(
+          (existing as any[]).map((a: any) => ({ pageIndex: a.pageIndex, id: a.id }))
+        );
+      }
+
       if (annotations.length === 0) {
         return;
       }
 
-      const serializedSnapshot = JSON.stringify(serializeAnnotationItems(annotations));
+      // Deduplicate by annotation ID to prevent React key errors in AnnotationLayer
+      const uniqueAnnotations = Array.from(
+        new Map(annotations.map((a: any) => [a.id, a])).values()
+      );
+
+      const serializedSnapshot = JSON.stringify(serializeAnnotationItems(uniqueAnnotations));
       lastPersistedSnapshotRef.current = serializedSnapshot;
       hydrateAnnotationsRef.current = true;
-      annotationApi.importAnnotations(annotations);
+      annotationApi.importAnnotations(uniqueAnnotations);
     } catch (error: any) {
       const message = String(error?.message || error || "");
       if (!message.includes("404")) {

@@ -58,10 +58,12 @@ services:
     ports:
       - "8001:8000"
     environment:
+      - LOG_LEVEL=INFO
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=0.7
       - DATA_DIR=/data
       - BACKEND_URL=http://backend:8000
+      - GOTENBERG_URL=http://gotenberg:3000
       - DEFAULT_EMBEDDING_MODEL=BAAI/bge-m3
       - DEFAULT_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
       - LOCAL_EMBEDDING_MODELS=BAAI/bge-m3
@@ -87,11 +89,21 @@ services:
       - DOCLING_TABLE_MODE=ACCURATE # ACCURATE is better for tables but slower.
       - DOCLING_FORCE_FULL_PAGE_OCR=False # KEEP FALSE for digital PDFs to avoid noise and degradation.
       - DOCLING_DO_FORMULA_ENRICHMENT=False # use when you have formulas in your PDFs
-      - LOG_LEVEL=INFO
+      # Web capture extraction tuning
+      - TRAFILATURA_INCLUDE_TABLES=True
+      - TRAFILATURA_INCLUDE_IMAGES=True
+      - TRAFILATURA_INCLUDE_LINKS=True
+      - TRAFILATURA_INCLUDE_FORMATTING=True
+      - TRAFILATURA_INCLUDE_COMMENTS=False
+      - TRAFILATURA_DEDUPLICATE=False
+      - TRAFILATURA_FAVOR_RECALL=True
+      - TRAFILATURA_FAST=False
     env_file:
       - .env
     depends_on:
       weaviate:
+        condition: service_healthy
+      gotenberg:
         condition: service_healthy
     volumes:
       - ./rag_service:/app
@@ -125,6 +137,24 @@ services:
       retries: 5
     volumes:
       - weaviate_data:/var/lib/weaviate
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    ports:
+      - "3001:3000"
+    command: |
+      gotenberg
+      --chromium-auto-start=true
+      --chromium-allow-insecure-localhost=true
+      --chromium-allow-file-access-from-files=true
+      --chromium-disable-javascript=false
+    environment:
+      - CHROMIUM_FLAGS=--no-sandbox,--disable-dev-shm-usage,--disable-gpu,--disable-blink-features=AutomationControlled,--no-first-run,--no-default-browser-check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   weaviate_data:

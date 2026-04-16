@@ -167,6 +167,10 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
         }
       };
     } catch (e) {
+      // Ignore expected abort errors from interrupted play() calls (pause/skip)
+      if (e instanceof Error && e.name === "AbortError") {
+        return;
+      }
       console.error("Playback failed", e);
       setIsPlaying(false);
     }
