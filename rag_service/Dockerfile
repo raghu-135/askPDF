@@ -19,23 +19,10 @@ RUN apt-get update && apt-get install -y \
     espeak-ng \
     curl \
     git \
-    # Playwright/Chromium dependencies
-    libdbus-1-3 \
-    libx11-xcb1 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libasound2 \
-    libpangocairo-1.0-0 \
-    libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY rag_service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
-
-# Install Playwright Chromium browser
-RUN playwright install chromium
 
 ARG DOWNLOAD_LOCAL_MODELS=true
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
