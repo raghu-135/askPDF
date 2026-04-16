@@ -9,15 +9,20 @@ import hashlib
 import logging
 import json
 import re
-import base64
 from datetime import datetime
-from io import BytesIO
 from typing import Optional, List
 
 import httpx
 from markitdown import MarkItDown
 
-from app.services.cookie_presets import get_consent_cookies_for_url, cookies_to_json, Cookie
+from app.web_capture.cookie_presets import Cookie
+from app.web_capture.cmp_registry import detect_cmp, CMPType
+from app.web_capture.capture_strategy import (
+    CaptureOptions,
+    ConsentStrategy,
+    RenderStrategy,
+    SuppressionValidator,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,33 +41,30 @@ def _url_to_hash(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()
 
 
-def _cookies_to_header_string(cookies: List[Cookie]) -> str:
-    """Convert cookies to a Cookie header string format."""
-    return "; ".join([f"{c.name}={c.value}" for c in cookies])
-
-
-# Banner suppression CSS to hide common cookie banners via emulateScreenMediaType
-deviceType = "screen"
-
-
 async def _convert_url_to_pdf_with_gotenberg(
     url: str,
     custom_cookies: Optional[List[Cookie]] = None,
-    wait_delay: str = "4s",
+    wait_delay: str = "2s",
+    capture_options: Optional[CaptureOptions] = None,
+    cmp_type: CMPType = CMPType.NONE,
+    fallback: bool = False,
 ) -> bytes:
     """
     Convert URL to PDF using Gotenberg's /forms/chromium/convert/url endpoint.
     
-    Uses a 4-layer approach to suppress cookie banners:
-    1. Proper domain-matched cookies via 'cookies' parameter
-    2. Cookie header via 'extraHttpHeaders' as backup
-    3. JavaScript suppression via 'waitForExpression' (sets localStorage, hides banners)
-    4. Extended wait delay for banner animations
+    Uses a modular strategy-based approach to suppress cookie banners:
+    1. Provider-specific cookies via 'cookies' parameter (proper domain/path semantics)
+    2. Provider-specific localStorage via immediate-execution JavaScript
+    3. Provider-specific CSS suppression via immediate-execution JavaScript
+    4. Adaptive wait (expression-based for CMPs, delay-based otherwise)
     
     Args:
         url: The URL to convert
         custom_cookies: Optional list of custom Cookie objects to use instead of presets
-        wait_delay: Duration to wait before capturing (default: "4s")
+        wait_delay: Duration to wait before capturing (default: "2s")
+        capture_options: Optional CaptureOptions for advanced configuration
+        cmp_type: The detected CMP type for provider-specific handling
+        fallback: If True, use broader fallback strategy for retry attempts
         
     Returns:
         PDF bytes
@@ -72,49 +74,37 @@ async def _convert_url_to_pdf_with_gotenberg(
     """
     try:
         async with httpx.AsyncClient() as client:
-            # Gotenberg requires multipart/form-data encoding
-            # We use files= with BytesIO to force multipart encoding for form fields
+            # Initialize or use provided capture options
+            if capture_options is None:
+                capture_options = CaptureOptions(wait_delay=wait_delay)
             
-            # Get consent cookies - use custom if provided, otherwise use presets
+            # Get consent cookies using strategy
             if custom_cookies is not None:
                 cookies = custom_cookies
                 logger.info(f"Using {len(cookies)} custom cookies for {url}")
             else:
-                cookies = get_consent_cookies_for_url(url)
-                logger.info(f"Using {len(cookies)} preset consent cookies for {url}")
+                cookies = ConsentStrategy.get_cookies(url, cmp_type, fallback=fallback)
+                logger.info(f"Using {len(cookies)} strategy cookies for {cmp_type.value or 'unknown'} CMP")
             
-            # Convert cookies to Gotenberg's JSON format
-            cookies_json = cookies_to_json(cookies)
+            # Generate injection script for localStorage and CSS suppression
+            injection_script = ConsentStrategy.get_injection_script(cmp_type, fallback=fallback)
             
-            # Layer 2: Also send as Cookie header via extraHttpHeaders
-            cookie_header = _cookies_to_header_string(cookies)
-            extra_headers = {"Cookie": cookie_header}
+            # Build Gotenberg options using render strategy
+            form_fields = RenderStrategy.build_gotenberg_options(
+                capture_options=capture_options,
+                cmp_type=cmp_type,
+                cookies=cookies,
+                injection_script=injection_script,
+                fallback=fallback,
+            )
             
-            # Layer 3: Inject JavaScript to hide banners and set localStorage
-            # Uses extraScriptTags to inject early in page load
-            banner_suppression_script = """document.addEventListener('DOMContentLoaded',function(){try{localStorage.setItem('uc_settings','{"isValidConsent":true,"isFirstVisit":false}'),localStorage.setItem('uc_user_interaction','true'),localStorage.setItem('OptanonConsent','true'),localStorage.setItem('OptanonAlertBoxClosed','true'),localStorage.setItem('CookieConsent','{"necessary":true,"marketing":true}'),localStorage.setItem('cookieyes-consent','yes'),localStorage.setItem('cookie_consent','accepted');var e=document.createElement('style');e.textContent='#usercentrics-root,#onetrust-consent-sdk,#CybotCookiebotDialog,.cookie-banner,.cookie-consent,#gdpr-banner,#osano-cm-manage-dialog,.cc-window,.cc-banner,.didomi-popup-container,#sp-cc,.borlabs-cookie-preference,.iubenda-cs-container,.moove_gdpr_cookie_info_bar{display:none!important;visibility:hidden!important;opacity:0!important}',document.head.appendChild(e)}catch(e){}});"""
+            # Add URL field
+            form_fields["url"] = (None, url)
             
-            script_b64 = base64.b64encode(banner_suppression_script.encode()).decode()
-            extra_scripts = [{"src": f"data:text/javascript;base64,{script_b64}"}]
-            
-            form_fields = {
-                "url": (None, url),
-                "paperWidth": (None, "8.27"),
-                "paperHeight": (None, "11.69"),
-                "marginTop": (None, "0"),
-                "marginBottom": (None, "0"),
-                "marginLeft": (None, "0"),
-                "marginRight": (None, "0"),
-                "printBackground": (None, "true"),
-                "preferCssPageSize": (None, "false"),
-                "cookies": (None, cookies_json),
-                "extraHttpHeaders": (None, json.dumps(extra_headers)),
-                "waitDelay": (None, wait_delay),
-                "emulatedMediaType": (None, "screen"),
-                "extraScriptTags": (None, json.dumps(extra_scripts)),
-            }
-            
-            logger.info(f"PDF conversion request: url={url}, cookies={len(cookies)}, waitDelay={wait_delay}")
+            logger.info(
+                f"PDF conversion request: url={url}, cmp={cmp_type.value or 'none'}, "
+                f"cookies={len(cookies)}, fallback={fallback}"
+            )
             
             response = await client.post(
                 f"{GOTENBERG_URL}/forms/chromium/convert/url",
@@ -192,28 +182,33 @@ async def capture_webpage(
     force: bool = False,
     custom_cookies: Optional[List[Cookie]] = None,
     wait_delay: str = "4s",
+    capture_options: Optional[CaptureOptions] = None,
 ) -> dict:
     """
     Capture a webpage using Gotenberg for PDF and simple HTTP fetch for HTML.
 
     Pipeline:
-    1. Gotenberg converts URL to PDF (uses its built-in Chromium)
-    2. Fetch HTML separately for markdown extraction
-    3. HTML → MarkItDown → clean Markdown (for vector DB)
-    4. Save PDF to /static/{hash}.pdf
-    5. Save mapping file for URL→PDF lookup
+    1. Detect CMP type from URL/HTML
+    2. Attempt 1: minimal intervention (provider-specific cookies, CSS, localStorage)
+    3. Validate banner suppression in returned HTML
+    4. If banner detected: Attempt 2 with broader fallback strategy
+    5. Fetch HTML separately for markdown extraction
+    6. HTML → MarkItDown → clean Markdown (for vector DB)
+    7. Save PDF to /static/{hash}.pdf
+    8. Save mapping file for URL→PDF lookup
 
-    Uses preset consent cookies to suppress cookie banners by default.
+    Uses adaptive consent handling with provider-specific strategies.
 
     Args:
         url: The URL to capture
         force: If True, force recapture even if already cached
         custom_cookies: Optional list of custom Cookie objects to override presets
         wait_delay: Duration to wait for cookie banners to settle (default: "4s")
+        capture_options: Optional CaptureOptions for advanced configuration
 
     Returns:
         dict with file_hash (PDF hash), url_hash, title, pdf_path, original_url,
-        source_type, markdown_content, and cached flag
+        source_type, markdown_content, cached flag, and retry_attempts
     """
     url_hash = _url_to_hash(url)
     mapping_path = os.path.join(WEBPAGES_DIR, f"{url_hash}.mapping.json")
@@ -235,35 +230,83 @@ async def capture_webpage(
                     "source_type": "web",
                     "markdown_content": mapping.get("markdown_content", ""),
                     "cached": True,
+                    "retry_attempts": 0,
                 }
         except Exception as e:
             logger.warning(f"Failed to read cached mapping for {url}: {e}")
 
+    # Initialize capture options with backward-compatible defaults
+    if capture_options is None:
+        capture_options = CaptureOptions(wait_delay=wait_delay)
+    
+    # Determine max retries from options
+    max_retries = capture_options.max_retries
+
     # Capture webpage
-    logger.info(f"Capturing webpage: {url} (wait_delay={wait_delay})")
+    logger.info(f"Capturing webpage: {url} (wait_delay={capture_options.wait_delay}, max_retries={max_retries})")
 
     try:
-        # Step 1: Get PDF from Gotenberg (runs Chromium internally)
-        pdf_bytes = await _convert_url_to_pdf_with_gotenberg(
-            url,
-            custom_cookies=custom_cookies,
-            wait_delay=wait_delay,
-        )
+        # Step 1: Detect CMP type from URL first (fast path)
+        cmp_type = detect_cmp(url, html_content=None)
+        logger.info(f"Initial CMP detection from URL: {cmp_type.value or 'none'}")
         
-        # Step 2: Fetch HTML separately for markdown extraction
-        html_content, title = await _fetch_html_and_title(url)
-
-        # Step 2: Extract clean markdown
+        # Step 2: Attempt 1 - minimal intervention with detected CMP
+        pdf_bytes = None
+        html_content = None
+        title = url
+        retry_attempts = 0
+        
+        for attempt in range(1, max_retries + 2):  # +2 because range is exclusive and we start at 1
+            is_fallback = attempt > 1
+            
+            # Re-detect CMP from HTML on retry if we have it
+            if is_fallback and html_content:
+                cmp_type = detect_cmp(url, html_content)
+                logger.info(f"Retry {attempt - 1}: CMP re-detected from HTML: {cmp_type.value or 'none'}")
+            
+            logger.info(f"Capture attempt {attempt}: fallback={is_fallback}, cmp={cmp_type.value or 'none'}")
+            
+            # Generate PDF
+            pdf_bytes = await _convert_url_to_pdf_with_gotenberg(
+                url,
+                custom_cookies=custom_cookies,
+                wait_delay=capture_options.wait_delay,
+                capture_options=capture_options,
+                cmp_type=cmp_type,
+                fallback=is_fallback,
+            )
+            
+            # Step 3: Fetch HTML for validation and markdown extraction
+            html_content, title = await _fetch_html_and_title(url)
+            
+            # Validate banner suppression (if not custom cookies)
+            if custom_cookies is None:
+                is_banner_present, confidence = SuppressionValidator.validate_banner_suppression(html_content)
+                logger.info(f"Banner validation: present={is_banner_present}, confidence={confidence:.2f}")
+                
+                # Check if we should retry
+                if SuppressionValidator.should_retry(confidence, attempt, max_retries):
+                    retry_attempts = attempt
+                    logger.warning(f"Banner detected (confidence={confidence:.2f}), will retry with broader strategy")
+                    continue
+                else:
+                    # No retry needed or max retries reached
+                    break
+            else:
+                # Custom cookies provided, skip validation
+                break
+        
+        # Step 4: Extract clean markdown
         markdown_content = _extract_clean_markdown(html_content, url)
 
-        # Step 3: Calculate PDF hash and save
+        # Step 5: Calculate PDF hash and save
         pdf_hash = hashlib.md5(pdf_bytes).hexdigest()
         pdf_path = os.path.join(STATIC_DIR, f"{pdf_hash}.pdf")
 
         with open(pdf_path, "wb") as f:
             f.write(pdf_bytes)
 
-        # Step 4: Save mapping file
+        # Step 6: Save mapping file
         mapping = {
             "url": url,
             "pdf_hash": pdf_hash,
@@ -271,11 +314,13 @@ async def capture_webpage(
             "title": title,
             "markdown_content": markdown_content,
             "captured_at": datetime.utcnow().isoformat(),
+            "cmp_detected": cmp_type.value,
+            "retry_attempts": retry_attempts,
         }
         with open(mapping_path, "w", encoding="utf-8") as f:
             json.dump(mapping, f, indent=2)
 
-        logger.info(f"Captured {url} to {pdf_path} (hash: {pdf_hash})")
+        logger.info(f"Captured {url} to {pdf_path} (hash: {pdf_hash}, retries: {retry_attempts})")
 
         return {
             "file_hash": pdf_hash,
@@ -286,6 +331,7 @@ async def capture_webpage(
             "source_type": "web",
             "markdown_content": markdown_content,
             "cached": False,
+            "retry_attempts": retry_attempts,
         }
 
     except Exception as e:
@@ -299,9 +345,10 @@ async def capture_webpage_as_pdf(
     force: bool = False,
     custom_cookies: Optional[List[Cookie]] = None,
     wait_delay: str = "4s",
+    capture_options: Optional[CaptureOptions] = None,
 ) -> dict:
     """Backward-compatible alias for capture_webpage."""
-    return await capture_webpage(url, force, custom_cookies, wait_delay)
+    return await capture_webpage(url, force, custom_cookies, wait_delay, capture_options)
 
 
 async def get_webpage_pdf_by_url_hash(url_hash: str) -> Optional[dict]:

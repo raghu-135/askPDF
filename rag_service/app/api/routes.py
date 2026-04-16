@@ -76,7 +76,7 @@ from app.rag.indexer import (
 )
 from app.services.nlp_service import split_into_sentences
 from app.services.parsing_service import extract_text_with_coordinates
-from app.services.web_capture_service import capture_webpage_as_pdf, get_webpage_pdf_by_url_hash
+from app.web_capture import capture_webpage_as_pdf, get_webpage_pdf_by_url_hash
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

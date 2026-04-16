@@ -140,7 +140,7 @@ GENERIC_CONSENT = [
 TCF_V2_CONSENT = [
     Cookie(
         name="euconsent-v2",
-        value="CPSG8sAPSQ8sABADBENBfEoABAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        value="CPSG8sAPSQ8sABADBENBfEoABAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         domain="",
         path="/",
         secure=True,
@@ -463,3 +463,91 @@ def cookies_to_json(cookies: List[Cookie]) -> str:
     """Convert a list of Cookie objects to JSON string for Gotenberg."""
     import json
     return json.dumps([c.to_dict() for c in cookies])
+
+
+def get_cookies_by_preset_names(preset_names: List[str], domain: str = "") -> List[Cookie]:
+    """
+    Get cookies from preset names with domain assignment.
+    
+    Args:
+        preset_names: List of preset names (e.g., ["ONETRUST_CONSENT", "GENERIC_CONSENT"])
+        domain: The base domain to assign to cookies (if cookie has no domain)
+        
+    Returns:
+        List of Cookie objects with proper domains set
+    """
+    preset_map = {
+        "ONETRUST_CONSENT": ONETRUST_CONSENT,
+        "COOKIEBOT_CONSENT": COOKIEBOT_CONSENT,
+        "USERCENTRICS_CONSENT": USERCENTRICS_CONSENT,
+        "DIDOMI_CONSENT": DIDOMI_CONSENT,
+        "OSANO_CONSENT": OSANO_CONSENT,
+        "COOKIEYES_CONSENT": COOKIEYES_CONSENT,
+        "QUANTCAST_CONSENT": QUANTCAST_CONSENT,
+        "TRUSTARC_CONSENT": TRUSTARC_CONSENT,
+        "SOURCEPOINT_CONSENT": SOURCEPOINT_CONSENT,
+        "IUBENDA_CONSENT": IUBENDA_CONSENT,
+        "TERMLY_CONSENT": TERMLY_CONSENT,
+        "PIWIK_CONSENT": PIWIK_CONSENT,
+        "MOOVE_CONSENT": MOOVE_CONSENT,
+        "BORLABS_CONSENT": BORLABS_CONSENT,
+        "GOOGLE_CONSENT": GOOGLE_CONSENT,
+        "YOUTUBE_CONSENT": YOUTUBE_CONSENT,
+        "GENERIC_CONSENT": GENERIC_CONSENT,
+        "TCF_V2_CONSENT": TCF_V2_CONSENT,
+    }
+    
+    cookies = []
+    for preset_name in preset_names:
+        preset_cookies = preset_map.get(preset_name, [])
+        for cookie in preset_cookies:
+            # Use the cookie's domain if set, otherwise use the provided domain
+            cookie_domain = cookie.domain if cookie.domain else domain
+            cookies.append(Cookie(
+                name=cookie.name,
+                value=cookie.value,
+                domain=cookie_domain,
+                path=cookie.path,
+                secure=cookie.secure,
+                httpOnly=cookie.httpOnly,
+                sameSite=cookie.sameSite,
+            ))
+    
+    return cookies
+
+
+def get_minimal_cookies_for_cmp(cmp_type: str, domain: str = "") -> List[Cookie]:
+    """
+    Get minimal cookie set for a specific CMP type.
+    
+    Args:
+        cmp_type: String identifier for CMP (e.g., "onetrust", "cookiebot")
+        domain: The base domain to assign to cookies
+        
+    Returns:
+        List of Cookie objects
+    """
+    cmp_type = cmp_type.lower()
+    
+    preset_map = {
+        "onetrust": ["ONETRUST_CONSENT"],
+        "cookiebot": ["COOKIEBOT_CONSENT"],
+        "usercentrics": ["USERCENTRICS_CONSENT"],
+        "didomi": ["DIDOMI_CONSENT"],
+        "osano": ["OSANO_CONSENT"],
+        "cookieyes": ["COOKIEYES_CONSENT"],
+        "quantcast": ["QUANTCAST_CONSENT"],
+        "trustarc": ["TRUSTARC_CONSENT"],
+        "sourcepoint": ["SOURCEPOINT_CONSENT"],
+        "iubenda": ["IUBENDA_CONSENT"],
+        "termly": ["TERMLY_CONSENT"],
+        "piwik": ["PIWIK_CONSENT"],
+        "moove": ["MOOVE_CONSENT"],
+        "borlabs": ["BORLABS_CONSENT"],
+        "google": ["GOOGLE_CONSENT"],
+        "youtube": ["YOUTUBE_CONSENT"],
+        "generic": ["GENERIC_CONSENT"],
+    }
+    
+    preset_names = preset_map.get(cmp_type, ["GENERIC_CONSENT"])
+    return get_cookies_by_preset_names(preset_names, domain)
