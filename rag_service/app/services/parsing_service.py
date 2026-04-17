@@ -1,47 +1,13 @@
 import io
 import os
 import logging
+import json
 import fitz  # PyMuPDF
-from docling.document_converter import DocumentConverter, DocumentStream, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.document import TextItem
 
 logger = logging.getLogger(__name__)
 
-# Initialize Docling converter as a module-level singleton
-_pipeline_options = PdfPipelineOptions()
-
-def _get_env_bool(name: str, default: bool) -> bool:
-    val = os.environ.get(name)
-    if val is None:
-        return default
-    return val.lower() == "true"
-
-def _get_env_str(name: str, default: str) -> str:
-    return os.environ.get(name, default)
-
-# Tuneable via environment variables for accuracy vs speed
-_pipeline_options.do_ocr = _get_env_bool("DOCLING_DO_OCR", False)
-_pipeline_options.do_table_structure = _get_env_bool("DOCLING_DO_TABLE_STRUCTURE", True)
-_pipeline_options.do_formula_enrichment = _get_env_bool("DOCLING_DO_FORMULA_ENRICHMENT", True)
-
-# Table structure mode (FAST or ACCURATE)
-_table_mode = _get_env_str("DOCLING_TABLE_MODE", "FAST").upper()
-if _table_mode == "ACCURATE":
-    _pipeline_options.table_structure_options.mode = TableFormerMode.ACCURATE
-else:
-    _pipeline_options.table_structure_options.mode = TableFormerMode.FAST
-
-# OCR options
-if _pipeline_options.do_ocr:
-    _pipeline_options.ocr_options.force_full_page_ocr = _get_env_bool("DOCLING_FORCE_FULL_PAGE_OCR", False)
-
-_docling_converter = DocumentConverter(
-    format_options={
-        InputFormat.PDF: PdfFormatOption(pipeline_options=_pipeline_options)
-    }
-)
+# OpenDataLoader configuration via environment variables
+OPEN_DATALOADER_FORMAT = os.environ.get("OPEN_DATALOADER_FORMAT", "json")
 
 def _get_table_bboxes(page):
     """Identify bounding boxes for all tables detected on a PDF page."""
@@ -178,26 +144,113 @@ def _process_block(block, page_num, page_height, page_width):
     return segments
 
 
+def _flatten_odl_elements(element: dict, flat_list: list) -> None:
+    """
+    Recursively flatten the hierarchical OpenDataLoader structure into a flat list.
+    Preserves reading order as elements appear in the 'kids' array.
+    """
+    # Add the current element if it has the required fields
+    if 'type' in element and 'page number' in element:
+        flat_list.append(element)
+    
+    # Recursively process nested kids
+    if 'kids' in element and isinstance(element['kids'], list):
+        for kid in element['kids']:
+            _flatten_odl_elements(kid, flat_list)
+
+
+def _load_opendataloader_elements(data: bytes) -> list:
+    """
+    Use OpenDataLoader to extract structural elements with bounding boxes.
+    Returns a flat list of elements with type, content, page number, and bounding box.
+    """
+    try:
+        import opendataloader_pdf
+        
+        # Create a temporary file for OpenDataLoader
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
+            tmp_file.write(data)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Convert PDF to JSON format
+            result = opendataloader_pdf.convert(
+                input_path=[tmp_path],
+                output_dir=None,  # Don't write to disk, use return value
+                format="json"
+            )
+            
+            # Parse the JSON output - it's a dict with 'kids' array
+            if result and len(result) > 0:
+                json_output = result[0].get('json', '{}')
+                odl_doc = json.loads(json_output) if isinstance(json_output, str) else json_output
+
+                logger.info(f"ODL doc keys: {odl_doc.keys() if isinstance(odl_doc, dict) else 'not a dict'}")
+                
+                # Flatten the hierarchical structure while preserving reading order
+                flat_elements = []
+                _flatten_odl_elements(odl_doc, flat_elements)
+                logger.info(f"Flattened {len(flat_elements)} elements from OpenDataLoader")
+                return flat_elements
+            else:
+                logger.warning(f"OpenDataLoader returned no result or empty result")
+                return []
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"OpenDataLoader conversion failed: {e}")
+        return []
+
+
+def _map_odl_type_to_label(element: dict) -> str:
+    """
+    Map OpenDataLoader element type to our label system.
+    """
+    element_type = element.get('type', 'text').lower()
+    
+    type_mapping = {
+        'heading': 'heading',
+        'title': 'heading',
+        'sectionheader': 'heading',
+        'table': 'table',
+        'figure': 'picture',
+        'picture': 'picture',
+        'image': 'picture',
+        'caption': 'text',
+        'footnote': 'text',
+        'text': 'text',
+        'paragraph': 'text',
+        'list': 'text',
+        'listitem': 'text',
+        'code': 'text',
+        'equation': 'text',
+        'formula': 'text',
+    }
+    
+    return type_mapping.get(element_type, 'text')
+
+
 def extract_text_with_coordinates(data: bytes, filename: str):
     """
     Extract high-fidelity text items from a PDF using a hybrid approach:
-    Docling for structural segmentation (labels like 'table', 'heading') 
+    OpenDataLoader for structural segmentation (labels like 'table', 'heading') 
     combined with PyMuPDF for precise character-level coordinates.
     """
-    from docling.datamodel.document import TextItem, TableItem, PictureItem
     if not filename:
         return []
 
     doc = fitz.open(stream=data, filetype="pdf")
     items = []
     
-    docling_doc = None
-    try:
-        source = DocumentStream(name=filename, stream=io.BytesIO(data))
-        docling_result = _docling_converter.convert(source)
-        docling_doc = docling_result.document
-    except Exception as e:
-        logger.warning(f"Docling conversion failed: {e}")
+    # Load structural elements from OpenDataLoader
+    logger.info("Loading OpenDataLoader elements")
+    odl_elements = _load_opendataloader_elements(data)
+    logger.info(f"Loaded {len(odl_elements)} odl_elements from OpenDataLoader")
 
     for page_num in range(len(doc)):
         page = doc[page_num]
@@ -213,42 +266,29 @@ def extract_text_with_coordinates(data: bytes, filename: str):
         all_blocks = [b for b in text_page.get("blocks", []) if b.get("type") == 0]
         processed_indices = set()
 
-        if docling_doc:
-            page_items = []
-            for item, _level in docling_doc.iterate_items():
-                if (isinstance(item, (TextItem, TableItem, PictureItem))) and item.prov:
-                    if item.prov[0].page_no == (page_num + 1):
-                        page_items.append(item)
+        if odl_elements:
+            # Filter elements for current page (OpenDataLoader uses 1-based page numbers)
+            page_elements = [
+                elem for elem in odl_elements 
+                if elem.get('page number', 0) == (page_num + 1)
+            ]
             
-            for dl_item in page_items:
-                item_label = "text"
+            for elem in page_elements:
+                item_label = _map_odl_type_to_label(elem)
                 
-                if hasattr(dl_item, 'parent') and dl_item.parent:
-                    parent_ref = dl_item.parent
-                    if hasattr(parent_ref, 'cref') and parent_ref.cref.startswith('#/groups/'):
-                        try:
-                            group_idx = int(parent_ref.cref.split('/')[-1])
-                            if group_idx < len(docling_doc.groups):
-                                group = docling_doc.groups[group_idx]
-                                if hasattr(group, 'label') and hasattr(group.label, 'value'):
-                                    item_label = group.label.value
-                        except Exception:
-                            pass
-
-                if item_label == "text" and hasattr(dl_item, 'label') and hasattr(dl_item.label, 'value'):
-                    item_label = dl_item.label.value
-                elif isinstance(dl_item, TableItem):
-                    item_label = "table"
-                elif isinstance(dl_item, PictureItem):
-                    item_label = "picture"
-
-                dl_bbox = dl_item.prov[0].bbox
-                rect = fitz.Rect(
-                    dl_bbox.l,
-                    page_height - dl_bbox.t,
-                    dl_bbox.r,
-                    page_height - dl_bbox.b
-                )
+                # Get bounding box from OpenDataLoader [x1, y1, x2, y2]
+                bbox = elem.get('bounding box', [0, 0, 0, 0])
+                if len(bbox) >= 4:
+                    # OpenDataLoader bbox is [left, top, right, bottom] in PDF coordinates
+                    # where (0,0) is bottom-left, so we need to flip Y
+                    rect = fitz.Rect(
+                        bbox[0],
+                        page_height - bbox[3],  # Convert top to y0 (bottom-up)
+                        bbox[2],
+                        page_height - bbox[1]   # Convert bottom to y1 (bottom-up)
+                    )
+                else:
+                    continue
                 
                 item_blocks = []
                 for i, b in enumerate(all_blocks):

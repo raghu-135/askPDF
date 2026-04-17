@@ -24,7 +24,7 @@ torch
 PyMuPDF>=1.24.0
 pymupdf-layout
 spacy>=3.7.0
-docling>=2.0.0
+opendataloader-pdf>=0.1.0
 numpy
 pydub
 markitdown

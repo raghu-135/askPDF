@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     espeak-ng \
     curl \
     git \
+    default-jre \
     && rm -rf /var/lib/apt/lists/*
 
 COPY rag_service/requirements.txt /app/requirements.txt
