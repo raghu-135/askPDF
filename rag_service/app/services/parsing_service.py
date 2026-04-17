@@ -9,7 +9,16 @@ logger = logging.getLogger(__name__)
 def _load_pymupdf4llm_elements(doc: fitz.Document) -> list:
     """Load semantic elements from PyMuPDF4LLM with Layout mode."""
     json_data = pymupdf4llm.to_json(doc, page_chunks=True)
-    return json.loads(json_data)
+    data = json.loads(json_data)
+
+    # PyMuPDF4LLM returns a dict with 'pages' key containing the list
+    if isinstance(data, dict) and 'pages' in data:
+        return data['pages']
+    elif isinstance(data, list):
+        return data
+    else:
+        logger.warning(f"Unexpected PyMuPDF4LLM output type: {type(data)}")
+        return []
 
 def _process_line(line, page_num, page_height, page_width):
     """
@@ -132,12 +141,12 @@ def extract_text_with_coordinates(data: bytes, filename: str):
     items = []
     
     # Load semantic elements from PyMuPDF4LLM (single-pass using same doc)
-    pymupdf4llm_data = None
+    pymupdf4llm_data = []
     try:
         pymupdf4llm_data = _load_pymupdf4llm_elements(doc)
-        logger.info(f"PyMuPDF4LLM loaded {len(pymupdf4llm_data)} pages")
     except Exception as e:
         logger.warning(f"PyMuPDF4LLM conversion failed: {e}")
+        pymupdf4llm_data = []
 
     for page_num in range(len(doc)):
         page = doc[page_num]
@@ -146,32 +155,42 @@ def extract_text_with_coordinates(data: bytes, filename: str):
         
         # Get PyMuPDF4LLM page data
         page_boxes = []
-        if pymupdf4llm_data and isinstance(pymupdf4llm_data, list) and page_num < len(pymupdf4llm_data):
+        if isinstance(pymupdf4llm_data, list) and page_num < len(pymupdf4llm_data):
             page_data = pymupdf4llm_data[page_num]
-            page_boxes = page_data.get("page_boxes", [])
+            if isinstance(page_data, dict):
+                page_boxes = page_data.get("boxes", [])
 
-        # Process each page_box with its semantic label
-        for box in page_boxes:
-            box_class = box.get("class", "text")
-            box_bbox = box.get("bbox", [])
-            box_text = box.get("text", "")
+        # Process each box with its semantic label
+        for idx, box in enumerate(page_boxes):
+            # PyMuPDF4LLM uses x0/y0/x1/y1 keys, not bbox array
+            box_bbox = [box.get("x0"), box.get("y0"), box.get("x1"), box.get("y1")]
+            box_class = box.get("boxclass", "text")  # PyMuPDF4LLM uses 'boxclass'
             
-            if len(box_bbox) != 4:
+            # Extract text from textlines array
+            textlines = box.get("textlines") or []
+            box_text = ""
+            for line in textlines:
+                for span in line.get("spans", []):
+                    box_text += span.get("text", "")
+
+            if len(box_bbox) != 4 or None in box_bbox:
                 continue
             
-            # Map PyMuPDF4LLM class names to our label system
+            # Map PyMuPDF4LLM boxclass names to our label system
             label = "text"
-            if box_class == "picture":
+            if "picture" in box_class:
                 label = "picture"
-            elif box_class == "table":
+            elif "table" in box_class:
                 label = "table"
-            elif box_class in ["heading", "title", "subtitle"]:
+            elif any(h in box_class for h in ["page-header", "header", "title", "h1", "h2", "h3", "heading"]):
                 label = "heading"
+            elif "page-footer" in box_class:
+                label = "footer"
             
             # Get character-level coordinates for this region using PyMuPDF
             rect = fitz.Rect(box_bbox)
             char_map = []
-            
+
             try:
                 # Extract text with character-level coordinates within the bounding box
                 text_dict = page.get_text("rawdict", clip=rect, flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
@@ -201,11 +220,15 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                                         "size": font_size
                                     })
             except Exception as e:
-                logger.warning(f"Error extracting character coordinates for box: {e}")
-            
+                logger.warning(f"Error extracting character coordinates: {e}")
+
             # Use the text from PyMuPDF4LLM if available, otherwise use extracted text
-            text = box_text if box_text else "".join([c["page"] for c in char_map])  # Fallback
-            
+            text = box_text if box_text else "".join([c.get("c", "") for c in char_map])
+
+            # Filter out images, headers, and footers
+            if label in ["picture", "heading", "footer"]:
+                continue
+
             if text.strip() and char_map:
                 items.append({
                     "text": text,
@@ -218,11 +241,10 @@ def extract_text_with_coordinates(data: bytes, filename: str):
         
         # Fallback: if no PyMuPDF4LLM data, use basic PyMuPDF extraction
         if not page_boxes:
-            logger.warning(f"Page {page_num}: No page_boxes found, using fallback extraction")
             text_page = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
             all_blocks = [b for b in text_page.get("blocks", []) if b.get("type") == 0]
             
-            for block in all_blocks:
+            for idx, block in enumerate(all_blocks):
                 bbox = fitz.Rect(block["bbox"])
                 segments = _process_block(block, page_num, page_height, page_width)
                 for seg in segments:
@@ -244,6 +266,6 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                             "bbox": list(bbox),
                             "font": seg_font
                         })
-            
+
     doc.close()
     return items
