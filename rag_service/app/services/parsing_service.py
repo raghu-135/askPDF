@@ -182,10 +182,11 @@ def extract_text_with_coordinates(data: bytes, filename: str):
                 label = "picture"
             elif "table" in box_class:
                 label = "table"
-            elif any(h in box_class for h in ["page-header", "header", "title", "h1", "h2", "h3", "heading"]):
+            elif any(h in box_class for h in ["page-header", "header"]):
                 label = "heading"
             elif "page-footer" in box_class:
                 label = "footer"
+            # titles, h1, h2, h3, heading are kept as text (not filtered)
             
             # Get character-level coordinates for this region using PyMuPDF
             rect = fitz.Rect(box_bbox)
