@@ -2,146 +2,74 @@ import io
 import os
 import logging
 import json
-import fitz  # PyMuPDF
+import pdfplumber
 
 logger = logging.getLogger(__name__)
 
 # OpenDataLoader configuration via environment variables
 OPEN_DATALOADER_FORMAT = os.environ.get("OPEN_DATALOADER_FORMAT", "json")
 
-def _get_table_bboxes(page):
-    """Identify bounding boxes for all tables detected on a PDF page."""
-    tables = page.find_tables()
-    return [fitz.Rect(t.bbox) for t in tables]
-
-def _get_image_bboxes(page):
-    """Identify bounding boxes for all images detected on a PDF page."""
-    image_bboxes = []
-    for img in page.get_images():
-        rects = page.get_image_rects(img[0])
-        image_bboxes.extend(rects)
-    return image_bboxes
-
-def _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes):
+def _is_block_filtered(bbox, header_height, footer_y):
     """
-    Determine if a text block should be filtered out (e.g., headers, footers, 
-    items inside tables or overlapping images).
+    Determine if a text block should be filtered out (e.g., headers, footers).
     """
-    if bbox.y1 < header_height or bbox.y0 > footer_y:
-        return True
-    block_center = fitz.Point((bbox.x0 + bbox.x1)/2, (bbox.y0 + bbox.y1)/2)
-    if any(block_center in t_bbox for t_bbox in table_bboxes):
-        return True
-    if any(block_center in i_bbox for i_bbox in image_bboxes):
+    if bbox[3] < header_height or bbox[1] > footer_y:
         return True
     return False
 
-def _process_line(line, page_num, page_height, page_width):
+def _extract_word_coordinates(page, page_num, original_page_height, original_page_width):
     """
-    Process a single line of text from PyMuPDF, extracting character-level 
-    coordinates and font information.
+    Extract word-level coordinates from a pdfplumber page.
+    Returns a list of word dictionaries with text and bounding box coordinates.
     """
-    line_text = ""
-    line_chars = []
-    processed_fonts = []
+    words = page.extract_words(extra_attrs=["fontname", "size"])
+    cropped_page_width = page.width
+    cropped_page_height = page.height
     
-    spans = sorted(line.get("spans", []), key=lambda s: s["bbox"][0])
-    for span in spans:
-        font_name = span.get("font", "")
-        font_size = span.get("size", 0)
-        processed_fonts.append({"name": font_name, "size": font_size})
-        
-        chars = span.get("chars", [])
-        for char_info in chars:
-            c = char_info.get("c", "")
-            if not c:
-                continue
-            c_bbox = char_info.get("bbox", [0,0,0,0])
-            c_height = c_bbox[3] - c_bbox[1]
-            c_y_bottom = page_height - c_bbox[1] - c_height
-            line_text += c
-            line_chars.append({
-                "page": page_num + 1,
-                "x": c_bbox[0],
-                "y": c_y_bottom,
-                "width": c_bbox[2] - c_bbox[0],
-                "height": c_height,
-                "page_height": page_height,
-                "page_width": page_width,
-                "font": font_name,
-                "size": font_size
-            })
-    
-    line_font = processed_fonts[0] if processed_fonts else {"name": "", "size": 0}
-    return line_text, line_chars, line_font
-
-def _process_block(block, page_num, page_height, page_width):
-    """
-    Process a text block containing multiple lines, grouping them into 
-    segments with consistent font styles.
-    """
-    segments = []
-    current_text = ""
-    current_chars = []
-    current_font = None
-    
-    NO_SPACE_ENDINGS = ("/", "@", "-", ".", "_", ":")
-    
-    for line in block.get("lines", []):
-        line_text, line_chars, line_font = _process_line(line, page_num, page_height, page_width)
-        if not line_text:
+    word_boxes = []
+    for word in words:
+        word_text = word.get("text", "")
+        if not word_text.strip():
             continue
             
-        if current_font is not None:
-            font_changed = (line_font["name"] != current_font["name"] or 
-                          abs(line_font["size"] - current_font["size"]) > 0.5)
-            
-            if font_changed:
-                if current_text.strip():
-                    segments.append({
-                        "text": current_text,
-                        "chars": current_chars,
-                        "font": current_font
-                    })
-                current_text = ""
-                current_chars = []
-                current_font = line_font
-            
-        if current_font is None:
-            current_font = line_font
-            
-        if current_text:
-            prev_trimmed = current_text.strip()
-            needs_space = not (prev_trimmed.endswith(NO_SPACE_ENDINGS) or line_text.startswith(tuple(NO_SPACE_ENDINGS) + (" ",)))
-            
-            if needs_space:
-                current_text += " "
-                if current_chars:
-                    last = current_chars[-1]
-                    current_chars.append({
-                        "page": last["page"],
-                        "x": last["x"] + last["width"],
-                        "y": last["y"],
-                        "width": 0,
-                        "height": last["height"],
-                        "page_height": last["page_height"],
-                        "page_width": last["page_width"],
-                        "is_space": True,
-                        "font": last.get("font", ""),
-                        "size": last.get("size", 0)
-                    })
+        # pdfplumber coordinates: (x0, top, x1, bottom) in top-down format (y from top)
+        x0, top, x1, bottom = word["x0"], word["top"], word["x1"], word["bottom"]
         
-        current_text += line_text
-        current_chars.extend(line_chars)
+        # Convert to bottom-up coordinates (y from bottom) for frontend
+        # Use ORIGINAL page dimensions for conversion, not cropped page dimensions
+        # Frontend does page_height - bbox.y1, so it expects y1 to be distance from bottom
+        y0 = original_page_height - bottom
+        y1 = original_page_height - top
         
-    if current_text.strip():
-        segments.append({
-            "text": current_text,
-            "chars": current_chars,
-            "font": current_font
-        })
+        word_box = {
+            "word": word_text,
+            "x0": x0,
+            "y0": y0,
+            "x1": x1,
+            "y1": y1,
+            "page": page_num + 1,
+            "page_width": original_page_width,
+            "page_height": original_page_height,
+            "font": word.get("fontname", ""),
+            "size": word.get("size", 0)
+        }
         
-    return segments
+        word_boxes.append(word_box)
+    
+    return word_boxes
+
+def _crop_to_bbox(page, bbox):
+    """
+    Crop a pdfplumber page to the specified bounding box.
+    bbox: [x0, y0, x1, y1] in bottom-up coordinates (y from bottom)
+    """
+    page_height = page.height
+    # Convert from bottom-up to pdfplumber's top-down coordinates
+    x0, y0, x1, y1 = bbox
+    top = page_height - y1  # Convert top edge (from bottom) to distance from top
+    bottom = page_height - y0  # Convert bottom edge (from bottom) to distance from top
+    
+    return page.crop((x0, top, x1, bottom))
 
 
 def _flatten_odl_elements(element: dict, flat_list: list) -> None:
@@ -161,8 +89,11 @@ def _flatten_odl_elements(element: dict, flat_list: list) -> None:
 
 def _load_opendataloader_elements(data: bytes) -> list:
     """
-    Use OpenDataLoader to extract structural elements with bounding boxes.
+    Use OpenDataLoader v2.0 to extract structural elements with bounding boxes.
     Returns a flat list of elements with type, content, page number, and bounding box.
+    
+    Args:
+        data: PDF file data as bytes
     """
     try:
         import opendataloader_pdf
@@ -173,54 +104,88 @@ def _load_opendataloader_elements(data: bytes) -> list:
             tmp_file.write(data)
             tmp_path = tmp_file.name
         
+        # Use persistent output directory for the JSON result (mounted volume)
+        output_dir = "/data/opendataloader_output"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Create a unique subdirectory for this run
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        tmp_dir = os.path.join(output_dir, f"run_{timestamp}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        
         try:
-            # Convert PDF to JSON format
-            result = opendataloader_pdf.convert(
-                input_path=[tmp_path],
-                output_dir=None,  # Don't write to disk, use return value
-                format="json"
+            # Call OpenDataLoader convert function
+            logger.info(f"Calling OpenDataLoader v2.0 convert on {tmp_path}")
+            opendataloader_pdf.convert(
+                tmp_path,
+                output_dir=tmp_dir,
+                format=OPEN_DATALOADER_FORMAT,
+                use_struct_tree=True
             )
             
-            # Parse the JSON output - it's a dict with 'kids' array
-            if result and len(result) > 0:
-                json_output = result[0].get('json', '{}')
-                odl_doc = json.loads(json_output) if isinstance(json_output, str) else json_output
-
-                logger.info(f"ODL doc keys: {odl_doc.keys() if isinstance(odl_doc, dict) else 'not a dict'}")
-                
-                # Flatten the hierarchical structure while preserving reading order
-                flat_elements = []
-                _flatten_odl_elements(odl_doc, flat_elements)
-                logger.info(f"Flattened {len(flat_elements)} elements from OpenDataLoader")
-                return flat_elements
-            else:
-                logger.warning(f"OpenDataLoader returned no result or empty result")
+            # Find the JSON file in the output directory
+            json_files = [f for f in os.listdir(tmp_dir) if f.endswith('.json')]
+            if not json_files:
+                logger.warning(f"No JSON file found in output directory {tmp_dir}")
                 return []
+            
+            json_path = os.path.join(tmp_dir, json_files[0])
+            logger.info(f"Reading OpenDataLoader result from {json_path}")
+            logger.info(f"Raw output will be preserved at: {json_path}")
+            
+            # Read the JSON result
+            with open(json_path, 'r') as f:
+                result = json.load(f)
+            
+            logger.info(f"OpenDataLoader raw output: {json.dumps(result, indent=2)}")
+            logger.info(f"OpenDataLoader result type: {type(result)}")
+            logger.info(f"OpenDataLoader result keys: {result.keys() if isinstance(result, dict) else 'not a dict'}")
+            
+            if not result:
+                logger.warning("OpenDataLoader returned no result or empty result")
+                return []
+            
+            # Flatten the hierarchical structure
+            flat_elements = []
+            _flatten_odl_elements(result, flat_elements)
+            
+            logger.info(f"Flattened {len(flat_elements)} elements from OpenDataLoader")
+            if flat_elements:
+                logger.info(f"Sample element: {flat_elements[0]}")
+            
+            return flat_elements
+            
         finally:
-            # Clean up temp file
+            # Clean up only the input PDF temp file, preserve the output directory
             try:
                 os.unlink(tmp_path)
             except Exception:
                 pass
+            # Note: We do NOT delete tmp_dir anymore - it's preserved for inspection
     except Exception as e:
-        logger.warning(f"OpenDataLoader conversion failed: {e}")
+        logger.error(f"Error loading OpenDataLoader elements: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return []
 
 
 def _map_odl_type_to_label(element: dict) -> str:
     """
     Map OpenDataLoader element type to our label system.
+    Returns None for types that should be ignored (tables, images, charts).
     """
     element_type = element.get('type', 'text').lower()
+    
+    # Types to ignore completely
+    ignored_types = {'table', 'figure', 'picture', 'image', 'chart'}
+    if element_type in ignored_types:
+        return None
     
     type_mapping = {
         'heading': 'heading',
         'title': 'heading',
         'sectionheader': 'heading',
-        'table': 'table',
-        'figure': 'picture',
-        'picture': 'picture',
-        'image': 'picture',
         'caption': 'text',
         'footnote': 'text',
         'text': 'text',
@@ -239,128 +204,142 @@ def extract_text_with_coordinates(data: bytes, filename: str):
     """
     Extract high-fidelity text items from a PDF using a hybrid approach:
     OpenDataLoader for structural segmentation (labels like 'table', 'heading') 
-    combined with PyMuPDF for precise character-level coordinates.
+    combined with pdfplumber for word-level coordinates.
     """
     if not filename:
         return []
 
-    doc = fitz.open(stream=data, filetype="pdf")
-    items = []
+    # Create a temporary file for pdfplumber
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
+        tmp_file.write(data)
+        tmp_path = tmp_file.name
     
-    # Load structural elements from OpenDataLoader
-    logger.info("Loading OpenDataLoader elements")
-    odl_elements = _load_opendataloader_elements(data)
-    logger.info(f"Loaded {len(odl_elements)} odl_elements from OpenDataLoader")
-
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        page_height = page.rect.height
-        page_width = page.rect.width
-        
-        table_bboxes = _get_table_bboxes(page)
-        image_bboxes = _get_image_bboxes(page)
-        header_height = page_height * 0.05
-        footer_y = page_height * 0.95
-        
-        text_page = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
-        all_blocks = [b for b in text_page.get("blocks", []) if b.get("type") == 0]
-        processed_indices = set()
-
-        if odl_elements:
-            # Filter elements for current page (OpenDataLoader uses 1-based page numbers)
-            page_elements = [
-                elem for elem in odl_elements 
-                if elem.get('page number', 0) == (page_num + 1)
-            ]
+    try:
+        with pdfplumber.open(tmp_path) as pdf:
+            items = []
             
-            for elem in page_elements:
-                item_label = _map_odl_type_to_label(elem)
+            # Load structural elements from OpenDataLoader v2.0
+            logger.info("Loading OpenDataLoader v2.0 elements")
+            odl_elements = _load_opendataloader_elements(data)
+            logger.info(f"Loaded {len(odl_elements)} odl_elements from OpenDataLoader v2.0")
+
+            for page_num, page in enumerate(pdf.pages):
+                page_height = page.height
+                page_width = page.width
+                header_height = page_height * 0.05
+                footer_y = page_height * 0.95
                 
-                # Get bounding box from OpenDataLoader [x1, y1, x2, y2]
-                bbox = elem.get('bounding box', [0, 0, 0, 0])
-                if len(bbox) >= 4:
-                    # OpenDataLoader bbox is [left, top, right, bottom] in PDF coordinates
-                    # where (0,0) is bottom-left, so we need to flip Y
-                    rect = fitz.Rect(
-                        bbox[0],
-                        page_height - bbox[3],  # Convert top to y0 (bottom-up)
-                        bbox[2],
-                        page_height - bbox[1]   # Convert bottom to y1 (bottom-up)
-                    )
-                else:
-                    continue
-                
-                item_blocks = []
-                for i, b in enumerate(all_blocks):
-                    if i in processed_indices:
-                        continue
-                    b_rect = fitz.Rect(b["bbox"])
+                processed_odl_indices = set()
+                processed_odl_bboxes = []
+
+                if odl_elements:
+                    # Filter elements for current page (OpenDataLoader uses 1-based page numbers)
+                    page_elements = [
+                        elem for elem in odl_elements 
+                        if elem.get('page number', 0) == (page_num + 1)
+                    ]
                     
-                    if _is_block_filtered(b_rect, header_height, footer_y, table_bboxes, image_bboxes):
-                        processed_indices.add(i)
-                        continue
+                    # Track which regions have been processed
+                    processed_odl_bboxes = []
+                    
+                    for elem in page_elements:
+                        item_label = _map_odl_type_to_label(elem)
                         
-                    intersection = rect.intersect(b_rect)
-                    b_center = fitz.Point((b_rect.x0 + b_rect.x1)/2, (b_rect.y0 + b_rect.y1)/2)
-                    
-                    if (intersection.get_area() / b_rect.get_area() > 0.4 or 
-                        b_center in rect or 
-                        rect.contains(b_rect)):
-                        item_blocks.append(b)
-                        processed_indices.add(i)
-                
-                if item_blocks:
-                    item_blocks.sort(key=lambda b: (b["bbox"][1], b["bbox"][0]))
-                    for b in item_blocks:
-                        segments = _process_block(b, page_num, page_height, page_width)
-                        for seg in segments:
-                            seg_text = seg["text"]
-                            seg_chars = seg["chars"]
-                            seg_font = seg["font"]
+                        # Skip ignored types (tables, images, charts)
+                        if item_label is None:
+                            continue
+                        
+                        # Get bounding box from OpenDataLoader [x1, y1, x2, y2]
+                        bbox = elem.get('bounding box', [0, 0, 0, 0])
+                        if len(bbox) >= 4:
+                            # OpenDataLoader bbox is [left, bottom, right, top] in PDF coordinates
+                            # where (0,0) is bottom-left (same as bottom-up coordinates)
+                            # Direct mapping to bottom-up coordinates for frontend
+                            rect_bbox = [
+                                bbox[0],  # left -> x0
+                                bbox[1],  # bottom -> y0
+                                bbox[2],  # right -> x1
+                                bbox[3]   # top -> y1
+                            ]
+                        else:
+                            continue
+                        
+                        # Filter out headers/footers
+                        if _is_block_filtered(rect_bbox, header_height, footer_y):
+                            continue
+                        
+                        # Crop page to the ODL bounding box and extract word coordinates
+                        try:
+                            cropped_page = _crop_to_bbox(page, rect_bbox)
+                            word_boxes = _extract_word_coordinates(cropped_page, page_num, page_height, page_width)
                             
-                            while seg_text and seg_text[-1].isspace():
-                                seg_text = seg_text[:-1]
-                                if seg_chars:
-                                    seg_chars.pop()
-                            
-                            if seg_text.strip():
-                                items.append({
-                                    "text": seg_text,
-                                    "label": item_label,
-                                    "char_map": seg_chars,
-                                    "page": page_num + 1,
-                                    "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
-                                    "font": seg_font
-                                })
+                            if word_boxes:
+                                # Combine words into text
+                                text = " ".join([w["word"] for w in word_boxes])
+                                if text.strip():
+                                    items.append({
+                                        "text": text,
+                                        "label": item_label,
+                                        "word_boxes": word_boxes,
+                                        "page": page_num + 1,
+                                        "bbox": rect_bbox
+                                    })
+                            processed_odl_bboxes.append(rect_bbox)
+                        except Exception as e:
+                            logger.warning(f"Failed to extract words from ODL region: {e}")
+                            continue
 
-        remaining_blocks = [all_blocks[i] for i in range(len(all_blocks)) if i not in processed_indices]
-        sorted_remaining = sorted(remaining_blocks, key=lambda b: (b["bbox"][1], b["bbox"][0]))
-        
-        for block in sorted_remaining:
-            bbox = fitz.Rect(block["bbox"])
-            if _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes):
-                continue
+                # Extract remaining text from page not covered by ODL
+                # Extract all words and filter out those in ODL regions
+                try:
+                    all_word_boxes = _extract_word_coordinates(page, page_num, page_height, page_width)
+                    
+                    # Filter out words that are in processed ODL regions
+                    remaining_words = []
+                    for word_box in all_word_boxes:
+                        word_center_x = (word_box["x0"] + word_box["x1"]) / 2
+                        word_center_y = (word_box["y0"] + word_box["y1"]) / 2
+                        
+                        in_odl_region = False
+                        for odl_rect in processed_odl_bboxes:
+                            if (odl_rect[0] <= word_center_x <= odl_rect[2] and
+                                odl_rect[1] <= word_center_y <= odl_rect[3]):
+                                in_odl_region = True
+                                break
+                        
+                        if not in_odl_region:
+                            remaining_words.append(word_box)
+                    
+                    # Sort remaining words by reading order (top to bottom, left to right)
+                    remaining_words.sort(key=lambda w: (w["y0"], w["x0"]))
+                    
+                    # Group remaining words into text blocks by proximity
+                    if remaining_words:
+                        # Simple grouping: all remaining words as one block
+                        # This can be improved later for better segmentation
+                        text = " ".join([w["word"] for w in remaining_words])
+                        if text.strip():
+                            # Calculate overall bbox
+                            min_x = min(w["x0"] for w in remaining_words)
+                            min_y = min(w["y0"] for w in remaining_words)
+                            max_x = max(w["x1"] for w in remaining_words)
+                            max_y = max(w["y1"] for w in remaining_words)
+                            
+                            items.append({
+                                "text": text,
+                                "label": "text",
+                                "word_boxes": remaining_words,
+                                "page": page_num + 1,
+                                "bbox": [min_x, min_y, max_x, max_y]
+                            })
+                except Exception as e:
+                    logger.warning(f"Failed to extract remaining words from page {page_num}: {e}")
             
-            segments = _process_block(block, page_num, page_height, page_width)
-            for seg in segments:
-                seg_text = seg["text"]
-                seg_chars = seg["chars"]
-                seg_font = seg["font"]
-                
-                while seg_text and seg_text[-1].isspace():
-                    seg_text = seg_text[:-1]
-                    if seg_chars:
-                        seg_chars.pop()
-                
-                if seg_text.strip():
-                    items.append({
-                        "text": seg_text,
-                        "label": "text",
-                        "char_map": seg_chars,
-                        "page": page_num + 1,
-                        "bbox": list(bbox),
-                        "font": seg_font
-                    })
-            
-    doc.close()
-    return items
+            return items
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass

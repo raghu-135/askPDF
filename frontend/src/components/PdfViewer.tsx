@@ -83,13 +83,16 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 
 
 type BBox = {
+  word: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
   page: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  page_height: number;
   page_width: number;
+  page_height: number;
+  font?: string;
+  size?: number;
 };
 
 type Sentence = {
@@ -564,11 +567,11 @@ function EmbedPdfDocumentBody({
       const pageData = byPage[pageNumber] || [];
       for (const sentence of pageData) {
         for (const bbox of sentence.pageBBoxes) {
-          const bLeft = bbox.x / bbox.page_width;
+          const bLeft = bbox.x0 / bbox.page_width;
           const bTop =
-            (bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height;
-          const bWidth = bbox.width / bbox.page_width;
-          const bHeight = bbox.height / bbox.page_height;
+            (bbox.page_height - bbox.y1) / bbox.page_height;
+          const bWidth = (bbox.x1 - bbox.x0) / bbox.page_width;
+          const bHeight = (bbox.y1 - bbox.y0) / bbox.page_height;
 
           if (
             x >= bLeft &&
@@ -750,10 +753,10 @@ function EmbedPdfDocumentBody({
                     }}
                     style={{
                       position: "absolute",
-                      left: `${(bbox.x / bbox.page_width) * 100}%`,
-                      top: `${((bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height) * 100}%`,
-                      width: `${(bbox.width / bbox.page_width) * 100}%`,
-                      height: `${(bbox.height / bbox.page_height) * 100}%`,
+                      left: `${(bbox.x0 / bbox.page_width) * 100}%`,
+                      top: `${((bbox.page_height - bbox.y1) / bbox.page_height) * 100}%`,
+                      width: `${((bbox.x1 - bbox.x0) / bbox.page_width) * 100}%`,
+                      height: `${((bbox.y1 - bbox.y0) / bbox.page_height) * 100}%`,
                       backgroundColor: "rgba(0, 180, 255, 0.28)",
                     }}
                   />

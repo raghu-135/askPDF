@@ -21,10 +21,9 @@ langchain-community
 ddgs
 sentence_transformers
 torch
-PyMuPDF>=1.24.0
-pymupdf-layout
+pdfplumber>=0.10.0
 spacy>=3.7.0
-opendataloader-pdf>=0.1.0
+opendataloader-pdf==2.2.1
 numpy
 pydub
 markitdown

@@ -35,6 +35,7 @@ def split_into_sentences(items: list[dict]):
         text = item.get("text", "").strip()
         bbox = item.get("bbox")
         page = item.get("page", 0)
+        word_boxes = item.get("word_boxes", [])
         font = item.get("font", {"name": "", "size": 0})
         
         should_join = False
@@ -95,14 +96,9 @@ def split_into_sentences(items: list[dict]):
             
             if needs_space:
                 prev["text"] += " "
-                if prev["char_map"]:
-                    last_char = prev["char_map"][-1]
-                    space_char = last_char.copy()
-                    space_char.update({"is_space": True, "width": 0, "c": " "})
-                    prev["char_map"].append(space_char)
             
             prev["text"] += item["text"]
-            prev["char_map"].extend(item["char_map"])
+            prev["word_boxes"].extend(word_boxes)
             if bbox and prev.get("bbox"):
                 prev["bbox"] = [
                     min(prev["bbox"][0], bbox[0]),
@@ -118,7 +114,7 @@ def split_into_sentences(items: list[dict]):
     
     for item in processed_items:
         text = item["text"]
-        char_map = item["char_map"]
+        word_boxes = item["word_boxes"]
         protected_spans = []
         for match in URL_PATTERN.finditer(text):
             protected_spans.append((match.start(), match.end()))
@@ -134,14 +130,37 @@ def split_into_sentences(items: list[dict]):
             sent_text = sent.text.strip()
             if not sent_text:
                 continue
-            start_idx = sent.start_char
-            end_idx = sent.end_char
-            sent_bboxes = char_map[start_idx:end_idx]
-            sentences.append({
-                "id": global_id,
-                "text": sent_text,
-                "bboxes": sent_bboxes
-            })
-            global_id += 1
+            
+            # Match sentence text to word boxes by word order
+            # Split sentence into words and match to word_boxes
+            sent_words = sent_text.split()
+            sent_word_boxes = []
+            word_idx = 0
+            
+            for sent_word in sent_words:
+                # Find matching word box
+                while word_idx < len(word_boxes):
+                    word_box = word_boxes[word_idx]
+                    word_text = word_box.get("word", "").strip()
+                    
+                    # Normalize for comparison (remove punctuation, case-insensitive)
+                    sent_word_clean = sent_word.strip(".,!?;:\"'()[]{}").lower()
+                    word_text_clean = word_text.strip(".,!?;:\"'()[]{}").lower()
+                    
+                    if sent_word_clean == word_text_clean:
+                        sent_word_boxes.append(word_box)
+                        word_idx += 1
+                        break
+                    else:
+                        # Skip this word box if it doesn't match
+                        word_idx += 1
+            
+            if sent_word_boxes:
+                sentences.append({
+                    "id": global_id,
+                    "text": sent_text,
+                    "bboxes": sent_word_boxes
+                })
+                global_id += 1
             
     return sentences
