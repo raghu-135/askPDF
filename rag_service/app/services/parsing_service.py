@@ -153,11 +153,33 @@ def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, p
                 sent_words.append(word)
         
         if sent_words:
-            # Calculate sentence bbox from word bboxes
-            x0 = min(w["x0"] for w in sent_words)
-            y0 = min(w["top"] for w in sent_words)
-            x1 = max(w["x1"] for w in sent_words)
-            y1 = max(w["bottom"] for w in sent_words)
+            # Group words by lines (words with similar top positions)
+            # Sort words by top position first
+            sent_words_sorted = sorted(sent_words, key=lambda w: w["top"])
+            
+            # Group into lines based on vertical proximity (within 5 points)
+            lines = []
+            current_line = [sent_words_sorted[0]]
+            current_top = sent_words_sorted[0]["top"]
+            
+            for word in sent_words_sorted[1:]:
+                # If word is on a new line (vertical gap > 5 points)
+                if abs(word["top"] - current_top) > 5:
+                    lines.append(current_line)
+                    current_line = [word]
+                    current_top = word["top"]
+                else:
+                    current_line.append(word)
+            lines.append(current_line)
+            
+            # Calculate bbox for each line
+            line_bboxes = []
+            for line in lines:
+                line_x0 = min(w["x0"] for w in line)
+                line_y0 = min(w["top"] for w in line)
+                line_x1 = max(w["x1"] for w in line)
+                line_y1 = max(w["bottom"] for w in line)
+                line_bboxes.append([line_x0, line_y0, line_x1, line_y1])
             
             # Extract font info (use first word's font)
             font_name = sent_words[0].get("fontname", "")
@@ -168,7 +190,8 @@ def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, p
                 "text": sent_text,
                 "label": label,
                 "page": page_num + 1,
-                "bbox": [x0, y0, x1, y1],
+                "bbox": line_bboxes[0],  # Primary bbox (first line)
+                "bboxes": line_bboxes,  # All line bboxes
                 "page_width": page_width,
                 "page_height": page_height,
                 "words": sent_words,
@@ -234,11 +257,33 @@ def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
                 sent_words.append(word)
         
         if sent_words:
-            # Calculate sentence bbox (may span multiple pages)
-            x0 = min(w["x0"] for w in sent_words)
-            y0 = min(w["top"] for w in sent_words)
-            x1 = max(w["x1"] for w in sent_words)
-            y1 = max(w["bottom"] for w in sent_words)
+            # Group words by lines (words with similar top positions)
+            # Sort words by top position first
+            sent_words_sorted = sorted(sent_words, key=lambda w: w["top"])
+            
+            # Group into lines based on vertical proximity (within 5 points)
+            lines = []
+            current_line = [sent_words_sorted[0]]
+            current_top = sent_words_sorted[0]["top"]
+            
+            for word in sent_words_sorted[1:]:
+                # If word is on a new line (vertical gap > 5 points)
+                if abs(word["top"] - current_top) > 5:
+                    lines.append(current_line)
+                    current_line = [word]
+                    current_top = word["top"]
+                else:
+                    current_line.append(word)
+            lines.append(current_line)
+            
+            # Calculate bbox for each line
+            line_bboxes = []
+            for line in lines:
+                line_x0 = min(w["x0"] for w in line)
+                line_y0 = min(w["top"] for w in line)
+                line_x1 = max(w["x1"] for w in line)
+                line_y1 = max(w["bottom"] for w in line)
+                line_bboxes.append([line_x0, line_y0, line_x1, line_y1])
             
             # Get pages this sentence spans
             pages = sorted(set(w["page"] for w in sent_words))
@@ -256,7 +301,8 @@ def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
                 "text": sent_text,
                 "label": label,
                 "pages": pages,  # List of pages sentence spans
-                "bbox": [x0, y0, x1, y1],
+                "bbox": line_bboxes[0],  # Primary bbox (first line)
+                "bboxes": line_bboxes,  # All line bboxes
                 "page_width": first_page.width,
                 "page_height": first_page.height,
                 "words": sent_words,
