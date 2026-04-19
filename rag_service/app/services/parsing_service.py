@@ -171,20 +171,28 @@ def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, p
                 else:
                     current_line.append(word)
             lines.append(current_line)
-            
-            # Calculate bbox for each line
+
+            # Calculate bbox for each line with page info
             line_bboxes = []
             for line in lines:
                 line_x0 = min(w["x0"] for w in line)
                 line_y0 = min(w["top"] for w in line)
                 line_x1 = max(w["x1"] for w in line)
                 line_y1 = max(w["bottom"] for w in line)
-                line_bboxes.append([line_x0, line_y0, line_x1, line_y1])
-            
+                line_bboxes.append({
+                    "page": page_num + 1,
+                    "x0": line_x0,
+                    "y0": line_y0,
+                    "x1": line_x1,
+                    "y1": line_y1,
+                    "page_width": page_width,
+                    "page_height": page_height
+                })
+
             # Extract font info (use first word's font)
             font_name = sent_words[0].get("fontname", "")
             font_size = sent_words[0].get("size", 0)
-            
+
             sentences.append({
                 "id": start_id + len(sentences),
                 "text": sent_text,
@@ -201,7 +209,32 @@ def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, p
     return sentences
 
 def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
-    """Extract sentences from text spanning multiple bboxes (columns/pages)."""
+    """
+    Extract sentences from text spanning multiple bboxes (columns/pages).
+    
+    This function handles multi-column layouts and multi-page sentences by:
+    - Collecting all words from all bboxes first
+    - Using the full text from the Docling item
+    - Splitting sentences on the full text using spaCy
+    - Mapping sentences back to words across all regions
+    - Creating line-level bboxes that preserve visual structure
+    - Tracking which pages a sentence spans
+    
+    Bbox handling approach:
+    - Line-level bboxes: Group words by vertical proximity (within 5 points) to create line bboxes
+    - Primary bbox: First line bbox for quick reference
+    - All bboxes: Array of all line bboxes for precise highlighting
+    - Pages field: List of pages the sentence spans
+    
+    Args:
+        pdf: pdfplumber PDF object
+        item: Docling TextItem with multiple prov entries
+        label: Label for the text item
+        start_id: Starting ID for sentence numbering
+        
+    Returns:
+        List of sentence dictionaries with bounding boxes and metadata
+    """
     all_words = []
     char_offset = 0
     
@@ -226,17 +259,20 @@ def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
             use_text_flow=True
         )
         
-        # Add page number to each word
+        # Add page number and dimensions to each word
         for word in words:
             word["page"] = page_num + 1
+            word["page_width"] = page_width
+            word["page_height"] = page_height
             word["char_start"] = char_offset
             word["char_end"] = char_offset + len(word["text"])
             char_offset += len(word["text"]) + 1  # +1 for space
-        
+
         all_words.extend(words)
-    
-    # Get full text from item
-    full_text = item.text
+
+    # Build full text from extracted words to ensure character alignment
+    # Using word text instead of item.text to avoid spacing/character mismatches
+    full_text = " ".join(w["text"] for w in all_words)
     
     # Split into sentences using spaCy
     if not _nlp:
@@ -275,16 +311,29 @@ def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
                 else:
                     current_line.append(word)
             lines.append(current_line)
-            
-            # Calculate bbox for each line
+
+            # Calculate bbox for each line with page info
             line_bboxes = []
             for line in lines:
                 line_x0 = min(w["x0"] for w in line)
                 line_y0 = min(w["top"] for w in line)
                 line_x1 = max(w["x1"] for w in line)
                 line_y1 = max(w["bottom"] for w in line)
-                line_bboxes.append([line_x0, line_y0, line_x1, line_y1])
-            
+                # Get the page for this line from the first word in the line
+                line_page = line[0]["page"]
+                # Get page dimensions from the first word
+                line_page_width = line[0].get("page_width", 0)
+                line_page_height = line[0].get("page_height", 0)
+                line_bboxes.append({
+                    "page": line_page,
+                    "x0": line_x0,
+                    "y0": line_y0,
+                    "x1": line_x1,
+                    "y1": line_y1,
+                    "page_width": line_page_width,
+                    "page_height": line_page_height
+                })
+
             # Get pages this sentence spans
             pages = sorted(set(w["page"] for w in sent_words))
             
@@ -311,7 +360,7 @@ def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
     
     return sentences
 
-def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_output: bool = True):
+def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_output: bool = True, merge_multi_bbox: bool = True):
     """
     Parse PDF with pdfplumber to extract word-level coordinates within Docling regions.
     
@@ -320,6 +369,9 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_o
         docling_doc: Docling document object from parse_with_docling
         filename: Name of the PDF file
         write_debug_output: Whether to write debug output to /app/tests
+        merge_multi_bbox: If True, merge text from multiple bboxes before sentence splitting
+                         (recommended for multi-column layouts). If False, process each
+                         bbox independently (legacy behavior). Default: True.
         
     Returns:
         List of sentence dictionaries with bounding boxes and metadata
@@ -364,25 +416,31 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_o
             
             # Check if item has multiple prov entries (multi-bbox case)
             if len(dl_item.prov) > 1:
-                # Handle multi-bbox (multi-column/page) case by processing each prov entry independently
-                sentences = []
-                for prov in dl_item.prov:
-                    page_num = prov.page_no - 1  # Convert to 0-indexed
-                    pdf_page = pdf.pages[page_num]
-                    page_height = pdf_page.height
-                    page_width = pdf_page.width
-                    
-                    # Convert bbox to TOPLEFT using page-specific height
-                    pdf_bbox = _convert_bottomleft_to_topleft(
-                        (prov.bbox.l, prov.bbox.t, prov.bbox.r, prov.bbox.b),
-                        page_height
+                if merge_multi_bbox:
+                    # Use multi-bbox function to merge text before sentence splitting
+                    sentences = _extract_sentences_from_multi_bbox(
+                        pdf, dl_item, item_label, start_id=len(all_sentences)
                     )
-                    
-                    prov_sentences = _extract_sentences_from_bbox(
-                        pdf_page, pdf_bbox, item_label, page_num, page_height, page_width,
-                        start_id=len(all_sentences) + len(sentences)
-                    )
-                    sentences.extend(prov_sentences)
+                else:
+                    # Legacy behavior: process each prov independently
+                    sentences = []
+                    for prov in dl_item.prov:
+                        page_num = prov.page_no - 1  # Convert to 0-indexed
+                        pdf_page = pdf.pages[page_num]
+                        page_height = pdf_page.height
+                        page_width = pdf_page.width
+                        
+                        # Convert bbox to TOPLEFT using page-specific height
+                        pdf_bbox = _convert_bottomleft_to_topleft(
+                            (prov.bbox.l, prov.bbox.t, prov.bbox.r, prov.bbox.b),
+                            page_height
+                        )
+                        
+                        prov_sentences = _extract_sentences_from_bbox(
+                            pdf_page, pdf_bbox, item_label, page_num, page_height, page_width,
+                            start_id=len(all_sentences) + len(sentences)
+                        )
+                        sentences.extend(prov_sentences)
             else:
                 # Handle single bbox case
                 prov = dl_item.prov[0]
@@ -418,13 +476,20 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_o
     
     return all_sentences
 
-def extract_text_with_coordinates(data: bytes, filename: str):
+def extract_text_with_coordinates(data: bytes, filename: str, merge_multi_bbox: bool = True):
     """
     Extract sentences with bounding boxes using Docling + pdfplumber.
     Docling provides structural labels and paragraph bboxes (potentially multiple).
     pdfplumber provides word/character-level coordinates within those bboxes.
     
     This is the main orchestration function that combines Docling and pdfplumber parsing.
+    
+    Args:
+        data: PDF file bytes
+        filename: Name of the PDF file
+        merge_multi_bbox: If True, merge text from multiple bboxes before sentence splitting
+                         (recommended for multi-column layouts). If False, process each
+                         bbox independently (legacy behavior). Default: True.
     """
     if not filename:
         return []
@@ -436,6 +501,6 @@ def extract_text_with_coordinates(data: bytes, filename: str):
         return []
     
     # Parse with pdfplumber using Docling regions
-    all_sentences = parse_with_pdfplumber(data, docling_doc, filename, write_debug_output=True)
+    all_sentences = parse_with_pdfplumber(data, docling_doc, filename, write_debug_output=True, merge_multi_bbox=merge_multi_bbox)
     
     return all_sentences
