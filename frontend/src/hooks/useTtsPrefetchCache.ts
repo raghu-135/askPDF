@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef } from "react";
 
-type Sentence = { id: number; text: string };
+type Sentence = {
+  id: number;
+  text: string;
+  label?: string;
+  page?: number;
+  bbox?: [number, number, number, number];
+  page_width?: number;
+  page_height?: number;
+  bboxes?: any[];
+  words?: any[];
+};
 type TtsResult = { audioUrl: string };
 
 type UseTtsPrefetchCacheParams = {

@@ -8,7 +8,17 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import { ttsSentence, getVoices } from "../lib/tts-api";
 import { useTtsPrefetchCache } from "../hooks/useTtsPrefetchCache";
 
-type Sentence = { id: number; text: string };
+type Sentence = {
+  id: number;
+  text: string;
+  label?: string;
+  page?: number;
+  bbox?: [number, number, number, number];
+  page_width?: number;
+  page_height?: number;
+  bboxes?: any[];
+  words?: any[];
+};
 
 
 type Props = {

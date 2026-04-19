@@ -26,8 +26,41 @@ import PdfTabs, { PdfTab } from "../components/PdfTabs";
 import { Thread, addFileToThread, removeSourceFromThread } from "../lib/api";
 import { loadThreadTabs, createPdfTabFromUpload, createWebTabFromIndexed, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
+import { transformSentences } from "../lib/bbox-derivation";
 
-type Sentence = { id: number; text: string; bboxes: any[] };
+type BBox = {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  page_height: number;
+  page_width: number;
+};
+
+type Word = {
+  text: string;
+  x0: number;
+  x1: number;
+  top: number;
+  bottom: number;
+  page_width: number;
+  page_height: number;
+  char_start: number;
+  char_end: number;
+};
+
+type Sentence = {
+  id: number;
+  text: string;
+  label: string;
+  page: number;
+  bbox: [number, number, number, number];
+  page_width: number;
+  page_height: number;
+  bboxes: BBox[];
+  words?: Word[];
+};
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -181,13 +214,14 @@ export default function Home() {
       console.warn('PDF data not yet available, creating tab with empty sentences:', err);
     }
 
+    const transformedSentences = pdfData?.sentences ? transformSentences(pdfData.sentences) : [];
     const newTab: PdfTab = {
       id: data.fileHash,
       fileHash: data.fileHash,
       fileName: data.title || data.url,
       pdfUrl: `${apiBase}/api/pdf-file/${data.fileHash}?t=${Date.now()}`,
-      sentences: pdfData?.sentences || [],
-      text: pdfData?.sentences ? extractTextFromSentences(pdfData.sentences) : '',
+      sentences: transformedSentences,
+      text: transformedSentences ? extractTextFromSentences(transformedSentences) : '',
       sourceType: 'web',
       sourceUrl: data.url,
     };

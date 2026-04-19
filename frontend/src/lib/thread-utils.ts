@@ -1,5 +1,6 @@
 import { PdfTab } from "../components/PdfTabs";
 import { Thread, addFileToThread, getThread, getPdfByHash } from "./api";
+import { transformSentences } from "./bbox-derivation";
 
 /**
  * Loads all sources (PDFs and web-converted PDFs) for a thread and returns PdfTabs.
@@ -15,13 +16,14 @@ export async function loadThreadTabs(thread: Thread, apiBase: string): Promise<P
     // With unified flow, all sources are PDFs (both uploaded and web-converted)
     try {
       const pdfData = await getPdfByHash(file.file_hash);
+      const transformedSentences = transformSentences(pdfData.sentences);
       loadedTabs.push({
         id: file.file_hash,
         fileName: file.file_name,
         fileHash: file.file_hash,
         pdfUrl: `${apiBase}${pdfData.pdfUrl}?t=${Date.now()}`,
-        sentences: pdfData.sentences,
-        text: extractTextFromSentences(pdfData.sentences),
+        sentences: transformedSentences,
+        text: extractTextFromSentences(transformedSentences),
         sourceType: file.source_type === 'web' ? 'web' : 'pdf',
         sourceUrl: file.source_type === 'web' ? file.file_path || file.file_name : undefined,
       });
@@ -37,13 +39,14 @@ export async function loadThreadTabs(thread: Thread, apiBase: string): Promise<P
  * Creates a PdfTab from upload data.
  */
 export function createPdfTabFromUpload(data: any, apiBase: string): PdfTab {
+  const transformedSentences = transformSentences(data?.sentences || []);
   return {
     id: data?.fileHash || `tab-${Date.now()}`,
     fileName: data?.fileName || 'Untitled.pdf',
     fileHash: data?.fileHash || '',
     pdfUrl: data?.pdfUrl ? `${apiBase}${data.pdfUrl}?t=${Date.now()}` : '',
-    sentences: data?.sentences || [],
-    text: extractTextFromSentences(data?.sentences || []),
+    sentences: transformedSentences,
+    text: extractTextFromSentences(transformedSentences),
     sourceType: 'pdf',
   };
 }

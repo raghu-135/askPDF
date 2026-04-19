@@ -111,7 +111,7 @@ def parse_with_docling(data: bytes, filename: str, write_debug_output: bool = Tr
         logger.warning(f"Docling conversion failed: {e}")
         return None
 
-def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, page_width):
+def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, page_width, start_id=0):
     """Extract sentences from a single cropped region using pdfplumber."""
     # Crop to bbox
     cropped = pdf_page.crop(bbox)
@@ -164,18 +164,20 @@ def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, p
             font_size = sent_words[0].get("size", 0)
             
             sentences.append({
-                "id": len(sentences),
+                "id": start_id + len(sentences),
                 "text": sent_text,
                 "label": label,
                 "page": page_num + 1,
                 "bbox": [x0, y0, x1, y1],
+                "page_width": page_width,
+                "page_height": page_height,
                 "words": sent_words,
                 "font": {"name": font_name, "size": font_size}
             })
     
     return sentences
 
-def _extract_sentences_from_multi_bbox(pdf, item, label):
+def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
     """Extract sentences from text spanning multiple bboxes (columns/pages)."""
     all_words = []
     char_offset = 0
@@ -245,12 +247,18 @@ def _extract_sentences_from_multi_bbox(pdf, item, label):
             font_name = sent_words[0].get("fontname", "")
             font_size = sent_words[0].get("size", 0)
             
+            # Use first page's dimensions
+            first_page_num = pages[0] - 1  # Convert to 0-indexed
+            first_page = pdf.pages[first_page_num]
+            
             sentences.append({
-                "id": len(sentences),
+                "id": start_id + len(sentences),
                 "text": sent_text,
                 "label": label,
                 "pages": pages,  # List of pages sentence spans
                 "bbox": [x0, y0, x1, y1],
+                "page_width": first_page.width,
+                "page_height": first_page.height,
                 "words": sent_words,
                 "font": {"name": font_name, "size": font_size}
             })
@@ -325,7 +333,8 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_o
                     )
                     
                     prov_sentences = _extract_sentences_from_bbox(
-                        pdf_page, pdf_bbox, item_label, page_num, page_height, page_width
+                        pdf_page, pdf_bbox, item_label, page_num, page_height, page_width,
+                        start_id=len(all_sentences) + len(sentences)
                     )
                     sentences.extend(prov_sentences)
             else:
@@ -343,7 +352,8 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_o
                 )
                 
                 sentences = _extract_sentences_from_bbox(
-                    pdf_page, pdf_bbox, item_label, page_num, page_height, page_width
+                    pdf_page, pdf_bbox, item_label, page_num, page_height, page_width,
+                    start_id=len(all_sentences)
                 )
             
             all_sentences.extend(sentences)

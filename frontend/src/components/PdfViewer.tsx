@@ -92,10 +92,28 @@ type BBox = {
   page_width: number;
 };
 
+type Word = {
+  text: string;
+  x0: number;
+  x1: number;
+  top: number;
+  bottom: number;
+  page_width: number;
+  page_height: number;
+  char_start: number;
+  char_end: number;
+};
+
 type Sentence = {
   id: number;
   text: string;
+  label: string;
+  page: number;
+  bbox: [number, number, number, number];
+  page_width: number;
+  page_height: number;
   bboxes: BBox[];
+  words?: Word[];
 };
 
 type Props = {
@@ -315,7 +333,11 @@ function EmbedPdfDocumentBody({
   const isResizingRef = useRef(isResizing);
   isResizingRef.current = isResizing;
 
-  const byPage = useMemo(() => sentencesByPageMap(sentences), [sentences]);
+  const byPage = useMemo(() => {
+    const map = sentencesByPageMap(sentences);
+    console.log('[PdfViewer] Sentences by page:', Object.keys(map).map(k => ({ page: k, count: map[k].length })));
+    return map;
+  }, [sentences]);
 
   const { provides: annotationApi } = useAnnotation(documentId);
   const { provides: selectionCapability } = useSelectionCapability();
@@ -565,8 +587,7 @@ function EmbedPdfDocumentBody({
       for (const sentence of pageData) {
         for (const bbox of sentence.pageBBoxes) {
           const bLeft = bbox.x / bbox.page_width;
-          const bTop =
-            (bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height;
+          const bTop = bbox.y / bbox.page_height;  // Already top-left origin
           const bWidth = bbox.width / bbox.page_width;
           const bHeight = bbox.height / bbox.page_height;
 
@@ -578,6 +599,7 @@ function EmbedPdfDocumentBody({
           ) {
             e.preventDefault();
             e.stopPropagation();
+            console.log('[PdfViewer] Double-click jumped to sentence:', sentence.id, sentence.text?.substring(0, 50));
             onJump(sentence.id);
             return;
           }
@@ -679,6 +701,13 @@ function EmbedPdfDocumentBody({
 
       const pageData = byPage[pageNumber] || [];
       const activeSentence = pageData.find((s) => s.id === currentId);
+      if (activeSentence) {
+        console.log('[PdfViewer] Rendering active sentence on page', pageNumber, ':', {
+          id: activeSentence.id,
+          text: activeSentence.text?.substring(0, 50),
+          pageBBoxes: activeSentence.pageBBoxes,
+        });
+      }
 
       return (
         <div
@@ -751,7 +780,7 @@ function EmbedPdfDocumentBody({
                     style={{
                       position: "absolute",
                       left: `${(bbox.x / bbox.page_width) * 100}%`,
-                      top: `${((bbox.page_height - (bbox.y + bbox.height)) / bbox.page_height) * 100}%`,
+                      top: `${(bbox.y / bbox.page_height) * 100}%`,  // Already top-left origin
                       width: `${(bbox.width / bbox.page_width) * 100}%`,
                       height: `${(bbox.height / bbox.page_height) * 100}%`,
                       backgroundColor: "rgba(0, 180, 255, 0.28)",

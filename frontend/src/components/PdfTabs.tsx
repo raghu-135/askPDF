@@ -7,12 +7,46 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import LanguageIcon from '@mui/icons-material/Language';
 
+type BBox = {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  page_height: number;
+  page_width: number;
+};
+
+type Word = {
+  text: string;
+  x0: number;
+  x1: number;
+  top: number;
+  bottom: number;
+  page_width: number;
+  page_height: number;
+  char_start: number;
+  char_end: number;
+};
+
+type Sentence = {
+  id: number;
+  text: string;
+  label: string;
+  page: number;
+  bbox: [number, number, number, number];
+  page_width: number;
+  page_height: number;
+  bboxes: BBox[];
+  words?: Word[];
+};
+
 export type PdfTab = {
   id: string;
   fileName: string;
   fileHash: string;
   pdfUrl: string;
-  sentences: any[];
+  sentences: Sentence[];
   text?: string;
   sourceType?: 'pdf' | 'web';
   sourceUrl?: string;
