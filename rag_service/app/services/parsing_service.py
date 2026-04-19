@@ -349,6 +349,7 @@ def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
                 "id": start_id + len(sentences),
                 "text": sent_text,
                 "label": label,
+                "page": pages[0],  # Primary page (first page)
                 "pages": pages,  # List of pages sentence spans
                 "bbox": line_bboxes[0],  # Primary bbox (first line)
                 "bboxes": line_bboxes,  # All line bboxes
