@@ -310,8 +310,24 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_o
             
             # Check if item has multiple prov entries (multi-bbox case)
             if len(dl_item.prov) > 1:
-                # Handle multi-bbox (multi-column/page) case
-                sentences = _extract_sentences_from_multi_bbox(pdf, dl_item, item_label)
+                # Handle multi-bbox (multi-column/page) case by processing each prov entry independently
+                sentences = []
+                for prov in dl_item.prov:
+                    page_num = prov.page_no - 1  # Convert to 0-indexed
+                    pdf_page = pdf.pages[page_num]
+                    page_height = pdf_page.height
+                    page_width = pdf_page.width
+                    
+                    # Convert bbox to TOPLEFT using page-specific height
+                    pdf_bbox = _convert_bottomleft_to_topleft(
+                        (prov.bbox.l, prov.bbox.t, prov.bbox.r, prov.bbox.b),
+                        page_height
+                    )
+                    
+                    prov_sentences = _extract_sentences_from_bbox(
+                        pdf_page, pdf_bbox, item_label, page_num, page_height, page_width
+                    )
+                    sentences.extend(prov_sentences)
             else:
                 # Handle single bbox case
                 prov = dl_item.prov[0]
