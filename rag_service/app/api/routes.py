@@ -91,6 +91,8 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
     Extract structured text items and spatial coordinates (bounding boxes) from a PDF.
     Downloads the file from the backend and performs high-fidelity parsing to enable
     accurate PDF highlighting and sentence-level indexing.
+    
+    New format: sentences with word-level bboxes instead of character-level char_map.
     """
     pdf_url = f"{req.backend_url}/{req.file_hash}.pdf"
     try:
@@ -99,10 +101,10 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
             resp.raise_for_status()
             pdf_data = resp.content
 
-        items = extract_text_with_coordinates(pdf_data, filename=req.file_name)
-        enriched_sentences = split_into_sentences(items)
+        # extract_text_with_coordinates now returns sentences directly with word-level bboxes
+        sentences = extract_text_with_coordinates(pdf_data, filename=req.file_name)
 
-        return {"file_hash": req.file_hash, "sentences": enriched_sentences}
+        return {"file_hash": req.file_hash, "sentences": sentences}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
