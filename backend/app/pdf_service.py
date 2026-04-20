@@ -72,12 +72,12 @@ class PDFService:
         self.service_client = service_client
         # Internal URL for processing service to reach backend for PDF download
         self.backend_internal_url = os.getenv("BACKEND_INTERNAL_URL", "http://backend:8000")
-        
+
         if not self.service_client:
             raise RuntimeError("ServiceClient is not provided.")
-            
+
         os.makedirs(self.static_dir, exist_ok=True)
-        os.makedirs(self.cache_dir, exist_ok=True)
+        # Cache directory is no longer created here - kept for backward compatibility only
 
     async def _delegate_parsing(self, file_hash: str, filename: str) -> List[dict]:
         """
@@ -106,13 +106,8 @@ class PDFService:
             with open(pdf_path, "wb") as f:
                 f.write(content)
 
-        # Delegate parsing to RAG service
+        # Delegate parsing to RAG service (which now stores in SQLite)
         enriched_sentences = await self._delegate_parsing(file_hash, file.filename)
-
-        # Save to cache
-        cache_path = os.path.join(self.cache_dir, f"{file_hash}.json")
-        with open(cache_path, "w") as f:
-            json.dump(enriched_sentences, f)
 
         set_indexing_status(file_hash, IndexingStatus.PENDING)
 
@@ -155,6 +150,17 @@ class PDFService:
         if not os.path.exists(pdf_path):
             raise HTTPException(status_code=404, detail=f"PDF file not found: {file_hash}")
 
+        # Try to retrieve from RAG service SQLite first
+        parsed_data = await self.service_client.get_parsed_sentences(file_hash)
+        if parsed_data:
+            sentences = parsed_data.get("sentences", [])
+            return {
+                "sentences": sentences,
+                "pdfUrl": f"/api/pdf-file/{file_hash}",
+                "fileHash": file_hash
+            }
+
+        # Fallback to file cache for existing files
         if os.path.exists(cache_path):
             try:
                 with open(cache_path, "r") as f:
@@ -167,14 +173,8 @@ class PDFService:
             except Exception as e:
                 logging.warning(f"Failed to load cache for {file_hash}: {e}")
 
-        # Fallback: re-parse via RAG service
+        # Fallback: re-parse via RAG service (which will now store in SQLite)
         enriched_sentences = await self._delegate_parsing(file_hash, pdf_filename)
-
-        try:
-            with open(cache_path, "w") as f:
-                json.dump(enriched_sentences, f)
-        except Exception as e:
-            logging.warning(f"Failed to update cache for {file_hash}: {e}")
 
         return {
             "sentences": enriched_sentences,

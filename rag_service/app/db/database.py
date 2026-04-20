@@ -177,6 +177,7 @@ async def init_db():
             "ALTER TABLE threads ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'",
             "ALTER TABLE messages ADD COLUMN web_sources TEXT",
             "ALTER TABLE files ADD COLUMN source_type TEXT NOT NULL DEFAULT 'pdf'",
+            "ALTER TABLE files ADD COLUMN parsed_sentences_json TEXT",
             # thread_stats is created by SCHEMA above; new columns go here if needed later
         ]
         for stmt in migrations:
@@ -375,6 +376,36 @@ async def get_file(file_hash: str) -> Optional[File]:
                 file_path=row["file_path"],
                 source_type=row["source_type"] or "pdf",
             )
+    return None
+
+
+async def update_file_parsed_sentences(file_hash: str, parsed_data_json: str) -> bool:
+    """Store parsed sentences JSON in the files table."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        cursor = await db.execute(
+            "UPDATE files SET parsed_sentences_json = ? WHERE file_hash = ?",
+            (parsed_data_json, file_hash)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_file_parsed_sentences(file_hash: str) -> Optional[Dict[str, Any]]:
+    """Retrieve parsed sentences JSON from the files table."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
+        cursor = await db.execute(
+            "SELECT parsed_sentences_json FROM files WHERE file_hash = ?",
+            (file_hash,)
+        )
+        row = await cursor.fetchone()
+        if row and row["parsed_sentences_json"]:
+            try:
+                return json.loads(row["parsed_sentences_json"])
+            except Exception:
+                return None
     return None
 
 

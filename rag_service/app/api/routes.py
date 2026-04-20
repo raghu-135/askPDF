@@ -25,6 +25,7 @@ from app.db.database import (
     delete_message_pair,
     delete_thread,
     get_file,
+    get_file_parsed_sentences,
     get_message,
     get_recent_messages,
     get_thread,
@@ -38,6 +39,7 @@ from app.db.database import (
     recompute_qa_stats,
     remove_document_from_stats,
     remove_file_from_thread,
+    update_file_parsed_sentences,
     update_thread,
     update_thread_settings,
     upsert_thread_stats_document,
@@ -91,7 +93,7 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
     Extract structured text items and spatial coordinates (bounding boxes) from a PDF.
     Downloads the file from the backend and performs high-fidelity parsing to enable
     accurate PDF highlighting and sentence-level indexing.
-    
+
     New format: sentences with word-level bboxes instead of character-level char_map.
     """
     pdf_url = f"{req.backend_url}/{req.file_hash}.pdf"
@@ -104,10 +106,38 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
         # extract_text_with_coordinates now returns sentences directly with word-level bboxes
         sentences = extract_text_with_coordinates(pdf_data, filename=req.file_name)
 
+        # Ensure file record exists in database
+        await create_or_get_file(req.file_hash, req.file_name)
+
+        # Store sentences in SQLite with version field
+        parsed_data = {
+            "version": "1.0",
+            "sentences": sentences
+        }
+        await update_file_parsed_sentences(req.file_hash, json.dumps(parsed_data))
+
         return {"file_hash": req.file_hash, "sentences": sentences}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
+
+
+@router.get("/files/{file_hash}/parsed-sentences")
+async def get_file_parsed_sentences_endpoint(file_hash: str):
+    """
+    Retrieve parsed sentences for a file from SQLite.
+    Returns the JSON object with version and sentences array.
+    """
+    try:
+        parsed_data = await get_file_parsed_sentences(file_hash)
+        if not parsed_data:
+            raise HTTPException(status_code=404, detail="Parsed sentences not found")
+        return parsed_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve parsed sentences: {str(e)}")
 
 
 # ============ Thread Endpoints ============

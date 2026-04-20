@@ -20,6 +20,10 @@ class ProcessingService(ABC):
     async def index_document(self, metadata: dict, emb_model: str) -> bool:
         pass
 
+    @abstractmethod
+    async def get_parsed_sentences(self, file_hash: str) -> Optional[dict]:
+        pass
+
 class RestProcessingServiceClient(ProcessingService):
     """
     REST API implementation of the core processing service client.
@@ -74,4 +78,22 @@ class RestProcessingServiceClient(ProcessingService):
             except httpx.HTTPError as e:
                 logger.error(f"Failed to index document: {e}")
                 return False
+
+    async def get_parsed_sentences(self, file_hash: str) -> Optional[dict]:
+        """
+        Retrieve parsed sentences for a file from the processing service.
+        Returns the JSON object with version and sentences array, or None if not found.
+        """
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    f"{self.service_url}/files/{file_hash}/parsed-sentences",
+                    timeout=30.0
+                )
+                if response.status_code == 200:
+                    return response.json()
+                return None
+            except httpx.HTTPError as e:
+                logger.error(f"Failed to retrieve parsed sentences: {e}")
+                return None
 
