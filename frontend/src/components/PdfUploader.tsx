@@ -5,7 +5,7 @@ import { Button, Tooltip, CircularProgress, Box, Typography } from "@mui/materia
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import React from "react";
-import { getFileIndexStatus, IndexingStatus as IndexStatus } from "../lib/api";
+import { getFileStatus, FileStatus, ProcessStatusHelper } from "../lib/api";
 
 type Props = {
   onUploaded: (data: { sentences: any[]; pdfUrl: string; fileHash: string; fileName?: string }) => void;
@@ -31,52 +31,66 @@ const PdfUploader = React.memo(function PdfUploader({
 }: Props) {
   const inputId = "pdf-upload-input";
   const [isUploading, setIsUploading] = React.useState(false);
-  const [indexingState, setIndexingState] = React.useState<{
+  const [fileStatus, setFileStatus] = React.useState<{
     fileHash: string;
-    status: IndexStatus;
-    progress: number;
-    error?: string;
+    status: FileStatus;
   } | null>(null);
 
   const isWebMode = !!webUrl?.trim();
   const isDisabled = disabled || isUploading || isWebLoading;
 
-  // Poll for indexing status
+  // Poll for file status (parsing and indexing)
   React.useEffect(() => {
-    if (!indexingState || indexingState.status === 'ready' || indexingState.status === 'failed') {
+    if (!fileStatus) {
       return;
+    }
+
+    // Check if it's a full FileStatus object
+    if ('parsing' in fileStatus.status && 'indexing' in fileStatus.status) {
+      const { parsing, indexing } = fileStatus.status;
+      // Stop polling if both parsing and indexing are completed or failed
+      if (ProcessStatusHelper.isTerminal(parsing.status) && ProcessStatusHelper.isTerminal(indexing.status)) {
+        if (ProcessStatusHelper.isCompleted(parsing.status) && ProcessStatusHelper.isCompleted(indexing.status)) {
+          onIndexingComplete?.(fileStatus.fileHash);
+        }
+        return;
+      }
     }
 
     const pollInterval = setInterval(async () => {
       try {
-        const status = await getFileIndexStatus(indexingState.fileHash);
-        setIndexingState({
-          fileHash: status.file_hash,
-          status: status.status,
-          progress: status.progress || 0,
-          error: status.error
+        const status = await getFileStatus(fileStatus.fileHash);
+        // Ensure we have a full FileStatus object
+        const fullStatus: FileStatus = 'parsing' in status && 'indexing' in status 
+          ? status as FileStatus 
+          : { parsing: { status: 'unknown' }, indexing: { status: 'unknown' }, updated_at: new Date().toISOString() };
+        
+        setFileStatus({
+          fileHash: fileStatus.fileHash,
+          status: fullStatus
         });
 
-        if (status.status === 'ready') {
+        // Check if both parsing and indexing are completed
+        if (ProcessStatusHelper.isCompleted(fullStatus.parsing.status) && ProcessStatusHelper.isCompleted(fullStatus.indexing.status)) {
           clearInterval(pollInterval);
-          onIndexingComplete?.(status.file_hash);
-        } else if (status.status === 'failed') {
+          onIndexingComplete?.(fileStatus.fileHash);
+        } else if (ProcessStatusHelper.isFailed(fullStatus.parsing.status) || ProcessStatusHelper.isFailed(fullStatus.indexing.status)) {
           clearInterval(pollInterval);
         }
       } catch (error) {
-        console.error("Failed to check indexing status", error);
+        console.error("Failed to check file status", error);
       }
     }, 2000);
 
     return () => clearInterval(pollInterval);
-  }, [indexingState?.fileHash, indexingState?.status, onIndexingComplete]);
+  }, [fileStatus?.fileHash, fileStatus?.status, onIndexingComplete]);
 
   const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploading(true);
-    setIndexingState(null);
+    setFileStatus(null);
     
     try {
       const form = new FormData();
@@ -87,11 +101,14 @@ const PdfUploader = React.memo(function PdfUploader({
       const res = await fetch(`${apiBase}/api/upload`, { method: "POST", body: form });
       const data = await res.json();
       
-      // Set initial indexing state
-      setIndexingState({
+      // Set initial file status - will be updated by polling
+      setFileStatus({
         fileHash: data.fileHash,
-        status: data.indexingStatus || 'pending',
-        progress: 0
+        status: {
+          parsing: { status: 'pending' },
+          indexing: { status: 'pending' },
+          updated_at: new Date().toISOString()
+        }
       });
       
       onUploaded({ ...data, fileName: file.name });

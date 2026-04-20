@@ -9,24 +9,38 @@ const RAG_API_BASE = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:80
 
 // ============ PDF Upload ============
 
-export type IndexingStatus = 'pending' | 'indexing' | 'ready' | 'failed' | 'unknown';
+export type ProcessStatus = 'pending' | 'running' | 'completed' | 'failed' | 'unknown';
+
+export interface ProcessSection {
+  status: ProcessStatus;
+  started_at?: string;
+  finished_at?: string;
+  error?: string;
+}
+
+export interface FileStatus {
+  parsing: ProcessSection;
+  indexing: ProcessSection & {
+    chunk_count?: number;
+    total_chars?: number;
+  };
+  updated_at: string;
+}
+
+// Helper functions for status checks
+export const ProcessStatusHelper = {
+  isCompleted: (status: ProcessStatus) => status === 'completed',
+  isFailed: (status: ProcessStatus) => status === 'failed',
+  isRunning: (status: ProcessStatus) => status === 'running',
+  isPending: (status: ProcessStatus) => status === 'pending',
+  isTerminal: (status: ProcessStatus) => status === 'completed' || status === 'failed',
+};
 
 export interface UploadResponse {
   sentences: any[];
   pdfUrl: string;
   fileHash: string;
   fileName: string;
-  indexingStatus: IndexingStatus;
-}
-
-export interface FileIndexStatus {
-  file_hash: string;
-  status: IndexingStatus;
-  error?: string;
-  started_at?: string;
-  finished_at?: string;
-  progress?: number;
-  message?: string;
 }
 
 export async function uploadPdf(file: File, embeddingModel: string): Promise<UploadResponse> {
@@ -38,8 +52,11 @@ export async function uploadPdf(file: File, embeddingModel: string): Promise<Upl
   return res.json();
 }
 
-export async function getFileIndexStatus(fileHash: string): Promise<FileIndexStatus> {
-  const res = await fetch(`${API_BASE}/api/index-status/${fileHash}`);
+export async function getFileStatus(fileHash: string, section?: 'parsing' | 'indexing'): Promise<FileStatus | { parsing: ProcessSection } | { indexing: ProcessSection & { chunk_count?: number; total_chars?: number } }> {
+  const url = section
+    ? `${API_BASE}/api/files/${fileHash}/status?section=${section}`
+    : `${API_BASE}/api/files/${fileHash}/status`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

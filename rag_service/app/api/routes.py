@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import traceback
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -16,6 +17,7 @@ from app.agent.agent import (
 )
 from app.db.database import (
     MessageRole,
+    ProcessStatus,
     add_file_to_thread,
     count_threads_with_file_for_model,
     create_message,
@@ -26,6 +28,7 @@ from app.db.database import (
     delete_thread,
     get_file,
     get_file_parsed_sentences,
+    get_file_status,
     get_message,
     get_recent_messages,
     get_thread,
@@ -40,9 +43,11 @@ from app.db.database import (
     remove_document_from_stats,
     remove_file_from_thread,
     update_file_parsed_sentences,
+    update_file_status,
+    update_parsing_status,
+    update_indexing_status,
     update_thread,
     update_thread_settings,
-    upsert_thread_stats_document,
     upsert_thread_file_annotations,
 )
 from app.db.vector_db import get_vector_db
@@ -97,6 +102,10 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
     New format: sentences with word-level bboxes instead of character-level char_map.
     """
     pdf_url = f"{req.backend_url}/{req.file_hash}.pdf"
+    
+    # Update parsing status to running
+    await update_parsing_status(req.file_hash, ProcessStatus.RUNNING.value, started_at=datetime.utcnow().isoformat())
+    
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get(pdf_url, timeout=30.0)
@@ -116,9 +125,14 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
         }
         await update_file_parsed_sentences(req.file_hash, json.dumps(parsed_data))
 
+        # Update parsing status to completed
+        await update_parsing_status(req.file_hash, ProcessStatus.COMPLETED.value, finished_at=datetime.utcnow().isoformat())
+
         return {"file_hash": req.file_hash, "sentences": sentences}
     except Exception as e:
         traceback.print_exc()
+        # Update parsing status to failed
+        await update_parsing_status(req.file_hash, ProcessStatus.FAILED.value, error=str(e))
         raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
 
 
@@ -138,6 +152,67 @@ async def get_file_parsed_sentences_endpoint(file_hash: str):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to retrieve parsed sentences: {str(e)}")
+
+
+@router.get("/files/{file_hash}/status")
+async def get_file_status_endpoint(file_hash: str, section: Optional[str] = None):
+    """
+    Retrieve file status (parsing and indexing status) from SQLite.
+    Returns the file_status JSON with parsing and indexing sections.
+    
+    Query parameters:
+    - section: Optional filter for specific section (e.g., "parsing", "indexing")
+    """
+    try:
+        file = await get_file(file_hash)
+        if not file:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        status = await get_file_status(file_hash)
+        if not status:
+            # Initialize with default structure if not set
+            status = {
+                "parsing": {"status": ProcessStatus.UNKNOWN.value},
+                "indexing": {"status": ProcessStatus.UNKNOWN.value},
+                "updated_at": datetime.utcnow().isoformat()
+            }
+        
+        # Filter by section if specified
+        if section:
+            if section in status:
+                return {section: status[section]}
+            else:
+                raise HTTPException(status_code=400, detail=f"Invalid section: {section}")
+        
+        return status
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve file status: {str(e)}")
+
+
+@router.put("/files/{file_hash}/status")
+async def update_file_status_endpoint(file_hash: str, status_update: Dict[str, Any]):
+    """
+    Update file status (parsing and indexing status) in SQLite.
+    Accepts partial status updates and merges with existing status.
+    """
+    try:
+        file = await get_file(file_hash)
+        if not file:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        success = await update_file_status(file_hash, status_update)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update file status")
+        
+        return await get_file_status_endpoint(file_hash)
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to update file status: {str(e)}")
 
 
 # ============ Thread Endpoints ============
@@ -386,15 +461,7 @@ async def add_file_to_thread_endpoint(
         # Associate file with thread
         await add_file_to_thread(thread_id, req.file_hash)
 
-        # Seed stats row with pending status immediately
-        await upsert_thread_stats_document(
-            thread_id=thread_id,
-            file_hash=req.file_hash,
-            file_name=req.file_name,
-            source_type="pdf",
-        )
-
-        # Trigger background indexing
+        # Trigger background indexing (status is tracked in file_status column)
         background_tasks.add_task(
             index_document_for_thread,
             thread_id=thread_id,
@@ -552,14 +619,6 @@ async def add_web_source_to_thread_endpoint(
             source_type="pdf",  # Unified type
         )
         await add_file_to_thread(thread_id, pdf_hash)
-
-        # Seed stats row with pending status immediately
-        await upsert_thread_stats_document(
-            thread_id=thread_id,
-            file_hash=pdf_hash,
-            file_name=capture["title"],
-            source_type="pdf",
-        )
 
         # Use markdown for vector DB indexing (cleaner than PDF extraction)
         background_tasks.add_task(
@@ -913,6 +972,7 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
 async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = None):
     """
     Check indexing status for a thread (or specific file in thread).
+    Now uses file_status column instead of thread_stats.
     """
     try:
         thread = await get_thread(thread_id)
@@ -923,21 +983,34 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         embed_model_ready = await check_embed_model_ready(thread.embed_model)
 
         if file_hash:
-            # Check specific file
-            is_indexed = await db.has_file_indexed(thread_id, file_hash, thread.embed_model)
-            status = "ready" if is_indexed else "not_ready"
+            # Check specific file using file_status
+            file_status = await get_file_status(file_hash)
+            indexing_status = file_status.get("indexing", {}).get("status", ProcessStatus.UNKNOWN.value) if file_status else ProcessStatus.UNKNOWN.value
+            if ProcessStatus.is_completed(indexing_status):
+                status = "ready"
+            elif ProcessStatus.is_failed(indexing_status):
+                status = "not_ready"
+            elif ProcessStatus.is_running(indexing_status):
+                status = "not_ready"
+            else:
+                # Fallback to vector DB check for backward compatibility
+                is_indexed = await db.has_file_indexed(thread_id, file_hash, thread.embed_model)
+                status = "ready" if is_indexed else "not_ready"
         else:
-            # Check all files in thread
+            # Check all files in thread using file_status
             files = await get_thread_files(thread_id)
             if not files:
                 status = "ready"
             else:
                 all_indexed = True
                 for f in files:
-                    # Check if file chunks exist for this thread
-                    if not await db.has_file_indexed(thread_id, f.file_hash, thread.embed_model):
-                        all_indexed = False
-                        break
+                    file_status = await get_file_status(f.file_hash)
+                    indexing_status = file_status.get("indexing", {}).get("status", ProcessStatus.UNKNOWN.value) if file_status else ProcessStatus.UNKNOWN.value
+                    if not ProcessStatus.is_completed(indexing_status):
+                        # Fallback to vector DB check for backward compatibility
+                        if not await db.has_file_indexed(thread_id, f.file_hash, thread.embed_model):
+                            all_indexed = False
+                            break
                 status = "ready" if all_indexed else "not_ready"
 
         stats = await db.get_thread_stats(

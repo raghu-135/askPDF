@@ -12,6 +12,7 @@ import json
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional
+from app.db.database import ProcessStatus
 
 import httpx
 from unstructured.partition.pdf import partition_pdf
@@ -241,18 +242,23 @@ async def index_document_for_thread(
     Returns:
         Status dict with indexing results
     """
+    from app.db.database import update_indexing_status
+    from datetime import datetime
+    
     db_client = get_vector_db()
     metadata = metadata or {}
+
+    # Update indexing status to running
+    await update_indexing_status(file_hash, ProcessStatus.RUNNING.value, started_at=datetime.utcnow().isoformat())
 
     try:
         if await db_client.has_file_indexed(thread_id, file_hash, embedding_model_name):
             try:
-                from app.db.database import update_document_indexing_status
                 shared_chunks = await db_client.get_file_chunk_count(file_hash, embedding_model_name)
-                await update_document_indexing_status(
-                    thread_id=thread_id,
+                await update_indexing_status(
                     file_hash=file_hash,
-                    status="indexed",
+                    status=ProcessStatus.COMPLETED.value,
+                    finished_at=datetime.utcnow().isoformat(),
                     chunk_count=shared_chunks,
                     total_chars=0,
                 )
@@ -274,6 +280,7 @@ async def index_document_for_thread(
             chunks = await get_chunks(file_hash)
         if not chunks:
             logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
+            await update_indexing_status(file_hash, ProcessStatus.FAILED.value, error="No text extracted from document")
             return {"status": "error", "message": "No text extracted from document"}
         
         logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
@@ -303,18 +310,17 @@ async def index_document_for_thread(
         
         logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
 
-        # Update thread stats snapshot
+        # Update indexing status to completed
         try:
-            from app.db.database import update_document_indexing_status
-            await update_document_indexing_status(
-                thread_id=thread_id,
+            await update_indexing_status(
                 file_hash=file_hash,
-                status="indexed",
+                status=ProcessStatus.COMPLETED.value,
+                finished_at=datetime.utcnow().isoformat(),
                 chunk_count=indexed_count,
                 total_chars=sum(len(c) for c in chunks),
             )
         except Exception as stats_err:
-            logger.warning(f"thread_stats update skipped after indexing: {stats_err}")
+            logger.warning(f"file_status update skipped after indexing: {stats_err}")
 
         return {
             "status": "success",
@@ -326,8 +332,7 @@ async def index_document_for_thread(
     except Exception as e:
         logger.error(f"Error indexing document for thread {thread_id}: {e}", exc_info=True)
         try:
-            from app.db.database import update_document_indexing_status
-            await update_document_indexing_status(thread_id=thread_id, file_hash=file_hash, status="failed")
+            await update_indexing_status(file_hash, "failed", error=str(e))
         except Exception:
             pass
         return {"status": "error", "message": str(e)}

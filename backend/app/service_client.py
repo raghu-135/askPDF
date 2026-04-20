@@ -24,6 +24,10 @@ class ProcessingService(ABC):
     async def get_parsed_sentences(self, file_hash: str) -> Optional[dict]:
         pass
 
+    @abstractmethod
+    async def get_file_status(self, file_hash: str) -> Optional[dict]:
+        pass
+
 class RestProcessingServiceClient(ProcessingService):
     """
     REST API implementation of the core processing service client.
@@ -95,5 +99,23 @@ class RestProcessingServiceClient(ProcessingService):
                 return None
             except httpx.HTTPError as e:
                 logger.error(f"Failed to retrieve parsed sentences: {e}")
+                return None
+
+    async def get_file_status(self, file_hash: str) -> Optional[dict]:
+        """
+        Retrieve file status (parsing and indexing status) from the processing service.
+        Returns the file_status JSON with parsing and indexing sections, or None if not found.
+        """
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(
+                    f"{self.service_url}/files/{file_hash}/status",
+                    timeout=30.0
+                )
+                if response.status_code == 200:
+                    return response.json()
+                return None
+            except httpx.HTTPError as e:
+                logger.error(f"Failed to retrieve file status: {e}")
                 return None
 

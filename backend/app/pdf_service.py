@@ -3,62 +3,13 @@ import hashlib
 import httpx
 import logging
 import json
-from enum import Enum
 from typing import Dict, Optional, List
 from .service_client import ProcessingService
-from datetime import datetime
 from fastapi import HTTPException
 
 # NOTE: Heavy PDF parsing and NLP logic moved to rag_service.
 # We no longer import .pdf_parser or .nlp here.
-
-class IndexingStatus(str, Enum):
-    PENDING = "pending"
-    INDEXING = "indexing"
-    READY = "ready"
-    FAILED = "failed"
-
-
-class IndexingState:
-    """Track the indexing state for a single file."""
-    def __init__(self):
-        self.status: IndexingStatus = IndexingStatus.PENDING
-        self.error: Optional[str] = None
-        self.started_at: datetime = datetime.now()
-        self.finished_at: Optional[datetime] = None
-        self.progress: int = 0  # Percentage 0-100
-
-    def to_dict(self) -> dict:
-        return {
-            "status": self.status.value,
-            "error": self.error,
-            "started_at": self.started_at.isoformat(),
-            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
-            "progress": self.progress
-        }
-
-
-# Global indexing status tracker (in production, use Redis or a database)
-_indexing_status: Dict[str, IndexingState] = {}
-
-
-def get_indexing_status(file_hash: str) -> Optional[IndexingState]:
-    """Get the indexing status for a file."""
-    return _indexing_status.get(file_hash)
-
-
-def set_indexing_status(file_hash: str, status: IndexingStatus, error: Optional[str] = None, progress: int = 0):
-    """Set the indexing status for a file."""
-    if file_hash not in _indexing_status:
-        _indexing_status[file_hash] = IndexingState()
-    
-    state = _indexing_status[file_hash]
-    state.status = status
-    state.progress = progress
-    if error:
-        state.error = error
-    if status in (IndexingStatus.READY, IndexingStatus.FAILED):
-        state.finished_at = datetime.now()
+# NOTE: Indexing status tracking moved to RAG service database (file_status column).
 
 
 class PDFService:
@@ -109,38 +60,15 @@ class PDFService:
         # Delegate parsing to RAG service (which now stores in SQLite)
         enriched_sentences = await self._delegate_parsing(file_hash, file.filename)
 
-        set_indexing_status(file_hash, IndexingStatus.PENDING)
-
-        # Trigger RAG Indexing in background (calls separate /index endpoint in RAG service)
-        background_tasks.add_task(
-            self._call_rag_index,
-            {"filename": file.filename, "file_hash": file_hash},
-            embedding_model,
-            file_hash
-        )
+        # Indexing is now handled by RAG service when file is added to a thread
+        # No longer trigger background indexing from upload endpoint
 
         return {
             "sentences": enriched_sentences,
             "pdfUrl": f"/api/pdf-file/{file_hash}",
             "fileHash": file_hash,
-            "fileName": file.filename,
-            "indexingStatus": IndexingStatus.PENDING.value
+            "fileName": file.filename
         }
-
-    async def _call_rag_index(self, metadata: dict, emb_model: str, file_hash: str):
-        """
-        Coordinate the indexing call to ensure documents are processed into the vector database.
-        """
-        set_indexing_status(file_hash, IndexingStatus.INDEXING, progress=10)
-        
-        try:
-            success = await self.service_client.index_document(metadata, emb_model)
-            if success:
-                set_indexing_status(file_hash, IndexingStatus.READY, progress=100)
-            else:
-                set_indexing_status(file_hash, IndexingStatus.FAILED, error="Indexing service failed.")
-        except Exception as e:
-            set_indexing_status(file_hash, IndexingStatus.FAILED, error=str(e))
 
     async def get_pdf_by_hash(self, file_hash: str) -> dict:
         pdf_filename = f"{file_hash}.pdf"

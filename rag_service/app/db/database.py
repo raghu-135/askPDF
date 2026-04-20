@@ -16,6 +16,35 @@ from pydantic import BaseModel, Field
 from enum import Enum
 
 
+class ProcessStatus(str, Enum):
+    """Status values for processing operations (parsing, indexing, etc.)"""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+    @classmethod
+    def is_completed(cls, status: str) -> bool:
+        return status == cls.COMPLETED.value
+
+    @classmethod
+    def is_failed(cls, status: str) -> bool:
+        return status == cls.FAILED.value
+
+    @classmethod
+    def is_running(cls, status: str) -> bool:
+        return status == cls.RUNNING.value
+
+    @classmethod
+    def is_pending(cls, status: str) -> bool:
+        return status == cls.PENDING.value
+
+    @classmethod
+    def is_terminal(cls, status: str) -> bool:
+        return status in (cls.COMPLETED.value, cls.FAILED.value)
+
+
 # Database path - use /data for persistence in Docker
 DATA_DIR = os.getenv("DATA_DIR")
 if DATA_DIR is None:
@@ -111,7 +140,8 @@ CREATE TABLE IF NOT EXISTS files (
     file_hash TEXT PRIMARY KEY,
     file_name TEXT NOT NULL,
     file_path TEXT,
-    source_type TEXT NOT NULL DEFAULT 'pdf'
+    source_type TEXT NOT NULL DEFAULT 'pdf',
+    file_status TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS thread_files (
@@ -178,6 +208,7 @@ async def init_db():
             "ALTER TABLE messages ADD COLUMN web_sources TEXT",
             "ALTER TABLE files ADD COLUMN source_type TEXT NOT NULL DEFAULT 'pdf'",
             "ALTER TABLE files ADD COLUMN parsed_sentences_json TEXT",
+            "ALTER TABLE files ADD COLUMN file_status TEXT NOT NULL DEFAULT '{}'",
             # thread_stats is created by SCHEMA above; new columns go here if needed later
         ]
         for stmt in migrations:
@@ -407,6 +438,102 @@ async def get_file_parsed_sentences(file_hash: str) -> Optional[Dict[str, Any]]:
             except Exception:
                 return None
     return None
+
+
+async def get_file_status(file_hash: str) -> Optional[Dict[str, Any]]:
+    """Retrieve file_status JSON from the files table."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
+        cursor = await db.execute(
+            "SELECT file_status FROM files WHERE file_hash = ?",
+            (file_hash,)
+        )
+        row = await cursor.fetchone()
+        if row and row["file_status"]:
+            try:
+                return json.loads(row["file_status"])
+            except Exception:
+                return {}
+    return None
+
+
+async def update_file_status(file_hash: str, status_data: Dict[str, Any]) -> bool:
+    """Update file_status JSON for a file, merging with existing status."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
+        
+        # Get existing status
+        cursor = await db.execute(
+            "SELECT file_status FROM files WHERE file_hash = ?",
+            (file_hash,)
+        )
+        row = await cursor.fetchone()
+        existing = {}
+        if row and row["file_status"]:
+            try:
+                existing = json.loads(row["file_status"])
+            except Exception:
+                pass
+        
+        # Merge status data
+        merged = {**existing, **status_data}
+        merged["updated_at"] = datetime.utcnow().isoformat()
+        
+        # Update
+        cursor = await db.execute(
+            "UPDATE files SET file_status = ? WHERE file_hash = ?",
+            (json.dumps(merged), file_hash)
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def update_parsing_status(
+    file_hash: str,
+    status: str,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+    error: Optional[str] = None
+) -> bool:
+    """Update parsing section of file_status."""
+    current_status = await get_file_status(file_hash) or {}
+    parsing = current_status.get("parsing", {})
+    parsing["status"] = status
+    if started_at:
+        parsing["started_at"] = started_at
+    if finished_at:
+        parsing["finished_at"] = finished_at
+    if error:
+        parsing["error"] = error
+    return await update_file_status(file_hash, {"parsing": parsing})
+
+
+async def update_indexing_status(
+    file_hash: str,
+    status: str,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+    error: Optional[str] = None,
+    chunk_count: Optional[int] = None,
+    total_chars: Optional[int] = None
+) -> bool:
+    """Update indexing section of file_status."""
+    current_status = await get_file_status(file_hash) or {}
+    indexing = current_status.get("indexing", {})
+    indexing["status"] = status
+    if started_at:
+        indexing["started_at"] = started_at
+    if finished_at:
+        indexing["finished_at"] = finished_at
+    if error:
+        indexing["error"] = error
+    if chunk_count is not None:
+        indexing["chunk_count"] = chunk_count
+    if total_chars is not None:
+        indexing["total_chars"] = total_chars
+    return await update_file_status(file_hash, {"indexing": indexing})
 
 
 # ============ Thread-File Association Operations ============
@@ -874,109 +1001,6 @@ async def _ensure_thread_stats_row(db, thread_id: str) -> None:
         "INSERT OR IGNORE INTO thread_stats (thread_id) VALUES (?)",
         (thread_id,),
     )
-
-
-async def upsert_thread_stats_document(
-    thread_id: str,
-    file_hash: str,
-    file_name: str,
-    source_type: str = "pdf",
-    content_hash: Optional[str] = None,
-) -> None:
-    """
-    Insert or upsert a document entry in thread_stats.documents_meta.
-    Called immediately when a file is added to the thread (status=pending).
-
-    If content_hash is provided this is a refresh-reset: chunk_count and
-    indexing_status are cleared back to pending so agents see fresh state.
-    When no content_hash is given (normal add), existing fields are preserved.
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await _ensure_thread_stats_row(db, thread_id)
-
-        cursor = await db.execute(
-            "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
-            (thread_id,),
-        )
-        row = await cursor.fetchone()
-        docs = _load_documents_meta(row["documents_meta"] if row else None)
-
-        existing = docs.get(file_hash, {})
-        if content_hash is not None:
-            # Refresh-reset: clear stale indexing fields, store new content hash
-            docs[file_hash] = {
-                "file_name": file_name,
-                "source_type": source_type,
-                "chunk_count": 0,
-                "total_chars": 0,
-                "indexing_status": "pending",
-                "indexed_at": None,
-                "content_hash": content_hash,
-            }
-        else:
-            # Normal add: preserve existing indexed fields if doc was already indexed
-            docs[file_hash] = {
-                "file_name": file_name,
-                "source_type": source_type,
-                "chunk_count": existing.get("chunk_count", 0),
-                "total_chars": existing.get("total_chars", 0),
-                "indexing_status": existing.get("indexing_status", "pending"),
-                "indexed_at": existing.get("indexed_at"),
-                "content_hash": existing.get("content_hash"),
-            }
-
-        await db.execute(
-            """
-            UPDATE thread_stats
-            SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
-            WHERE thread_id = ?
-            """,
-            (json.dumps(docs), thread_id),
-        )
-        await db.commit()
-
-
-async def update_document_indexing_status(
-    thread_id: str,
-    file_hash: str,
-    status: str,
-    chunk_count: int = 0,
-    total_chars: int = 0,
-    indexed_at: Optional[str] = None,
-) -> None:
-    """
-    Update a document's indexing status and size metadata after background
-    indexing completes (status='indexed') or fails (status='failed').
-    """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await _ensure_thread_stats_row(db, thread_id)
-
-        cursor = await db.execute(
-            "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
-            (thread_id,),
-        )
-        row = await cursor.fetchone()
-        docs = _load_documents_meta(row["documents_meta"] if row else None)
-
-        entry = docs.get(file_hash, {})
-        entry["indexing_status"] = status
-        if status == "indexed":
-            entry["chunk_count"] = chunk_count
-            entry["total_chars"] = total_chars
-            entry["indexed_at"] = indexed_at or datetime.utcnow().isoformat()
-        docs[file_hash] = entry
-
-        await db.execute(
-            """
-            UPDATE thread_stats
-            SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
-            WHERE thread_id = ?
-            """,
-            (json.dumps(docs), thread_id),
-        )
-        await db.commit()
 
 
 async def remove_document_from_stats(thread_id: str, file_hash: str) -> None:

@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 # Local imports
-from .pdf_service import PDFService, get_indexing_status, IndexingStatus
+from .pdf_service import PDFService
 
 
 
@@ -110,28 +110,26 @@ async def get_pdf_file(file_hash: str):
     return FileResponse(file_path, media_type="application/pdf")
 
 
-@app.get(f"{API_PREFIX}/index-status/{{file_hash}}")
-async def get_file_index_status(file_hash: str):
+@app.get(f"{API_PREFIX}/files/{{file_hash}}/status")
+async def get_file_status_endpoint(file_hash: str):
     """
-    Check the indexing status for a specific file.
+    Check the file status (parsing and indexing) for a specific file.
     
     Args:
         file_hash (str): The MD5 hash of the file to check status for.
     Returns:
-        dict: Status information including status, progress, and any errors.
+        dict: File status information with parsing and indexing sections.
     """
-    status = get_indexing_status(file_hash)
+    status = await service_client.get_file_status(file_hash)
     if status is None:
         # Unknown file - could be already indexed or never uploaded
         return {
             "file_hash": file_hash,
-            "status": "unknown",
-            "message": "File not found in indexing queue. It may already be indexed or was never uploaded."
+            "parsing": {"status": "unknown"},
+            "indexing": {"status": "unknown"},
+            "updated_at": None
         }
-    return {
-        "file_hash": file_hash,
-        **status.to_dict()
-    }
+    return status
 
 
 @app.get("/health")
