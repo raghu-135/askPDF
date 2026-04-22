@@ -473,7 +473,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             } catch (error) {
                 console.error('Status check failed:', error);
             }
-        }, 2000);
+        }, 5000);
 
         return () => clearInterval(intervalId);
     }, [activeThread?.id, indexingStatus, isEmbedModelValid]);

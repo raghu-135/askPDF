@@ -18,12 +18,24 @@ export interface ProcessSection {
   error?: string;
 }
 
+export interface IndexingSection extends ProcessSection {
+  chunk_count?: number;
+  total_chars?: number;
+  reused_existing_embeddings?: boolean;
+}
+
+export interface FileIndexingStatus {
+  summary: IndexingSection;
+  models: Record<string, IndexingSection & {
+    threads?: Record<string, IndexingSection>;
+  }>;
+}
+
 export interface FileStatus {
+  file_hash?: string;
   parsing: ProcessSection;
-  indexing: ProcessSection & {
-    chunk_count?: number;
-    total_chars?: number;
-  };
+  indexing: IndexingSection;
+  indexing_status: FileIndexingStatus;
   updated_at: string;
 }
 
@@ -43,19 +55,29 @@ export interface UploadResponse {
   fileName: string;
 }
 
-export async function uploadPdf(file: File, embeddingModel: string): Promise<UploadResponse> {
+export async function uploadPdf(file: File, threadId: string): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
-  form.append("embedding_model", embeddingModel);
+  form.append("thread_id", threadId);
   const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export async function getFileStatus(fileHash: string, section?: 'parsing' | 'indexing'): Promise<FileStatus | { parsing: ProcessSection } | { indexing: ProcessSection & { chunk_count?: number; total_chars?: number } }> {
-  const url = section
-    ? `${API_BASE}/api/files/${fileHash}/status?section=${section}`
-    : `${API_BASE}/api/files/${fileHash}/status`;
+export async function getFileStatus(
+  fileHash: string,
+  options?: {
+    section?: 'parsing' | 'indexing';
+    embeddingModel?: string;
+    threadId?: string;
+  }
+): Promise<FileStatus | { parsing: ProcessSection } | { indexing: IndexingSection }> {
+  const params = new URLSearchParams();
+  if (options?.section) params.set("section", options.section);
+  if (options?.embeddingModel) params.set("embedding_model", options.embeddingModel);
+  if (options?.threadId) params.set("thread_id", options.threadId);
+  const query = params.toString();
+  const url = `${API_BASE}/api/files/${fileHash}/status${query ? `?${query}` : ""}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -69,6 +91,12 @@ export interface PdfData {
 
 export async function getPdfByHash(fileHash: string): Promise<PdfData> {
   const res = await fetch(`${API_BASE}/api/pdf/${fileHash}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getParsedSentences(fileHash: string): Promise<{ version: string; sentences: any[] }> {
+  const res = await fetch(`${RAG_API_BASE}/files/${fileHash}/parsed-sentences`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

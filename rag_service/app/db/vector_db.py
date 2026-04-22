@@ -176,10 +176,10 @@ class WeaviateAdapter:
         return len(points)
 
     async def delete_thread_data(self, thread_id: str) -> bool:
-        """Delete all document, chat-memory, and web-search vectors for a thread."""
+        """Delete only thread-scoped chat-memory and web-search vectors for a thread."""
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
         try:
-            for name in [DOCUMENT_COLLECTION, CHAT_COLLECTION, WEB_SEARCH_COLLECTION]:
+            for name in [CHAT_COLLECTION, WEB_SEARCH_COLLECTION]:
                 col = self.client.collections.use(name)
                 await asyncio.to_thread(col.data.delete_many, where=filt)
             return True
@@ -199,6 +199,9 @@ class WeaviateAdapter:
         points: List[Dict[str, Any]] = []
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
             md = metadatas[i] if metadatas and i < len(metadatas) else {}
+            source_kind = md.get("source_kind", "pdf")
+            url = md.get("url") or md.get("original_url") or ""
+            title = md.get("title") or ""
             points.append(
                 {
                     "vector": vector,
@@ -206,12 +209,12 @@ class WeaviateAdapter:
                         "thread_id": thread_id,
                         "type": "knowledge_source",
                         "embed_model": embedding_model_name,
-                        "source_kind": "pdf",
+                        "source_kind": source_kind,
                         "file_hash": file_hash,
                         "chunk_id": i,
                         "text": text,
-                        "url": "",
-                        "title": "",
+                        "url": url,
+                        "title": title,
                         "metadata_json": self._metadata_json(md),
                     },
                 }
@@ -487,8 +490,8 @@ class WeaviateAdapter:
         except Exception:
             return 0
 
-    async def delete_source_chunks_by_file_hash(self, thread_id: str, file_hash: str, embedding_model_name: str) -> bool:
-        """Delete all document chunks for a file hash under a specific embedding model."""
+    async def delete_document_vectors_by_file_hash_and_model(self, file_hash: str, embedding_model_name: str) -> bool:
+        """Delete all document vectors for a file hash and embedding model."""
         filt = (
             wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
             & wvc.query.Filter.by_property("file_hash").equal(file_hash)

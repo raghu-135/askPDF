@@ -56,6 +56,17 @@ def _convert_bottomleft_to_topleft(bbox, page_height):
     l, t, r, b = bbox
     return (l, page_height - t, r, page_height - b)
 
+
+def _is_valid_bbox(bbox, min_size: float = 0.5) -> bool:
+    """Return True when a bbox has positive area and is large enough to crop safely."""
+    if not bbox:
+        return False
+    try:
+        l, t, r, b = bbox
+        return (r - l) > min_size and (b - t) > min_size
+    except Exception:
+        return False
+
 def _should_filter_item(item):
     """Filter items based on Docling labels and structure."""
     # Filter by label
@@ -113,8 +124,26 @@ def parse_with_docling(data: bytes, filename: str, write_debug_output: bool = Tr
 
 def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, page_width, start_id=0):
     """Extract sentences from a single cropped region using pdfplumber."""
+    if not _is_valid_bbox(bbox):
+        logger.warning(
+            "Skipping degenerate bbox on page %s for label %s: %s",
+            page_num + 1,
+            label,
+            bbox,
+        )
+        return []
+
     # Crop to bbox
-    cropped = pdf_page.crop(bbox)
+    try:
+        cropped = pdf_page.crop(bbox)
+    except Exception as exc:
+        logger.warning(
+            "Failed to crop bbox on page %s for label %s: %s",
+            page_num + 1,
+            label,
+            exc,
+        )
+        return []
     
     # Extract words with font info
     words = cropped.extract_words(
@@ -250,9 +279,26 @@ def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
             (prov.bbox.l, prov.bbox.t, prov.bbox.r, prov.bbox.b),
             page_height
         )
+        if not _is_valid_bbox(bbox):
+            logger.warning(
+                "Skipping degenerate multi-bbox region on page %s for label %s: %s",
+                page_num + 1,
+                label,
+                bbox,
+            )
+            continue
         
         # Crop and extract words
-        cropped = pdf_page.crop(bbox)
+        try:
+            cropped = pdf_page.crop(bbox)
+        except Exception as exc:
+            logger.warning(
+                "Failed to crop multi-bbox region on page %s for label %s: %s",
+                page_num + 1,
+                label,
+                exc,
+            )
+            continue
         words = cropped.extract_words(
             extra_attrs=["fontname", "size"],
             keep_blank_chars=False,
@@ -495,13 +541,23 @@ def extract_text_with_coordinates(data: bytes, filename: str, merge_multi_bbox: 
     if not filename:
         return []
     
-    # Parse with Docling
-    docling_doc = parse_with_docling(data, filename, write_debug_output=True)
-    
-    if not docling_doc:
+    try:
+        # Parse with Docling
+        docling_doc = parse_with_docling(data, filename, write_debug_output=True)
+        
+        if not docling_doc:
+            return []
+        
+        # Parse with pdfplumber using Docling regions
+        all_sentences = parse_with_pdfplumber(
+            data,
+            docling_doc,
+            filename,
+            write_debug_output=True,
+            merge_multi_bbox=merge_multi_bbox,
+        )
+        
+        return all_sentences
+    except Exception as exc:
+        logger.exception("Failed to extract text with coordinates for %s: %s", filename, exc)
         return []
-    
-    # Parse with pdfplumber using Docling regions
-    all_sentences = parse_with_pdfplumber(data, docling_doc, filename, write_debug_output=True, merge_multi_bbox=merge_multi_bbox)
-    
-    return all_sentences

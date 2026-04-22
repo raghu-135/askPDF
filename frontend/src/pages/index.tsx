@@ -23,44 +23,10 @@ import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
-import { Thread, addFileToThread, removeSourceFromThread } from "../lib/api";
+import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper } from "../lib/api";
 import { loadThreadTabs, createPdfTabFromUpload, createWebTabFromIndexed, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
-
-type BBox = {
-  page: number;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  page_height: number;
-  page_width: number;
-};
-
-type Word = {
-  text: string;
-  x0: number;
-  x1: number;
-  top: number;
-  bottom: number;
-  page_width: number;
-  page_height: number;
-  char_start: number;
-  char_end: number;
-};
-
-type Sentence = {
-  id: number;
-  text: string;
-  label: string;
-  page: number;
-  bbox: [number, number, number, number];
-  page_width: number;
-  page_height: number;
-  bboxes: BBox[];
-  words?: Word[];
-};
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -172,24 +138,13 @@ export default function Home() {
     setPdfTabs(prev => [...prev, newTab]);
     setActiveTabId(newTab.id);
 
-    // If we have an active thread, add the file to it
-    if (activeThread && data?.fileHash && data?.fileName) {
+    if (activeThread && data?.fileHash) {
       try {
-        await addFileToThread(
-          activeThread.id,
-          data.fileHash,
-          data.fileName,
-          newTab.text
-        );
-
-        // Refresh active thread to trigger UI updates (like indexing status in ChatInterface)
-        // Refresh full thread data to ensure we have updated file_count
         const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
         setActiveThread(updatedThread);
-        // Trigger sidebar refresh to update file counts in the list
         setSidebarVersion(v => v + 1);
       } catch (error) {
-        console.error('Failed to add file to thread:', error);
+        console.error('Failed to refresh thread after upload:', error);
       }
     }
 
@@ -198,6 +153,57 @@ export default function Home() {
     setPlayRequestId(null);
     setActiveSource('pdf');
   };
+
+  // Handle parsing completion - update tab with fetched sentences
+  const handleParsingComplete = async (fileHash: string, sentences: any[]) => {
+    const transformedSentences = transformSentences(sentences);
+    setPdfTabs(prev => prev.map(tab => {
+      if (tab.fileHash === fileHash) {
+        return {
+          ...tab,
+          sentences: transformedSentences,
+          text: extractTextFromSentences(transformedSentences),
+          parsingStatus: 'completed',
+        };
+      }
+      return tab;
+    }));
+  };
+
+  // Poll for parsing status when active tab is pending
+  useEffect(() => {
+    if (!activeTab || activeTab.parsingStatus !== 'pending') {
+      return;
+    }
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const status = await getFileStatus(activeTab.fileHash);
+        if (status && 'parsing' in status) {
+          const parsingStatus = status.parsing.status;
+          if (ProcessStatusHelper.isCompleted(parsingStatus)) {
+            // Fetch parsed sentences
+            const parsedData = await getParsedSentences(activeTab.fileHash);
+            handleParsingComplete(activeTab.fileHash, parsedData.sentences);
+            clearInterval(pollInterval);
+          } else if (ProcessStatusHelper.isFailed(parsingStatus)) {
+            // Update tab to failed status
+            setPdfTabs(prev => prev.map(tab => {
+              if (tab.fileHash === activeTab.fileHash) {
+                return { ...tab, parsingStatus: 'failed' };
+              }
+              return tab;
+            }));
+            clearInterval(pollInterval);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to check parsing status", error);
+      }
+    }, 5000);
+
+    return () => clearInterval(pollInterval);
+  }, [activeTab?.fileHash, activeTab?.parsingStatus]);
 
   // Handle web source indexed
   const handleWebIndexed = async (data: { fileHash: string; url: string; title?: string; status: string; message?: string }) => {
@@ -397,7 +403,10 @@ export default function Home() {
 
               {/* PDF Uploader (Unified Button) - Now on the right */}
               <PdfUploader
+                threadId={activeThread?.id ?? null}
+                embeddingModel={activeThread?.embed_model ?? null}
                 onUploaded={handlePdfUploaded}
+                onParsingComplete={handleParsingComplete}
                 disabled={!activeThread}
                 tooltipText={!activeThread ? "Select or create a thread first" : undefined}
                 webUrl={webUrl}
@@ -470,7 +479,7 @@ export default function Home() {
                 <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
                 <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
               </Box>
-            ) : (pdfSentences?.length ?? 0) > 0 && pdfUrl ? (
+            ) : pdfUrl ? (
               <PdfViewer
                 pdfUrl={pdfUrl}
                 sentences={pdfSentences}
@@ -513,7 +522,7 @@ export default function Home() {
                     <li>Use <b>Intent Agent</b> (requires Reasoning mode) to rewrite follow-up questions into standalone queries.</li>
                     <li>Enable <b>Reranker</b> to improve ordering of retrieved chunks.</li>
                     <li>Customize <b>Tools</b> to control which capabilities the assistant can use.</li>
-                    <li>Edit the <b>System role</b> to change the assistant’s behavior and tone.</li>
+                    <li>Edit the <b>System role</b> to change the assistant's behavior and tone.</li>
                     <li>Use <b>Prompt preview</b> to see the exact prompt that will be sent to the model.</li>
                   </ul>
                   <Typography sx={{ mt: 2, fontSize: 14, color: pdfDarkMode ? '#aaa' : 'textSecondary' }}>

@@ -41,11 +41,11 @@ class PDFService:
             logging.error(f"Failed to delegate parsing: {e}")
             raise HTTPException(status_code=502, detail="PDF parsing service unavailable or failed.")
 
-    async def process_upload(self, file, embedding_model, background_tasks):
+    async def process_upload(self, file, thread_id: str):
         if not file.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Please upload a PDF file.")
-        if not embedding_model:
-            raise HTTPException(status_code=400, detail="Please provide an embedding_model.")
+        if not thread_id:
+            raise HTTPException(status_code=400, detail="Please provide a thread_id.")
 
         content = await file.read()
         file_hash = hashlib.md5(content).hexdigest()
@@ -57,14 +57,12 @@ class PDFService:
             with open(pdf_path, "wb") as f:
                 f.write(content)
 
-        # Delegate parsing to RAG service (which now stores in SQLite)
-        enriched_sentences = await self._delegate_parsing(file_hash, file.filename)
+        # Tell RAG service to process PDF (parse and index in background)
+        await self.service_client.process_pdf(file_hash, file.filename, self.backend_internal_url, thread_id)
 
-        # Indexing is now handled by RAG service when file is added to a thread
-        # No longer trigger background indexing from upload endpoint
-
+        # Return immediately with sentences: null to indicate parsing not yet done
         return {
-            "sentences": enriched_sentences,
+            "sentences": None,
             "pdfUrl": f"/api/pdf-file/{file_hash}",
             "fileHash": file_hash,
             "fileName": file.filename

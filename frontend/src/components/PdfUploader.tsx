@@ -5,11 +5,14 @@ import { Button, Tooltip, CircularProgress, Box, Typography } from "@mui/materia
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import React from "react";
-import { getFileStatus, FileStatus, ProcessStatusHelper } from "../lib/api";
+import { getFileStatus, getParsedSentences, FileStatus, ProcessStatusHelper } from "../lib/api";
 
 type Props = {
-  onUploaded: (data: { sentences: any[]; pdfUrl: string; fileHash: string; fileName?: string }) => void;
+  threadId?: string | null;
+  embeddingModel?: string | null;
+  onUploaded: (data: { sentences: any[] | null; pdfUrl: string; fileHash: string; fileName?: string }) => void;
   onIndexingComplete?: (fileHash: string) => void;
+  onParsingComplete?: (fileHash: string, sentences: any[]) => void;
   disabled?: boolean;
   tooltipText?: string;
   /** Current web URL value - when provided, button switches to web mode */
@@ -20,14 +23,17 @@ type Props = {
   isWebLoading?: boolean;
 };
 
-const PdfUploader = React.memo(function PdfUploader({ 
-  onUploaded, 
-  onIndexingComplete, 
-  disabled, 
+const PdfUploader = React.memo(function PdfUploader({
+  threadId,
+  embeddingModel,
+  onUploaded,
+  onIndexingComplete,
+  onParsingComplete,
+  disabled,
   tooltipText,
   webUrl,
   onWebSubmit,
-  isWebLoading = false 
+  isWebLoading = false
 }: Props) {
   const inputId = "pdf-upload-input";
   const [isUploading, setIsUploading] = React.useState(false);
@@ -59,16 +65,34 @@ const PdfUploader = React.memo(function PdfUploader({
 
     const pollInterval = setInterval(async () => {
       try {
-        const status = await getFileStatus(fileStatus.fileHash);
+        const status = await getFileStatus(fileStatus.fileHash, {
+          embeddingModel: embeddingModel || undefined,
+          threadId: threadId || undefined,
+        });
         // Ensure we have a full FileStatus object
-        const fullStatus: FileStatus = 'parsing' in status && 'indexing' in status 
-          ? status as FileStatus 
-          : { parsing: { status: 'unknown' }, indexing: { status: 'unknown' }, updated_at: new Date().toISOString() };
-        
+        const fullStatus: FileStatus = 'parsing' in status && 'indexing' in status
+          ? status as FileStatus
+          : {
+              parsing: { status: 'unknown' },
+              indexing: { status: 'unknown' },
+              indexing_status: { summary: { status: 'unknown' }, models: {} },
+              updated_at: new Date().toISOString(),
+            };
+
         setFileStatus({
           fileHash: fileStatus.fileHash,
           status: fullStatus
         });
+
+        // Check if parsing just completed
+        if (ProcessStatusHelper.isCompleted(fullStatus.parsing.status) && onParsingComplete) {
+          try {
+            const parsedData = await getParsedSentences(fileStatus.fileHash);
+            onParsingComplete(fileStatus.fileHash, parsedData.sentences);
+          } catch (error) {
+            console.error("Failed to fetch parsed sentences", error);
+          }
+        }
 
         // Check if both parsing and indexing are completed
         if (ProcessStatusHelper.isCompleted(fullStatus.parsing.status) && ProcessStatusHelper.isCompleted(fullStatus.indexing.status)) {
@@ -80,10 +104,10 @@ const PdfUploader = React.memo(function PdfUploader({
       } catch (error) {
         console.error("Failed to check file status", error);
       }
-    }, 2000);
+    }, 5000);
 
     return () => clearInterval(pollInterval);
-  }, [fileStatus?.fileHash, fileStatus?.status, onIndexingComplete]);
+  }, [embeddingModel, fileStatus?.fileHash, fileStatus?.status, onIndexingComplete, onParsingComplete, threadId]);
 
   const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -93,10 +117,12 @@ const PdfUploader = React.memo(function PdfUploader({
     setFileStatus(null);
     
     try {
+      if (!threadId) {
+        throw new Error("A thread must be selected before uploading.");
+      }
       const form = new FormData();
       form.append("file", file);
-      const defaultEmbedModel = process.env.NEXT_PUBLIC_DEFAULT_EMBED_MODEL || "BAAI/bge-m3";
-      form.append("embedding_model", defaultEmbedModel);
+      form.append("thread_id", threadId);
       const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const res = await fetch(`${apiBase}/api/upload`, { method: "POST", body: form });
       const data = await res.json();
@@ -107,6 +133,7 @@ const PdfUploader = React.memo(function PdfUploader({
         status: {
           parsing: { status: 'pending' },
           indexing: { status: 'pending' },
+          indexing_status: { summary: { status: 'pending' }, models: {} },
           updated_at: new Date().toISOString()
         }
       });

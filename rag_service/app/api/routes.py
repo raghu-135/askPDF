@@ -19,15 +19,18 @@ from app.db.database import (
     MessageRole,
     ProcessStatus,
     add_file_to_thread,
+    count_threads_with_file,
     count_threads_with_file_for_model,
     create_message,
     create_or_get_file,
     create_thread,
+    delete_file_record,
     delete_message,
     delete_message_pair,
     delete_thread,
     get_file,
     get_file_parsed_sentences,
+    get_scoped_indexing_status,
     get_file_status,
     get_message,
     get_recent_messages,
@@ -42,12 +45,14 @@ from app.db.database import (
     recompute_qa_stats,
     remove_document_from_stats,
     remove_file_from_thread,
+    remove_thread_indexing_status,
     update_file_parsed_sentences,
     update_file_status,
     update_parsing_status,
     update_indexing_status,
     update_thread,
     update_thread_settings,
+    upsert_document_in_stats,
     upsert_thread_file_annotations,
 )
 from app.db.vector_db import get_vector_db
@@ -62,6 +67,7 @@ from app.models.llm_server_client import (
 )
 from app.models.requests import (
     PdfParseRequest,
+    ProcessPdfRequest,
     PromptDefaults,
     PromptPreviewRequest,
     RefreshWebSourceRequest,
@@ -87,9 +93,355 @@ from app.web_capture import capture_webpage_as_pdf, get_webpage_pdf_by_url_hash
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+WEBPAGES_DIR = "/static/webpages"
+
+
+def _default_file_status(file_hash: str) -> Dict[str, Any]:
+    """Return the default status payload for an unknown file."""
+    return {
+        "file_hash": file_hash,
+        "parsing": {"status": ProcessStatus.UNKNOWN.value},
+        "indexing": {"status": ProcessStatus.UNKNOWN.value},
+        "indexing_status": {
+            "summary": {"status": ProcessStatus.UNKNOWN.value},
+            "models": {},
+        },
+        "updated_at": None,
+    }
+
+
+def _scoped_status_payload(
+    file_hash: str,
+    status: Optional[Dict[str, Any]],
+    embedding_model: Optional[str] = None,
+    thread_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a backward-compatible file-status payload with a scoped top-level indexing section."""
+    payload = dict(status or _default_file_status(file_hash))
+    payload["file_hash"] = file_hash
+    payload["indexing"] = get_scoped_indexing_status(
+        payload,
+        embedding_model=embedding_model,
+        thread_id=thread_id,
+    )
+    return payload
+
+
+async def _delete_file_artifacts(file_hash: str) -> None:
+    """Delete the stored PDF and any webpage mapping that points to it."""
+    pdf_path = f"/static/{file_hash}.pdf"
+    if os.path.exists(pdf_path):
+        try:
+            os.remove(pdf_path)
+        except Exception as exc:
+            logger.warning("Failed to delete PDF artifact %s: %s", pdf_path, exc)
+
+    if not os.path.isdir(WEBPAGES_DIR):
+        return
+
+    for filename in os.listdir(WEBPAGES_DIR):
+        if not filename.endswith(".mapping.json"):
+            continue
+        mapping_path = os.path.join(WEBPAGES_DIR, filename)
+        try:
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                mapping = json.load(f)
+            if mapping.get("pdf_hash") != file_hash:
+                continue
+            os.remove(mapping_path)
+        except Exception as exc:
+            logger.warning("Failed to delete webpage mapping %s: %s", mapping_path, exc)
+
+
+def _get_web_mapping_by_pdf_hash(file_hash: str) -> Optional[Dict[str, Any]]:
+    """Return the webpage mapping payload for a PDF hash when one exists."""
+    if not os.path.isdir(WEBPAGES_DIR):
+        return None
+
+    for filename in os.listdir(WEBPAGES_DIR):
+        if not filename.endswith(".mapping.json"):
+            continue
+        mapping_path = os.path.join(WEBPAGES_DIR, filename)
+        try:
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                mapping = json.load(f)
+            if mapping.get("pdf_hash") == file_hash:
+                return mapping
+        except Exception as exc:
+            logger.warning("Failed to read webpage mapping %s: %s", mapping_path, exc)
+    return None
+
+
+async def _repair_thread_documents_meta(thread_id: str, embedding_model: str, files: List[Any]) -> None:
+    """Rebuild thread_stats.documents_meta for already-indexed files attached to a thread."""
+    vector_db = get_vector_db()
+    attached_hashes = {f.file_hash for f in files}
+    shape = await get_thread_shape(thread_id)
+    for stale_hash in list(shape.get("documents", {}).keys()):
+        if stale_hash not in attached_hashes:
+            await remove_document_from_stats(thread_id, stale_hash)
+
+    for file in files:
+        file_status = await get_file_status(file.file_hash)
+        scoped_status = get_scoped_indexing_status(
+            file_status,
+            embedding_model=embedding_model,
+            thread_id=thread_id,
+        )
+        chunk_count = await vector_db.get_file_chunk_count(file.file_hash, embedding_model)
+        is_ready = ProcessStatus.is_completed(scoped_status.get("status", ProcessStatus.UNKNOWN.value)) or chunk_count > 0
+        if not is_ready:
+            await remove_document_from_stats(thread_id, file.file_hash)
+            continue
+
+        total_chars = int(scoped_status.get("total_chars", 0) or 0)
+        mapping = _get_web_mapping_by_pdf_hash(file.file_hash) if file.source_type == "web" else None
+        content_hash = None
+        if mapping and mapping.get("markdown_content"):
+            content_hash = hashlib.md5(mapping["markdown_content"].encode("utf-8")).hexdigest()
+        await upsert_document_in_stats(
+            thread_id,
+            file.file_hash,
+            {
+                "file_name": file.file_name,
+                "source_type": file.source_type,
+                "chunk_count": chunk_count,
+                "total_chars": total_chars,
+                "indexing_status": ProcessStatus.COMPLETED.value,
+                "indexed_at": scoped_status.get("finished_at"),
+                **({"url": file.file_path} if file.source_type == "web" and file.file_path else {}),
+                **({"title": mapping.get("title")} if mapping and mapping.get("title") else {}),
+                **({"content_hash": content_hash} if content_hash else {}),
+            },
+        )
+
+
+async def _cleanup_detached_file(file_hash: str, thread_id: str, embed_model: str) -> None:
+    """Apply post-detach cleanup for status, vector data, and orphaned file artifacts."""
+    await remove_document_from_stats(thread_id, file_hash)
+    await remove_thread_indexing_status(file_hash, embed_model, thread_id)
+
+    vector_db = get_vector_db()
+    remaining_model_refs = await count_threads_with_file_for_model(file_hash, embed_model)
+    if remaining_model_refs == 0:
+        await vector_db.delete_document_vectors_by_file_hash_and_model(
+            file_hash=file_hash,
+            embedding_model_name=embed_model,
+        )
+
+    remaining_refs = await count_threads_with_file(file_hash)
+    if remaining_refs == 0:
+        file_status = await get_file_status(file_hash) or {}
+        indexing_status = file_status.get("indexing_status", {})
+        models = indexing_status.get("models", {}) if isinstance(indexing_status, dict) else {}
+        model_names = [name for name in models.keys() if isinstance(name, str) and name]
+        if not model_names:
+            model_names = [embed_model]
+        for model_name in model_names:
+            await vector_db.delete_document_vectors_by_file_hash_and_model(
+                file_hash=file_hash,
+                embedding_model_name=model_name,
+            )
+        await delete_file_record(file_hash)
+        await _delete_file_artifacts(file_hash)
+
+
+async def _queue_file_processing(
+    background_tasks: BackgroundTasks,
+    thread,
+    file_hash: str,
+    file_name: str,
+    backend_url: str,
+    file_path: Optional[str] = None,
+    source_type: str = "pdf",
+    indexing_metadata: Optional[Dict[str, Any]] = None,
+    markdown_content: Optional[str] = None,
+) -> None:
+    """Ensure a file is attached to a thread and background parse/index work is queued."""
+    await create_or_get_file(
+        file_hash=file_hash,
+        file_name=file_name,
+        file_path=file_path,
+        source_type=source_type,
+    )
+    await add_file_to_thread(thread.id, file_hash)
+
+    file_status = await get_file_status(file_hash)
+    parsing_status = (file_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
+
+    scoped_indexing = get_scoped_indexing_status(
+        file_status,
+        embedding_model=thread.embed_model,
+        thread_id=thread.id,
+    )
+    if not ProcessStatus.is_completed(scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)) and not ProcessStatus.is_running(scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)):
+        await update_indexing_status(
+            file_hash=file_hash,
+            status=ProcessStatus.PENDING.value,
+            embedding_model=thread.embed_model,
+            thread_id=thread.id,
+        )
+        background_tasks.add_task(
+            _background_index,
+            file_hash,
+            thread.id,
+            thread.embed_model,
+            file_name,
+            backend_url,
+            indexing_metadata or {},
+            markdown_content,
+        )
+
+    parsed_data = await get_file_parsed_sentences(file_hash)
+    if parsed_data:
+        if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
+            await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
+    elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
+        await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
+        background_tasks.add_task(_background_parse, file_hash, file_name, backend_url)
 
 
 # ============ Compute Endpoints (Heavy Processing) ============
+
+
+@router.post("/process-pdf")
+async def process_pdf_endpoint(req: ProcessPdfRequest, background_tasks: BackgroundTasks):
+    """
+    Process a PDF file (parse and index) in the background.
+    This endpoint returns immediately after triggering the background tasks.
+    """
+    thread = await get_thread(req.thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    await _queue_file_processing(
+        background_tasks=background_tasks,
+        thread=thread,
+        file_hash=req.file_hash,
+        file_name=req.file_name,
+        backend_url=req.backend_url,
+    )
+
+    return {
+        "status": "accepted",
+        "thread_id": req.thread_id,
+        "file_hash": req.file_hash,
+    }
+
+
+async def _background_parse(file_hash: str, filename: str, backend_url: str):
+    """
+    Background task to parse PDF and update status.
+    """
+    current_status = await get_file_status(file_hash)
+    parsing_status = (current_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
+
+    if ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
+        if await get_file_parsed_sentences(file_hash):
+            return
+
+    started_at = datetime.utcnow().isoformat()
+    try:
+        claimed = await update_parsing_status(
+            file_hash,
+            ProcessStatus.RUNNING.value,
+            started_at=started_at,
+            claim=True,
+        )
+        if not claimed:
+            return
+
+        pdf_url = f"{backend_url}/{file_hash}.pdf"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(pdf_url, timeout=30.0)
+            resp.raise_for_status()
+            pdf_data = resp.content
+
+        sentences = extract_text_with_coordinates(pdf_data, filename=filename)
+        parsed_data = {
+            "version": "1.0",
+            "sentences": sentences
+        }
+        await update_file_parsed_sentences(file_hash, json.dumps(parsed_data))
+
+        finished_at = datetime.utcnow().isoformat()
+        await update_parsing_status(
+            file_hash,
+            ProcessStatus.COMPLETED.value,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        logger.info(f"Background parsing completed for {file_hash}")
+    except Exception as e:
+        traceback.print_exc()
+        finished_at = datetime.utcnow().isoformat()
+        try:
+            await update_parsing_status(
+                file_hash,
+                ProcessStatus.FAILED.value,
+                started_at=started_at,
+                finished_at=finished_at,
+                error=str(e),
+            )
+        except Exception as update_error:
+            logger.error(f"Failed to update parsing status to failed for {file_hash}: {update_error}")
+        logger.error(f"Background parsing failed for {file_hash}: {e}")
+
+
+async def _background_index(
+    file_hash: str,
+    thread_id: str,
+    embedding_model: str,
+    file_name: str,
+    backend_url: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    markdown_content: Optional[str] = None,
+):
+    """
+    Background task to index a document for a thread after parsing completes.
+    """
+    started_at = datetime.utcnow().isoformat()
+    try:
+        claimed = await update_indexing_status(
+            file_hash=file_hash,
+            status=ProcessStatus.RUNNING.value,
+            embedding_model=embedding_model,
+            thread_id=thread_id,
+            started_at=started_at,
+            claim=True,
+        )
+        if not claimed:
+            return
+
+        result = await index_document_for_thread(
+            thread_id=thread_id,
+            file_hash=file_hash,
+            embedding_model_name=embedding_model,
+            metadata=metadata,
+            markdown_content=markdown_content,
+        )
+        if result.get("status") != "success":
+            raise Exception(result.get("message", "Indexing failed"))
+        logger.info(f"Background indexing completed for %s in thread %s", file_hash, thread_id)
+
+        if markdown_content is None:
+            await _background_parse(file_hash, file_name, backend_url)
+    except Exception as e:
+        traceback.print_exc()
+        finished_at = datetime.utcnow().isoformat()
+        try:
+            await update_indexing_status(
+                file_hash=file_hash,
+                status=ProcessStatus.FAILED.value,
+                embedding_model=embedding_model,
+                thread_id=thread_id,
+                started_at=started_at,
+                finished_at=finished_at,
+                error=str(e),
+            )
+        except Exception as update_error:
+            logger.error(f"Failed to update indexing status to failed for {file_hash}: {update_error}")
+        logger.error(f"Background indexing failed for {file_hash}: {e}")
 
 
 @router.post("/parse-pdf")
@@ -155,7 +507,12 @@ async def get_file_parsed_sentences_endpoint(file_hash: str):
 
 
 @router.get("/files/{file_hash}/status")
-async def get_file_status_endpoint(file_hash: str, section: Optional[str] = None):
+async def get_file_status_endpoint(
+    file_hash: str,
+    section: Optional[str] = None,
+    embedding_model: Optional[str] = None,
+    thread_id: Optional[str] = None,
+):
     """
     Retrieve file status (parsing and indexing status) from SQLite.
     Returns the file_status JSON with parsing and indexing sections.
@@ -168,22 +525,19 @@ async def get_file_status_endpoint(file_hash: str, section: Optional[str] = None
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
         
-        status = await get_file_status(file_hash)
-        if not status:
-            # Initialize with default structure if not set
-            status = {
-                "parsing": {"status": ProcessStatus.UNKNOWN.value},
-                "indexing": {"status": ProcessStatus.UNKNOWN.value},
-                "updated_at": datetime.utcnow().isoformat()
-            }
-        
+        status = _scoped_status_payload(
+            file_hash=file_hash,
+            status=await get_file_status(file_hash),
+            embedding_model=embedding_model,
+            thread_id=thread_id,
+        )
+
         # Filter by section if specified
         if section:
-            if section in status:
-                return {section: status[section]}
-            else:
+            if section not in {"parsing", "indexing"}:
                 raise HTTPException(status_code=400, detail=f"Invalid section: {section}")
-        
+            return {section: status[section]}
+
         return status
     except HTTPException:
         raise
@@ -306,13 +660,14 @@ async def get_thread_endpoint(thread_id: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
+        files = await get_thread_files(thread_id)
+        await _repair_thread_documents_meta(thread_id, thread.embed_model, files)
         asyncio.create_task(
             trigger_reembed_for_missing_sources(
                 thread_id=thread_id,
                 embedding_model_name=thread.embed_model,
             )
         )
-        files = await get_thread_files(thread_id)
         db = get_vector_db()
         stats = await db.get_thread_stats(
             thread_id=thread_id,
@@ -329,6 +684,7 @@ async def get_thread_endpoint(thread_id: str):
                 {
                     "file_hash": f.file_hash,
                     "file_name": f.file_name,
+                    "file_path": f.file_path,
                     "source_type": f.source_type,
                 }
                 for f in files
@@ -422,6 +778,11 @@ async def delete_thread_endpoint(thread_id: str):
     Delete a thread, its messages, file associations, and vector data.
     """
     try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        files = await get_thread_files(thread_id)
+
         # Delete thread-scoped vector data first
         db = get_vector_db()
         await db.delete_thread_data(thread_id)
@@ -430,6 +791,9 @@ async def delete_thread_endpoint(thread_id: str):
         deleted = await delete_thread(thread_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Thread not found")
+
+        for file in files:
+            await _cleanup_detached_file(file.file_hash, thread_id, thread.embed_model)
 
         return {"status": "deleted", "thread_id": thread_id}
     except HTTPException:
@@ -455,18 +819,13 @@ async def add_file_to_thread_endpoint(
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        # Create or get file record
-        file = await create_or_get_file(req.file_hash, req.file_name, req.file_path)
-
-        # Associate file with thread
-        await add_file_to_thread(thread_id, req.file_hash)
-
-        # Trigger background indexing (status is tracked in file_status column)
-        background_tasks.add_task(
-            index_document_for_thread,
-            thread_id=thread_id,
+        await _queue_file_processing(
+            background_tasks=background_tasks,
+            thread=thread,
             file_hash=req.file_hash,
-            embedding_model_name=thread.embed_model,
+            file_name=req.file_name,
+            file_path=req.file_path,
+            backend_url=os.getenv("BACKEND_URL", "http://backend:8000"),
         )
 
         return {
@@ -611,23 +970,25 @@ async def add_web_source_to_thread_endpoint(
         pdf_hash = capture["file_hash"]
         url_hash = capture["url_hash"]
 
-        # Record in files table with source_type='pdf' (unified with uploaded PDFs)
-        await create_or_get_file(
+        markdown_content = capture.get("markdown_content") or ""
+        content_hash = hashlib.md5(markdown_content.encode("utf-8")).hexdigest() if markdown_content else None
+
+        await _queue_file_processing(
+            background_tasks=background_tasks,
+            thread=thread,
             file_hash=pdf_hash,
             file_name=capture["title"],
-            file_path=capture["pdf_path"],
-            source_type="pdf",  # Unified type
-        )
-        await add_file_to_thread(thread_id, pdf_hash)
-
-        # Use markdown for vector DB indexing (cleaner than PDF extraction)
-        background_tasks.add_task(
-            index_document_for_thread,
-            thread_id=thread_id,
-            file_hash=pdf_hash,
-            embedding_model_name=thread.embed_model,
-            metadata={"original_url": req.url, "url_hash": url_hash},
-            markdown_content=capture.get("markdown_content"),
+            file_path=req.url,
+            source_type="web",
+            backend_url=os.getenv("BACKEND_URL", "http://backend:8000"),
+            indexing_metadata={
+                "source_kind": "webpage",
+                "url": req.url,
+                "title": capture["title"],
+                "url_hash": url_hash,
+                **({"content_hash": content_hash} if content_hash else {}),
+            },
+            markdown_content=markdown_content,
         )
 
         return {
@@ -637,7 +998,7 @@ async def add_web_source_to_thread_endpoint(
             "url_hash": url_hash,
             "url": req.url,
             "title": capture["title"],
-            "source_type": "pdf",
+            "source_type": "web",
             "indexing": "in_progress",
         }
     except HTTPException:
@@ -658,25 +1019,10 @@ async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        # Delete vectors from Weaviate
-        vector_db = get_vector_db()
-        remaining_refs = await count_threads_with_file_for_model(
-            file_hash=file_hash,
-            embed_model=thread.embed_model,
-            exclude_thread_id=thread_id,
-        )
-        if remaining_refs == 0:
-            await vector_db.delete_source_chunks_by_file_hash(
-                thread_id=thread_id,
-                file_hash=file_hash,
-                embedding_model_name=thread.embed_model,
-            )
-
         # Remove from SQLite
         removed = await remove_file_from_thread(thread_id, file_hash)
-
-        # Remove from thread stats
-        await remove_document_from_stats(thread_id, file_hash)
+        if removed:
+            await _cleanup_detached_file(file_hash, thread_id, thread.embed_model)
 
         return {
             "status": "deleted",
@@ -763,20 +1109,6 @@ async def refresh_web_source_endpoint(
             req=WebSourceRequest(url=url),
             background_tasks=background_tasks,
         )
-
-        # 4. Clean up old PDF file if no longer referenced
-        remaining_refs = await count_threads_with_file_for_model(
-            file_hash=old_pdf_hash,
-            embed_model=thread.embed_model,
-        )
-        if remaining_refs == 0:
-            try:
-                old_pdf_path = mapping["pdf_path"]
-                if os.path.exists(old_pdf_path):
-                    os.remove(old_pdf_path)
-                    logger.info(f"Cleaned up old PDF: {old_pdf_path}")
-            except Exception as e:
-                logger.warning(f"Failed to clean up old PDF {old_pdf_hash}: {e}")
 
         return {
             "status": "refreshed",
@@ -985,7 +1317,12 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
         if file_hash:
             # Check specific file using file_status
             file_status = await get_file_status(file_hash)
-            indexing_status = file_status.get("indexing", {}).get("status", ProcessStatus.UNKNOWN.value) if file_status else ProcessStatus.UNKNOWN.value
+            scoped_indexing = get_scoped_indexing_status(
+                file_status,
+                embedding_model=thread.embed_model,
+                thread_id=thread_id,
+            )
+            indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
             if ProcessStatus.is_completed(indexing_status):
                 status = "ready"
             elif ProcessStatus.is_failed(indexing_status):
@@ -1005,7 +1342,12 @@ async def get_thread_index_status(thread_id: str, file_hash: Optional[str] = Non
                 all_indexed = True
                 for f in files:
                     file_status = await get_file_status(f.file_hash)
-                    indexing_status = file_status.get("indexing", {}).get("status", ProcessStatus.UNKNOWN.value) if file_status else ProcessStatus.UNKNOWN.value
+                    scoped_indexing = get_scoped_indexing_status(
+                        file_status,
+                        embedding_model=thread.embed_model,
+                        thread_id=thread_id,
+                    )
+                    indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
                     if not ProcessStatus.is_completed(indexing_status):
                         # Fallback to vector DB check for backward compatibility
                         if not await db.has_file_indexed(thread_id, f.file_hash, thread.embed_model):

@@ -160,3 +160,12 @@ class PdfParseRequest(BaseModel):
     file_hash: str
     file_name: str
     backend_url: str
+
+
+class ProcessPdfRequest(BaseModel):
+    """Request body for thread-owned PDF processing."""
+
+    thread_id: str
+    file_hash: str
+    file_name: str
+    backend_url: str

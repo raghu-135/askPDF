@@ -1,5 +1,5 @@
 import { PdfTab } from "../components/PdfTabs";
-import { Thread, addFileToThread, getThread, getPdfByHash } from "./api";
+import { Thread, getThread, getPdfByHash } from "./api";
 import { transformSentences } from "./bbox-derivation";
 
 /**
@@ -39,15 +39,17 @@ export async function loadThreadTabs(thread: Thread, apiBase: string): Promise<P
  * Creates a PdfTab from upload data.
  */
 export function createPdfTabFromUpload(data: any, apiBase: string): PdfTab {
-  const transformedSentences = transformSentences(data?.sentences || []);
+  const sentences = data?.sentences;
+  const transformedSentences = sentences ? transformSentences(sentences) : [];
   return {
     id: data?.fileHash || `tab-${Date.now()}`,
     fileName: data?.fileName || 'Untitled.pdf',
     fileHash: data?.fileHash || '',
     pdfUrl: data?.pdfUrl ? `${apiBase}${data.pdfUrl}?t=${Date.now()}` : '',
-    sentences: transformedSentences,
-    text: extractTextFromSentences(transformedSentences),
+    sentences: sentences ? transformedSentences : null,
+    text: sentences ? extractTextFromSentences(transformedSentences) : '',
     sourceType: 'pdf',
+    parsingStatus: sentences ? 'completed' : 'pending',
   };
 }
 

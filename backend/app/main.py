@@ -9,15 +9,13 @@ This service acts as a coordinator and API gateway for:
 - Managing indexing status and serving processed assets
 """
 import os
-import uuid
-import hashlib
-import httpx
 import logging
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
+from typing import Optional
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 from dotenv import load_dotenv
 
@@ -65,21 +63,19 @@ pdf_service = PDFService(static_dir="/static", service_client=service_client)
 
 @app.post(f"{API_PREFIX}/upload")
 async def upload_pdf(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    embedding_model: str = Form(...)
+    thread_id: str = Form(...),
 ):
     """
     Upload a PDF file, extract sentences and bounding boxes, and trigger RAG indexing.
-    
+
     Args:
-        background_tasks (BackgroundTasks): FastAPI background task manager.
         file (UploadFile): PDF file to upload.
-        embedding_model (str): Name of the embedding model to use.
+        thread_id (str): Thread to attach the upload to immediately.
     Returns:
         dict: Result of the upload and processing.
     """
-    return await pdf_service.process_upload(file, embedding_model, background_tasks)
+    return await pdf_service.process_upload(file, thread_id)
 
 
 @app.get(f"{API_PREFIX}/pdf/{{file_hash}}")
@@ -111,7 +107,12 @@ async def get_pdf_file(file_hash: str):
 
 
 @app.get(f"{API_PREFIX}/files/{{file_hash}}/status")
-async def get_file_status_endpoint(file_hash: str):
+async def get_file_status_endpoint(
+    file_hash: str,
+    section: Optional[str] = None,
+    embedding_model: Optional[str] = None,
+    thread_id: Optional[str] = None,
+):
     """
     Check the file status (parsing and indexing) for a specific file.
     
@@ -120,15 +121,25 @@ async def get_file_status_endpoint(file_hash: str):
     Returns:
         dict: File status information with parsing and indexing sections.
     """
-    status = await service_client.get_file_status(file_hash)
+    status = await service_client.get_file_status(
+        file_hash,
+        section=section,
+        embedding_model=embedding_model,
+        thread_id=thread_id,
+    )
     if status is None:
         # Unknown file - could be already indexed or never uploaded
-        return {
+        payload = {
             "file_hash": file_hash,
             "parsing": {"status": "unknown"},
             "indexing": {"status": "unknown"},
             "updated_at": None
         }
+        if section == "parsing":
+            return {"parsing": payload["parsing"]}
+        if section == "indexing":
+            return {"indexing": payload["indexing"]}
+        return payload
     return status
 
 

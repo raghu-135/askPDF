@@ -85,6 +85,160 @@ def _parse_json_list(raw: Optional[str]) -> Optional[List[Dict[str, Any]]]:
         return None
 
 
+def _default_process_section(status: str = ProcessStatus.UNKNOWN.value) -> Dict[str, Any]:
+    """Return the default shape for a process-status section."""
+    return {"status": status}
+
+
+def _copy_process_section(section: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return a shallow copy of a process-status section with a default status."""
+    copied = dict(section or {})
+    copied.setdefault("status", ProcessStatus.UNKNOWN.value)
+    return copied
+
+
+def _collapse_process_sections(sections: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Collapse many process-status sections into a single summary.
+
+    Priority reflects the most actionable state for the UI:
+    failed > running > pending > completed > unknown
+    """
+    if not sections:
+        return _default_process_section()
+
+    copied = [_copy_process_section(section) for section in sections]
+    statuses = [section.get("status", ProcessStatus.UNKNOWN.value) for section in copied]
+
+    if any(status == ProcessStatus.FAILED.value for status in statuses):
+        status = ProcessStatus.FAILED.value
+    elif any(status == ProcessStatus.RUNNING.value for status in statuses):
+        status = ProcessStatus.RUNNING.value
+    elif any(status == ProcessStatus.PENDING.value for status in statuses):
+        status = ProcessStatus.PENDING.value
+    elif all(status == ProcessStatus.COMPLETED.value for status in statuses):
+        status = ProcessStatus.COMPLETED.value
+    else:
+        status = ProcessStatus.UNKNOWN.value
+
+    summary: Dict[str, Any] = {"status": status}
+
+    started_candidates = [
+        section.get("started_at")
+        for section in copied
+        if section.get("started_at")
+    ]
+    finished_candidates = [
+        section.get("finished_at")
+        for section in copied
+        if section.get("finished_at")
+    ]
+    if started_candidates:
+        summary["started_at"] = min(started_candidates)
+    if finished_candidates and all(
+        section.get("status") == ProcessStatus.COMPLETED.value for section in copied
+    ):
+        summary["finished_at"] = max(finished_candidates)
+
+    errors = [section.get("error") for section in copied if section.get("error")]
+    if errors:
+        summary["error"] = errors[-1]
+
+    chunk_counts = [
+        int(section.get("chunk_count", 0) or 0)
+        for section in copied
+        if section.get("chunk_count") is not None
+    ]
+    total_chars = [
+        int(section.get("total_chars", 0) or 0)
+        for section in copied
+        if section.get("total_chars") is not None
+    ]
+    if chunk_counts:
+        summary["chunk_count"] = max(chunk_counts)
+    if total_chars:
+        summary["total_chars"] = max(total_chars)
+
+    return summary
+
+
+def _normalize_file_status(status: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Normalize legacy and current file_status payloads into a single shape."""
+    raw = dict(status or {})
+
+    parsing = _copy_process_section(
+        raw.get("parsing_status") if isinstance(raw.get("parsing_status"), dict) else raw.get("parsing")
+    )
+
+    raw_indexing_status = raw.get("indexing_status")
+    if isinstance(raw_indexing_status, dict):
+        raw_models = raw_indexing_status.get("models")
+        raw_summary = raw_indexing_status.get("summary")
+    else:
+        raw_models = None
+        raw_summary = None
+
+    models: Dict[str, Dict[str, Any]] = {}
+    if isinstance(raw_models, dict):
+        for model_name, model_entry in raw_models.items():
+            if not isinstance(model_entry, dict):
+                continue
+            normalized_model = _copy_process_section(model_entry)
+            threads = model_entry.get("threads", {})
+            normalized_threads: Dict[str, Dict[str, Any]] = {}
+            if isinstance(threads, dict):
+                for thread_id, thread_entry in threads.items():
+                    if isinstance(thread_entry, dict):
+                        normalized_threads[thread_id] = _copy_process_section(thread_entry)
+            normalized_model["threads"] = normalized_threads
+            models[model_name] = normalized_model
+
+    summary = _copy_process_section(raw_summary if isinstance(raw_summary, dict) else raw.get("indexing"))
+    if models:
+        summary = _collapse_process_sections(list(models.values()))
+
+    return {
+        **raw,
+        "parsing": parsing,
+        "parsing_status": parsing,
+        "indexing": summary,
+        "indexing_status": {
+            "summary": summary,
+            "models": models,
+        },
+        "updated_at": raw.get("updated_at") or datetime.utcnow().isoformat(),
+    }
+
+
+def get_scoped_indexing_status(
+    status: Optional[Dict[str, Any]],
+    embedding_model: Optional[str] = None,
+    thread_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Select the summary, model, or thread-specific indexing section."""
+    normalized = _normalize_file_status(status)
+    indexing_status = normalized.get("indexing_status", {})
+    models = indexing_status.get("models", {})
+
+    if embedding_model:
+        model_status = _copy_process_section(models.get(embedding_model))
+        if thread_id:
+            return _copy_process_section(model_status.get("threads", {}).get(thread_id))
+        return model_status
+
+    if thread_id:
+        thread_sections = []
+        for model_status in models.values():
+            if not isinstance(model_status, dict):
+                continue
+            threads = model_status.get("threads", {})
+            if thread_id in threads and isinstance(threads[thread_id], dict):
+                thread_sections.append(threads[thread_id])
+        return _collapse_process_sections(thread_sections)
+
+    return _copy_process_section(indexing_status.get("summary"))
+
+
 class Thread(BaseModel):
     id: str
     name: str
@@ -374,6 +528,18 @@ async def create_or_get_file(
             "INSERT OR IGNORE INTO files (file_hash, file_name, file_path, source_type) VALUES (?, ?, ?, ?)",
             (file_hash, file_name, file_path, source_type)
         )
+        if file_name or file_path or source_type:
+            await db.execute(
+                """
+                UPDATE files
+                SET
+                    file_name = COALESCE(NULLIF(?, ''), file_name),
+                    file_path = COALESCE(file_path, ?),
+                    source_type = COALESCE(NULLIF(?, ''), source_type)
+                WHERE file_hash = ?
+                """,
+                (file_name, file_path, source_type, file_hash),
+            )
         await db.commit()
         
         db.row_factory = aiosqlite.Row
@@ -452,9 +618,9 @@ async def get_file_status(file_hash: str) -> Optional[Dict[str, Any]]:
         row = await cursor.fetchone()
         if row and row["file_status"]:
             try:
-                return json.loads(row["file_status"])
+                return _normalize_file_status(json.loads(row["file_status"]))
             except Exception:
-                return {}
+                return _normalize_file_status({})
     return None
 
 
@@ -470,24 +636,77 @@ async def update_file_status(file_hash: str, status_data: Dict[str, Any]) -> boo
             (file_hash,)
         )
         row = await cursor.fetchone()
-        existing = {}
+        existing: Dict[str, Any] = {}
         if row and row["file_status"]:
             try:
-                existing = json.loads(row["file_status"])
+                existing = _normalize_file_status(json.loads(row["file_status"]))
             except Exception:
-                pass
+                existing = _normalize_file_status({})
         
         # Merge status data
         merged = {**existing, **status_data}
         merged["updated_at"] = datetime.utcnow().isoformat()
+        normalized = _normalize_file_status(merged)
         
         # Update
         cursor = await db.execute(
             "UPDATE files SET file_status = ? WHERE file_hash = ?",
-            (json.dumps(merged), file_hash)
+            (json.dumps(normalized), file_hash)
         )
         await db.commit()
         return cursor.rowcount > 0
+
+
+async def _claim_file_status(
+    file_hash: str,
+    section: str,
+    claim_status: str,
+    started_at: Optional[str] = None,
+) -> bool:
+    """Atomically claim a process section if it is not already running or completed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute("BEGIN IMMEDIATE")
+
+        cursor = await db.execute(
+            "SELECT file_status FROM files WHERE file_hash = ?",
+            (file_hash,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            await db.rollback()
+            return False
+
+        try:
+            current = _normalize_file_status(json.loads(row["file_status"])) if row["file_status"] else _normalize_file_status({})
+        except Exception:
+            current = _normalize_file_status({})
+
+        section_payload = _copy_process_section(current.get(section))
+        current_status = section_payload.get("status", ProcessStatus.UNKNOWN.value)
+        if ProcessStatus.is_running(current_status) or ProcessStatus.is_completed(current_status):
+            await db.rollback()
+            return False
+
+        section_payload["status"] = claim_status
+        if started_at:
+            section_payload["started_at"] = started_at
+        section_payload.pop("error", None)
+
+        merged = {**current, section: section_payload, f"{section}_status": section_payload}
+        merged["updated_at"] = datetime.utcnow().isoformat()
+        normalized = _normalize_file_status(merged)
+
+        cursor = await db.execute(
+            "UPDATE files SET file_status = ? WHERE file_hash = ?",
+            (json.dumps(normalized), file_hash),
+        )
+        if cursor.rowcount <= 0:
+            await db.rollback()
+            return False
+        await db.commit()
+        return True
 
 
 async def update_parsing_status(
@@ -495,11 +714,15 @@ async def update_parsing_status(
     status: str,
     started_at: Optional[str] = None,
     finished_at: Optional[str] = None,
-    error: Optional[str] = None
+    error: Optional[str] = None,
+    claim: bool = False,
 ) -> bool:
     """Update parsing section of file_status."""
+    if claim:
+        return await _claim_file_status(file_hash, "parsing", status, started_at=started_at)
+
     current_status = await get_file_status(file_hash) or {}
-    parsing = current_status.get("parsing", {})
+    parsing = _copy_process_section(current_status.get("parsing_status") or current_status.get("parsing"))
     parsing["status"] = status
     if started_at:
         parsing["started_at"] = started_at
@@ -507,33 +730,198 @@ async def update_parsing_status(
         parsing["finished_at"] = finished_at
     if error:
         parsing["error"] = error
-    return await update_file_status(file_hash, {"parsing": parsing})
+    else:
+        parsing.pop("error", None)
+    return await update_file_status(
+        file_hash,
+        {
+            "parsing": parsing,
+            "parsing_status": parsing,
+        },
+    )
 
 
 async def update_indexing_status(
     file_hash: str,
     status: str,
+    embedding_model: Optional[str] = None,
+    thread_id: Optional[str] = None,
     started_at: Optional[str] = None,
     finished_at: Optional[str] = None,
     error: Optional[str] = None,
     chunk_count: Optional[int] = None,
-    total_chars: Optional[int] = None
+    total_chars: Optional[int] = None,
+    reused_existing_embeddings: Optional[bool] = None,
+    claim: bool = False,
 ) -> bool:
     """Update indexing section of file_status."""
-    current_status = await get_file_status(file_hash) or {}
-    indexing = current_status.get("indexing", {})
-    indexing["status"] = status
+    if claim:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+            await db.execute("BEGIN IMMEDIATE")
+
+            cursor = await db.execute(
+                "SELECT file_status FROM files WHERE file_hash = ?",
+                (file_hash,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                await db.rollback()
+                return False
+
+            try:
+                current = _normalize_file_status(json.loads(row["file_status"])) if row["file_status"] else _normalize_file_status({})
+            except Exception:
+                current = _normalize_file_status({})
+
+            indexing_status = current.get("indexing_status", {})
+            models = dict(indexing_status.get("models", {}))
+            if embedding_model:
+                model_status = _copy_process_section(models.get(embedding_model))
+                threads = dict(model_status.get("threads", {}))
+                thread_status = _copy_process_section(threads.get(thread_id))
+                current_status = thread_status.get("status", ProcessStatus.UNKNOWN.value)
+                if ProcessStatus.is_running(current_status) or ProcessStatus.is_completed(current_status):
+                    await db.rollback()
+                    return False
+                thread_status["status"] = status
+                if started_at:
+                    thread_status["started_at"] = started_at
+                thread_status.pop("error", None)
+                threads[thread_id] = thread_status
+                model_status["threads"] = threads
+                models[embedding_model] = model_status
+                summary = _collapse_process_sections(list(models.values()))
+            else:
+                summary = _copy_process_section(indexing_status.get("summary"))
+                current_status = summary.get("status", ProcessStatus.UNKNOWN.value)
+                if ProcessStatus.is_running(current_status) or ProcessStatus.is_completed(current_status):
+                    await db.rollback()
+                    return False
+                summary["status"] = status
+                if started_at:
+                    summary["started_at"] = started_at
+                summary.pop("error", None)
+
+            merged = {
+                **current,
+                "indexing": summary,
+                "indexing_status": {
+                    "summary": summary,
+                    "models": models,
+                },
+            }
+            merged["updated_at"] = datetime.utcnow().isoformat()
+            normalized = _normalize_file_status(merged)
+
+            cursor = await db.execute(
+                "UPDATE files SET file_status = ? WHERE file_hash = ?",
+                (json.dumps(normalized), file_hash),
+            )
+            if cursor.rowcount <= 0:
+                await db.rollback()
+                return False
+            await db.commit()
+            return True
+
+    current_status = _normalize_file_status(await get_file_status(file_hash) or {})
+    indexing_status = current_status.get("indexing_status", {})
+    models = dict(indexing_status.get("models", {}))
+
+    if embedding_model:
+        model_status = _copy_process_section(models.get(embedding_model))
+    else:
+        model_status = _copy_process_section(indexing_status.get("summary"))
+
+    model_status["status"] = status
     if started_at:
-        indexing["started_at"] = started_at
+        model_status["started_at"] = started_at
     if finished_at:
-        indexing["finished_at"] = finished_at
+        model_status["finished_at"] = finished_at
     if error:
-        indexing["error"] = error
+        model_status["error"] = error
+    else:
+        model_status.pop("error", None)
     if chunk_count is not None:
-        indexing["chunk_count"] = chunk_count
+        model_status["chunk_count"] = chunk_count
     if total_chars is not None:
-        indexing["total_chars"] = total_chars
-    return await update_file_status(file_hash, {"indexing": indexing})
+        model_status["total_chars"] = total_chars
+    if reused_existing_embeddings is not None:
+        model_status["reused_existing_embeddings"] = reused_existing_embeddings
+
+    if embedding_model:
+        threads = dict(model_status.get("threads", {}))
+        if thread_id:
+            thread_status = _copy_process_section(threads.get(thread_id))
+            thread_status["status"] = status
+            if started_at:
+                thread_status["started_at"] = started_at
+            if finished_at:
+                thread_status["finished_at"] = finished_at
+            if error:
+                thread_status["error"] = error
+            else:
+                thread_status.pop("error", None)
+            if chunk_count is not None:
+                thread_status["chunk_count"] = chunk_count
+            if total_chars is not None:
+                thread_status["total_chars"] = total_chars
+            if reused_existing_embeddings is not None:
+                thread_status["reused_existing_embeddings"] = reused_existing_embeddings
+            threads[thread_id] = thread_status
+        model_status["threads"] = threads
+        models[embedding_model] = model_status
+        summary = _collapse_process_sections(list(models.values()))
+    else:
+        summary = model_status
+
+    return await update_file_status(
+        file_hash,
+        {
+            "indexing": summary,
+            "indexing_status": {
+                "summary": summary,
+                "models": models,
+            },
+        },
+    )
+
+
+async def remove_thread_indexing_status(file_hash: str, embedding_model: str, thread_id: str) -> bool:
+    """Remove a thread-scoped indexing entry and recompute the remaining summaries."""
+    current_status = _normalize_file_status(await get_file_status(file_hash) or {})
+    indexing_status = current_status.get("indexing_status", {})
+    models = dict(indexing_status.get("models", {}))
+    model_status = dict(models.get(embedding_model, {}))
+    threads = dict(model_status.get("threads", {}))
+
+    if thread_id not in threads and embedding_model not in models:
+        return True
+
+    threads.pop(thread_id, None)
+    if threads:
+        recomputed = _collapse_process_sections(list(threads.values()))
+        for key in ("chunk_count", "total_chars"):
+            existing = model_status.get(key)
+            if existing is not None:
+                recomputed[key] = existing
+        model_status = {**model_status, **recomputed, "threads": threads}
+        models[embedding_model] = model_status
+    else:
+        models.pop(embedding_model, None)
+
+    summary = _collapse_process_sections(list(models.values()))
+    return await update_file_status(
+        file_hash,
+        {
+            "indexing": summary,
+            "indexing_status": {
+                "summary": summary,
+                "models": models,
+            },
+        },
+    )
 
 
 # ============ Thread-File Association Operations ============
@@ -643,6 +1031,30 @@ async def count_threads_with_file_for_model(
             )
         row = await cursor.fetchone()
         return int(row[0]) if row else 0
+
+
+async def count_threads_with_file(file_hash: str) -> int:
+    """Count how many threads currently reference a file."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM thread_files WHERE file_hash = ?",
+            (file_hash,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0]) if row else 0
+
+
+async def delete_file_record(file_hash: str) -> bool:
+    """Delete a file row once all thread associations have been removed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        cursor = await db.execute(
+            "DELETE FROM files WHERE file_hash = ?",
+            (file_hash,),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
 
 
 def _load_thread_file_annotations(raw: Optional[str]) -> List[Dict[str, Any]]:
@@ -1016,6 +1428,32 @@ async def remove_document_from_stats(thread_id: str, file_hash: str) -> None:
             return
         docs = _load_documents_meta(row["documents_meta"])
         docs.pop(file_hash, None)
+        await db.execute(
+            """
+            UPDATE thread_stats
+            SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
+            WHERE thread_id = ?
+            """,
+            (json.dumps(docs), thread_id),
+        )
+        await db.commit()
+
+
+async def upsert_document_in_stats(thread_id: str, file_hash: str, meta: Dict[str, Any]) -> None:
+    """Insert or replace a document entry in thread_stats.documents_meta."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        await _ensure_thread_stats_row(db, thread_id)
+        cursor = await db.execute(
+            "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
+            (thread_id,),
+        )
+        row = await cursor.fetchone()
+        docs = _load_documents_meta(row["documents_meta"] if row else None)
+        docs[file_hash] = {
+            **docs.get(file_hash, {}),
+            **(meta or {}),
+        }
         await db.execute(
             """
             UPDATE thread_stats

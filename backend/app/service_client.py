@@ -17,15 +17,21 @@ class ProcessingService(ABC):
         pass
 
     @abstractmethod
-    async def index_document(self, metadata: dict, emb_model: str) -> bool:
-        pass
-
-    @abstractmethod
     async def get_parsed_sentences(self, file_hash: str) -> Optional[dict]:
         pass
 
     @abstractmethod
-    async def get_file_status(self, file_hash: str) -> Optional[dict]:
+    async def get_file_status(
+        self,
+        file_hash: str,
+        section: Optional[str] = None,
+        embedding_model: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ) -> Optional[dict]:
+        pass
+
+    @abstractmethod
+    async def process_pdf(self, file_hash: str, filename: str, backend_url: str, thread_id: str) -> bool:
         pass
 
 class RestProcessingServiceClient(ProcessingService):
@@ -63,26 +69,6 @@ class RestProcessingServiceClient(ProcessingService):
                 logger.error(f"Failed to parse PDF: {e}")
                 raise
 
-    async def index_document(self, metadata: dict, emb_model: str) -> bool:
-        """
-        Trigger document indexing in the processing service.
-        """
-        payload = {
-            "embedding_model": emb_model,
-            "metadata": metadata
-        }
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    f"{self.service_url}/index",
-                    json=payload,
-                    timeout=600.0
-                )
-                return response.status_code == 200
-            except httpx.HTTPError as e:
-                logger.error(f"Failed to index document: {e}")
-                return False
-
     async def get_parsed_sentences(self, file_hash: str) -> Optional[dict]:
         """
         Retrieve parsed sentences for a file from the processing service.
@@ -101,15 +87,29 @@ class RestProcessingServiceClient(ProcessingService):
                 logger.error(f"Failed to retrieve parsed sentences: {e}")
                 return None
 
-    async def get_file_status(self, file_hash: str) -> Optional[dict]:
+    async def get_file_status(
+        self,
+        file_hash: str,
+        section: Optional[str] = None,
+        embedding_model: Optional[str] = None,
+        thread_id: Optional[str] = None,
+    ) -> Optional[dict]:
         """
         Retrieve file status (parsing and indexing status) from the processing service.
         Returns the file_status JSON with parsing and indexing sections, or None if not found.
         """
+        params = {}
+        if section:
+            params["section"] = section
+        if embedding_model:
+            params["embedding_model"] = embedding_model
+        if thread_id:
+            params["thread_id"] = thread_id
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(
                     f"{self.service_url}/files/{file_hash}/status",
+                    params=params or None,
                     timeout=30.0
                 )
                 if response.status_code == 200:
@@ -119,3 +119,25 @@ class RestProcessingServiceClient(ProcessingService):
                 logger.error(f"Failed to retrieve file status: {e}")
                 return None
 
+    async def process_pdf(self, file_hash: str, filename: str, backend_url: str, thread_id: str):
+        """
+        Tell the processing service to process a PDF file (parse and index).
+        The service will handle background parsing and indexing with status updates internally.
+        """
+        payload = {
+            "thread_id": thread_id,
+            "file_hash": file_hash,
+            "file_name": filename,
+            "backend_url": backend_url,
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    f"{self.service_url}/process-pdf",
+                    json=payload,
+                    timeout=30.0
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as e:
+                logger.error(f"Failed to process PDF: {e}")
+                raise

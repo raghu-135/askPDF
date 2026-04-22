@@ -11,8 +11,15 @@ import os
 import json
 import logging
 import asyncio
+from datetime import datetime
 from typing import Dict, Any, List, Optional
-from app.db.database import ProcessStatus
+from app.db.database import (
+    ProcessStatus,
+    get_file,
+    get_file_status,
+    get_scoped_indexing_status,
+    upsert_document_in_stats,
+)
 
 import httpx
 from unstructured.partition.pdf import partition_pdf
@@ -31,6 +38,48 @@ logger = logging.getLogger(__name__)
 
 TEMP_PDF_DIR = "/tmp/pdfs"
 os.makedirs(TEMP_PDF_DIR, exist_ok=True)
+_document_index_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _document_index_lock(file_hash: str, embedding_model_name: str) -> asyncio.Lock:
+    """Return the shared lock for a file/model indexing run."""
+    key = f"{file_hash}:{embedding_model_name}"
+    if key not in _document_index_locks:
+        _document_index_locks[key] = asyncio.Lock()
+    return _document_index_locks[key]
+
+
+async def _upsert_document_stats(
+    thread_id: str,
+    file_hash: str,
+    metadata: Dict[str, Any],
+    chunk_count: int,
+    total_chars: int,
+    indexed_at: str,
+) -> None:
+    """Persist thread-local document inventory metadata used by retrieval and agents."""
+    file = await get_file(file_hash)
+    source_type = (file.source_type if file and file.source_type else "pdf")
+    url = metadata.get("url") or metadata.get("original_url") or (file.file_path if file and source_type == "web" else None)
+    title = metadata.get("title") or (file.file_name if file else file_hash)
+    content_hash = metadata.get("content_hash")
+
+    doc_meta: Dict[str, Any] = {
+        "file_name": file.file_name if file else file_hash,
+        "source_type": source_type,
+        "chunk_count": chunk_count,
+        "total_chars": total_chars,
+        "indexing_status": ProcessStatus.COMPLETED.value,
+        "indexed_at": indexed_at,
+    }
+    if url:
+        doc_meta["url"] = url
+    if title:
+        doc_meta["title"] = title
+    if content_hash:
+        doc_meta["content_hash"] = content_hash
+
+    await upsert_document_in_stats(thread_id, file_hash, doc_meta)
 
 
 async def summarize_qa(
@@ -243,96 +292,145 @@ async def index_document_for_thread(
         Status dict with indexing results
     """
     from app.db.database import update_indexing_status
-    from datetime import datetime
     
     db_client = get_vector_db()
     metadata = metadata or {}
-
-    # Update indexing status to running
-    await update_indexing_status(file_hash, ProcessStatus.RUNNING.value, started_at=datetime.utcnow().isoformat())
+    started_at = datetime.utcnow().isoformat()
+    total_chars = 0
 
     try:
-        if await db_client.has_file_indexed(thread_id, file_hash, embedding_model_name):
-            try:
+        await update_indexing_status(
+            file_hash=file_hash,
+            status=ProcessStatus.RUNNING.value,
+            embedding_model=embedding_model_name,
+            thread_id=thread_id,
+            started_at=started_at,
+            claim=True,
+        )
+
+        async with _document_index_lock(file_hash, embedding_model_name):
+            if await db_client.has_file_indexed(thread_id, file_hash, embedding_model_name):
+                file_status = await get_file_status(file_hash)
+                model_status = get_scoped_indexing_status(file_status, embedding_model=embedding_model_name)
                 shared_chunks = await db_client.get_file_chunk_count(file_hash, embedding_model_name)
+                total_chars = int(model_status.get("total_chars", 0) or 0)
+                finished_at = datetime.utcnow().isoformat()
                 await update_indexing_status(
                     file_hash=file_hash,
                     status=ProcessStatus.COMPLETED.value,
-                    finished_at=datetime.utcnow().isoformat(),
+                    embedding_model=embedding_model_name,
+                    thread_id=thread_id,
+                    started_at=started_at,
+                    finished_at=finished_at,
                     chunk_count=shared_chunks,
-                    total_chars=0,
+                    total_chars=total_chars,
+                    reused_existing_embeddings=True,
                 )
-            except Exception:
-                pass
+                await _upsert_document_stats(
+                    thread_id=thread_id,
+                    file_hash=file_hash,
+                    metadata=metadata,
+                    chunk_count=shared_chunks,
+                    total_chars=total_chars,
+                    indexed_at=finished_at,
+                )
+                return {
+                    "status": "success",
+                    "thread_id": thread_id,
+                    "file_hash": file_hash,
+                    "chunks_count": shared_chunks,
+                    "reused_existing_embeddings": True,
+                }
+
+            # 1. Get chunks - use markdown for web sources, PDF for uploaded files
+            if markdown_content:
+                logger.info(f"Using markdown content for web source indexing: {file_hash}")
+                chunks = parse_markdown_to_chunks(markdown_content)
+            else:
+                chunks = await get_chunks(file_hash)
+            if not chunks:
+                logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
+                await update_indexing_status(
+                    file_hash=file_hash,
+                    status=ProcessStatus.FAILED.value,
+                    embedding_model=embedding_model_name,
+                    thread_id=thread_id,
+                    started_at=started_at,
+                    finished_at=datetime.utcnow().isoformat(),
+                    error="No text extracted from document",
+                )
+                return {"status": "error", "message": "No text extracted from document"}
+
+            logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
+
+            # 2. Generate embeddings
+            vectors = await generate_embeddings(chunks, embedding_model_name)
+
+            # 3. Prepare metadata for each chunk
+            chunk_metadatas = []
+            source_kind = metadata.get("source_kind", "pdf")
+            for i, _chunk in enumerate(chunks):
+                chunk_metadata = {
+                    **metadata,
+                    "source_kind": source_kind,
+                    "file_hash": file_hash,
+                    "chunk_index": i,
+                }
+                chunk_metadatas.append(chunk_metadata)
+
+            # 4. Index into document collection
+            indexed_count = await db_client.index_pdf_chunks(
+                thread_id=thread_id,
+                embedding_model_name=embedding_model_name,
+                file_hash=file_hash,
+                texts=chunks,
+                embeddings=vectors,
+                metadatas=chunk_metadatas
+            )
+
+            total_chars = sum(len(c) for c in chunks)
+            finished_at = datetime.utcnow().isoformat()
+            logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
+
+            await update_indexing_status(
+                file_hash=file_hash,
+                status=ProcessStatus.COMPLETED.value,
+                embedding_model=embedding_model_name,
+                thread_id=thread_id,
+                started_at=started_at,
+                finished_at=finished_at,
+                chunk_count=indexed_count,
+                total_chars=total_chars,
+                reused_existing_embeddings=False,
+            )
+            await _upsert_document_stats(
+                thread_id=thread_id,
+                file_hash=file_hash,
+                metadata=metadata,
+                chunk_count=indexed_count,
+                total_chars=total_chars,
+                indexed_at=finished_at,
+            )
+
             return {
                 "status": "success",
                 "thread_id": thread_id,
                 "file_hash": file_hash,
-                "chunks_count": await db_client.get_file_chunk_count(file_hash, embedding_model_name),
-                "reused_existing_embeddings": True,
+                "chunks_count": indexed_count
             }
-
-        # 1. Get chunks - use markdown for web sources, PDF for uploaded files
-        if markdown_content:
-            logger.info(f"Using markdown content for web source indexing: {file_hash}")
-            chunks = parse_markdown_to_chunks(markdown_content)
-        else:
-            chunks = await get_chunks(file_hash)
-        if not chunks:
-            logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
-            await update_indexing_status(file_hash, ProcessStatus.FAILED.value, error="No text extracted from document")
-            return {"status": "error", "message": "No text extracted from document"}
-        
-        logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
-        
-        # 2. Generate embeddings
-        vectors = await generate_embeddings(chunks, embedding_model_name)
-        
-        # 3. Prepare metadata for each chunk
-        chunk_metadatas = []
-        for i, chunk in enumerate(chunks):
-            chunk_metadata = {
-                **metadata,
-                "file_hash": file_hash,
-                "chunk_index": i,
-            }
-            chunk_metadatas.append(chunk_metadata)
-        
-        # 4. Index into thread collection
-        indexed_count = await db_client.index_pdf_chunks(
-            thread_id=thread_id,
-            embedding_model_name=embedding_model_name,
-            file_hash=file_hash,
-            texts=chunks,
-            embeddings=vectors,
-            metadatas=chunk_metadatas
-        )
-        
-        logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
-
-        # Update indexing status to completed
-        try:
-            await update_indexing_status(
-                file_hash=file_hash,
-                status=ProcessStatus.COMPLETED.value,
-                finished_at=datetime.utcnow().isoformat(),
-                chunk_count=indexed_count,
-                total_chars=sum(len(c) for c in chunks),
-            )
-        except Exception as stats_err:
-            logger.warning(f"file_status update skipped after indexing: {stats_err}")
-
-        return {
-            "status": "success",
-            "thread_id": thread_id,
-            "file_hash": file_hash,
-            "chunks_count": indexed_count
-        }
 
     except Exception as e:
         logger.error(f"Error indexing document for thread {thread_id}: {e}", exc_info=True)
         try:
-            await update_indexing_status(file_hash, "failed", error=str(e))
+            await update_indexing_status(
+                file_hash=file_hash,
+                status=ProcessStatus.FAILED.value,
+                embedding_model=embedding_model_name,
+                thread_id=thread_id,
+                started_at=started_at,
+                finished_at=datetime.utcnow().isoformat(),
+                error=str(e),
+            )
         except Exception:
             pass
         return {"status": "error", "message": str(e)}

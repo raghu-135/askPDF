@@ -118,7 +118,7 @@ type Sentence = {
 
 type Props = {
   pdfUrl: string;
-  sentences: Sentence[];
+  sentences: Sentence[] | null;
   currentId: number | null;
   onJump: (id: number) => void;
   autoScroll: boolean;
@@ -221,7 +221,7 @@ function buildPlugins(pdfUrl: string) {
   ];
 }
 
-function sentencesByPageMap(sentences: Sentence[]) {
+function sentencesByPageMap(sentences: Sentence[] | null) {
   const map: { [key: number]: (Sentence & { pageBBoxes: BBox[] })[] } = {};
   if (!sentences) return map;
   sentences.forEach((s) => {
@@ -394,7 +394,7 @@ function EmbedPdfDocumentBody({
     // Priority: Don't let TTS scroll fight with a manual history undo/redo
     if (isHistoryProcessingRef.current) return;
 
-    if (!autoScroll || currentId === null) {
+    if (!autoScroll || currentId === null || !sentences) {
       pendingScrollIdRef.current = null;
       return;
     }
