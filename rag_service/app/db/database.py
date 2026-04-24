@@ -501,15 +501,20 @@ async def delete_thread(thread_id: str) -> bool:
     """Delete a thread and all associated data."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON")
-        # Delete messages first (cascade should handle this, but being explicit)
-        await db.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
-        await db.execute("DELETE FROM thread_file_annotations WHERE thread_id = ?", (thread_id,))
-        # Delete thread_files associations
-        await db.execute("DELETE FROM thread_files WHERE thread_id = ?", (thread_id,))
-        # Delete the thread
-        cursor = await db.execute("DELETE FROM threads WHERE id = ?", (thread_id,))
-        await db.commit()
-        return cursor.rowcount > 0
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            # Delete messages first (cascade should handle this, but being explicit)
+            await db.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
+            await db.execute("DELETE FROM thread_file_annotations WHERE thread_id = ?", (thread_id,))
+            # Delete thread_files associations
+            await db.execute("DELETE FROM thread_files WHERE thread_id = ?", (thread_id,))
+            # Delete the thread
+            cursor = await db.execute("DELETE FROM threads WHERE id = ?", (thread_id,))
+            await db.commit()
+            return cursor.rowcount > 0
+        except Exception:
+            await db.rollback()
+            raise
 
 
 # ============ File Operations ============
@@ -523,37 +528,42 @@ async def create_or_get_file(
     """Create a new file record or return existing one."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON")
-        # Try to insert, ignore if exists
-        await db.execute(
-            "INSERT OR IGNORE INTO files (file_hash, file_name, file_path, source_type) VALUES (?, ?, ?, ?)",
-            (file_hash, file_name, file_path, source_type)
-        )
-        if file_name or file_path or source_type:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            # Try to insert, ignore if exists
             await db.execute(
-                """
-                UPDATE files
-                SET
-                    file_name = COALESCE(NULLIF(?, ''), file_name),
-                    file_path = COALESCE(file_path, ?),
-                    source_type = COALESCE(NULLIF(?, ''), source_type)
-                WHERE file_hash = ?
-                """,
-                (file_name, file_path, source_type, file_hash),
+                "INSERT OR IGNORE INTO files (file_hash, file_name, file_path, source_type) VALUES (?, ?, ?, ?)",
+                (file_hash, file_name, file_path, source_type)
             )
-        await db.commit()
-        
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT file_hash, file_name, file_path, source_type FROM files WHERE file_hash = ?",
-            (file_hash,)
-        )
-        row = await cursor.fetchone()
-        return File(
-            file_hash=row["file_hash"],
-            file_name=row["file_name"],
-            file_path=row["file_path"],
-            source_type=row["source_type"] or "pdf",
-        )
+            if file_name or file_path or source_type:
+                await db.execute(
+                    """
+                    UPDATE files
+                    SET
+                        file_name = COALESCE(NULLIF(?, ''), file_name),
+                        file_path = COALESCE(file_path, ?),
+                        source_type = COALESCE(NULLIF(?, ''), source_type)
+                    WHERE file_hash = ?
+                    """,
+                    (file_name, file_path, source_type, file_hash),
+                )
+            await db.commit()
+            
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT file_hash, file_name, file_path, source_type FROM files WHERE file_hash = ?",
+                (file_hash,)
+            )
+            row = await cursor.fetchone()
+            return File(
+                file_hash=row["file_hash"],
+                file_name=row["file_name"],
+                file_path=row["file_path"],
+                source_type=row["source_type"] or "pdf",
+            )
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def get_file(file_hash: str) -> Optional[File]:
@@ -629,32 +639,36 @@ async def update_file_status(file_hash: str, status_data: Dict[str, Any]) -> boo
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         await db.execute("PRAGMA foreign_keys = ON")
-        
-        # Get existing status
-        cursor = await db.execute(
-            "SELECT file_status FROM files WHERE file_hash = ?",
-            (file_hash,)
-        )
-        row = await cursor.fetchone()
-        existing: Dict[str, Any] = {}
-        if row and row["file_status"]:
-            try:
-                existing = _normalize_file_status(json.loads(row["file_status"]))
-            except Exception:
-                existing = _normalize_file_status({})
-        
-        # Merge status data
-        merged = {**existing, **status_data}
-        merged["updated_at"] = datetime.utcnow().isoformat()
-        normalized = _normalize_file_status(merged)
-        
-        # Update
-        cursor = await db.execute(
-            "UPDATE files SET file_status = ? WHERE file_hash = ?",
-            (json.dumps(normalized), file_hash)
-        )
-        await db.commit()
-        return cursor.rowcount > 0
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            # Get existing status
+            cursor = await db.execute(
+                "SELECT file_status FROM files WHERE file_hash = ?",
+                (file_hash,)
+            )
+            row = await cursor.fetchone()
+            existing: Dict[str, Any] = {}
+            if row and row["file_status"]:
+                try:
+                    existing = _normalize_file_status(json.loads(row["file_status"]))
+                except Exception:
+                    existing = _normalize_file_status({})
+            
+            # Merge status data
+            merged = {**existing, **status_data}
+            merged["updated_at"] = datetime.utcnow().isoformat()
+            normalized = _normalize_file_status(merged)
+            
+            # Update
+            cursor = await db.execute(
+                "UPDATE files SET file_status = ? WHERE file_hash = ?",
+                (json.dumps(normalized), file_hash)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def _claim_file_status(
@@ -971,16 +985,21 @@ async def remove_file_from_thread(thread_id: str, file_hash: str) -> bool:
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("PRAGMA foreign_keys = ON")
-            await db.execute(
-                "DELETE FROM thread_file_annotations WHERE thread_id = ? AND file_hash = ?",
-                (thread_id, file_hash)
-            )
-            cursor = await db.execute(
-                "DELETE FROM thread_files WHERE thread_id = ? AND file_hash = ?",
-                (thread_id, file_hash)
-            )
-            await db.commit()
-            return cursor.rowcount > 0
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "DELETE FROM thread_file_annotations WHERE thread_id = ? AND file_hash = ?",
+                    (thread_id, file_hash)
+                )
+                cursor = await db.execute(
+                    "DELETE FROM thread_files WHERE thread_id = ? AND file_hash = ?",
+                    (thread_id, file_hash)
+                )
+                await db.commit()
+                return cursor.rowcount > 0
+            except Exception:
+                await db.rollback()
+                raise
     except Exception as e:
         logger.error(f"Error removing file from thread: {e}")
         return False
@@ -1337,48 +1356,55 @@ async def delete_message_pair(message_id: str) -> List[str]:
     deleted_ids = []
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        # 1. Get the target message
-        cursor = await db.execute("SELECT id, thread_id, role, created_at FROM messages WHERE id = ?", (message_id,))
-        target = await cursor.fetchone()
-        if not target:
-            return []
-        
-        target_role = target["role"]
-        target_thread = target["thread_id"]
-        target_created = target["created_at"]
-        
-        deleted_ids.append(message_id)
-        
-        # 2. Find the candidate pair
-        pair_id = None
-        if target_role == "assistant":
-            # Search for the user message immediately preceding it
-            cursor = await db.execute("""
-                SELECT id FROM messages 
-                WHERE thread_id = ? AND role = 'user' AND created_at <= ? AND id != ?
-                ORDER BY created_at DESC LIMIT 1
-            """, (target_thread, target_created, message_id))
-            pair = await cursor.fetchone()
-            if pair:
-                pair_id = pair["id"]
-        elif target_role == "user":
-            # Search for the assistant message immediately following it
-            cursor = await db.execute("""
-                SELECT id FROM messages 
-                WHERE thread_id = ? AND role = 'assistant' AND created_at >= ? AND id != ?
-                ORDER BY created_at ASC LIMIT 1
-            """, (target_thread, target_created, message_id))
-            pair = await cursor.fetchone()
-            if pair:
-                pair_id = pair["id"]
-        
-        if pair_id:
-            deleted_ids.append(pair_id)
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            # 1. Get the target message
+            cursor = await db.execute("SELECT id, thread_id, role, created_at FROM messages WHERE id = ?", (message_id,))
+            target = await cursor.fetchone()
+            if not target:
+                await db.rollback()
+                return []
             
-        # 3. Perform the deletion
-        placeholders = ', '.join(['?'] * len(deleted_ids))
-        await db.execute(f"DELETE FROM messages WHERE id IN ({placeholders})", deleted_ids)
-        await db.commit()
+            target_role = target["role"]
+            target_thread = target["thread_id"]
+            target_created = target["created_at"]
+            
+            deleted_ids.append(message_id)
+            
+            # 2. Find the candidate pair
+            pair_id = None
+            if target_role == "assistant":
+                # Search for the user message immediately preceding it
+                cursor = await db.execute("""
+                    SELECT id FROM messages 
+                    WHERE thread_id = ? AND role = 'user' AND created_at <= ? AND id != ?
+                    ORDER BY created_at DESC LIMIT 1
+                """, (target_thread, target_created, message_id))
+                pair = await cursor.fetchone()
+                if pair:
+                    pair_id = pair["id"]
+            elif target_role == "user":
+                # Search for the assistant message immediately following it
+                cursor = await db.execute("""
+                    SELECT id FROM messages 
+                    WHERE thread_id = ? AND role = 'assistant' AND created_at >= ? AND id != ?
+                    ORDER BY created_at ASC LIMIT 1
+                """, (target_thread, target_created, message_id))
+                pair = await cursor.fetchone()
+                if pair:
+                    pair_id = pair["id"]
+            
+            if pair_id:
+                deleted_ids.append(pair_id)
+                
+            # 3. Perform the deletion
+            placeholders = ', '.join(['?'] * len(deleted_ids))
+            await db.execute(f"DELETE FROM messages WHERE id IN ({placeholders})", deleted_ids)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
         
     return deleted_ids
 
@@ -1419,50 +1445,63 @@ async def remove_document_from_stats(thread_id: str, file_hash: str) -> None:
     """Remove a document entry from thread_stats.documents_meta."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
-            (thread_id,),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            return
-        docs = _load_documents_meta(row["documents_meta"])
-        docs.pop(file_hash, None)
-        await db.execute(
-            """
-            UPDATE thread_stats
-            SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
-            WHERE thread_id = ?
-            """,
-            (json.dumps(docs), thread_id),
-        )
-        await db.commit()
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await db.execute(
+                "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
+                (thread_id,),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                await db.rollback()
+                return
+            docs = _load_documents_meta(row["documents_meta"])
+            docs.pop(file_hash, None)
+            await db.execute(
+                """
+                UPDATE thread_stats
+                SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
+                WHERE thread_id = ?
+                """,
+                (json.dumps(docs), thread_id),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def upsert_document_in_stats(thread_id: str, file_hash: str, meta: Dict[str, Any]) -> None:
     """Insert or replace a document entry in thread_stats.documents_meta."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        await _ensure_thread_stats_row(db, thread_id)
-        cursor = await db.execute(
-            "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
-            (thread_id,),
-        )
-        row = await cursor.fetchone()
-        docs = _load_documents_meta(row["documents_meta"] if row else None)
-        docs[file_hash] = {
-            **docs.get(file_hash, {}),
-            **(meta or {}),
-        }
-        await db.execute(
-            """
-            UPDATE thread_stats
-            SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
-            WHERE thread_id = ?
-            """,
-            (json.dumps(docs), thread_id),
-        )
-        await db.commit()
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await _ensure_thread_stats_row(db, thread_id)
+            cursor = await db.execute(
+                "SELECT documents_meta FROM thread_stats WHERE thread_id = ?",
+                (thread_id,),
+            )
+            row = await cursor.fetchone()
+            docs = _load_documents_meta(row["documents_meta"] if row else None)
+            docs[file_hash] = {
+                **docs.get(file_hash, {}),
+                **(meta or {}),
+            }
+            await db.execute(
+                """
+                UPDATE thread_stats
+                SET documents_meta = ?, last_updated_at = CURRENT_TIMESTAMP
+                WHERE thread_id = ?
+                """,
+                (json.dumps(docs), thread_id),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def increment_qa_stats(thread_id: str, qa_chars: int) -> None:
@@ -1471,21 +1510,27 @@ async def increment_qa_stats(thread_id: str, qa_chars: int) -> None:
     Called on the hot path (every chat answer).
     """
     async with aiosqlite.connect(DB_PATH) as db:
-        await _ensure_thread_stats_row(db, thread_id)
-        await db.execute(
-            """
-            UPDATE thread_stats
-            SET
-                total_qa_pairs  = total_qa_pairs + 1,
-                total_qa_chars  = total_qa_chars + ?,
-                avg_qa_chars    = CAST(total_qa_chars + ? AS REAL) / (total_qa_pairs + 1),
-                last_qa_at      = CURRENT_TIMESTAMP,
-                last_updated_at = CURRENT_TIMESTAMP
-            WHERE thread_id = ?
-            """,
-            (qa_chars, qa_chars, thread_id),
-        )
-        await db.commit()
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await _ensure_thread_stats_row(db, thread_id)
+            await db.execute(
+                """
+                UPDATE thread_stats
+                SET
+                    total_qa_pairs  = total_qa_pairs + 1,
+                    total_qa_chars  = total_qa_chars + ?,
+                    avg_qa_chars    = CAST(total_qa_chars + ? AS REAL) / (total_qa_pairs + 1),
+                    last_qa_at      = CURRENT_TIMESTAMP,
+                    last_updated_at = CURRENT_TIMESTAMP
+                WHERE thread_id = ?
+                """,
+                (qa_chars, qa_chars, thread_id),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def recompute_qa_stats(thread_id: str) -> None:
@@ -1496,32 +1541,38 @@ async def recompute_qa_stats(thread_id: str) -> None:
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            """
-            SELECT COUNT(*) as cnt, COALESCE(SUM(LENGTH(content)), 0) as total_chars
-            FROM messages
-            WHERE thread_id = ? AND role = 'assistant'
-            """,
-            (thread_id,),
-        )
-        row = await cursor.fetchone()
-        cnt = row["cnt"] or 0
-        total_chars = row["total_chars"] or 0
-        avg = (total_chars / cnt) if cnt > 0 else 0.0
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*) as cnt, COALESCE(SUM(LENGTH(content)), 0) as total_chars
+                FROM messages
+                WHERE thread_id = ? AND role = 'assistant'
+                """,
+                (thread_id,),
+            )
+            row = await cursor.fetchone()
+            cnt = row["cnt"] or 0
+            total_chars = row["total_chars"] or 0
+            avg = (total_chars / cnt) if cnt > 0 else 0.0
 
-        await _ensure_thread_stats_row(db, thread_id)
-        await db.execute(
-            """
-            UPDATE thread_stats
-            SET total_qa_pairs  = ?,
-                total_qa_chars  = ?,
-                avg_qa_chars    = ?,
-                last_updated_at = CURRENT_TIMESTAMP
-            WHERE thread_id = ?
-            """,
-            (cnt, total_chars, avg, thread_id),
-        )
-        await db.commit()
+            await _ensure_thread_stats_row(db, thread_id)
+            await db.execute(
+                """
+                UPDATE thread_stats
+                SET total_qa_pairs  = ?,
+                    total_qa_chars  = ?,
+                    avg_qa_chars    = ?,
+                    last_updated_at = CURRENT_TIMESTAMP
+                WHERE thread_id = ?
+                """,
+                (cnt, total_chars, avg, thread_id),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def get_thread_shape(thread_id: str) -> Dict[str, Any]:
