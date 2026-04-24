@@ -350,17 +350,13 @@ function EmbedPdfDocumentBody({
   historyRef.current = { provides: historyApi };
   const {
     hydrateAnnotationsRef,
-    loadPersistedAnnotations,
     schedulePersistAnnotations,
   } = usePersistAnnotations({
     annotationApi,
     threadId,
     fileHash,
+    pdfLoaded,
   });
-
-  useEffect(() => {
-    void loadPersistedAnnotations();
-  }, [loadPersistedAnnotations]);
 
   
   useEffect(() => {
@@ -442,7 +438,7 @@ function EmbedPdfDocumentBody({
     const sub = annotationApi.onAnnotationEvent((event) => {
       if (event.type === "loaded") return;
 
-      // 1. Persistence logging
+      // 1. Schedule debounced persistence save
       if (isCommittedMutationEvent(event)) {
         if (!hydrateAnnotationsRef.current) {
           schedulePersistAnnotations();

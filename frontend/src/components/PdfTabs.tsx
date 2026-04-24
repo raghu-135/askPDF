@@ -99,18 +99,25 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
                     {isWeb
                       ? (
                         <Tooltip title="Open source webpage">
-                          <IconButton
-                            size="small"
+                          <span
                             onClick={(e) => {
                               e.stopPropagation();
                               if (tab.sourceUrl) {
                                 window.open(tab.sourceUrl, '_blank', 'noopener,noreferrer');
                               }
                             }}
-                            sx={{ p: 0.3, color: 'primary.main' }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                              padding: '2px',
+                              borderRadius: '4px',
+                              color: '#1976d2',
+                            }}
                           >
                             <LanguageIcon fontSize="small" />
-                          </IconButton>
+                          </span>
                         </Tooltip>
                       )
                       : <PictureAsPdfIcon fontSize="small" sx={{ color: 'error.main', opacity: 0.7 }} />

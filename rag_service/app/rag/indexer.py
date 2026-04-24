@@ -21,7 +21,6 @@ from app.db.database import (
     upsert_document_in_stats,
 )
 
-import httpx
 from unstructured.partition.pdf import partition_pdf
 from unstructured.partition.md import partition_md
 from langchain_core.documents import Document
@@ -113,59 +112,61 @@ async def summarize_qa(
         return f"Q: {question}\nA: {answer}"[:hard_limit_chars] + "..."
 
 
-async def download_and_parse_pdf(file_hash: str, backend_url: str) -> Optional[List[str]]:
+async def download_and_parse_pdf(file_hash: str, backend_url: str = "") -> Optional[List[str]]:
     """
-    Download a PDF from the backend using file_hash and parse it into text chunks using unstructured.
-    Returns a list of chunked strings, or None if download/parsing fails.
+    Read a PDF from local filesystem using file_hash and parse it into text chunks using unstructured.
+    Returns a list of chunked strings, or None if reading/parsing fails.
     """
-    pdf_url = f"{backend_url}/{file_hash}.pdf"
+    pdf_path = f"/static/{file_hash}.pdf"
     local_path = os.path.join(TEMP_PDF_DIR, f"{file_hash}.pdf")
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(pdf_url, timeout=30.0)
-            if resp.status_code == 200:
-                with open(local_path, "wb") as f:
-                    f.write(resp.content)
-                
-                # Run partitioning in a thread pool as it is CPU-bound
-                elements = await asyncio.to_thread(partition_pdf, filename=local_path)
-                
-                from unstructured.chunking.title import chunk_by_title
-                # Improved chunking: ensure sentences are not split and use consistent sizing
-                # multipage_sections=True helps keep context across page breaks
-                chunked_elements = chunk_by_title(
-                    elements,
-                    multipage_sections=True,
-                    combine_text_under_n_chars=200,
-                    max_characters=500,
-                    new_after_n_chars=400,
-                    overlap=0 # Neighbors provide the continuity, so we don't need overlapping text
-                )
-                chunks = [str(c) for c in chunked_elements]
-                try:
-                    os.remove(local_path)
-                except Exception:
-                    pass
-                return chunks
-            else:
-                logger.error(f"Failed to download PDF from {pdf_url}: {resp.status_code}")
-                return None
+        # Read PDF from local filesystem
+        if not os.path.exists(pdf_path):
+            logger.error(f"PDF not found at {pdf_path}")
+            return None
+
+        with open(pdf_path, "rb") as f:
+            pdf_data = f.read()
+
+        # Write to temp location for unstructured processing
+        with open(local_path, "wb") as f:
+            f.write(pdf_data)
+
+        # Run partitioning in a thread pool as it is CPU-bound
+        elements = await asyncio.to_thread(partition_pdf, filename=local_path)
+
+        from unstructured.chunking.title import chunk_by_title
+        # Improved chunking: ensure sentences are not split and use consistent sizing
+        # multipage_sections=True helps keep context across page breaks
+        chunked_elements = chunk_by_title(
+            elements,
+            multipage_sections=True,
+            combine_text_under_n_chars=200,
+            max_characters=500,
+            new_after_n_chars=400,
+            overlap=0 # Neighbors provide the continuity, so we don't need overlapping text
+        )
+        chunks = [str(c) for c in chunked_elements]
+        try:
+            os.remove(local_path)
+        except Exception:
+            pass
+        return chunks
     except Exception as e:
-        logger.error(f"Error downloading/parsing PDF: {e}")
+        logger.error(f"Error reading/parsing PDF: {e}")
         return None
 
 
 async def get_chunks(file_hash: str) -> List[str]:
     """
-    Download a PDF from the backend using file_hash and parse it into text chunks using unstructured.
+    Read a PDF from local filesystem using file_hash and parse it into text chunks using unstructured.
     Returns a list of chunked strings.
     """
-    backend_url = os.getenv("BACKEND_URL", "http://backend:8000")
-    chunks = await download_and_parse_pdf(file_hash, backend_url)
+    chunks = await download_and_parse_pdf(file_hash)
     if chunks:
         return chunks
-    
-    logger.error(f"PDF download/parse failed for {file_hash}")
+
+    logger.error(f"PDF read/parse failed for {file_hash}")
     return []
 
 

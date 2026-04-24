@@ -1,11 +1,8 @@
-declare const process: {
-  env: Record<string, string | undefined>;
-};
 import { Button, Tooltip, CircularProgress, Box, Typography } from "@mui/material";
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import React from "react";
-import { getFileStatus, getParsedSentences, FileStatus, ProcessStatusHelper } from "../lib/api";
+import { getFileStatus, getParsedSentences, FileStatus, ProcessStatusHelper, uploadPdf as apiUploadPdf } from "../lib/api";
 
 type Props = {
   threadId?: string | null;
@@ -115,18 +112,13 @@ const PdfUploader = React.memo(function PdfUploader({
 
     setIsUploading(true);
     setFileStatus(null);
-    
+
     try {
       if (!threadId) {
         throw new Error("A thread must be selected before uploading.");
       }
-      const form = new FormData();
-      form.append("file", file);
-      form.append("thread_id", threadId);
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const res = await fetch(`${apiBase}/api/upload`, { method: "POST", body: form });
-      const data = await res.json();
-      
+      const data = await apiUploadPdf(file, threadId);
+
       // Set initial file status - will be updated by polling
       setFileStatus({
         fileHash: data.fileHash,
@@ -137,7 +129,7 @@ const PdfUploader = React.memo(function PdfUploader({
           updated_at: new Date().toISOString()
         }
       });
-      
+
       onUploaded({ ...data, fileName: file.name });
     } catch (error) {
       console.error("Upload failed", error);

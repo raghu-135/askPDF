@@ -23,7 +23,7 @@ import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
-import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper } from "../lib/api";
+import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE } from "../lib/api";
 import { loadThreadTabs, createPdfTabFromUpload, createWebTabFromIndexed, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
@@ -110,11 +110,10 @@ export default function Home() {
       try {
         setIsPdfLoading(true);
         // Always fetch the latest thread data to ensure we have current files and stats
-        const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
         const detailedThread = await import("../lib/api").then(m => m.getThread(thread.id));
         setActiveThread(detailedThread);
 
-        const loadedTabs = await loadThreadTabs(detailedThread, apiBase);
+        const loadedTabs = await loadThreadTabs(detailedThread);
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
           setActiveTabId(loadedTabs[0].id);
@@ -132,8 +131,7 @@ export default function Home() {
 
   // Handle PDF upload - create new tab
   const handlePdfUploaded = async (data: any) => {
-    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const newTab = createPdfTabFromUpload(data, apiBase);
+    const newTab = createPdfTabFromUpload(data);
 
     setPdfTabs(prev => [...prev, newTab]);
     setActiveTabId(newTab.id);
@@ -209,8 +207,6 @@ export default function Home() {
   const handleWebIndexed = async (data: { fileHash: string; url: string; title?: string; status: string; message?: string }) => {
     if (data.status !== 'accepted' || !activeThread || !data.fileHash) return;
 
-    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
     // Fetch PDF data immediately so PdfViewer has sentences on first load
     let pdfData;
     try {
@@ -225,7 +221,7 @@ export default function Home() {
       id: data.fileHash,
       fileHash: data.fileHash,
       fileName: data.title || data.url,
-      pdfUrl: `${apiBase}/api/pdf-file/${data.fileHash}?t=${Date.now()}`,
+      pdfUrl: `${API_BASE}/files/${data.fileHash}.pdf?t=${Date.now()}`,
       sentences: transformedSentences,
       text: transformedSentences ? extractTextFromSentences(transformedSentences) : '',
       sourceType: 'web',

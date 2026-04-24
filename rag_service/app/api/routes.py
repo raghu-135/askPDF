@@ -8,7 +8,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
 
 from app.agent.agent import (
     build_system_prompt,
@@ -251,7 +252,7 @@ async def _queue_file_processing(
     thread,
     file_hash: str,
     file_name: str,
-    backend_url: str,
+    backend_url: str = "",  # No longer needed, files are read locally
     file_path: Optional[str] = None,
     source_type: str = "pdf",
     indexing_metadata: Optional[Dict[str, Any]] = None,
@@ -329,9 +330,10 @@ async def process_pdf_endpoint(req: ProcessPdfRequest, background_tasks: Backgro
     }
 
 
-async def _background_parse(file_hash: str, filename: str, backend_url: str):
+async def _background_parse(file_hash: str, filename: str, backend_url: str = ""):
     """
     Background task to parse PDF and update status.
+    Reads PDF from local disk at /static/{file_hash}.pdf
     """
     current_status = await get_file_status(file_hash)
     parsing_status = (current_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
@@ -351,11 +353,13 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str):
         if not claimed:
             return
 
-        pdf_url = f"{backend_url}/{file_hash}.pdf"
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(pdf_url, timeout=30.0)
-            resp.raise_for_status()
-            pdf_data = resp.content
+        # Read PDF from local disk
+        pdf_path = f"/static/{file_hash}.pdf"
+        if not os.path.exists(pdf_path):
+            raise FileNotFoundError(f"PDF not found at {pdf_path}")
+
+        with open(pdf_path, "rb") as f:
+            pdf_data = f.read()
 
         sentences = extract_text_with_coordinates(pdf_data, filename=filename)
         parsed_data = {
@@ -448,21 +452,22 @@ async def _background_index(
 async def parse_pdf_endpoint(req: PdfParseRequest):
     """
     Extract structured text items and spatial coordinates (bounding boxes) from a PDF.
-    Downloads the file from the backend and performs high-fidelity parsing to enable
-    accurate PDF highlighting and sentence-level indexing.
+    Reads the file from local disk at /static/{file_hash}.pdf and performs high-fidelity
+    parsing to enable accurate PDF highlighting and sentence-level indexing.
 
     New format: sentences with word-level bboxes instead of character-level char_map.
     """
-    pdf_url = f"{req.backend_url}/{req.file_hash}.pdf"
-    
     # Update parsing status to running
     await update_parsing_status(req.file_hash, ProcessStatus.RUNNING.value, started_at=datetime.utcnow().isoformat())
-    
+
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(pdf_url, timeout=30.0)
-            resp.raise_for_status()
-            pdf_data = resp.content
+        # Read PDF from local disk
+        pdf_path = f"/static/{req.file_hash}.pdf"
+        if not os.path.exists(pdf_path):
+            raise FileNotFoundError(f"PDF not found at {pdf_path}")
+
+        with open(pdf_path, "rb") as f:
+            pdf_data = f.read()
 
         # extract_text_with_coordinates now returns sentences directly with word-level bboxes
         sentences = extract_text_with_coordinates(pdf_data, filename=req.file_name)
@@ -825,7 +830,6 @@ async def add_file_to_thread_endpoint(
             file_hash=req.file_hash,
             file_name=req.file_name,
             file_path=req.file_path,
-            backend_url=os.getenv("BACKEND_URL", "http://backend:8000"),
         )
 
         return {
@@ -980,7 +984,6 @@ async def add_web_source_to_thread_endpoint(
             file_name=capture["title"],
             file_path=req.url,
             source_type="web",
-            backend_url=os.getenv("BACKEND_URL", "http://backend:8000"),
             indexing_metadata={
                 "source_kind": "webpage",
                 "url": req.url,
@@ -1412,3 +1415,107 @@ async def is_embed_model_ready_endpoint(model: str):
     """
     ready = await check_embed_model_ready(model)
     return {"model": model, "embed_model_ready": ready}
+
+
+# ============ File Upload and Serving Endpoints (Migrated from Backend) ============
+
+
+@router.post("/upload")
+async def upload_pdf_endpoint(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    thread_id: str = Form(...),
+):
+    """
+    Upload a PDF file, save it to static storage, and trigger background parsing and indexing.
+
+    Args:
+        file (UploadFile): PDF file to upload.
+        thread_id (str): Thread to attach the upload to immediately.
+    Returns:
+        dict: Result with fileHash, fileName, pdfUrl, and sentences (null initially).
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Please upload a PDF file.")
+    if not thread_id:
+        raise HTTPException(status_code=400, detail="Please provide a thread_id.")
+
+    # Verify thread exists
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    content = await file.read()
+    file_hash = hashlib.md5(content).hexdigest()
+
+    pdf_filename = f"{file_hash}.pdf"
+    pdf_path = f"/static/{pdf_filename}"
+
+    # Save PDF to static directory if not already exists
+    if not os.path.exists(pdf_path):
+        with open(pdf_path, "wb") as f:
+            f.write(content)
+
+    # Queue file processing (parsing and indexing in background)
+    await _queue_file_processing(
+        background_tasks=background_tasks,
+        thread=thread,
+        file_hash=file_hash,
+        file_name=file.filename,
+        backend_url="",  # Not needed - we serve files directly now
+    )
+
+    # Return immediately with sentences: null to indicate parsing not yet done
+    return {
+        "sentences": None,
+        "pdfUrl": f"/files/{file_hash}.pdf",
+        "fileHash": file_hash,
+        "fileName": file.filename,
+    }
+
+
+@router.get("/files/{file_hash}.pdf")
+async def get_pdf_file_endpoint(file_hash: str):
+    """
+    Serve the actual PDF file from the static directory with CORS headers.
+    """
+    file_path = f"/static/{file_hash}.pdf"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return FileResponse(file_path, media_type="application/pdf")
+
+
+@router.get("/files/{file_hash}")
+async def get_pdf_data_endpoint(file_hash: str):
+    """
+    Get PDF data (sentences with bounding boxes) for an existing PDF by file hash.
+    This is used to reload PDFs when switching threads.
+
+    Args:
+        file_hash (str): The MD5 hash of the PDF file.
+    Returns:
+        dict: Contains sentences with bounding boxes and PDF URL.
+    Raises:
+        HTTPException: If PDF file is not found.
+    """
+    pdf_path = f"/static/{file_hash}.pdf"
+
+    if not os.path.exists(pdf_path):
+        raise HTTPException(status_code=404, detail=f"PDF file not found: {file_hash}")
+
+    # Retrieve parsed sentences from SQLite
+    parsed_data = await get_file_parsed_sentences(file_hash)
+    if parsed_data:
+        sentences = parsed_data.get("sentences", [])
+        return {
+            "sentences": sentences,
+            "pdfUrl": f"/files/{file_hash}.pdf",
+            "fileHash": file_hash,
+        }
+
+    # If not parsed yet, return empty sentences
+    return {
+        "sentences": [],
+        "pdfUrl": f"/files/{file_hash}.pdf",
+        "fileHash": file_hash,
+    }

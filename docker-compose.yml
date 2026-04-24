@@ -9,11 +9,8 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
-      - NEXT_PUBLIC_RAG_API_URL=http://localhost:8001
       - NEXT_PUBLIC_DEFAULT_EMBED_MODEL=BAAI/bge-m3
     depends_on:
-      backend:
-        condition: service_healthy
       rag-service:
         condition: service_healthy
     volumes:
@@ -26,43 +23,17 @@ services:
       retries: 3
       start_period: 30s
 
-  backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    ports:
-      - "8000:8000"
-    environment:
-      - PROCESSING_SERVICE_URL=http://rag-service:8000
-      - BACKEND_INTERNAL_URL=http://backend:8000
-      - LOG_LEVEL=INFO
-    depends_on:
-      rag-service:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app/backend
-      - pdf_data:/static
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
-
   rag-service:
     build:
       context: .
       dockerfile: rag_service/Dockerfile
     ports:
-      - "8001:8000"
+      - "8000:8000"
     environment:
       - LOG_LEVEL=INFO
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=0.7
       - DATA_DIR=/data
-      - BACKEND_URL=http://backend:8000
       - GOTENBERG_URL=http://gotenberg:3000
       - DEFAULT_EMBEDDING_MODEL=BAAI/bge-m3
       - DEFAULT_RERANKER_MODEL=BAAI/bge-reranker-v2-m3

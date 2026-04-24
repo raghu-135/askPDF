@@ -91,11 +91,11 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Docker Compose                                 │
-├─────────────────┬─────────────────┬─────────────────┬───────────────────────┤
-│    Frontend     │    Backend      │   RAG Service   │       Weaviate          │
-│   (Next.js)     │    (FastAPI)    │    (FastAPI)    │   (Vector DB)         │
-│   Port: 3000    │   Port: 8000    │   Port: 8001    │   Port: 8080          │
-└─────────────────┴─────────────────┴─────────────────┴───────────────────────┘
+├─────────────────┬─────────────────┬─────────────────────────────────────────┤
+│    Frontend     │   RAG Service   │       Weaviate                          │
+│   (Next.js)     │    (FastAPI)    │   (Vector DB)                           │
+│   Port: 3000    │   Port: 8000    │   Port: 8080                            │
+└─────────────────┴─────────────────┴─────────────────────────────────────────┘
                                           │
                                           ▼
                             ┌──────────────────────────────────────────────┐
@@ -109,9 +109,8 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, and thread management |
-| **Backend** | 8000 | FastAPI server for PDF processing and TTS |
-| **RAG Service** | 8001 | FastAPI server for document indexing, AI chat, thread/message/file management |
+| **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
+| **RAG Service** | 8000 | FastAPI server for PDF processing, document indexing, AI chat, thread/message/file management |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
@@ -219,8 +218,7 @@ docker-compose up --build
 ### 4. Access the Application
 
 - **Main App**: http://localhost:3000
-- **Backend API**: http://localhost:8000
-- **RAG API**: http://localhost:8001
+- **RAG API**: http://localhost:8000
 - **Weaviate API**: http://localhost:8080/v1/.well-known/ready
 
 ## 📖 Usage
@@ -265,14 +263,6 @@ docker-compose up --build
 
 ## 🛠️ Technology Stack
 
-### Backend Service
-| Technology | Purpose |
-|------------|---------|
-| **FastAPI** | Web framework for REST APIs |
-| **PyMuPDF (fitz)** | PDF parsing with character-level coordinates |
-| **spaCy** | NLP for sentence segmentation |
-| **Kokoro** | Neural TTS with 82M parameters |
-
 ### RAG Service
 | Technology | Purpose |
 |------------|---------|
@@ -295,15 +285,6 @@ docker-compose up --build
 ```
 askpdf/
 ├── docker-compose.yml          # Multi-service orchestration
-├── backend/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── app/
-│       ├── main.py             # FastAPI app, upload & TTS endpoints
-│       ├── pdf_parser.py       # PyMuPDF text extraction with coordinates
-│       ├── web_capture_service.py # Fetches and captures text from live websites
-│       ├── nlp.py              # spaCy sentence segmentation
-│       └── tts.py              # Kokoro TTS synthesis
 ├── rag_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -337,69 +318,51 @@ askpdf/
         ├── hooks/
         │   └── usePersistAnnotations.ts  # Annotation persistence hook
         └── lib/
-            ├── api.ts          # Backend & RAG API client (thread/message/file/settings/prompt)
+            ├── api.ts          # Unified RAG API client (upload/thread/message/file/settings/prompt)
             └── tts-api.ts      # TTS API client
 ```
 The application expects an OpenAI-compatible API at the URL specified by `LLM_API_URL` in your `.env` file (default: `http://host.docker.internal:12434`).
 ## 📝 API Reference
 
-### Backend Service (Port 8000)
+### RAG Service (Port 8000)
 
-#### `POST /api/upload`
-Upload a PDF and extract sentences with bounding boxes.
+#### `POST /upload`
+Upload a PDF and trigger background parsing and indexing.
 
 **Request:** `multipart/form-data`
 - `file`: PDF file
-
-All environment variables, including `LLM_API_URL`, are now managed via a `.env` file at the project root. This file is loaded by both Docker Compose and the Python services.
-- `embedding_model`: Model name for RAG indexing
+- `thread_id`: Thread to attach the file to
 
 **Response:**
 ```json
 {
-  "sentences": [
-    {
-      "id": 0,
-| `LLM_API_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (set in `.env`; change to `...:11434` for default Ollama) |
-      "bboxes": [
-        {"page": 1, "x": 72, "y": 700, "width": 50, "height": 12, "page_height": 792, "page_width": 612}
-      ]
-    }
-  ],
-  "pdfUrl": "/abc123.pdf"
+  "sentences": null,
+  "pdfUrl": "/files/abc123.pdf",
+  "fileHash": "abc123",
+  "fileName": "document.pdf"
 }
 ```
 
-#### `GET /api/voices`
-List available TTS voice styles.
+#### `GET /files/{file_hash}`
+Get PDF data (sentences with bounding boxes) for a file.
 
 **Response:**
 ```json
 {
-  "voices": ["M1.json", "F1.json", "M2.json"]
+  "sentences": [...],
+  "pdfUrl": "/files/abc123.pdf",
+  "fileHash": "abc123"
 }
 ```
 
-#### `POST /api/tts`
-Synthesize speech for text.
+#### `GET /files/{file_hash}.pdf`
+Serve the actual PDF file.
 
-**Request:**
-```json
-{
-  "text": "Text to synthesize",
-  "voice": "M1.json",
-  "speed": 1.0
-}
-```
+#### `GET /files/{file_hash}/status`
+Check parsing and indexing status for a file.
 
-**Response:**
-```json
-{
-  "audioUrl": "/data/audio/tmp_xyz.wav"
-}
-```
-
-### RAG Service (Port 8001)
+#### `GET /files/{file_hash}/parsed-sentences`
+Get parsed sentences for a file.
 
 #### `POST /index` (Legacy)
 Index document text into vector database (legacy, single collection).
@@ -498,9 +461,7 @@ Health check endpoint.
 
 | Variable | Service | Default | Description |
 |----------|---------|---------|-------------|
-| `NEXT_PUBLIC_API_URL` | Frontend | `http://localhost:8000` | Backend API URL |
-| `NEXT_PUBLIC_RAG_API_URL` | Frontend | `http://localhost:8001` | RAG API URL |
-| `RAG_SERVICE_URL` | Backend | `http://rag-service:8000` | Internal RAG service URL |
+| `NEXT_PUBLIC_API_URL` | Frontend | `http://localhost:8000` | RAG API URL |
 | `WEAVIATE_URL` | RAG Service | `http://weaviate:8080` | Weaviate endpoint URL |
 | `WEAVIATE_HYBRID_ALPHA` | RAG Service | `0.5` | Hybrid search alpha (query-vs-vector blend) |
 | `LLM_API_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (Change to `...:11434` for default Ollama) |
@@ -545,15 +506,13 @@ In `backend/app/tts.py`:
 ```
 User uploads PDF
   ↓
-Backend: Save PDF → Extract text + coordinates (PyMuPDF)
+RAG Service: Save PDF → Extract text + coordinates (Docling)
   ↓
-Backend: Split into sentences (spaCy)
+RAG Service: Split into sentences
   ↓
-Backend: Map sentences to bounding boxes
+RAG Service: Trigger async indexing
   ↓
-Backend: Trigger async RAG indexing (per-thread if using threads)
-  ↓
-RAG Service: Chunk text → Generate embeddings → Store in Weaviate (global separated collections, thread-filtered)
+RAG Service: Chunk text → Generate embeddings → Store in Weaviate (thread-scoped collections)
   ↓
 Frontend: Display PDF with clickable sentence overlays
 ```
@@ -599,12 +558,11 @@ On audio end: Auto-advance to next sentence
 
 ## 🐳 Docker Details
 
-The application uses Docker Compose with four services:
+The application uses Docker Compose with three services:
 
 1. **frontend**: Next.js dev server with hot reload
-2. **backend**: FastAPI with TTS models mounted (Supertonic cloned from HuggingFace at build)
-3. **rag-service**: FastAPI with LangChain/LangGraph
-4. **weaviate**: Official Weaviate image with persistent storage
+2. **rag-service**: FastAPI with LangChain/LangGraph, PDF processing, and chat
+3. **weaviate**: Official Weaviate image with persistent storage
 
 ### Volumes
 - \`weaviate_data\`: Persistent vector storage

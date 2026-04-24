@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 # Import modular components
 from app.api.routes import router
@@ -81,11 +82,16 @@ app.include_router(router)
 async def health_check():
     """Service health check endpoint."""
     return {
-        "status": "ok", 
+        "status": "ok",
         "service": "rag-service",
         "version": "2.0.0",
         "mode": "modular"
     }
+
+
+# Mount static files last to avoid shadowing API routes
+app.mount("/files", StaticFiles(directory="/static"), name="static")
+
 
 if __name__ == "__main__":
     import uvicorn
