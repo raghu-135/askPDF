@@ -29,7 +29,7 @@ from app.agent.agent_helpers import (
     collect_tool_sources,
 )
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
-from app.db.vector_db import get_vector_db
+from app.db.vector import get_vector_db
 from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 

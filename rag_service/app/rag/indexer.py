@@ -31,7 +31,7 @@ from app.models.llm_server_client import (
     DEFAULT_TOKEN_BUDGET, RATIO_MEMORY_SUMMARIZATION_THRESHOLD, 
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
 )
-from app.db.vector_db import get_vector_db
+from app.db.vector import get_vector_db
 
 logger = logging.getLogger(__name__)
 

@@ -66,7 +66,7 @@ async def prefetch_context(
     - Both agents receive the same bundle; no re-fetching between Intent and
       Orchestrator for the same raw question.
     """
-    from app.db.vector_db import get_vector_db
+    from app.db.vector import get_vector_db
     from app.agent.agent import invoke_with_retry
 
     budget = compute_prefetch_budget(context_window)

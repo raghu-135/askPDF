@@ -56,7 +56,7 @@ from app.db import (
     upsert_document_in_stats,
     upsert_thread_file_annotations,
 )
-from app.db.vector_db import get_vector_db
+from app.db.vector import get_vector_db
 from app.models.llm_server_client import (
     DEFAULT_EMBEDDING_MODEL,
     INTENT_AGENT_MAX_ITERATIONS,

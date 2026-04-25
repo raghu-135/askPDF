@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 # Import modular components
 from app.api.routes import router
 from app.db import init_db
-from app.db.vector_db import get_vector_db
+from app.db.vector import get_vector_db
 
 # Load environment variables
 load_dotenv()
