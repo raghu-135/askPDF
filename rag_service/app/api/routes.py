@@ -300,46 +300,6 @@ async def _queue_file_processing(
         background_tasks.add_task(_background_parse, file_hash, file_name, backend_url)
 
 
-# ============ Compute Endpoints (Heavy Processing) ============
-
-
-@router.post("/threads/{thread_id}/files/{file_hash}/process")
-async def process_pdf_endpoint(
-    thread_id: str,
-    file_hash: str,
-    background_tasks: BackgroundTasks,
-    file_name: str = Form(...),
-    backend_url: str = Form(""),
-):
-    """
-    Process a PDF file (parse and index) in the background.
-    This endpoint returns immediately after triggering the background tasks.
-    Validates that the file is attached to the thread.
-    """
-    # Verify thread exists
-    thread = await get_thread(thread_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    # Verify file is attached to thread
-    if not await is_file_in_thread(thread_id, file_hash):
-        raise HTTPException(status_code=404, detail="File is not attached to this thread")
-
-    await _queue_file_processing(
-        background_tasks=background_tasks,
-        thread=thread,
-        file_hash=file_hash,
-        file_name=file_name,
-        backend_url=backend_url,
-    )
-
-    return {
-        "status": "accepted",
-        "thread_id": thread_id,
-        "file_hash": file_hash,
-    }
-
-
 async def _background_parse(file_hash: str, filename: str, backend_url: str = ""):
     """
     Background task to parse PDF and update status.
@@ -456,61 +416,6 @@ async def _background_index(
         except Exception as update_error:
             logger.error(f"Failed to update indexing status to failed for {file_hash}: {update_error}")
         logger.error(f"Background indexing failed for {file_hash}: {e}")
-
-
-@router.post("/threads/{thread_id}/files/{file_hash}/parse")
-async def parse_pdf_endpoint(thread_id: str, file_hash: str, file_name: str = Form(...)):
-    """
-    Extract structured text items and spatial coordinates (bounding boxes) from a PDF.
-    Reads the file from local disk at /static/{file_hash}.pdf and performs high-fidelity
-    parsing to enable accurate PDF highlighting and sentence-level indexing.
-    Validates that the file is attached to the thread.
-
-    New format: sentences with word-level bboxes instead of character-level char_map.
-    """
-    # Verify thread exists
-    thread = await get_thread(thread_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    # Verify file is attached to thread
-    if not await is_file_in_thread(thread_id, file_hash):
-        raise HTTPException(status_code=404, detail="File is not attached to this thread")
-
-    # Update parsing status to running
-    await update_parsing_status(file_hash, ProcessStatus.RUNNING.value, started_at=datetime.utcnow().isoformat())
-
-    try:
-        # Read PDF from local disk
-        pdf_path = f"/static/{file_hash}.pdf"
-        if not os.path.exists(pdf_path):
-            raise FileNotFoundError(f"PDF not found at {pdf_path}")
-
-        with open(pdf_path, "rb") as f:
-            pdf_data = f.read()
-
-        # extract_text_with_coordinates now returns sentences directly with word-level bboxes
-        sentences = extract_text_with_coordinates(pdf_data, filename=file_name)
-
-        # Ensure file record exists in database
-        await create_or_get_file(file_hash, file_name)
-
-        # Store sentences in SQLite with version field
-        parsed_data = {
-            "version": "1.0",
-            "sentences": sentences
-        }
-        await update_file_parsed_sentences(file_hash, json.dumps(parsed_data))
-
-        # Update parsing status to completed
-        await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value, finished_at=datetime.utcnow().isoformat())
-
-        return {"file_hash": file_hash, "sentences": sentences}
-    except Exception as e:
-        traceback.print_exc()
-        # Update parsing status to failed
-        await update_parsing_status(file_hash, ProcessStatus.FAILED.value, error=str(e))
-        raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
 
 
 @router.get("/threads/{thread_id}/files/{file_hash}/parsed-sentences")
