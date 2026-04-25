@@ -3,7 +3,7 @@
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.db.database import get_thread_shape
+from app.db import get_thread_shape
 from app.models.llm_server_client import get_reranker_model, DEFAULT_RERANKER_MODEL
 from app.db.vector_db import get_vector_db
 

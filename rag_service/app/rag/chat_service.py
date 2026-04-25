@@ -23,7 +23,7 @@ from app.models.llm_server_client import (
     compute_prefetch_budget,
     INTENT_AGENT_MAX_ITERATIONS,
 )
-from app.db.database import (
+from app.db import (
     create_message,
     get_recent_messages,
     update_message_context_compact,

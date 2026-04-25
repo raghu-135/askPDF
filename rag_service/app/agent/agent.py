@@ -439,7 +439,7 @@ async def list_uploaded_documents(config: RunnableConfig = None) -> str:
         if not thread_id:
             return "No thread context found."
 
-        from app.db.database import get_thread_shape as _get_shape
+        from app.db import get_thread_shape as _get_shape
         shape = await _get_shape(thread_id)
         docs = shape["documents"]
 
@@ -574,7 +574,7 @@ async def find_topic_anchor_in_history(
         if not recalled:
             return "No relevant history found for this topic."
 
-        from app.db.database import get_thread_messages
+        from app.db import get_thread_messages
         all_messages = await get_thread_messages(thread_id, limit=2000)
         position_map = {msg.id: i + 1 for i, msg in enumerate(all_messages)}
 

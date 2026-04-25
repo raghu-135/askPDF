@@ -13,7 +13,7 @@ import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-from app.db.database import (
+from app.db import (
     ProcessStatus,
     get_file,
     get_file_status,
@@ -292,7 +292,7 @@ async def index_document_for_thread(
     Returns:
         Status dict with indexing results
     """
-    from app.db.database import update_indexing_status
+    from app.db import update_indexing_status
     
     db_client = get_vector_db()
     metadata = metadata or {}
@@ -615,7 +615,7 @@ async def trigger_reembed_for_missing_sources(
     Lazy backfill for sources and chat-memory vectors missing in vector DB.
     Called when a thread is opened.
     """
-    from app.db.database import get_thread_files, get_thread_messages, MessageRole
+    from app.db import get_thread_files, get_thread_messages, MessageRole
     if not await embed_model_check(thread_id, embedding_model_name):
         return {"status": "skipped", "reason": "embed_model_not_ready"}
 

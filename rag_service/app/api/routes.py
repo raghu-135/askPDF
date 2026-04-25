@@ -16,7 +16,7 @@ from app.agent.agent import (
     get_tool_catalog,
     normalize_tool_instructions,
 )
-from app.db.database import (
+from app.db import (
     MessageRole,
     ProcessStatus,
     add_file_to_thread,
