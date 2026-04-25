@@ -67,7 +67,6 @@ from app.models.llm_server_client import (
     merge_thread_settings,
 )
 from app.models.requests import (
-    ProcessPdfRequest,
     PromptDefaults,
     PromptPreviewRequest,
     RefreshWebSourceRequest,
@@ -304,28 +303,40 @@ async def _queue_file_processing(
 # ============ Compute Endpoints (Heavy Processing) ============
 
 
-@router.post("/process-pdf")
-async def process_pdf_endpoint(req: ProcessPdfRequest, background_tasks: BackgroundTasks):
+@router.post("/threads/{thread_id}/files/{file_hash}/process")
+async def process_pdf_endpoint(
+    thread_id: str,
+    file_hash: str,
+    background_tasks: BackgroundTasks,
+    file_name: str = Form(...),
+    backend_url: str = Form(""),
+):
     """
     Process a PDF file (parse and index) in the background.
     This endpoint returns immediately after triggering the background tasks.
+    Validates that the file is attached to the thread.
     """
-    thread = await get_thread(req.thread_id)
+    # Verify thread exists
+    thread = await get_thread(thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Verify file is attached to thread
+    if not await is_file_in_thread(thread_id, file_hash):
+        raise HTTPException(status_code=404, detail="File is not attached to this thread")
 
     await _queue_file_processing(
         background_tasks=background_tasks,
         thread=thread,
-        file_hash=req.file_hash,
-        file_name=req.file_name,
-        backend_url=req.backend_url,
+        file_hash=file_hash,
+        file_name=file_name,
+        backend_url=backend_url,
     )
 
     return {
         "status": "accepted",
-        "thread_id": req.thread_id,
-        "file_hash": req.file_hash,
+        "thread_id": thread_id,
+        "file_hash": file_hash,
     }
 
 
