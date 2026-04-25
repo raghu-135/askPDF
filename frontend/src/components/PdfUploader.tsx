@@ -62,9 +62,12 @@ const PdfUploader = React.memo(function PdfUploader({
 
     const pollInterval = setInterval(async () => {
       try {
-        const status = await getFileStatus(fileStatus.fileHash, {
+        if (!threadId) {
+          console.error("Thread ID is required for file status polling");
+          return;
+        }
+        const status = await getFileStatus(fileStatus.fileHash, threadId, {
           embeddingModel: embeddingModel || undefined,
-          threadId: threadId || undefined,
         });
         // Ensure we have a full FileStatus object
         const fullStatus: FileStatus = 'parsing' in status && 'indexing' in status
@@ -84,7 +87,11 @@ const PdfUploader = React.memo(function PdfUploader({
         // Check if parsing just completed
         if (ProcessStatusHelper.isCompleted(fullStatus.parsing.status) && onParsingComplete) {
           try {
-            const parsedData = await getParsedSentences(fileStatus.fileHash);
+            if (!threadId) {
+              console.error("Thread ID is required for fetching parsed sentences");
+              return;
+            }
+            const parsedData = await getParsedSentences(fileStatus.fileHash, threadId);
             onParsingComplete(fileStatus.fileHash, parsedData.sentences);
           } catch (error) {
             console.error("Failed to fetch parsed sentences", error);

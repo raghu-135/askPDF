@@ -170,18 +170,18 @@ export default function Home() {
 
   // Poll for parsing status when active tab is pending
   useEffect(() => {
-    if (!activeTab || activeTab.parsingStatus !== 'pending') {
+    if (!activeTab || activeTab.parsingStatus !== 'pending' || !activeThread) {
       return;
     }
 
     const pollInterval = setInterval(async () => {
       try {
-        const status = await getFileStatus(activeTab.fileHash);
+        const status = await getFileStatus(activeTab.fileHash, activeThread.id);
         if (status && 'parsing' in status) {
           const parsingStatus = status.parsing.status;
           if (ProcessStatusHelper.isCompleted(parsingStatus)) {
             // Fetch parsed sentences
-            const parsedData = await getParsedSentences(activeTab.fileHash);
+            const parsedData = await getParsedSentences(activeTab.fileHash, activeThread.id);
             handleParsingComplete(activeTab.fileHash, parsedData.sentences);
             clearInterval(pollInterval);
           } else if (ProcessStatusHelper.isFailed(parsingStatus)) {
@@ -201,7 +201,7 @@ export default function Home() {
     }, 5000);
 
     return () => clearInterval(pollInterval);
-  }, [activeTab?.fileHash, activeTab?.parsingStatus]);
+  }, [activeTab?.fileHash, activeTab?.parsingStatus, activeThread?.id]);
 
   // Handle web source indexed
   const handleWebIndexed = async (data: { fileHash: string; url: string; title?: string; status: string; message?: string }) => {
@@ -211,7 +211,7 @@ export default function Home() {
     let pdfData;
     try {
       const { getPdfByHash } = await import("../lib/api");
-      pdfData = await getPdfByHash(data.fileHash);
+      pdfData = await getPdfByHash(data.fileHash, activeThread.id);
     } catch (err) {
       console.warn('PDF data not yet available, creating tab with empty sentences:', err);
     }
@@ -221,7 +221,7 @@ export default function Home() {
       id: data.fileHash,
       fileHash: data.fileHash,
       fileName: data.title || data.url,
-      pdfUrl: `${API_BASE}/files/${data.fileHash}.pdf?t=${Date.now()}`,
+      pdfUrl: `${API_BASE}/threads/${activeThread.id}/files/${data.fileHash}.pdf?t=${Date.now()}`,
       sentences: transformedSentences,
       text: transformedSentences ? extractTextFromSentences(transformedSentences) : '',
       sourceType: 'web',

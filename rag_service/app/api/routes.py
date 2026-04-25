@@ -493,13 +493,23 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
         raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
 
 
-@router.get("/files/{file_hash}/parsed-sentences")
-async def get_file_parsed_sentences_endpoint(file_hash: str):
+@router.get("/threads/{thread_id}/files/{file_hash}/parsed-sentences")
+async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str):
     """
     Retrieve parsed sentences for a file from SQLite.
     Returns the JSON object with version and sentences array.
+    Validates that the file is attached to the thread.
     """
     try:
+        # Verify thread exists
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Verify file is attached to thread
+        if not await is_file_in_thread(thread_id, file_hash):
+            raise HTTPException(status_code=404, detail="File is not attached to this thread")
+
         parsed_data = await get_file_parsed_sentences(file_hash)
         if not parsed_data:
             raise HTTPException(status_code=404, detail="Parsed sentences not found")
@@ -511,25 +521,40 @@ async def get_file_parsed_sentences_endpoint(file_hash: str):
         raise HTTPException(status_code=500, detail=f"Failed to retrieve parsed sentences: {str(e)}")
 
 
-@router.get("/files/{file_hash}/status")
+@router.get("/threads/{thread_id}/files/{file_hash}/status")
 async def get_file_status_endpoint(
+    thread_id: str,
     file_hash: str,
     section: Optional[str] = None,
     embedding_model: Optional[str] = None,
-    thread_id: Optional[str] = None,
 ):
     """
     Retrieve file status (parsing and indexing status) from SQLite.
     Returns the file_status JSON with parsing and indexing sections.
+    Validates that the file is attached to the thread.
     
     Query parameters:
     - section: Optional filter for specific section (e.g., "parsing", "indexing")
+    - embedding_model: Optional embedding model for scoped indexing status
     """
     try:
+        # Verify thread exists
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+
+        # Verify file is attached to thread
+        if not await is_file_in_thread(thread_id, file_hash):
+            raise HTTPException(status_code=404, detail="File is not attached to this thread")
+
         file = await get_file(file_hash)
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
         
+        # Use thread's embed_model if not specified
+        if not embedding_model:
+            embedding_model = thread.embed_model
+
         status = _scoped_status_payload(
             file_hash=file_hash,
             status=await get_file_status(file_hash),
@@ -551,27 +576,6 @@ async def get_file_status_endpoint(
         raise HTTPException(status_code=500, detail=f"Failed to retrieve file status: {str(e)}")
 
 
-@router.put("/files/{file_hash}/status")
-async def update_file_status_endpoint(file_hash: str, status_update: Dict[str, Any]):
-    """
-    Update file status (parsing and indexing status) in SQLite.
-    Accepts partial status updates and merges with existing status.
-    """
-    try:
-        file = await get_file(file_hash)
-        if not file:
-            raise HTTPException(status_code=404, detail="File not found")
-        
-        success = await update_file_status(file_hash, status_update)
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to update file status")
-        
-        return await get_file_status_endpoint(file_hash)
-    except HTTPException:
-        raise
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Failed to update file status: {str(e)}")
 
 
 # ============ Thread Endpoints ============
@@ -1420,25 +1424,23 @@ async def is_embed_model_ready_endpoint(model: str):
 # ============ File Upload and Serving Endpoints (Migrated from Backend) ============
 
 
-@router.post("/upload")
+@router.post("/threads/{thread_id}/upload")
 async def upload_pdf_endpoint(
+    thread_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    thread_id: str = Form(...),
 ):
     """
     Upload a PDF file, save it to static storage, and trigger background parsing and indexing.
 
     Args:
-        file (UploadFile): PDF file to upload.
         thread_id (str): Thread to attach the upload to immediately.
+        file (UploadFile): PDF file to upload.
     Returns:
         dict: Result with fileHash, fileName, pdfUrl, and sentences (null initially).
     """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a PDF file.")
-    if not thread_id:
-        raise HTTPException(status_code=400, detail="Please provide a thread_id.")
 
     # Verify thread exists
     thread = await get_thread(thread_id)
@@ -1468,36 +1470,57 @@ async def upload_pdf_endpoint(
     # Return immediately with sentences: null to indicate parsing not yet done
     return {
         "sentences": None,
-        "pdfUrl": f"/files/{file_hash}.pdf",
+        "pdfUrl": f"/threads/{thread_id}/files/{file_hash}.pdf",
         "fileHash": file_hash,
         "fileName": file.filename,
     }
 
 
-@router.get("/files/{file_hash}.pdf")
-async def get_pdf_file_endpoint(file_hash: str):
+@router.get("/threads/{thread_id}/files/{file_hash}.pdf")
+async def get_pdf_file_endpoint(thread_id: str, file_hash: str):
     """
     Serve the actual PDF file from the static directory with CORS headers.
+    Validates that the file is attached to the thread.
     """
+    # Verify thread exists
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Verify file is attached to thread
+    if not await is_file_in_thread(thread_id, file_hash):
+        raise HTTPException(status_code=404, detail="File is not attached to this thread")
+
     file_path = f"/static/{file_hash}.pdf"
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="PDF not found")
     return FileResponse(file_path, media_type="application/pdf")
 
 
-@router.get("/files/{file_hash}")
-async def get_pdf_data_endpoint(file_hash: str):
+@router.get("/threads/{thread_id}/files/{file_hash}")
+async def get_pdf_data_endpoint(thread_id: str, file_hash: str):
     """
     Get PDF data (sentences with bounding boxes) for an existing PDF by file hash.
     This is used to reload PDFs when switching threads.
+    Validates that the file is attached to the thread.
 
     Args:
+        thread_id (str): The thread ID.
         file_hash (str): The MD5 hash of the PDF file.
     Returns:
         dict: Contains sentences with bounding boxes and PDF URL.
     Raises:
-        HTTPException: If PDF file is not found.
+        HTTPException: If PDF file is not found or not attached to thread.
     """
+    # Verify thread exists
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Verify file is attached to thread
+    if not await is_file_in_thread(thread_id, file_hash):
+        raise HTTPException(status_code=404, detail="File is not attached to this thread")
+
     pdf_path = f"/static/{file_hash}.pdf"
 
     if not os.path.exists(pdf_path):
@@ -1509,13 +1532,13 @@ async def get_pdf_data_endpoint(file_hash: str):
         sentences = parsed_data.get("sentences", [])
         return {
             "sentences": sentences,
-            "pdfUrl": f"/files/{file_hash}.pdf",
+            "pdfUrl": f"/threads/{thread_id}/files/{file_hash}.pdf",
             "fileHash": file_hash,
         }
 
     # If not parsed yet, return empty sentences
     return {
         "sentences": [],
-        "pdfUrl": f"/files/{file_hash}.pdf",
+        "pdfUrl": f"/threads/{thread_id}/files/{file_hash}.pdf",
         "fileHash": file_hash,
     }

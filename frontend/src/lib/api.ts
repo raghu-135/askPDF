@@ -62,26 +62,24 @@ export interface UploadResponse {
 export async function uploadPdf(file: File, threadId: string): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
-  form.append("thread_id", threadId);
-  const res = await fetch(`${API_BASE}/upload`, { method: "POST", body: form });
+  const res = await fetch(`${API_BASE}/threads/${threadId}/upload`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getFileStatus(
   fileHash: string,
+  threadId: string,
   options?: {
     section?: 'parsing' | 'indexing';
     embeddingModel?: string;
-    threadId?: string;
   }
 ): Promise<FileStatus | { parsing: ProcessSection } | { indexing: IndexingSection }> {
   const params = new URLSearchParams();
   if (options?.section) params.set("section", options.section);
   if (options?.embeddingModel) params.set("embedding_model", options.embeddingModel);
-  if (options?.threadId) params.set("thread_id", options.threadId);
   const query = params.toString();
-  const url = `${API_BASE}/files/${fileHash}/status${query ? `?${query}` : ""}`;
+  const url = `${API_BASE}/threads/${threadId}/files/${fileHash}/status${query ? `?${query}` : ""}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -93,14 +91,14 @@ export interface PdfData {
   fileHash: string;
 }
 
-export async function getPdfByHash(fileHash: string): Promise<PdfData> {
-  const res = await fetch(`${API_BASE}/files/${fileHash}`);
+export async function getPdfByHash(fileHash: string, threadId: string): Promise<PdfData> {
+  const res = await fetch(`${API_BASE}/threads/${threadId}/files/${fileHash}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export async function getParsedSentences(fileHash: string): Promise<{ version: string; sentences: any[] }> {
-  const res = await fetch(`${API_BASE}/files/${fileHash}/parsed-sentences`);
+export async function getParsedSentences(fileHash: string, threadId: string): Promise<{ version: string; sentences: any[] }> {
+  const res = await fetch(`${API_BASE}/threads/${threadId}/files/${fileHash}/parsed-sentences`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

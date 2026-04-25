@@ -15,7 +15,7 @@ export async function loadThreadTabs(thread: Thread): Promise<PdfTab[]> {
   for (const file of threadData.files) {
     // With unified flow, all sources are PDFs (both uploaded and web-converted)
     try {
-      const pdfData = await getPdfByHash(file.file_hash);
+      const pdfData = await getPdfByHash(file.file_hash, thread.id);
       const transformedSentences = transformSentences(pdfData.sentences);
       loadedTabs.push({
         id: file.file_hash,
@@ -59,12 +59,12 @@ export function createPdfTabFromUpload(data: any): PdfTab {
  * With unified PDF flow, web sources are converted to PDFs on the backend
  * and treated identically to uploaded PDFs.
  */
-export function createWebTabFromIndexed(fileHash: string, url: string, title?: string): PdfTab {
+export function createWebTabFromIndexed(fileHash: string, url: string, title?: string, threadId?: string): PdfTab {
   return {
     id: fileHash,
     fileName: title || url,
     fileHash,
-    pdfUrl: `${API_BASE}/files/${fileHash}.pdf?t=${Date.now()}`,
+    pdfUrl: threadId ? `${API_BASE}/threads/${threadId}/files/${fileHash}.pdf?t=${Date.now()}` : `${API_BASE}/files/${fileHash}.pdf?t=${Date.now()}`,
     sentences: [],  // Will be populated by getPdfByHash on thread load
     text: '',
     sourceType: 'web',
