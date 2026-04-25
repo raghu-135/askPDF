@@ -67,7 +67,6 @@ from app.models.llm_server_client import (
     merge_thread_settings,
 )
 from app.models.requests import (
-    PdfParseRequest,
     ProcessPdfRequest,
     PromptDefaults,
     PromptPreviewRequest,
@@ -448,21 +447,31 @@ async def _background_index(
         logger.error(f"Background indexing failed for {file_hash}: {e}")
 
 
-@router.post("/parse-pdf")
-async def parse_pdf_endpoint(req: PdfParseRequest):
+@router.post("/threads/{thread_id}/files/{file_hash}/parse")
+async def parse_pdf_endpoint(thread_id: str, file_hash: str, file_name: str = Form(...)):
     """
     Extract structured text items and spatial coordinates (bounding boxes) from a PDF.
     Reads the file from local disk at /static/{file_hash}.pdf and performs high-fidelity
     parsing to enable accurate PDF highlighting and sentence-level indexing.
+    Validates that the file is attached to the thread.
 
     New format: sentences with word-level bboxes instead of character-level char_map.
     """
+    # Verify thread exists
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Verify file is attached to thread
+    if not await is_file_in_thread(thread_id, file_hash):
+        raise HTTPException(status_code=404, detail="File is not attached to this thread")
+
     # Update parsing status to running
-    await update_parsing_status(req.file_hash, ProcessStatus.RUNNING.value, started_at=datetime.utcnow().isoformat())
+    await update_parsing_status(file_hash, ProcessStatus.RUNNING.value, started_at=datetime.utcnow().isoformat())
 
     try:
         # Read PDF from local disk
-        pdf_path = f"/static/{req.file_hash}.pdf"
+        pdf_path = f"/static/{file_hash}.pdf"
         if not os.path.exists(pdf_path):
             raise FileNotFoundError(f"PDF not found at {pdf_path}")
 
@@ -470,26 +479,26 @@ async def parse_pdf_endpoint(req: PdfParseRequest):
             pdf_data = f.read()
 
         # extract_text_with_coordinates now returns sentences directly with word-level bboxes
-        sentences = extract_text_with_coordinates(pdf_data, filename=req.file_name)
+        sentences = extract_text_with_coordinates(pdf_data, filename=file_name)
 
         # Ensure file record exists in database
-        await create_or_get_file(req.file_hash, req.file_name)
+        await create_or_get_file(file_hash, file_name)
 
         # Store sentences in SQLite with version field
         parsed_data = {
             "version": "1.0",
             "sentences": sentences
         }
-        await update_file_parsed_sentences(req.file_hash, json.dumps(parsed_data))
+        await update_file_parsed_sentences(file_hash, json.dumps(parsed_data))
 
         # Update parsing status to completed
-        await update_parsing_status(req.file_hash, ProcessStatus.COMPLETED.value, finished_at=datetime.utcnow().isoformat())
+        await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value, finished_at=datetime.utcnow().isoformat())
 
-        return {"file_hash": req.file_hash, "sentences": sentences}
+        return {"file_hash": file_hash, "sentences": sentences}
     except Exception as e:
         traceback.print_exc()
         # Update parsing status to failed
-        await update_parsing_status(req.file_hash, ProcessStatus.FAILED.value, error=str(e))
+        await update_parsing_status(file_hash, ProcessStatus.FAILED.value, error=str(e))
         raise HTTPException(status_code=500, detail=f"PDF parsing failed: {str(e)}")
 
 

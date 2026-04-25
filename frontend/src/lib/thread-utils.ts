@@ -59,12 +59,12 @@ export function createPdfTabFromUpload(data: any): PdfTab {
  * With unified PDF flow, web sources are converted to PDFs on the backend
  * and treated identically to uploaded PDFs.
  */
-export function createWebTabFromIndexed(fileHash: string, url: string, title?: string, threadId?: string): PdfTab {
+export function createWebTabFromIndexed(fileHash: string, url: string, threadId: string, title?: string): PdfTab {
   return {
     id: fileHash,
     fileName: title || url,
     fileHash,
-    pdfUrl: threadId ? `${API_BASE}/threads/${threadId}/files/${fileHash}.pdf?t=${Date.now()}` : `${API_BASE}/files/${fileHash}.pdf?t=${Date.now()}`,
+    pdfUrl: `${API_BASE}/threads/${threadId}/files/${fileHash}.pdf?t=${Date.now()}`,
     sentences: [],  // Will be populated by getPdfByHash on thread load
     text: '',
     sourceType: 'web',
