@@ -2,6 +2,7 @@ import io
 import os
 import logging
 import json
+from typing import Optional
 import spacy
 from docling.document_converter import DocumentConverter, DocumentStream, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
@@ -85,14 +86,14 @@ def _should_filter_item(item):
     
     return False
 
-def parse_with_docling(data: bytes, filename: str, write_debug_output: bool = True):
+def parse_with_docling(data: bytes, filename: str, debug_output_dir: Optional[str] = None):
     """
     Parse PDF with Docling to extract structural information and bounding boxes.
     
     Args:
         data: PDF file bytes
         filename: Name of the PDF file
-        write_debug_output: Whether to write debug output to /app/tests
+        debug_output_dir: If provided, write debug JSON files to this directory
         
     Returns:
         Docling document object or None if parsing fails
@@ -105,10 +106,9 @@ def parse_with_docling(data: bytes, filename: str, write_debug_output: bool = Tr
         docling_result = _docling_converter.convert(source)
         
         # Write debug output if requested
-        if write_debug_output:
-            test_dir = "/app/tests"
-            os.makedirs(test_dir, exist_ok=True)
-            test_file_json = os.path.join(test_dir, f"docling_raw_output_{filename}_dict.json")
+        if debug_output_dir:
+            os.makedirs(debug_output_dir, exist_ok=True)
+            test_file_json = os.path.join(debug_output_dir, f"docling_raw_output_{filename}_dict.json")
             try:
                 doc_dict = docling_result.document.export_to_dict()
                 with open(test_file_json, "w") as f:
@@ -407,7 +407,7 @@ def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
     
     return sentences
 
-def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_output: bool = True, merge_multi_bbox: bool = True):
+def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, merge_multi_bbox: bool = True, debug_output_dir: Optional[str] = None):
     """
     Parse PDF with pdfplumber to extract word-level coordinates within Docling regions.
     
@@ -415,8 +415,10 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_o
         data: PDF file bytes
         docling_doc: Docling document object from parse_with_docling
         filename: Name of the PDF file
-        write_debug_output: Whether to write debug output to /app/tests
         merge_multi_bbox: If True, merge text from multiple bboxes before sentence splitting
+                         (recommended for multi-column layouts). If False, process each
+                         bbox independently (legacy behavior). Default: True.
+        debug_output_dir: If provided, write debug JSON files to this directory
                          (recommended for multi-column layouts). If False, process each
                          bbox independently (legacy behavior). Default: True.
         
@@ -510,10 +512,9 @@ def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, write_debug_o
             all_sentences.extend(sentences)
     
     # Write pdfplumber parsed output to test folder if requested
-    if write_debug_output:
-        test_dir = "/app/tests"
-        os.makedirs(test_dir, exist_ok=True)
-        test_file_pdfplumber = os.path.join(test_dir, f"pdfplumber_parsed_output_{filename}.json")
+    if debug_output_dir:
+        os.makedirs(debug_output_dir, exist_ok=True)
+        test_file_pdfplumber = os.path.join(debug_output_dir, f"pdfplumber_parsed_output_{filename}.json")
         try:
             with open(test_file_pdfplumber, "w") as f:
                 json.dump(all_sentences, f, indent=2)
@@ -543,7 +544,7 @@ def extract_text_with_coordinates(data: bytes, filename: str, merge_multi_bbox: 
     
     try:
         # Parse with Docling
-        docling_doc = parse_with_docling(data, filename, write_debug_output=True)
+        docling_doc = parse_with_docling(data, filename)
         
         if not docling_doc:
             return []
@@ -553,7 +554,6 @@ def extract_text_with_coordinates(data: bytes, filename: str, merge_multi_bbox: 
             data,
             docling_doc,
             filename,
-            write_debug_output=True,
             merge_multi_bbox=merge_multi_bbox,
         )
         
