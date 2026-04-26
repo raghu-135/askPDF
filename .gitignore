@@ -130,6 +130,8 @@ lerna-debug.log*
 htmlcov/
 coverage/
 *.cover
+/test_output/
+/rag_service/tests/output/
 
 # Local configuration
 .env.local

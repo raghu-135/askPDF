@@ -8,11 +8,21 @@ import EditNoteIcon from '@mui/icons-material/EditNote';
 import { ttsSentence, getVoices } from "../lib/tts-api";
 import { useTtsPrefetchCache } from "../hooks/useTtsPrefetchCache";
 
-type Sentence = { id: number; text: string };
+type Sentence = {
+  id: number;
+  text: string;
+  label?: string;
+  page?: number;
+  bbox?: [number, number, number, number];
+  page_width?: number;
+  page_height?: number;
+  bboxes?: any[];
+  words?: any[];
+};
 
 
 type Props = {
-  sentences: Sentence[];
+  sentences: Sentence[] | null;
   currentId: number | null;                // highlight only
   onCurrentChange: (id: number | null) => void;
   playRequestId: number | null;            // explicit command to play now
@@ -37,6 +47,9 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
   const [pausedAt, setPausedAt] = useState<number | null>(null);
   // Popover anchor
   const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
+
+  // Disable controls when sentences are null (parsing in progress)
+  const isDisabled = sentences === null;
 
   const handleOpenSettings = (event: React.MouseEvent<HTMLButtonElement>) => {
     setAnchorEl(event.currentTarget);
@@ -201,46 +214,53 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
 
   return (
     <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
-      <Stack direction="row" spacing={0.5} alignItems="center">
-        <IconButton color="primary" onClick={handlePlayPause} size="small">
-          {isPlaying ? <Pause fontSize="small" /> : <PlayArrow fontSize="small" />}
-        </IconButton>
-        <IconButton onClick={() => currentId !== null && currentId > 0 && playSentence(currentId - 1)} disabled={currentId === null || currentId <= 0} size="small">
-          <SkipPrevious fontSize="small" />
-        </IconButton>
-        <IconButton onClick={() => currentId !== null && currentId < sentences.length - 1 && playSentence(currentId + 1)} disabled={currentId === null || currentId >= sentences.length - 1} size="small">
-          <SkipNext fontSize="small" />
-        </IconButton>
-
-        <Tooltip title={autoScroll ? "Disable Auto-Scroll" : "Enable Auto-Scroll"}>
-          <IconButton
-            color={autoScroll ? "primary" : "default"}
-            onClick={() => onAutoScrollChange(!autoScroll)}
-            size="small"
-          >
-            <AutoStoriesIcon fontSize="small" />
+      <Tooltip title={isDisabled ? "Parsing in progress" : ""}>
+        <Stack direction="row" spacing={0.5} alignItems="center">
+          <IconButton color="primary" onClick={handlePlayPause} size="small" disabled={isDisabled}>
+            {isPlaying ? <Pause fontSize="small" /> : <PlayArrow fontSize="small" />}
           </IconButton>
-        </Tooltip>
-
-        <Tooltip title={highlightEnabled ? "Disable TTS Highlighting" : "Enable TTS Highlighting"}>
-          <IconButton
-            color={highlightEnabled ? "primary" : "default"}
-            onClick={() => onHighlightEnabledChange(!highlightEnabled)}
-            size="small"
-          >
-            <EditNoteIcon fontSize="small" />
+          <IconButton onClick={() => currentId !== null && currentId > 0 && playSentence(currentId - 1)} disabled={isDisabled || currentId === null || currentId <= 0} size="small">
+            <SkipPrevious fontSize="small" />
           </IconButton>
-        </Tooltip>
-      </Stack>
+          <IconButton onClick={() => currentId !== null && currentId < (sentences?.length ?? 0) - 1 && playSentence(currentId + 1)} disabled={isDisabled || currentId === null || currentId >= (sentences?.length ?? 0) - 1} size="small">
+            <SkipNext fontSize="small" />
+          </IconButton>
 
-      <IconButton
-        aria-describedby={id_popover}
-        size="small"
-        onClick={handleOpenSettings}
-        color={open ? "primary" : "default"}
-      >
-        <RecordVoiceOverIcon fontSize="small" />
-      </IconButton>
+          <Tooltip title={autoScroll ? "Disable Auto-Scroll" : "Enable Auto-Scroll"}>
+            <IconButton
+              color={autoScroll ? "primary" : "default"}
+              onClick={() => onAutoScrollChange(!autoScroll)}
+              size="small"
+              disabled={isDisabled}
+            >
+              <AutoStoriesIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+
+          <Tooltip title={highlightEnabled ? "Disable TTS Highlighting" : "Enable TTS Highlighting"}>
+            <IconButton
+              color={highlightEnabled ? "primary" : "default"}
+              onClick={() => onHighlightEnabledChange(!highlightEnabled)}
+              size="small"
+              disabled={isDisabled}
+            >
+              <EditNoteIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      </Tooltip>
+
+      <Tooltip title={isDisabled ? "Parsing in progress" : ""}>
+        <IconButton
+          aria-describedby={id_popover}
+          size="small"
+          onClick={handleOpenSettings}
+          color={open ? "primary" : "default"}
+          disabled={isDisabled}
+        >
+          <RecordVoiceOverIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
 
       <Popover
         id={id_popover}

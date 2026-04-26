@@ -6,16 +6,20 @@ import CloseIcon from '@mui/icons-material/Close';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import LanguageIcon from '@mui/icons-material/Language';
+import type { BackendSentence, BBox } from '../lib/bbox-derivation';
+
+type Sentence = Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] };
 
 export type PdfTab = {
   id: string;
   fileName: string;
   fileHash: string;
   pdfUrl: string;
-  sentences: any[];
+  sentences: Sentence[] | null;
   text?: string;
   sourceType?: 'pdf' | 'web';
   sourceUrl?: string;
+  parsingStatus?: 'pending' | 'completed' | 'failed';
 };
 
 type Props = {
@@ -95,18 +99,25 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
                     {isWeb
                       ? (
                         <Tooltip title="Open source webpage">
-                          <IconButton
-                            size="small"
+                          <span
                             onClick={(e) => {
                               e.stopPropagation();
                               if (tab.sourceUrl) {
                                 window.open(tab.sourceUrl, '_blank', 'noopener,noreferrer');
                               }
                             }}
-                            sx={{ p: 0.3, color: 'primary.main' }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer',
+                              padding: '2px',
+                              borderRadius: '4px',
+                              color: '#1976d2',
+                            }}
                           >
                             <LanguageIcon fontSize="small" />
-                          </IconButton>
+                          </span>
                         </Tooltip>
                       )
                       : <PictureAsPdfIcon fontSize="small" sx={{ color: 'error.main', opacity: 0.7 }} />

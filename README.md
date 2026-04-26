@@ -91,11 +91,11 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Docker Compose                                 │
-├─────────────────┬─────────────────┬─────────────────┬───────────────────────┤
-│    Frontend     │    Backend      │   RAG Service   │       Weaviate          │
-│   (Next.js)     │    (FastAPI)    │    (FastAPI)    │   (Vector DB)         │
-│   Port: 3000    │   Port: 8000    │   Port: 8001    │   Port: 8080          │
-└─────────────────┴─────────────────┴─────────────────┴───────────────────────┘
+├─────────────────┬─────────────────┬─────────────────────────────────────────┤
+│    Frontend     │   RAG Service   │       Weaviate                          │
+│   (Next.js)     │    (FastAPI)    │   (Vector DB)                           │
+│   Port: 3000    │   Port: 8000    │   Port: 8080                            │
+└─────────────────┴─────────────────┴─────────────────────────────────────────┘
                                           │
                                           ▼
                             ┌──────────────────────────────────────────────┐
@@ -109,9 +109,8 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 
 | Service | Port | Description |
 |---------|------|-------------|
-| **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, and thread management |
-| **Backend** | 8000 | FastAPI server for PDF processing and TTS |
-| **RAG Service** | 8001 | FastAPI server for document indexing, AI chat, thread/message/file management |
+| **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
+| **RAG Service** | 8000 | FastAPI server for PDF processing, document indexing, AI chat, thread/message/file management |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
@@ -219,8 +218,7 @@ docker-compose up --build
 ### 4. Access the Application
 
 - **Main App**: http://localhost:3000
-- **Backend API**: http://localhost:8000
-- **RAG API**: http://localhost:8001
+- **RAG API**: http://localhost:8000
 - **Weaviate API**: http://localhost:8080/v1/.well-known/ready
 
 ## 📖 Usage
@@ -265,14 +263,6 @@ docker-compose up --build
 
 ## 🛠️ Technology Stack
 
-### Backend Service
-| Technology | Purpose |
-|------------|---------|
-| **FastAPI** | Web framework for REST APIs |
-| **PyMuPDF (fitz)** | PDF parsing with character-level coordinates |
-| **spaCy** | NLP for sentence segmentation |
-| **Kokoro** | Neural TTS with 82M parameters |
-
 ### RAG Service
 | Technology | Purpose |
 |------------|---------|
@@ -280,7 +270,7 @@ docker-compose up --build
 | **LangChain** | LLM/Embedding integration |
 | **LangGraph** | Stateful multi-agent workflow (Orchestrator + Intent Agent) |
 | **Weaviate Client** | Vector database operations |
-| **aiosqlite** | Async SQLite for threads, messages, settings, and web sources |
+| **aiosqlite** | Async SQLite for threads, messages, settings, annotations, and web sources |
 
 ### Frontend
 | Technology | Purpose |
@@ -295,29 +285,58 @@ docker-compose up --build
 ```
 askpdf/
 ├── docker-compose.yml          # Multi-service orchestration
-├── backend/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── app/
-│       ├── main.py             # FastAPI app, upload & TTS endpoints
-│       ├── pdf_parser.py       # PyMuPDF text extraction with coordinates
-│       ├── web_capture_service.py # Fetches and captures text from live websites
-│       ├── nlp.py              # spaCy sentence segmentation
-│       └── tts.py              # Kokoro TTS synthesis
 ├── rag_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── main.py                 # FastAPI app, index, chat, thread, file, message, settings, and prompt endpoints
-│   ├── rag.py                  # Document chunking & indexing (thread-aware)
-│   ├── agent.py                # LangGraph multi-agent workflow (Orchestrator + Intent Agent + tools)
-│   ├── reasoning.py            # Multi-provider reasoning/thinking trace extraction
-│   ├── models.py               # LLM/Embedding model clients, constants, and config helpers
-│   ├── database.py             # SQLite thread/message/file/settings management
-│   └── app/db/
-│       └── vector_db.py        # Weaviate adapter (DocumentChunk, ChatMemoryChunk, WebSearchChunk)
+│   ├── main.py                 # FastAPI entrypoint (v2.0.0 modular)
+│   ├── pytest.ini              # Test configuration
+│   ├── app/
+│   │   ├── api/                # REST API route handlers
+│   │   │   ├── threads.py      # Thread CRUD, settings, prompt tools/preview endpoints
+│   │   │   ├── files.py        # File upload, download, status, annotations, web sources
+│   │   │   ├── messages.py     # Message CRUD and chat endpoints
+│   │   │   └── models.py       # Model availability and health check endpoints
+│   │   ├── agent/              # Multi-agent AI system
+│   │   │   ├── agent.py        # LangGraph orchestrator (Orchestrator + Intent Agent + tools)
+│   │   │   ├── agent_helpers.py # Agent utility functions
+│   │   │   ├── reasoning.py    # Multi-provider reasoning/thinking trace extraction
+│   │   │   └── tool_registry.py # Tool registration and management
+│   │   ├── db/                 # Data layer
+│   │   │   ├── __init__.py     # Database initialization
+│   │   │   ├── database.py     # SQLite thread/message/file/settings management
+│   │   │   ├── annotations_db.py # Annotation persistence
+│   │   │   ├── file_repository.py # File metadata storage
+│   │   │   ├── message_repository.py # Message CRUD operations
+│   │   │   ├── settings_repository.py # Thread settings persistence
+│   │   │   ├── thread_repository.py # Thread CRUD operations
+│   │   │   └── vector/         # Vector database layer
+│   │   │       ├── adapter.py   # Weaviate adapter (DocumentChunk, ChatMemoryChunk, WebSearchChunk)
+│   │   │       ├── config.py    # Vector DB configuration
+│   │   │       └── helpers.py   # Vector search utilities
+│   │   ├── models/             # Pydantic request/response models
+│   │   │   └── requests.py     # API request schemas
+│   │   ├── prompts/            # System prompts and templates
+│   │   ├── rag/                # RAG core logic
+│   │   │   ├── chat_service.py # Chat orchestration and response generation
+│   │   │   ├── indexer.py      # Document chunking & indexing (thread-aware)
+│   │   │   └── retrieval.py    # Document and memory retrieval
+│   │   ├── services/           # Business logic services
+│   │   │   ├── file_cleanup_service.py     # File lifecycle management
+│   │   │   ├── file_processing_service.py  # Async file processing orchestration
+│   │   │   ├── nlp_service.py              # NLP utilities (sentence segmentation)
+│   │   │   ├── parsing_service.py          # PDF/webpage parsing with Docling/pdfplumber
+│   │   │   └── thread_management_service.py # Thread operations
+│   │   └── web_capture/        # Webpage capture functionality
+│   │       ├── capture.py      # Playwright-based webpage capture
+│   │       ├── markdown_generator.py # HTML to Markdown conversion
+│   │       └── utils.py        # Capture utilities
+│   └── tests/                  # Test suite
+│       ├── test_*.py           # Unit and integration tests
+│       └── *.pdf               # Test PDF files
 └── frontend/
     ├── Dockerfile
     ├── package.json
+    ├── next.config.js            # Next.js configuration
     └── src/
         ├── pages/
         │   └── index.tsx           # Main application page
@@ -336,81 +355,60 @@ askpdf/
         │   └── TextViewer.tsx      # Alternative text display
         ├── hooks/
         │   └── usePersistAnnotations.ts  # Annotation persistence hook
-        └── lib/
-            ├── api.ts          # Backend & RAG API client (thread/message/file/settings/prompt)
-            └── tts-api.ts      # TTS API client
+        ├── lib/
+        │   ├── api.ts          # Unified RAG API client
+        │   └── tts-api.ts      # TTS API client
+        └── theme.ts            # MUI theme configuration
 ```
 The application expects an OpenAI-compatible API at the URL specified by `LLM_API_URL` in your `.env` file (default: `http://host.docker.internal:12434`).
 ## 📝 API Reference
 
-### Backend Service (Port 8000)
+### RAG Service (Port 8000)
 
-#### `POST /api/upload`
-Upload a PDF and extract sentences with bounding boxes.
+#### `POST /api/threads/{thread_id}/files/upload`
+Upload a PDF and trigger background parsing and indexing.
 
 **Request:** `multipart/form-data`
 - `file`: PDF file
 
-All environment variables, including `LLM_API_URL`, are now managed via a `.env` file at the project root. This file is loaded by both Docker Compose and the Python services.
-- `embedding_model`: Model name for RAG indexing
+**Response:**
+```json
+{
+  "sentences": null,
+  "pdfUrl": "/api/threads/{thread_id}/files/abc123/download",
+  "fileHash": "abc123",
+  "fileName": "document.pdf"
+}
+```
+
+#### `GET /api/threads/{thread_id}/files/{file_hash}`
+Get PDF data (sentences with bounding boxes) for a file.
 
 **Response:**
 ```json
 {
-  "sentences": [
-    {
-      "id": 0,
-| `LLM_API_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (set in `.env`; change to `...:11434` for default Ollama) |
-      "bboxes": [
-        {"page": 1, "x": 72, "y": 700, "width": 50, "height": 12, "page_height": 792, "page_width": 612}
-      ]
-    }
-  ],
-  "pdfUrl": "/abc123.pdf"
+  "sentences": [...],
+  "pdfUrl": "/api/threads/{thread_id}/files/abc123/download",
+  "fileHash": "abc123"
 }
 ```
 
-#### `GET /api/voices`
-List available TTS voice styles.
+#### `GET /api/threads/{thread_id}/files/{file_hash}/download`
+Serve the actual PDF file.
 
-**Response:**
-```json
-{
-  "voices": ["M1.json", "F1.json", "M2.json"]
-}
-```
+#### `GET /api/threads/{thread_id}/files/{file_hash}/status`
+Check parsing and indexing status for a file.
 
-#### `POST /api/tts`
-Synthesize speech for text.
+#### `GET /api/threads/{thread_id}/files/{file_hash}/sentences`
+Get parsed sentences for a file.
 
-**Request:**
-```json
-{
-  "text": "Text to synthesize",
-  "voice": "M1.json",
-  "speed": 1.0
-}
-```
-
-**Response:**
-```json
-{
-  "audioUrl": "/data/audio/tmp_xyz.wav"
-}
-```
-
-### RAG Service (Port 8001)
-
-#### `POST /index` (Legacy)
-Index document text into vector database (legacy, single collection).
-
-#### `POST /threads` / `GET /threads` / `PUT /threads/{id}` / `DELETE /threads/{id}`
+#### `POST /api/threads` / `GET /api/threads` / `PUT /api/threads/{id}` / `DELETE /api/threads/{id}`
 Create, list, update, and delete chat threads. Each thread has its own context, files, and messages.
 
-#### `POST /threads/{thread_id}/files`
+#### `POST /api/threads/{thread_id}/files`
 Add a file to a thread and trigger background indexing. Associates PDFs with threads for context-aware chat.
 
-#### `POST /threads/{thread_id}/chat`
+#### `POST /api/threads/{thread_id}/chat`
 Chat with a thread using the multi-agent orchestrator (and optional Intent Agent).
 
 **Request:**
@@ -443,10 +441,10 @@ Chat with a thread using the multi-agent orchestrator (and optional Intent Agent
 }
 ```
 
-#### `GET /threads/{thread_id}/settings`
+#### `GET /api/threads/{thread_id}/settings`
 Get persisted prompt/behaviour settings for a thread.
 
-#### `PUT /threads/{thread_id}/settings`
+#### `PUT /api/threads/{thread_id}/settings`
 Update persisted settings for a thread.
 
 **Request body fields (all optional):**
@@ -460,10 +458,10 @@ Update persisted settings for a thread.
 | `use_intent_agent` | bool | Enable/disable the Intent Agent |
 | `intent_agent_max_iterations` | int (1–10) | Iteration budget for Intent Agent |
 
-#### `GET /prompt-tools`
+#### `GET /api/threads/prompt-tools`
 Returns the tool catalog (id, display name, description, default prompt) and current default thread settings. Used by the settings dialog to populate tool instruction editors.
 
-#### `POST /prompt-preview`
+#### `POST /api/threads/prompt-preview`
 Returns the fully composed system prompt that will be sent to the LLM, given a set of settings. Used for live preview in the settings dialog.
 
 **Request:**
@@ -483,14 +481,20 @@ Returns the fully composed system prompt that will be sent to the LLM, given a s
 { "prompt": "You are an Expert researcher..." }
 ```
 
-#### `GET /threads/{thread_id}/messages` / `DELETE /messages/{message_id}`
+#### `GET /api/threads/{thread_id}/messages` / `DELETE /api/messages/{message_id}`
 List and delete messages in a thread. Deleting a message also removes associated web-search results from Weaviate.
 
-#### `GET /models`
+#### `GET /api/models`
 Fetch available models from LLM server.
 
+#### `GET /api/health/chat-model/{model}`
+Check if a chat model is ready and supports tool calling. Model name can contain slashes (e.g., `qwen/qwen3-vl-8b`).
+
+#### `GET /api/health/embed-model/{model}`
+Check if an embedding model is ready.
+
 #### `GET /health`
-Health check endpoint.
+Service health check endpoint.
 
 ## 🔧 Configuration
 
@@ -498,9 +502,7 @@ Health check endpoint.
 
 | Variable | Service | Default | Description |
 |----------|---------|---------|-------------|
-| `NEXT_PUBLIC_API_URL` | Frontend | `http://localhost:8000` | Backend API URL |
-| `NEXT_PUBLIC_RAG_API_URL` | Frontend | `http://localhost:8001` | RAG API URL |
-| `RAG_SERVICE_URL` | Backend | `http://rag-service:8000` | Internal RAG service URL |
+| `NEXT_PUBLIC_API_URL` | Frontend | `http://localhost:8000` | RAG API URL |
 | `WEAVIATE_URL` | RAG Service | `http://weaviate:8080` | Weaviate endpoint URL |
 | `WEAVIATE_HYBRID_ALPHA` | RAG Service | `0.5` | Hybrid search alpha (query-vs-vector blend) |
 | `LLM_API_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (Change to `...:11434` for default Ollama) |
@@ -545,15 +547,13 @@ In `backend/app/tts.py`:
 ```
 User uploads PDF
   ↓
-Backend: Save PDF → Extract text + coordinates (PyMuPDF)
+RAG Service: Save PDF → Extract text + coordinates (Docling)
   ↓
-Backend: Split into sentences (spaCy)
+RAG Service: Split into sentences
   ↓
-Backend: Map sentences to bounding boxes
+RAG Service: Trigger async indexing
   ↓
-Backend: Trigger async RAG indexing (per-thread if using threads)
-  ↓
-RAG Service: Chunk text → Generate embeddings → Store in Weaviate (global separated collections, thread-filtered)
+RAG Service: Chunk text → Generate embeddings → Store in Weaviate (thread-scoped collections)
   ↓
 Frontend: Display PDF with clickable sentence overlays
 ```
@@ -588,7 +588,7 @@ Frontend: Display markdown answer, expandable reasoning panel, web source cards
 ```
 User clicks Play or double-clicks sentence
   ↓
-Frontend: Request /api/tts with sentence text
+Frontend: Request /api/tts with sentence text (or /tts if using separate TTS service)
   ↓
 Backend: Kokoro synthesizes audio → WAV file
   ↓
@@ -599,12 +599,11 @@ On audio end: Auto-advance to next sentence
 
 ## 🐳 Docker Details
 
-The application uses Docker Compose with four services:
+The application uses Docker Compose with three services:
 
 1. **frontend**: Next.js dev server with hot reload
-2. **backend**: FastAPI with TTS models mounted (Supertonic cloned from HuggingFace at build)
-3. **rag-service**: FastAPI with LangChain/LangGraph
-4. **weaviate**: Official Weaviate image with persistent storage
+2. **rag-service**: FastAPI with LangChain/LangGraph, PDF processing, and chat
+3. **weaviate**: Official Weaviate image with persistent storage
 
 ### Volumes
 - \`weaviate_data\`: Persistent vector storage

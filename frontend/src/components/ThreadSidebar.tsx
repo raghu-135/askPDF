@@ -84,7 +84,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   // Load threads and embedding models on mount
   useEffect(() => {
     loadThreads();
-    const ragApiUrl = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
+    const ragApiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (!ragApiUrl) {
+      console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
+      return;
+    }
     fetchAvailableEmbedModels(ragApiUrl).then((models) => {
       setAvailableEmbedModels(models);
       const envDefault = process.env.NEXT_PUBLIC_DEFAULT_EMBED_MODEL;
@@ -112,7 +116,12 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
     try {
       // Check if the embedding model is valid before proceeding
-      const apiBase = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
+      const apiBase = process.env.NEXT_PUBLIC_API_URL;
+      if (!apiBase) {
+        console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
+        setIsEmbedModelValid(false);
+        return;
+      }
       const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(newThreadEmbedModel)}`);
       const data = await res.json();
 
@@ -186,9 +195,15 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     const validateEmbedModel = async () => {
       setIsCheckingEmbedModel(true);
       setIsEmbedModelValid(null);
-      const apiBase = process.env.NEXT_PUBLIC_RAG_API_URL || "http://localhost:8001";
+      const apiBase = process.env.NEXT_PUBLIC_API_URL;
+      if (!apiBase) {
+        console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
+        setIsEmbedModelValid(false);
+        setIsCheckingEmbedModel(false);
+        return;
+      }
       try {
-        const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(newThreadEmbedModel)}`);
+        const res = await fetch(`${apiBase}/api/health/embed-model/${encodeURIComponent(newThreadEmbedModel)}`);
         const data = await res.json();
         setIsEmbedModelValid(data.embed_model_ready === true);
       } catch (error) {

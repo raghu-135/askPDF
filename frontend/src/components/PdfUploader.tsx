@@ -1,15 +1,15 @@
-declare const process: {
-  env: Record<string, string | undefined>;
-};
 import { Button, Tooltip, CircularProgress, Box, Typography } from "@mui/material";
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import React from "react";
-import { getFileIndexStatus, IndexingStatus as IndexStatus } from "../lib/api";
+import { getFileStatus, getParsedSentences, FileStatus, ProcessStatusHelper, uploadPdf as apiUploadPdf } from "../lib/api";
 
 type Props = {
-  onUploaded: (data: { sentences: any[]; pdfUrl: string; fileHash: string; fileName?: string }) => void;
+  threadId?: string | null;
+  embeddingModel?: string | null;
+  onUploaded: (data: { sentences: any[] | null; pdfUrl: string; fileHash: string; fileName?: string }) => void;
   onIndexingComplete?: (fileHash: string) => void;
+  onParsingComplete?: (fileHash: string, sentences: any[]) => void;
   disabled?: boolean;
   tooltipText?: string;
   /** Current web URL value - when provided, button switches to web mode */
@@ -20,80 +20,123 @@ type Props = {
   isWebLoading?: boolean;
 };
 
-const PdfUploader = React.memo(function PdfUploader({ 
-  onUploaded, 
-  onIndexingComplete, 
-  disabled, 
+const PdfUploader = React.memo(function PdfUploader({
+  threadId,
+  embeddingModel,
+  onUploaded,
+  onIndexingComplete,
+  onParsingComplete,
+  disabled,
   tooltipText,
   webUrl,
   onWebSubmit,
-  isWebLoading = false 
+  isWebLoading = false
 }: Props) {
   const inputId = "pdf-upload-input";
   const [isUploading, setIsUploading] = React.useState(false);
-  const [indexingState, setIndexingState] = React.useState<{
+  const [fileStatus, setFileStatus] = React.useState<{
     fileHash: string;
-    status: IndexStatus;
-    progress: number;
-    error?: string;
+    status: FileStatus;
   } | null>(null);
 
   const isWebMode = !!webUrl?.trim();
   const isDisabled = disabled || isUploading || isWebLoading;
 
-  // Poll for indexing status
+  // Poll for file status (parsing and indexing)
   React.useEffect(() => {
-    if (!indexingState || indexingState.status === 'ready' || indexingState.status === 'failed') {
+    if (!fileStatus) {
       return;
+    }
+
+    // Check if it's a full FileStatus object
+    if ('parsing' in fileStatus.status && 'indexing' in fileStatus.status) {
+      const { parsing, indexing } = fileStatus.status;
+      // Stop polling if both parsing and indexing are completed or failed
+      if (ProcessStatusHelper.isTerminal(parsing.status) && ProcessStatusHelper.isTerminal(indexing.status)) {
+        if (ProcessStatusHelper.isCompleted(parsing.status) && ProcessStatusHelper.isCompleted(indexing.status)) {
+          onIndexingComplete?.(fileStatus.fileHash);
+        }
+        return;
+      }
     }
 
     const pollInterval = setInterval(async () => {
       try {
-        const status = await getFileIndexStatus(indexingState.fileHash);
-        setIndexingState({
-          fileHash: status.file_hash,
-          status: status.status,
-          progress: status.progress || 0,
-          error: status.error
+        if (!threadId) {
+          console.error("Thread ID is required for file status polling");
+          return;
+        }
+        const status = await getFileStatus(fileStatus.fileHash, threadId, {
+          embeddingModel: embeddingModel || undefined,
+        });
+        // Ensure we have a full FileStatus object
+        const fullStatus: FileStatus = 'parsing' in status && 'indexing' in status
+          ? status as FileStatus
+          : {
+              parsing: { status: 'unknown' },
+              indexing: { status: 'unknown' },
+              indexing_status: { summary: { status: 'unknown' }, models: {} },
+              updated_at: new Date().toISOString(),
+            };
+
+        setFileStatus({
+          fileHash: fileStatus.fileHash,
+          status: fullStatus
         });
 
-        if (status.status === 'ready') {
+        // Check if parsing just completed
+        if (ProcessStatusHelper.isCompleted(fullStatus.parsing.status) && onParsingComplete) {
+          try {
+            if (!threadId) {
+              console.error("Thread ID is required for fetching parsed sentences");
+              return;
+            }
+            const parsedData = await getParsedSentences(fileStatus.fileHash, threadId);
+            onParsingComplete(fileStatus.fileHash, parsedData.sentences);
+          } catch (error) {
+            console.error("Failed to fetch parsed sentences", error);
+          }
+        }
+
+        // Check if both parsing and indexing are completed
+        if (ProcessStatusHelper.isCompleted(fullStatus.parsing.status) && ProcessStatusHelper.isCompleted(fullStatus.indexing.status)) {
           clearInterval(pollInterval);
-          onIndexingComplete?.(status.file_hash);
-        } else if (status.status === 'failed') {
+          onIndexingComplete?.(fileStatus.fileHash);
+        } else if (ProcessStatusHelper.isFailed(fullStatus.parsing.status) || ProcessStatusHelper.isFailed(fullStatus.indexing.status)) {
           clearInterval(pollInterval);
         }
       } catch (error) {
-        console.error("Failed to check indexing status", error);
+        console.error("Failed to check file status", error);
       }
-    }, 2000);
+    }, 5000);
 
     return () => clearInterval(pollInterval);
-  }, [indexingState?.fileHash, indexingState?.status, onIndexingComplete]);
+  }, [embeddingModel, fileStatus?.fileHash, fileStatus?.status, onIndexingComplete, onParsingComplete, threadId]);
 
   const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploading(true);
-    setIndexingState(null);
-    
+    setFileStatus(null);
+
     try {
-      const form = new FormData();
-      form.append("file", file);
-      const defaultEmbedModel = process.env.NEXT_PUBLIC_DEFAULT_EMBED_MODEL || "BAAI/bge-m3";
-      form.append("embedding_model", defaultEmbedModel);
-      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const res = await fetch(`${apiBase}/api/upload`, { method: "POST", body: form });
-      const data = await res.json();
-      
-      // Set initial indexing state
-      setIndexingState({
+      if (!threadId) {
+        throw new Error("A thread must be selected before uploading.");
+      }
+      const data = await apiUploadPdf(file, threadId);
+
+      // Set initial file status - will be updated by polling
+      setFileStatus({
         fileHash: data.fileHash,
-        status: data.indexingStatus || 'pending',
-        progress: 0
+        status: {
+          parsing: { status: 'pending' },
+          indexing: { status: 'pending' },
+          indexing_status: { summary: { status: 'pending' }, models: {} },
+          updated_at: new Date().toISOString()
+        }
       });
-      
+
       onUploaded({ ...data, fileName: file.name });
     } catch (error) {
       console.error("Upload failed", error);

@@ -1,7 +1,9 @@
 import io
 import os
 import logging
-import fitz  # PyMuPDF
+import json
+from typing import Optional
+import spacy
 from docling.document_converter import DocumentConverter, DocumentStream, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from docling.datamodel.base_models import InputFormat
@@ -43,284 +45,519 @@ _docling_converter = DocumentConverter(
     }
 )
 
-def _get_table_bboxes(page):
-    """Identify bounding boxes for all tables detected on a PDF page."""
-    tables = page.find_tables()
-    return [fitz.Rect(t.bbox) for t in tables]
+# Initialize spaCy for sentence splitting
+try:
+    _nlp = spacy.load("en_core_web_sm")
+except Exception as e:
+    logger.error(f"Failed to load spacy model: {e}")
+    _nlp = None
 
-def _get_image_bboxes(page):
-    """Identify bounding boxes for all images detected on a PDF page."""
-    image_bboxes = []
-    for img in page.get_images():
-        rects = page.get_image_rects(img[0])
-        image_bboxes.extend(rects)
-    return image_bboxes
+def _convert_bottomleft_to_topleft(bbox, page_height):
+    """Convert Docling BOTTOMLEFT bbox to pdfplumber TOPLEFT."""
+    l, t, r, b = bbox
+    return (l, page_height - t, r, page_height - b)
 
-def _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes):
-    """
-    Determine if a text block should be filtered out (e.g., headers, footers, 
-    items inside tables or overlapping images).
-    """
-    if bbox.y1 < header_height or bbox.y0 > footer_y:
+
+def _is_valid_bbox(bbox, min_size: float = 0.5) -> bool:
+    """Return True when a bbox has positive area and is large enough to crop safely."""
+    if not bbox:
+        return False
+    try:
+        l, t, r, b = bbox
+        return (r - l) > min_size and (b - t) > min_size
+    except Exception:
+        return False
+
+def _should_filter_item(item):
+    """Filter items based on Docling labels and structure."""
+    # Filter by label
+    filtered_labels = {"page_header", "page_footer", "footnote", "caption"}
+    if hasattr(item, 'label') and item.label.value in filtered_labels:
         return True
-    block_center = fitz.Point((bbox.x0 + bbox.x1)/2, (bbox.y0 + bbox.y1)/2)
-    if any(block_center in t_bbox for t_bbox in table_bboxes):
+    
+    # Filter by content_layer
+    if hasattr(item, 'content_layer') and item.content_layer.value == "furniture":
         return True
-    if any(block_center in i_bbox for i_bbox in image_bboxes):
-        return True
+    
+    # Filter if parent is picture
+    if hasattr(item, 'parent') and item.parent:
+        if hasattr(item.parent, 'cref') and 'picture' in item.parent.cref.lower():
+            return True
+    
     return False
 
-def _process_line(line, page_num, page_height, page_width):
+def parse_with_docling(data: bytes, filename: str, debug_output_dir: Optional[str] = None):
     """
-    Process a single line of text from PyMuPDF, extracting character-level 
-    coordinates and font information.
-    """
-    line_text = ""
-    line_chars = []
-    processed_fonts = []
+    Parse PDF with Docling to extract structural information and bounding boxes.
     
-    spans = sorted(line.get("spans", []), key=lambda s: s["bbox"][0])
-    for span in spans:
-        font_name = span.get("font", "")
-        font_size = span.get("size", 0)
-        processed_fonts.append({"name": font_name, "size": font_size})
+    Args:
+        data: PDF file bytes
+        filename: Name of the PDF file
+        debug_output_dir: If provided, write debug JSON files to this directory
         
-        chars = span.get("chars", [])
-        for char_info in chars:
-            c = char_info.get("c", "")
-            if not c:
-                continue
-            c_bbox = char_info.get("bbox", [0,0,0,0])
-            c_height = c_bbox[3] - c_bbox[1]
-            c_y_bottom = page_height - c_bbox[1] - c_height
-            line_text += c
-            line_chars.append({
-                "page": page_num + 1,
-                "x": c_bbox[0],
-                "y": c_y_bottom,
-                "width": c_bbox[2] - c_bbox[0],
-                "height": c_height,
-                "page_height": page_height,
-                "page_width": page_width,
-                "font": font_name,
-                "size": font_size
-            })
-    
-    line_font = processed_fonts[0] if processed_fonts else {"name": "", "size": 0}
-    return line_text, line_chars, line_font
-
-def _process_block(block, page_num, page_height, page_width):
+    Returns:
+        Docling document object or None if parsing fails
     """
-    Process a text block containing multiple lines, grouping them into 
-    segments with consistent font styles.
-    """
-    segments = []
-    current_text = ""
-    current_chars = []
-    current_font = None
-    
-    NO_SPACE_ENDINGS = ("/", "@", "-", ".", "_", ":")
-    
-    for line in block.get("lines", []):
-        line_text, line_chars, line_font = _process_line(line, page_num, page_height, page_width)
-        if not line_text:
-            continue
-            
-        if current_font is not None:
-            font_changed = (line_font["name"] != current_font["name"] or 
-                          abs(line_font["size"] - current_font["size"]) > 0.5)
-            
-            if font_changed:
-                if current_text.strip():
-                    segments.append({
-                        "text": current_text,
-                        "chars": current_chars,
-                        "font": current_font
-                    })
-                current_text = ""
-                current_chars = []
-                current_font = line_font
-            
-        if current_font is None:
-            current_font = line_font
-            
-        if current_text:
-            prev_trimmed = current_text.strip()
-            needs_space = not (prev_trimmed.endswith(NO_SPACE_ENDINGS) or line_text.startswith(tuple(NO_SPACE_ENDINGS) + (" ",)))
-            
-            if needs_space:
-                current_text += " "
-                if current_chars:
-                    last = current_chars[-1]
-                    current_chars.append({
-                        "page": last["page"],
-                        "x": last["x"] + last["width"],
-                        "y": last["y"],
-                        "width": 0,
-                        "height": last["height"],
-                        "page_height": last["page_height"],
-                        "page_width": last["page_width"],
-                        "is_space": True,
-                        "font": last.get("font", ""),
-                        "size": last.get("size", 0)
-                    })
-        
-        current_text += line_text
-        current_chars.extend(line_chars)
-        
-    if current_text.strip():
-        segments.append({
-            "text": current_text,
-            "chars": current_chars,
-            "font": current_font
-        })
-        
-    return segments
-
-
-def extract_text_with_coordinates(data: bytes, filename: str):
-    """
-    Extract high-fidelity text items from a PDF using a hybrid approach:
-    Docling for structural segmentation (labels like 'table', 'heading') 
-    combined with PyMuPDF for precise character-level coordinates.
-    """
-    from docling.datamodel.document import TextItem, TableItem, PictureItem
     if not filename:
-        return []
-
-    doc = fitz.open(stream=data, filetype="pdf")
-    items = []
+        return None
     
-    docling_doc = None
     try:
         source = DocumentStream(name=filename, stream=io.BytesIO(data))
         docling_result = _docling_converter.convert(source)
-        docling_doc = docling_result.document
+        
+        # Write debug output if requested
+        if debug_output_dir:
+            os.makedirs(debug_output_dir, exist_ok=True)
+            test_file_json = os.path.join(debug_output_dir, f"docling_raw_output_{filename}_dict.json")
+            try:
+                doc_dict = docling_result.document.export_to_dict()
+                with open(test_file_json, "w") as f:
+                    json.dump(doc_dict, f, indent=2)
+                logger.info(f"Raw Docling output written to {test_file_json}")
+            except Exception as e:
+                logger.warning(f"Failed to write Docling output: {e}")
+        
+        return docling_result.document
     except Exception as e:
         logger.warning(f"Docling conversion failed: {e}")
+        return None
 
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        page_height = page.rect.height
-        page_width = page.rect.width
-        
-        table_bboxes = _get_table_bboxes(page)
-        image_bboxes = _get_image_bboxes(page)
-        header_height = page_height * 0.05
-        footer_y = page_height * 0.95
-        
-        text_page = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
-        all_blocks = [b for b in text_page.get("blocks", []) if b.get("type") == 0]
-        processed_indices = set()
+def _extract_sentences_from_bbox(pdf_page, bbox, label, page_num, page_height, page_width, start_id=0):
+    """Extract sentences from a single cropped region using pdfplumber."""
+    if not _is_valid_bbox(bbox):
+        logger.warning(
+            "Skipping degenerate bbox on page %s for label %s: %s",
+            page_num + 1,
+            label,
+            bbox,
+        )
+        return []
 
-        if docling_doc:
-            page_items = []
-            for item, _level in docling_doc.iterate_items():
-                if (isinstance(item, (TextItem, TableItem, PictureItem))) and item.prov:
-                    if item.prov[0].page_no == (page_num + 1):
-                        page_items.append(item)
+    # Crop to bbox
+    try:
+        cropped = pdf_page.crop(bbox)
+    except Exception as exc:
+        logger.warning(
+            "Failed to crop bbox on page %s for label %s: %s",
+            page_num + 1,
+            label,
+            exc,
+        )
+        return []
+    
+    # Extract words with font info
+    words = cropped.extract_words(
+        extra_attrs=["fontname", "size"],
+        keep_blank_chars=False,
+        use_text_flow=True
+    )
+    
+    # Concatenate text for sentence splitting
+    full_text = " ".join(w["text"] for w in words)
+    
+    # Split into sentences using spaCy
+    if not _nlp:
+        return []
+    
+    doc = _nlp(full_text)
+    sentences = []
+    
+    # Pre-calculate character positions for all words
+    char_offset = 0
+    for word in words:
+        word["char_start"] = char_offset
+        word["char_end"] = char_offset + len(word["text"])
+        char_offset += len(word["text"]) + 1  # +1 for space
+    
+    # Map sentences back to word bboxes
+    for sent in doc.sents:
+        sent_text = sent.text.strip()
+        if not sent_text:
+            continue
+        
+        # Find words that belong to this sentence based on char span
+        sent_words = []
+        for word in words:
+            if sent.start_char <= word["char_end"] and sent.end_char >= word["char_start"]:
+                sent_words.append(word)
+        
+        if sent_words:
+            # Group words by lines (words with similar top positions)
+            # Sort words by top position first
+            sent_words_sorted = sorted(sent_words, key=lambda w: w["top"])
             
-            for dl_item in page_items:
-                item_label = "text"
-                
-                if hasattr(dl_item, 'parent') and dl_item.parent:
-                    parent_ref = dl_item.parent
-                    if hasattr(parent_ref, 'cref') and parent_ref.cref.startswith('#/groups/'):
-                        try:
-                            group_idx = int(parent_ref.cref.split('/')[-1])
-                            if group_idx < len(docling_doc.groups):
-                                group = docling_doc.groups[group_idx]
-                                if hasattr(group, 'label') and hasattr(group.label, 'value'):
-                                    item_label = group.label.value
-                        except Exception:
-                            pass
+            # Group into lines based on vertical proximity (within 5 points)
+            lines = []
+            current_line = [sent_words_sorted[0]]
+            current_top = sent_words_sorted[0]["top"]
+            
+            for word in sent_words_sorted[1:]:
+                # If word is on a new line (vertical gap > 5 points)
+                if abs(word["top"] - current_top) > 5:
+                    lines.append(current_line)
+                    current_line = [word]
+                    current_top = word["top"]
+                else:
+                    current_line.append(word)
+            lines.append(current_line)
 
-                if item_label == "text" and hasattr(dl_item, 'label') and hasattr(dl_item.label, 'value'):
-                    item_label = dl_item.label.value
-                elif isinstance(dl_item, TableItem):
-                    item_label = "table"
-                elif isinstance(dl_item, PictureItem):
-                    item_label = "picture"
+            # Calculate bbox for each line with page info
+            line_bboxes = []
+            for line in lines:
+                line_x0 = min(w["x0"] for w in line)
+                line_y0 = min(w["top"] for w in line)
+                line_x1 = max(w["x1"] for w in line)
+                line_y1 = max(w["bottom"] for w in line)
+                line_bboxes.append({
+                    "page": page_num + 1,
+                    "x0": line_x0,
+                    "y0": line_y0,
+                    "x1": line_x1,
+                    "y1": line_y1,
+                    "page_width": page_width,
+                    "page_height": page_height
+                })
 
-                dl_bbox = dl_item.prov[0].bbox
-                rect = fitz.Rect(
-                    dl_bbox.l,
-                    page_height - dl_bbox.t,
-                    dl_bbox.r,
-                    page_height - dl_bbox.b
-                )
-                
-                item_blocks = []
-                for i, b in enumerate(all_blocks):
-                    if i in processed_indices:
-                        continue
-                    b_rect = fitz.Rect(b["bbox"])
-                    
-                    if _is_block_filtered(b_rect, header_height, footer_y, table_bboxes, image_bboxes):
-                        processed_indices.add(i)
-                        continue
-                        
-                    intersection = rect.intersect(b_rect)
-                    b_center = fitz.Point((b_rect.x0 + b_rect.x1)/2, (b_rect.y0 + b_rect.y1)/2)
-                    
-                    if (intersection.get_area() / b_rect.get_area() > 0.4 or 
-                        b_center in rect or 
-                        rect.contains(b_rect)):
-                        item_blocks.append(b)
-                        processed_indices.add(i)
-                
-                if item_blocks:
-                    item_blocks.sort(key=lambda b: (b["bbox"][1], b["bbox"][0]))
-                    for b in item_blocks:
-                        segments = _process_block(b, page_num, page_height, page_width)
-                        for seg in segments:
-                            seg_text = seg["text"]
-                            seg_chars = seg["chars"]
-                            seg_font = seg["font"]
-                            
-                            while seg_text and seg_text[-1].isspace():
-                                seg_text = seg_text[:-1]
-                                if seg_chars:
-                                    seg_chars.pop()
-                            
-                            if seg_text.strip():
-                                items.append({
-                                    "text": seg_text,
-                                    "label": item_label,
-                                    "char_map": seg_chars,
-                                    "page": page_num + 1,
-                                    "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
-                                    "font": seg_font
-                                })
+            # Extract font info (use first word's font)
+            font_name = sent_words[0].get("fontname", "")
+            font_size = sent_words[0].get("size", 0)
 
-        remaining_blocks = [all_blocks[i] for i in range(len(all_blocks)) if i not in processed_indices]
-        sorted_remaining = sorted(remaining_blocks, key=lambda b: (b["bbox"][1], b["bbox"][0]))
+            sentences.append({
+                "id": start_id + len(sentences),
+                "text": sent_text,
+                "label": label,
+                "page": page_num + 1,
+                "bbox": line_bboxes[0],  # Primary bbox (first line)
+                "bboxes": line_bboxes,  # All line bboxes
+                "page_width": page_width,
+                "page_height": page_height,
+                "words": sent_words,
+                "font": {"name": font_name, "size": font_size}
+            })
+    
+    return sentences
+
+def _extract_sentences_from_multi_bbox(pdf, item, label, start_id=0):
+    """
+    Extract sentences from text spanning multiple bboxes (columns/pages).
+    
+    This function handles multi-column layouts and multi-page sentences by:
+    - Collecting all words from all bboxes first
+    - Using the full text from the Docling item
+    - Splitting sentences on the full text using spaCy
+    - Mapping sentences back to words across all regions
+    - Creating line-level bboxes that preserve visual structure
+    - Tracking which pages a sentence spans
+    
+    Bbox handling approach:
+    - Line-level bboxes: Group words by vertical proximity (within 5 points) to create line bboxes
+    - Primary bbox: First line bbox for quick reference
+    - All bboxes: Array of all line bboxes for precise highlighting
+    - Pages field: List of pages the sentence spans
+    
+    Args:
+        pdf: pdfplumber PDF object
+        item: Docling TextItem with multiple prov entries
+        label: Label for the text item
+        start_id: Starting ID for sentence numbering
         
-        for block in sorted_remaining:
-            bbox = fitz.Rect(block["bbox"])
-            if _is_block_filtered(bbox, header_height, footer_y, table_bboxes, image_bboxes):
+    Returns:
+        List of sentence dictionaries with bounding boxes and metadata
+    """
+    all_words = []
+    char_offset = 0
+    
+    # Process each prov entry in order
+    for prov in item.prov:
+        page_num = prov.page_no - 1  # Convert to 0-indexed
+        pdf_page = pdf.pages[page_num]
+        page_height = pdf_page.height
+        page_width = pdf_page.width
+        
+        # Convert bbox to TOPLEFT using page-specific height
+        bbox = _convert_bottomleft_to_topleft(
+            (prov.bbox.l, prov.bbox.t, prov.bbox.r, prov.bbox.b),
+            page_height
+        )
+        if not _is_valid_bbox(bbox):
+            logger.warning(
+                "Skipping degenerate multi-bbox region on page %s for label %s: %s",
+                page_num + 1,
+                label,
+                bbox,
+            )
+            continue
+        
+        # Crop and extract words
+        try:
+            cropped = pdf_page.crop(bbox)
+        except Exception as exc:
+            logger.warning(
+                "Failed to crop multi-bbox region on page %s for label %s: %s",
+                page_num + 1,
+                label,
+                exc,
+            )
+            continue
+        words = cropped.extract_words(
+            extra_attrs=["fontname", "size"],
+            keep_blank_chars=False,
+            use_text_flow=True
+        )
+        
+        # Add page number and dimensions to each word
+        for word in words:
+            word["page"] = page_num + 1
+            word["page_width"] = page_width
+            word["page_height"] = page_height
+            word["char_start"] = char_offset
+            word["char_end"] = char_offset + len(word["text"])
+            char_offset += len(word["text"]) + 1  # +1 for space
+
+        all_words.extend(words)
+
+    # Build full text from extracted words to ensure character alignment
+    # Using word text instead of item.text to avoid spacing/character mismatches
+    full_text = " ".join(w["text"] for w in all_words)
+    
+    # Split into sentences using spaCy
+    if not _nlp:
+        return []
+    
+    doc = _nlp(full_text)
+    sentences = []
+    
+    for sent in doc.sents:
+        sent_text = sent.text.strip()
+        if not sent_text:
+            continue
+        
+        # Find words that belong to this sentence based on charspan
+        sent_words = []
+        for word in all_words:
+            if sent.start_char <= word["char_end"] and sent.end_char >= word["char_start"]:
+                sent_words.append(word)
+        
+        if sent_words:
+            # Group words by lines (words with similar top positions)
+            # Sort words by top position first
+            sent_words_sorted = sorted(sent_words, key=lambda w: w["top"])
+            
+            # Group into lines based on vertical proximity (within 5 points)
+            lines = []
+            current_line = [sent_words_sorted[0]]
+            current_top = sent_words_sorted[0]["top"]
+            
+            for word in sent_words_sorted[1:]:
+                # If word is on a new line (vertical gap > 5 points)
+                if abs(word["top"] - current_top) > 5:
+                    lines.append(current_line)
+                    current_line = [word]
+                    current_top = word["top"]
+                else:
+                    current_line.append(word)
+            lines.append(current_line)
+
+            # Calculate bbox for each line with page info
+            line_bboxes = []
+            for line in lines:
+                line_x0 = min(w["x0"] for w in line)
+                line_y0 = min(w["top"] for w in line)
+                line_x1 = max(w["x1"] for w in line)
+                line_y1 = max(w["bottom"] for w in line)
+                # Get the page for this line from the first word in the line
+                line_page = line[0]["page"]
+                # Get page dimensions from the first word
+                line_page_width = line[0].get("page_width", 0)
+                line_page_height = line[0].get("page_height", 0)
+                line_bboxes.append({
+                    "page": line_page,
+                    "x0": line_x0,
+                    "y0": line_y0,
+                    "x1": line_x1,
+                    "y1": line_y1,
+                    "page_width": line_page_width,
+                    "page_height": line_page_height
+                })
+
+            # Get pages this sentence spans
+            pages = sorted(set(w["page"] for w in sent_words))
+            
+            # Extract font info (use first word's font)
+            font_name = sent_words[0].get("fontname", "")
+            font_size = sent_words[0].get("size", 0)
+            
+            # Use first page's dimensions
+            first_page_num = pages[0] - 1  # Convert to 0-indexed
+            first_page = pdf.pages[first_page_num]
+            
+            sentences.append({
+                "id": start_id + len(sentences),
+                "text": sent_text,
+                "label": label,
+                "page": pages[0],  # Primary page (first page)
+                "pages": pages,  # List of pages sentence spans
+                "bbox": line_bboxes[0],  # Primary bbox (first line)
+                "bboxes": line_bboxes,  # All line bboxes
+                "page_width": first_page.width,
+                "page_height": first_page.height,
+                "words": sent_words,
+                "font": {"name": font_name, "size": font_size}
+            })
+    
+    return sentences
+
+def parse_with_pdfplumber(data: bytes, docling_doc, filename: str, merge_multi_bbox: bool = True, debug_output_dir: Optional[str] = None):
+    """
+    Parse PDF with pdfplumber to extract word-level coordinates within Docling regions.
+    
+    Args:
+        data: PDF file bytes
+        docling_doc: Docling document object from parse_with_docling
+        filename: Name of the PDF file
+        merge_multi_bbox: If True, merge text from multiple bboxes before sentence splitting
+                         (recommended for multi-column layouts). If False, process each
+                         bbox independently (legacy behavior). Default: True.
+        debug_output_dir: If provided, write debug JSON files to this directory
+                         (recommended for multi-column layouts). If False, process each
+                         bbox independently (legacy behavior). Default: True.
+        
+    Returns:
+        List of sentence dictionaries with bounding boxes and metadata
+    """
+    import pdfplumber
+    from docling.datamodel.document import TextItem
+    
+    if not docling_doc:
+        return []
+    
+    all_sentences = []
+    
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        # Get all text items from Docling
+        text_items = []
+        for item, _level in docling_doc.iterate_items():
+            if isinstance(item, TextItem) and item.prov:
+                text_items.append(item)
+        
+        # Process each Docling text item
+        for dl_item in text_items:
+            # Skip filtered items
+            if _should_filter_item(dl_item):
                 continue
             
-            segments = _process_block(block, page_num, page_height, page_width)
-            for seg in segments:
-                seg_text = seg["text"]
-                seg_chars = seg["chars"]
-                seg_font = seg["font"]
-                
-                while seg_text and seg_text[-1].isspace():
-                    seg_text = seg_text[:-1]
-                    if seg_chars:
-                        seg_chars.pop()
-                
-                if seg_text.strip():
-                    items.append({
-                        "text": seg_text,
-                        "label": "text",
-                        "char_map": seg_chars,
-                        "page": page_num + 1,
-                        "bbox": list(bbox),
-                        "font": seg_font
-                    })
+            # Get label
+            item_label = "text"
+            if hasattr(dl_item, 'parent') and dl_item.parent:
+                parent_ref = dl_item.parent
+                if hasattr(parent_ref, 'cref') and parent_ref.cref.startswith('#/groups/'):
+                    try:
+                        group_idx = int(parent_ref.cref.split('/')[-1])
+                        if group_idx < len(docling_doc.groups):
+                            group = docling_doc.groups[group_idx]
+                            if hasattr(group, 'label') and hasattr(group.label, 'value'):
+                                item_label = group.label.value
+                    except Exception:
+                        pass
             
-    doc.close()
-    return items
+            if item_label == "text" and hasattr(dl_item, 'label') and hasattr(dl_item.label, 'value'):
+                item_label = dl_item.label.value
+            
+            # Check if item has multiple prov entries (multi-bbox case)
+            if len(dl_item.prov) > 1:
+                if merge_multi_bbox:
+                    # Use multi-bbox function to merge text before sentence splitting
+                    sentences = _extract_sentences_from_multi_bbox(
+                        pdf, dl_item, item_label, start_id=len(all_sentences)
+                    )
+                else:
+                    # Legacy behavior: process each prov independently
+                    sentences = []
+                    for prov in dl_item.prov:
+                        page_num = prov.page_no - 1  # Convert to 0-indexed
+                        pdf_page = pdf.pages[page_num]
+                        page_height = pdf_page.height
+                        page_width = pdf_page.width
+                        
+                        # Convert bbox to TOPLEFT using page-specific height
+                        pdf_bbox = _convert_bottomleft_to_topleft(
+                            (prov.bbox.l, prov.bbox.t, prov.bbox.r, prov.bbox.b),
+                            page_height
+                        )
+                        
+                        prov_sentences = _extract_sentences_from_bbox(
+                            pdf_page, pdf_bbox, item_label, page_num, page_height, page_width,
+                            start_id=len(all_sentences) + len(sentences)
+                        )
+                        sentences.extend(prov_sentences)
+            else:
+                # Handle single bbox case
+                prov = dl_item.prov[0]
+                page_num = prov.page_no - 1  # Convert to 0-indexed
+                pdf_page = pdf.pages[page_num]
+                page_height = pdf_page.height
+                page_width = pdf_page.width
+                
+                # Convert bbox to TOPLEFT using page-specific height
+                pdf_bbox = _convert_bottomleft_to_topleft(
+                    (prov.bbox.l, prov.bbox.t, prov.bbox.r, prov.bbox.b),
+                    page_height
+                )
+                
+                sentences = _extract_sentences_from_bbox(
+                    pdf_page, pdf_bbox, item_label, page_num, page_height, page_width,
+                    start_id=len(all_sentences)
+                )
+            
+            all_sentences.extend(sentences)
+    
+    # Write pdfplumber parsed output to test folder if requested
+    if debug_output_dir:
+        os.makedirs(debug_output_dir, exist_ok=True)
+        test_file_pdfplumber = os.path.join(debug_output_dir, f"pdfplumber_parsed_output_{filename}.json")
+        try:
+            with open(test_file_pdfplumber, "w") as f:
+                json.dump(all_sentences, f, indent=2)
+            logger.info(f"Pdfplumber parsed output written to {test_file_pdfplumber}")
+        except Exception as e:
+            logger.warning(f"Failed to write pdfplumber output: {e}")
+    
+    return all_sentences
+
+def extract_text_with_coordinates(data: bytes, filename: str, merge_multi_bbox: bool = True):
+    """
+    Extract sentences with bounding boxes using Docling + pdfplumber.
+    Docling provides structural labels and paragraph bboxes (potentially multiple).
+    pdfplumber provides word/character-level coordinates within those bboxes.
+    
+    This is the main orchestration function that combines Docling and pdfplumber parsing.
+    
+    Args:
+        data: PDF file bytes
+        filename: Name of the PDF file
+        merge_multi_bbox: If True, merge text from multiple bboxes before sentence splitting
+                         (recommended for multi-column layouts). If False, process each
+                         bbox independently (legacy behavior). Default: True.
+    """
+    if not filename:
+        return []
+    
+    try:
+        # Parse with Docling
+        docling_doc = parse_with_docling(data, filename)
+        
+        if not docling_doc:
+            return []
+        
+        # Parse with pdfplumber using Docling regions
+        all_sentences = parse_with_pdfplumber(
+            data,
+            docling_doc,
+            filename,
+            merge_multi_bbox=merge_multi_bbox,
+        )
+        
+        return all_sentences
+    except Exception as exc:
+        logger.exception("Failed to extract text with coordinates for %s: %s", filename, exc)
+        return []

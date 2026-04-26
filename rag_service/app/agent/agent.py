@@ -29,7 +29,7 @@ from app.agent.agent_helpers import (
     collect_tool_sources,
 )
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
-from app.db.vector_db import get_vector_db
+from app.db.vector import get_vector_db
 from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
@@ -439,7 +439,7 @@ async def list_uploaded_documents(config: RunnableConfig = None) -> str:
         if not thread_id:
             return "No thread context found."
 
-        from app.db.database import get_thread_shape as _get_shape
+        from app.db import get_thread_shape as _get_shape
         shape = await _get_shape(thread_id)
         docs = shape["documents"]
 
@@ -574,7 +574,7 @@ async def find_topic_anchor_in_history(
         if not recalled:
             return "No relevant history found for this topic."
 
-        from app.db.database import get_thread_messages
+        from app.db import get_thread_messages
         all_messages = await get_thread_messages(thread_id, limit=2000)
         position_map = {msg.id: i + 1 for i, msg in enumerate(all_messages)}
 

@@ -73,7 +73,7 @@ interface ChatInterfaceProps {
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
-    ragApiUrl = "http://localhost:8001",
+    ragApiUrl: ragApiUrlProp,
     activeThread,
     chatSentences,
     setChatSentences,
@@ -85,6 +85,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     darkMode = false,
     autoScroll = true
 }) => {
+    const ragApiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (!ragApiUrl) {
+        console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
+    }
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const theme = useTheme();
     const [input, setInput] = useState('');
@@ -121,6 +125,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     // Model selection
     const [llmModel, setLlmModel] = useState('');
     const [availableModels, setAvailableModels] = useState<string[]>([]);
+
     const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(true);
     const [isLlmToolsSupported, setIsLlmToolsSupported] = useState<boolean | null>(null);
     const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
@@ -390,6 +395,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     // Fetch available LLM models using chat-utils
     useEffect(() => {
+        if (!ragApiUrl) return;
         fetchAvailableLlmModels(ragApiUrl)
             .then(setAvailableModels)
             .catch(err => {
@@ -473,7 +479,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             } catch (error) {
                 console.error('Status check failed:', error);
             }
-        }, 2000);
+        }, 5000);
 
         return () => clearInterval(intervalId);
     }, [activeThread?.id, indexingStatus, isEmbedModelValid]);
