@@ -288,7 +288,12 @@ askpdf/
 ├── rag_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── main.py                 # FastAPI app, index, chat, thread, file, message, settings, and prompt endpoints
+│   ├── main.py                 # FastAPI app, modular router mounting
+│   ├── app/api/
+│   │   ├── threads.py          # Thread CRUD, settings, prompt tools/preview endpoints
+│   │   ├── files.py            # File upload, download, status, annotations, web sources
+│   │   ├── messages.py         # Message CRUD and chat endpoints
+│   │   └── models.py           # Model availability and health check endpoints
 │   ├── rag.py                  # Document chunking & indexing (thread-aware)
 │   ├── agent.py                # LangGraph multi-agent workflow (Orchestrator + Intent Agent + tools)
 │   ├── reasoning.py            # Multi-provider reasoning/thinking trace extraction
@@ -326,54 +331,50 @@ The application expects an OpenAI-compatible API at the URL specified by `LLM_AP
 
 ### RAG Service (Port 8000)
 
-#### `POST /upload`
+#### `POST /api/threads/{thread_id}/files/upload`
 Upload a PDF and trigger background parsing and indexing.
 
 **Request:** `multipart/form-data`
 - `file`: PDF file
-- `thread_id`: Thread to attach the file to
 
 **Response:**
 ```json
 {
   "sentences": null,
-  "pdfUrl": "/files/abc123.pdf",
+  "pdfUrl": "/api/threads/{thread_id}/files/abc123/download",
   "fileHash": "abc123",
   "fileName": "document.pdf"
 }
 ```
 
-#### `GET /files/{file_hash}`
+#### `GET /api/threads/{thread_id}/files/{file_hash}`
 Get PDF data (sentences with bounding boxes) for a file.
 
 **Response:**
 ```json
 {
   "sentences": [...],
-  "pdfUrl": "/files/abc123.pdf",
+  "pdfUrl": "/api/threads/{thread_id}/files/abc123/download",
   "fileHash": "abc123"
 }
 ```
 
-#### `GET /files/{file_hash}.pdf`
+#### `GET /api/threads/{thread_id}/files/{file_hash}/download`
 Serve the actual PDF file.
 
-#### `GET /files/{file_hash}/status`
+#### `GET /api/threads/{thread_id}/files/{file_hash}/status`
 Check parsing and indexing status for a file.
 
-#### `GET /files/{file_hash}/parsed-sentences`
+#### `GET /api/threads/{thread_id}/files/{file_hash}/sentences`
 Get parsed sentences for a file.
 
-#### `POST /index` (Legacy)
-Index document text into vector database (legacy, single collection).
-
-#### `POST /threads` / `GET /threads` / `PUT /threads/{id}` / `DELETE /threads/{id}`
+#### `POST /api/threads` / `GET /api/threads` / `PUT /api/threads/{id}` / `DELETE /api/threads/{id}`
 Create, list, update, and delete chat threads. Each thread has its own context, files, and messages.
 
-#### `POST /threads/{thread_id}/files`
+#### `POST /api/threads/{thread_id}/files`
 Add a file to a thread and trigger background indexing. Associates PDFs with threads for context-aware chat.
 
-#### `POST /threads/{thread_id}/chat`
+#### `POST /api/threads/{thread_id}/chat`
 Chat with a thread using the multi-agent orchestrator (and optional Intent Agent).
 
 **Request:**
@@ -406,10 +407,10 @@ Chat with a thread using the multi-agent orchestrator (and optional Intent Agent
 }
 ```
 
-#### `GET /threads/{thread_id}/settings`
+#### `GET /api/threads/{thread_id}/settings`
 Get persisted prompt/behaviour settings for a thread.
 
-#### `PUT /threads/{thread_id}/settings`
+#### `PUT /api/threads/{thread_id}/settings`
 Update persisted settings for a thread.
 
 **Request body fields (all optional):**
@@ -423,10 +424,10 @@ Update persisted settings for a thread.
 | `use_intent_agent` | bool | Enable/disable the Intent Agent |
 | `intent_agent_max_iterations` | int (1–10) | Iteration budget for Intent Agent |
 
-#### `GET /prompt-tools`
+#### `GET /api/threads/prompt-tools`
 Returns the tool catalog (id, display name, description, default prompt) and current default thread settings. Used by the settings dialog to populate tool instruction editors.
 
-#### `POST /prompt-preview`
+#### `POST /api/threads/prompt-preview`
 Returns the fully composed system prompt that will be sent to the LLM, given a set of settings. Used for live preview in the settings dialog.
 
 **Request:**
@@ -446,14 +447,20 @@ Returns the fully composed system prompt that will be sent to the LLM, given a s
 { "prompt": "You are an Expert researcher..." }
 ```
 
-#### `GET /threads/{thread_id}/messages` / `DELETE /messages/{message_id}`
+#### `GET /api/threads/{thread_id}/messages` / `DELETE /api/messages/{message_id}`
 List and delete messages in a thread. Deleting a message also removes associated web-search results from Weaviate.
 
-#### `GET /models`
+#### `GET /api/models`
 Fetch available models from LLM server.
 
+#### `GET /api/health/chat-model/{model}`
+Check if a chat model is ready and supports tool calling. Model name can contain slashes (e.g., `qwen/qwen3-vl-8b`).
+
+#### `GET /api/health/embed-model/{model}`
+Check if an embedding model is ready.
+
 #### `GET /health`
-Health check endpoint.
+Service health check endpoint.
 
 ## 🔧 Configuration
 
@@ -547,7 +554,7 @@ Frontend: Display markdown answer, expandable reasoning panel, web source cards
 ```
 User clicks Play or double-clicks sentence
   ↓
-Frontend: Request /api/tts with sentence text
+Frontend: Request /api/tts with sentence text (or /tts if using separate TTS service)
   ↓
 Backend: Kokoro synthesizes audio → WAV file
   ↓
