@@ -270,7 +270,7 @@ docker-compose up --build
 | **LangChain** | LLM/Embedding integration |
 | **LangGraph** | Stateful multi-agent workflow (Orchestrator + Intent Agent) |
 | **Weaviate Client** | Vector database operations |
-| **aiosqlite** | Async SQLite for threads, messages, settings, and web sources |
+| **aiosqlite** | Async SQLite for threads, messages, settings, annotations, and web sources |
 
 ### Frontend
 | Technology | Purpose |
@@ -288,22 +288,55 @@ askpdf/
 ├── rag_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── main.py                 # FastAPI app, modular router mounting
-│   ├── app/api/
-│   │   ├── threads.py          # Thread CRUD, settings, prompt tools/preview endpoints
-│   │   ├── files.py            # File upload, download, status, annotations, web sources
-│   │   ├── messages.py         # Message CRUD and chat endpoints
-│   │   └── models.py           # Model availability and health check endpoints
-│   ├── rag.py                  # Document chunking & indexing (thread-aware)
-│   ├── agent.py                # LangGraph multi-agent workflow (Orchestrator + Intent Agent + tools)
-│   ├── reasoning.py            # Multi-provider reasoning/thinking trace extraction
-│   ├── models.py               # LLM/Embedding model clients, constants, and config helpers
-│   ├── database.py             # SQLite thread/message/file/settings management
-│   └── app/db/
-│       └── vector_db.py        # Weaviate adapter (DocumentChunk, ChatMemoryChunk, WebSearchChunk)
+│   ├── main.py                 # FastAPI entrypoint (v2.0.0 modular)
+│   ├── pytest.ini              # Test configuration
+│   ├── app/
+│   │   ├── api/                # REST API route handlers
+│   │   │   ├── threads.py      # Thread CRUD, settings, prompt tools/preview endpoints
+│   │   │   ├── files.py        # File upload, download, status, annotations, web sources
+│   │   │   ├── messages.py     # Message CRUD and chat endpoints
+│   │   │   └── models.py       # Model availability and health check endpoints
+│   │   ├── agent/              # Multi-agent AI system
+│   │   │   ├── agent.py        # LangGraph orchestrator (Orchestrator + Intent Agent + tools)
+│   │   │   ├── agent_helpers.py # Agent utility functions
+│   │   │   ├── reasoning.py    # Multi-provider reasoning/thinking trace extraction
+│   │   │   └── tool_registry.py # Tool registration and management
+│   │   ├── db/                 # Data layer
+│   │   │   ├── __init__.py     # Database initialization
+│   │   │   ├── database.py     # SQLite thread/message/file/settings management
+│   │   │   ├── annotations_db.py # Annotation persistence
+│   │   │   ├── file_repository.py # File metadata storage
+│   │   │   ├── message_repository.py # Message CRUD operations
+│   │   │   ├── settings_repository.py # Thread settings persistence
+│   │   │   ├── thread_repository.py # Thread CRUD operations
+│   │   │   └── vector/         # Vector database layer
+│   │   │       ├── adapter.py   # Weaviate adapter (DocumentChunk, ChatMemoryChunk, WebSearchChunk)
+│   │   │       ├── config.py    # Vector DB configuration
+│   │   │       └── helpers.py   # Vector search utilities
+│   │   ├── models/             # Pydantic request/response models
+│   │   │   └── requests.py     # API request schemas
+│   │   ├── prompts/            # System prompts and templates
+│   │   ├── rag/                # RAG core logic
+│   │   │   ├── chat_service.py # Chat orchestration and response generation
+│   │   │   ├── indexer.py      # Document chunking & indexing (thread-aware)
+│   │   │   └── retrieval.py    # Document and memory retrieval
+│   │   ├── services/           # Business logic services
+│   │   │   ├── file_cleanup_service.py     # File lifecycle management
+│   │   │   ├── file_processing_service.py  # Async file processing orchestration
+│   │   │   ├── nlp_service.py              # NLP utilities (sentence segmentation)
+│   │   │   ├── parsing_service.py          # PDF/webpage parsing with Docling/pdfplumber
+│   │   │   └── thread_management_service.py # Thread operations
+│   │   └── web_capture/        # Webpage capture functionality
+│   │       ├── capture.py      # Playwright-based webpage capture
+│   │       ├── markdown_generator.py # HTML to Markdown conversion
+│   │       └── utils.py        # Capture utilities
+│   └── tests/                  # Test suite
+│       ├── test_*.py           # Unit and integration tests
+│       └── *.pdf               # Test PDF files
 └── frontend/
     ├── Dockerfile
     ├── package.json
+    ├── next.config.js            # Next.js configuration
     └── src/
         ├── pages/
         │   └── index.tsx           # Main application page
@@ -322,9 +355,10 @@ askpdf/
         │   └── TextViewer.tsx      # Alternative text display
         ├── hooks/
         │   └── usePersistAnnotations.ts  # Annotation persistence hook
-        └── lib/
-            ├── api.ts          # Unified RAG API client (upload/thread/message/file/settings/prompt)
-            └── tts-api.ts      # TTS API client
+        ├── lib/
+        │   ├── api.ts          # Unified RAG API client
+        │   └── tts-api.ts      # TTS API client
+        └── theme.ts            # MUI theme configuration
 ```
 The application expects an OpenAI-compatible API at the URL specified by `LLM_API_URL` in your `.env` file (default: `http://host.docker.internal:12434`).
 ## 📝 API Reference
