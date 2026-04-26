@@ -64,7 +64,7 @@ export function createWebTabFromIndexed(fileHash: string, url: string, threadId:
     id: fileHash,
     fileName: title || url,
     fileHash,
-    pdfUrl: `${API_BASE}/threads/${threadId}/files/${fileHash}.pdf?t=${Date.now()}`,
+    pdfUrl: `${API_BASE}/api/threads/${threadId}/files/${fileHash}/download?t=${Date.now()}`,
     sentences: [],  // Will be populated by getPdfByHash on thread load
     text: '',
     sourceType: 'web',

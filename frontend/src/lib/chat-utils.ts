@@ -24,7 +24,7 @@ export const formatDate = (dateStr: string): string => {
  */
 export const fetchAvailableEmbedModels = async (ragApiUrl: string): Promise<string[]> => {
   try {
-    const res = await fetch(`${ragApiUrl}/models`);
+    const res = await fetch(`${ragApiUrl}/api/models`);
     const data = await res.json();
     if (data.embedding_models || data.not_embedding_models) {
       return [...(data.embedding_models || []), ...(data.not_embedding_models || [])];
@@ -50,7 +50,7 @@ export const fetchAvailableEmbedModels = async (ragApiUrl: string): Promise<stri
  */
 export const fetchAvailableLlmModels = async (ragApiUrl: string): Promise<string[]> => {
   try {
-    const res = await fetch(`${ragApiUrl}/models`);
+    const res = await fetch(`${ragApiUrl}/api/models`);
     const data = await res.json();
     if (data.llm_models || data.not_llm_models) {
       return [...(data.llm_models || []), ...(data.not_llm_models || [])];
@@ -73,7 +73,7 @@ export const fetchAvailableLlmModels = async (ragApiUrl: string): Promise<string
  */
 export const checkEmbedModelReady = async (model: string, apiBase: string): Promise<boolean> => {
   try {
-    const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(model)}`);
+    const res = await fetch(`${apiBase}/api/health/embed-model/${encodeURIComponent(model)}`);
     const data = await res.json();
     return data.embed_model_ready === true;
   } catch {
@@ -92,7 +92,7 @@ export const checkLlmModelReady = async (
   apiBase: string
 ): Promise<{ ready: boolean; supportsTools: boolean }> => {
   try {
-    const res = await fetch(`${apiBase}/health/is_chat_model_ready?model=${encodeURIComponent(model)}`);
+    const res = await fetch(`${apiBase}/api/health/chat-model/${encodeURIComponent(model)}`);
     const data = await res.json();
     return {
       ready: data.ready === true || data.chat_model_ready === true,

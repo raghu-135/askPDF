@@ -203,7 +203,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         return;
       }
       try {
-        const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(newThreadEmbedModel)}`);
+        const res = await fetch(`${apiBase}/api/health/embed-model/${encodeURIComponent(newThreadEmbedModel)}`);
         const data = await res.json();
         setIsEmbedModelValid(data.embed_model_ready === true);
       } catch (error) {
