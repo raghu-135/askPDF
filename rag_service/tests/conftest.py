@@ -9,6 +9,7 @@ import os
 import sys
 import asyncio
 import tempfile
+import uuid
 from typing import AsyncGenerator, Generator
 from datetime import datetime
 
@@ -57,15 +58,18 @@ def event_loop() -> Generator:
 @pytest.fixture(scope="session")
 def test_database_url() -> str:
     """
-    Get the test database URL from environment or use default.
+    Get the test database URL from environment or use default with random database name.
     
     In Docker: Use the postgres service
     Locally: Use localhost postgres
     """
-    return os.getenv(
+    base_url = os.getenv(
         "TEST_DATABASE_URL",
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/test_askpdf"
+        "postgresql+asyncpg://postgres:postgres@localhost:5432"
     )
+    # Generate random database name for each test session
+    random_db_name = f"test_askpdf_{uuid.uuid4().hex[:12]}"
+    return f"{base_url}/{random_db_name}"
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -387,17 +391,18 @@ def parsed_sentences_data():
 @pytest.fixture(scope="session")
 def test_db_path():
     """
-    Get the test database path for SQLite.
+    Get the test database path for SQLite with random database name.
     
-    Uses a temporary file for test isolation.
+    Uses a temporary file for test isolation with a random name.
     Can be overridden with TEST_DB_PATH environment variable.
     """
     if os.getenv("TEST_DB_PATH"):
         return os.getenv("TEST_DB_PATH")
     
-    # Create a temporary file for the test database
+    # Create a temporary file for the test database with random name
     temp_dir = tempfile.mkdtemp()
-    return os.path.join(temp_dir, "test_rag.db")
+    random_db_name = f"test_rag_{uuid.uuid4().hex[:12]}.db"
+    return os.path.join(temp_dir, random_db_name)
 
 
 @pytest_asyncio.fixture(scope="session")
