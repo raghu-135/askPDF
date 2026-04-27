@@ -10,6 +10,8 @@
 #   --coverage             Run tests with coverage report
 #   --standalone           Run standalone test scripts instead of pytest
 #   --pdf <path>           Path to PDF file (for standalone tests)
+#   --db-tests             Run PostgreSQL database tests (requires PostgreSQL service)
+#   --db-only              Run only database tests, skip other tests
 #
 # Examples:
 #   ./run_tests.sh                          # Run all pytest tests
@@ -18,6 +20,8 @@
 #   ./run_tests.sh --test test_docling_parsing  # Run specific test
 #   ./run_tests.sh --standalone --pdf tests/01030000000000.pdf  # Run standalone script
 #   ./run_tests.sh --coverage               # Run with coverage
+#   ./run_tests.sh --db-tests               # Run PostgreSQL database tests
+#   ./run_tests.sh --db-only                # Run only database tests
 
 set -e
 
@@ -28,6 +32,8 @@ TEST_FUNCTION=""
 COVERAGE=""
 STANDALONE=""
 PDF_PATH=""
+DB_TESTS=""
+DB_ONLY=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -43,6 +49,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --coverage             Run tests with coverage report"
             echo "  --standalone           Run standalone test scripts instead of pytest"
             echo "  --pdf <path>           Path to PDF file (for standalone tests)"
+            echo "  --db-tests             Run PostgreSQL database tests (requires PostgreSQL service)"
+            echo "  --db-only              Run only database tests, skip other tests"
             echo ""
             echo "Examples:"
             echo "  $0                                    # Run all pytest tests"
@@ -51,6 +59,8 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --test test_docling_parsing        # Run specific test"
             echo "  $0 --standalone --pdf tests/01030000000000.pdf  # Run standalone"
             echo "  $0 --coverage                         # Run with coverage"
+            echo "  $0 --db-tests                         # Run PostgreSQL database tests"
+            echo "  $0 --db-only                          # Run only database tests"
             exit 0
             ;;
         --verbose)
@@ -76,6 +86,14 @@ while [[ $# -gt 0 ]]; do
         --pdf)
             PDF_PATH="$2"
             shift 2
+            ;;
+        --db-tests)
+            DB_TESTS="true"
+            shift
+            ;;
+        --db-only)
+            DB_ONLY="true"
+            shift
             ;;
         *)
             echo "Unknown option: $1"
@@ -107,6 +125,17 @@ if ! $DOCKER_COMPOSE ps rag-service | grep -q "Up"; then
     sleep 10
 fi
 
+# Check if PostgreSQL is needed and running
+if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
+    echo "Checking if PostgreSQL service is running..."
+    if ! $DOCKER_COMPOSE ps postgresql 2>/dev/null | grep -q "Up"; then
+        echo "PostgreSQL service is not running. Please add PostgreSQL to docker-compose.yml first."
+        echo "See migration plan for PostgreSQL service configuration."
+        exit 1
+    fi
+    echo "PostgreSQL service is running."
+fi
+
 # Run standalone tests
 if [ "$STANDALONE" = "true" ]; then
     if [ -z "$PDF_PATH" ]; then
@@ -133,6 +162,16 @@ $DOCKER_COMPOSE exec rag-service python -c "import pytest" 2>/dev/null || {
 }
 
 PYTEST_CMD="pytest /app/tests/ $VERBOSE"
+
+# Handle db-only flag - run only database tests
+if [ "$DB_ONLY" = "true" ]; then
+    PYTEST_CMD="pytest /app/tests/test_database_connection_pytest.py /app/tests/test_models_sqlmodel_pytest.py /app/tests/test_thread_repository_pytest.py /app/tests/test_file_repository_pytest.py /app/tests/test_message_repository_pytest.py /app/tests/test_thread_file_repository_pytest.py /app/tests/test_stats_repository_pytest.py /app/tests/test_repository_transactions_pytest.py /app/tests/test_jsonb_operations_pytest.py $VERBOSE"
+fi
+
+# Handle db-tests flag - include database tests with regular tests
+if [ "$DB_TESTS" = "true" ]; then
+    PYTEST_CMD="pytest /app/tests/ $VERBOSE"
+fi
 
 if [ -n "$TEST_FILE" ]; then
     PYTEST_CMD="pytest /app/tests/$TEST_FILE $VERBOSE"
