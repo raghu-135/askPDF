@@ -1,19 +1,21 @@
 """
 conftest.py - Pytest configuration and fixtures for database tests.
 
-This module provides shared fixtures for PostgreSQL database testing,
+This module provides shared fixtures for both SQLite and PostgreSQL database testing,
 including connection management, session handling, and test data.
 """
 
 import os
 import sys
 import asyncio
+import tempfile
 from typing import AsyncGenerator, Generator
 from datetime import datetime
 
 import pytest
 import pytest_asyncio
 from faker import Faker
+import aiosqlite
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -35,6 +37,9 @@ except ImportError:
     SQLModel = object
     AsyncSession = object
     async_session_maker = None
+
+# SQLite imports for DB-agnostic tests
+from app.db.config import SCHEMA, MIGRATIONS
 
 
 # Faker instance for generating test data
@@ -372,4 +377,127 @@ def parsed_sentences_data():
                 "bbox": [0, 0, 100, 20]
             }
         ]
+    }
+
+
+# ============================================================================
+# SQLite Test Fixtures for DB-Agnostic Testing
+# ============================================================================
+
+@pytest.fixture(scope="session")
+def test_db_path():
+    """
+    Get the test database path for SQLite.
+    
+    Uses a temporary file for test isolation.
+    Can be overridden with TEST_DB_PATH environment variable.
+    """
+    if os.getenv("TEST_DB_PATH"):
+        return os.getenv("TEST_DB_PATH")
+    
+    # Create a temporary file for the test database
+    temp_dir = tempfile.mkdtemp()
+    return os.path.join(temp_dir, "test_rag.db")
+
+
+@pytest_asyncio.fixture(scope="session")
+async def init_test_db(test_db_path: str):
+    """
+    Initialize the test database with schema and migrations.
+    
+    This fixture is session-scoped to initialize the database once per test session.
+    """
+    async with aiosqlite.connect(test_db_path) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.executescript(SCHEMA)
+        
+        # Run migrations
+        for stmt in MIGRATIONS:
+            try:
+                await db.execute(stmt)
+            except aiosqlite.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+        await db.commit()
+    
+    yield test_db_path
+    
+    # Clean up the test database file
+    if os.path.exists(test_db_path):
+        os.remove(test_db_path)
+
+
+@pytest_asyncio.fixture(scope="function")
+async def test_session(init_test_db: str) -> AsyncGenerator[aiosqlite.Connection, None]:
+    """
+    Create a test database session with transaction rollback.
+    
+    Each test gets a clean session that rolls back at the end,
+    ensuring tests don't affect each other.
+    """
+    async with aiosqlite.connect(init_test_db) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute("BEGIN")
+        
+        yield db
+        
+        # Rollback transaction to keep test database clean
+        await db.rollback()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def shared_db_connection(init_test_db: str) -> AsyncGenerator[aiosqlite.Connection, None]:
+    """
+    Create a shared database connection for integration tests.
+    
+    This connection is committed after each operation (no rollback),
+    so data is visible across different repository instances.
+    """
+    async with aiosqlite.connect(init_test_db) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
+        
+        yield db
+
+
+# SQLite test data fixtures
+@pytest.fixture
+def sqlite_thread_data():
+    """Generate sample thread data for SQLite tests."""
+    import uuid
+    return {
+        "id": str(uuid.uuid4()),
+        "name": fake.sentence(nb_words=4),
+        "embed_model": "BAAI/bge-m3",
+        "settings": '{"max_iterations": 10, "token_budget": 8192}'
+    }
+
+
+@pytest.fixture
+def sqlite_file_data():
+    """Generate sample file data for SQLite tests."""
+    return {
+        "file_hash": fake.sha256(),
+        "file_name": f"{fake.word()}.pdf",
+        "file_path": f"/data/{fake.word()}.pdf",
+        "source_type": "pdf",
+        "file_status": "{}"
+    }
+
+
+@pytest.fixture
+def sqlite_message_data():
+    """Generate sample message data for SQLite tests."""
+    import uuid
+    return {
+        "id": str(uuid.uuid4()),
+        "thread_id": str(uuid.uuid4()),
+        "role": "user",
+        "content": fake.paragraph(nb_sentences=3),
+        "context_compact": fake.sentence(),
+        "reasoning": None,
+        "reasoning_available": 0,
+        "reasoning_format": "none",
+        "web_sources": None
     }
