@@ -152,6 +152,14 @@ else
     DOCKER_COMPOSE="docker compose"
 fi
 
+# Build the application to capture any code changes
+echo "Building Docker images to capture latest code changes..."
+if ! $DOCKER_COMPOSE build; then
+    echo "Error: Docker build failed. Please fix build errors before running tests."
+    exit 1
+fi
+echo "Docker build completed successfully."
+
 # Check if services are running
 echo "Checking if Docker services are running..."
 if ! $DOCKER_COMPOSE ps rag-service | grep -q "Up"; then
