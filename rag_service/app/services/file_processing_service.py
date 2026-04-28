@@ -23,7 +23,6 @@ from app.db import (
     create_or_get_file,
     get_file_parsed_sentences,
     get_file_status,
-    update_file_parsed_sentences,
     update_indexing_status,
     update_parsing_status,
 )
@@ -116,7 +115,7 @@ async def queue_file_processing(
         )
 
     parsed_data = await get_file_parsed_sentences(file_hash)
-    if parsed_data:
+    if parsed_data and parsed_data.get("sentences"):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):

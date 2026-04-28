@@ -23,6 +23,9 @@ from app.db.connection import init_db, get_db
 # Status helpers
 from app.db.status import get_scoped_indexing_status
 
+# Constants
+from app.db.repositories.file_repo import DEFAULT_SENTENCES_JSON, DEFAULT_FILE_STATUS
+
 # Repository instances (singleton pattern)
 _thread_repo = None
 _file_repo = None
@@ -325,6 +328,9 @@ __all__ = [
     "get_db",
     # Status
     "get_scoped_indexing_status",
+    # Constants
+    "DEFAULT_SENTENCES_JSON",
+    "DEFAULT_FILE_STATUS",
     # Thread operations
     "create_thread",
     "get_thread",

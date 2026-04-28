@@ -176,27 +176,16 @@ export default function Home() {
 
     const pollInterval = setInterval(async () => {
       try {
-        const status = await getFileStatus(activeTab.fileHash, activeThread.id);
-        if (status && 'parsing' in status) {
-          const parsingStatus = status.parsing.status;
-          if (ProcessStatusHelper.isCompleted(parsingStatus)) {
-            // Fetch parsed sentences
-            const parsedData = await getParsedSentences(activeTab.fileHash, activeThread.id);
-            handleParsingComplete(activeTab.fileHash, parsedData.sentences);
-            clearInterval(pollInterval);
-          } else if (ProcessStatusHelper.isFailed(parsingStatus)) {
-            // Update tab to failed status
-            setPdfTabs(prev => prev.map(tab => {
-              if (tab.fileHash === activeTab.fileHash) {
-                return { ...tab, parsingStatus: 'failed' };
-              }
-              return tab;
-            }));
-            clearInterval(pollInterval);
-          }
+        // Single endpoint returns both status and sentences
+        const parsedData = await getParsedSentences(activeTab.fileHash, activeThread.id);
+        if (parsedData.sentences !== null) {
+          // Parsing complete - sentences is an array
+          handleParsingComplete(activeTab.fileHash, parsedData.sentences);
+          clearInterval(pollInterval);
         }
+        // If sentences is null, parsing is still pending - continue polling
       } catch (error) {
-        console.error("Failed to check parsing status", error);
+        console.error("Failed to fetch parsed sentences", error);
       }
     }, 5000);
 

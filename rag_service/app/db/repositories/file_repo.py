@@ -14,6 +14,7 @@ import aiosqlite
 from app.db.config import DB_PATH
 from app.db.models import File, ProcessStatus
 from app.db.repositories.base import BaseRepository
+
 from app.db.status import (
     _parse_json_list,
     _normalize_file_status,
@@ -21,6 +22,17 @@ from app.db.status import (
     _collapse_process_sections,
     get_scoped_indexing_status,
 )
+
+# Default value for parsed_sentences_json column - used at row creation and API fallback
+DEFAULT_SENTENCES_JSON = {"version": "1.0", "sentences": None}
+
+# Default value for file_status column - used at row creation
+DEFAULT_FILE_STATUS = {
+    "parsing": {"status": "unknown"},
+    "parsing_status": {"status": "unknown"},
+    "indexing": {"status": "unknown"},
+    "indexing_status": {"summary": {"status": "unknown"}, "models": {}},
+}
 
 
 class FileRepository(BaseRepository):
@@ -35,10 +47,10 @@ class FileRepository(BaseRepository):
     ) -> File:
         """Create a new file record or return existing one."""
         async def _create_or_get_in_transaction(db):
-            # Try to insert, ignore if exists
+            # Try to insert with initialized columns, ignore if exists
             await db.execute(
-                "INSERT OR IGNORE INTO files (file_hash, file_name, file_path, source_type) VALUES (?, ?, ?, ?)",
-                (file_hash, file_name, file_path, source_type)
+                "INSERT OR IGNORE INTO files (file_hash, file_name, file_path, source_type, parsed_sentences_json, file_status) VALUES (?, ?, ?, ?, ?, ?)",
+                (file_hash, file_name, file_path, source_type, json.dumps(DEFAULT_SENTENCES_JSON), json.dumps(DEFAULT_FILE_STATUS))
             )
             if file_name or file_path or source_type:
                 await db.execute(
