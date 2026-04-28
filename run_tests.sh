@@ -152,6 +152,14 @@ else
     DOCKER_COMPOSE="docker compose"
 fi
 
+# Generate unique test database identifier
+TEST_RUN_ID=$(uuidgen 2>/dev/null || echo "test_$(date +%s)_$$")
+echo "Test run ID: $TEST_RUN_ID"
+
+# Set up test database directory for SQLite (inside the container's /data volume)
+TEST_DATA_DIR="/data/test_$TEST_RUN_ID"
+echo "Test data directory: $TEST_DATA_DIR (will be created inside container)"
+
 # Build the application to capture any code changes
 echo "Building Docker images to capture latest code changes..."
 if ! $DOCKER_COMPOSE build; then
@@ -178,7 +186,40 @@ if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
         exit 1
     fi
     echo "PostgreSQL service is running."
+    
+    # Generate unique PostgreSQL database name
+    TEST_POSTGRES_DB="test_askpdf_${TEST_RUN_ID}"
+    echo "Test PostgreSQL database: $TEST_POSTGRES_DB"
+    
+    # Create the test database
+    echo "Creating test PostgreSQL database..."
+    $DOCKER_COMPOSE exec -T postgresql psql -U postgres -c "CREATE DATABASE \"$TEST_POSTGRES_DB\";" || {
+        echo "Failed to create test database. Cleaning up..."
+        exit 1
+    }
 fi
+
+# Cleanup function to remove test databases
+cleanup() {
+    echo "Cleaning up test databases..."
+    
+    # Remove SQLite test data directory inside container
+    echo "Removing test data directory from container: $TEST_DATA_DIR"
+    $DOCKER_COMPOSE exec -T rag-service rm -rf "$TEST_DATA_DIR" 2>/dev/null || true
+    
+    # Drop PostgreSQL test database if it was created
+    if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
+        if [ -n "$TEST_POSTGRES_DB" ]; then
+            echo "Dropping test PostgreSQL database: $TEST_POSTGRES_DB"
+            $DOCKER_COMPOSE exec -T postgresql psql -U postgres -c "DROP DATABASE IF EXISTS \"$TEST_POSTGRES_DB\";" 2>/dev/null || true
+        fi
+    fi
+    
+    echo "Cleanup complete."
+}
+
+# Set trap to cleanup on exit
+trap cleanup EXIT
 
 # Run standalone tests
 if [ "$STANDALONE" = "true" ]; then
@@ -193,7 +234,7 @@ if [ "$STANDALONE" = "true" ]; then
     fi
 
     echo "Running standalone test script with PDF: $PDF_PATH"
-    $DOCKER_COMPOSE exec rag-service python /app/tests/test_parsing_service.py --pdf "/app/tests/$(basename $PDF_PATH)"
+    $DOCKER_COMPOSE exec -e DATA_DIR="$TEST_DATA_DIR" rag-service python /app/tests/test_parsing_service.py --pdf "/app/tests/$(basename $PDF_PATH)"
     exit $?
 fi
 
@@ -260,6 +301,17 @@ if [ -n "$COVERAGE" ]; then
     PYTEST_CMD="$PYTEST_CMD $COVERAGE"
 fi
 
+# Build environment variables for test databases
+TEST_ENV_VARS="-e DATA_DIR=$TEST_DATA_DIR"
+if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
+    TEST_ENV_VARS="$TEST_ENV_VARS -e TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/$TEST_POSTGRES_DB"
+fi
+
 echo "Running pytest tests..."
 echo "Command: $PYTEST_CMD"
-$DOCKER_COMPOSE exec rag-service $PYTEST_CMD
+echo "Test environment: DATA_DIR=$TEST_DATA_DIR"
+if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
+    echo "Test PostgreSQL database: $TEST_POSTGRES_DB"
+fi
+
+$DOCKER_COMPOSE exec $TEST_ENV_VARS rag-service $PYTEST_CMD
