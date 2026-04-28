@@ -23,6 +23,7 @@ from app.db import (
     create_or_get_file,
     get_file_parsed_sentences,
     get_file_status,
+    update_file_parsed_sentences,
     update_indexing_status,
     update_parsing_status,
 )
