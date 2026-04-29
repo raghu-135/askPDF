@@ -17,13 +17,18 @@ from typing import Any, Dict, Optional
 
 from fastapi import BackgroundTasks
 
+from app.db import ProcessStatus
+
+# SQLModel repositories for atomic transactions
+from app.db.repositories.file_repo_sqlmodel import FileRepository
+from app.db.repositories.thread_file_repo_sqlmodel import ThreadFileRepository
+
+# Legacy SQLite imports (for backward compatibility during migration)
 from app.db import (
-    ProcessStatus,
     add_file_to_thread,
     create_or_get_file,
     get_file_parsed_sentences,
     get_file_status,
-    update_file_parsed_sentences,
     update_indexing_status,
     update_parsing_status,
 )
@@ -126,9 +131,12 @@ async def queue_file_processing(
 
 async def _background_parse(file_hash: str, filename: str, backend_url: str = ""):
     """
-    Background task to parse PDF and update status.
+    Background task to parse PDF and update status with atomic transactions.
+    Uses SQLModel repository for transaction safety - sentences and status updated together.
     Reads PDF from local disk at /static/{file_hash}.pdf
     """
+    file_repo = FileRepository()
+
     current_status = await get_file_status(file_hash)
     parsing_status = (current_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
 
@@ -139,6 +147,7 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
 
     started_at = datetime.utcnow().isoformat()
     try:
+        # Claim the parsing job using legacy function (this is already atomic via claim mechanism)
         claimed = await update_parsing_status(
             file_hash,
             ProcessStatus.RUNNING.value,
@@ -161,26 +170,29 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
             "version": "1.0",
             "sentences": sentences
         }
-        await update_file_parsed_sentences(file_hash, json.dumps(parsed_data))
 
+        # ATOMIC: Store sentences AND update status to completed in ONE transaction
         finished_at = datetime.utcnow().isoformat()
-        await update_parsing_status(
-            file_hash,
-            ProcessStatus.COMPLETED.value,
-            started_at=started_at,
-            finished_at=finished_at,
+        success = await file_repo.complete_parsing_atomically(
+            file_hash=file_hash,
+            parsed_data_json=json.dumps(parsed_data),
+            finished_at=finished_at
         )
-        logger.info(f"Background parsing completed for {file_hash}")
+
+        if success:
+            logger.info(f"Background parsing completed for {file_hash} - {len(sentences)} sentences stored atomically")
+        else:
+            logger.error(f"Failed to atomically complete parsing for {file_hash}")
+
     except Exception as e:
         traceback.print_exc()
         finished_at = datetime.utcnow().isoformat()
         try:
-            await update_parsing_status(
-                file_hash,
-                ProcessStatus.FAILED.value,
-                started_at=started_at,
-                finished_at=finished_at,
+            # ATOMIC: Update status to failed with error message
+            await file_repo.fail_parsing_atomically(
+                file_hash=file_hash,
                 error=str(e),
+                finished_at=finished_at
             )
         except Exception as update_error:
             logger.error(f"Failed to update parsing status to failed for {file_hash}: {update_error}")

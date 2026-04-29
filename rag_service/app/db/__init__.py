@@ -1,12 +1,12 @@
 """
-app.db - Public API for database operations.
+app.db - Public API for database operations (PostgreSQL/SQLModel).
 
 This module provides a clean public API for database operations,
-re-exporting functions from the new modular structure.
+using SQLModel with PostgreSQL as the primary database.
 """
 
-# Models and Enums
-from app.db.models import (
+# Models and Enums (SQLModel-based)
+from app.db.models_sqlmodel import (
     ProcessStatus,
     MessageRole,
     Thread,
@@ -14,19 +14,32 @@ from app.db.models import (
     ThreadFile,
     ThreadFileAnnotation,
     Message,
+    ThreadStats,
 )
 
-# Configuration
-from app.db.config import DB_PATH
-from app.db.connection import init_db, get_db
+# Connection management (SQLModel/PostgreSQL)
+from app.db.connection_sqlmodel import (
+    init_db,
+    close_db,
+    get_session,
+    async_session_maker,
+    engine,
+    test_engine,
+)
 
 # Status helpers
 from app.db.status import get_scoped_indexing_status
 
-# Constants
-from app.db.repositories.file_repo import DEFAULT_SENTENCES_JSON, DEFAULT_FILE_STATUS
+# Constants (from file_repo for backward compatibility)
+DEFAULT_SENTENCES_JSON = '{"version": "1.0", "sentences": []}'
+DEFAULT_FILE_STATUS = {
+    "file_hash": "",
+    "parsing": {"status": "unknown"},
+    "indexing": {"status": "unknown"},
+    "updated_at": None,
+}
 
-# Repository instances (singleton pattern)
+# Repository instances (singleton pattern - SQLModel versions)
 _thread_repo = None
 _file_repo = None
 _message_repo = None
@@ -38,7 +51,7 @@ def get_thread_repo():
     """Get the thread repository instance."""
     global _thread_repo
     if _thread_repo is None:
-        from app.db.repositories.thread_repo import ThreadRepository
+        from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
         _thread_repo = ThreadRepository()
     return _thread_repo
 
@@ -47,7 +60,7 @@ def get_file_repo():
     """Get the file repository instance."""
     global _file_repo
     if _file_repo is None:
-        from app.db.repositories.file_repo import FileRepository
+        from app.db.repositories.file_repo_sqlmodel import FileRepository
         _file_repo = FileRepository()
     return _file_repo
 
@@ -56,7 +69,7 @@ def get_message_repo():
     """Get the message repository instance."""
     global _message_repo
     if _message_repo is None:
-        from app.db.repositories.message_repo import MessageRepository
+        from app.db.repositories.message_repo_sqlmodel import MessageRepository
         _message_repo = MessageRepository()
     return _message_repo
 
@@ -65,7 +78,7 @@ def get_thread_file_repo():
     """Get the thread-file repository instance."""
     global _thread_file_repo
     if _thread_file_repo is None:
-        from app.db.repositories.thread_file_repo import ThreadFileRepository
+        from app.db.repositories.thread_file_repo_sqlmodel import ThreadFileRepository
         _thread_file_repo = ThreadFileRepository()
     return _thread_file_repo
 
@@ -74,7 +87,7 @@ def get_stats_repo():
     """Get the stats repository instance."""
     global _stats_repo
     if _stats_repo is None:
-        from app.db.repositories.stats_repo import StatsRepository
+        from app.db.repositories.stats_repo_sqlmodel import StatsRepository
         _stats_repo = StatsRepository()
     return _stats_repo
 

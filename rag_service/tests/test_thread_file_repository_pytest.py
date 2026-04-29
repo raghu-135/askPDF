@@ -16,18 +16,11 @@ import json
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Import will work after migration
-try:
-    from sqlmodel import select
-    from app.db.models_sqlmodel import ThreadFile, Thread, File, ThreadFileAnnotation
-    from app.db.repositories.thread_file_repo import ThreadFileRepository
-    # Only mark as available if TEST_DATABASE_URL is explicitly set
-    SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
-except ImportError:
-    SQLMODEL_AVAILABLE = False
+from sqlmodel import select
+from app.db.models_sqlmodel import ThreadFile, Thread, File, ThreadFileAnnotation
+from app.db.repositories.thread_file_repo_sqlmodel import ThreadFileRepository
 
 
-@pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")
 class TestThreadFileRepository:
     """Test ThreadFileRepository operations."""
 

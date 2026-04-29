@@ -21,7 +21,7 @@ from app.api.threads import router as threads_router
 from app.api.files import router as files_router
 from app.api.messages import router as messages_router
 from app.api.models import router as models_router
-from app.db import init_db
+from app.db.connection_sqlmodel import init_db, close_db
 from app.db.vector import get_vector_db
 
 # Load environment variables
@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     """
     logger.info("--- RAG Service Starting ---")
     try:
-        logger.info("Initializing SQLite database...")
+        logger.info("Initializing PostgreSQL database with SQLModel...")
         await init_db()
         logger.info("Database initialization complete.")
     except Exception as e:
@@ -59,6 +59,12 @@ async def lifespan(app: FastAPI):
         
     yield
     logger.info("--- RAG Service Shutting Down ---")
+    try:
+        logger.info("Closing database connections...")
+        await close_db()
+        logger.info("Database connections closed.")
+    except Exception as e:
+        logger.error(f"Error during database shutdown: {e}")
 
 app = FastAPI(
     title="RAG Service",

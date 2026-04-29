@@ -21,24 +21,14 @@ import aiosqlite
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# These imports will work after migration is complete
-# For now, we'll handle the import error gracefully
-try:
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-    from sqlmodel import SQLModel
-    from app.db.connection_sqlmodel import get_session, init_db
-    from app.db.models_sqlmodel import (
-        Thread, File, ThreadFile, ThreadFileAnnotation,
-        Message, ThreadStats, ProcessStatus, MessageRole
-    )
-    # Only mark as available if TEST_DATABASE_URL is explicitly set
-    SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
-except ImportError:
-    SQLMODEL_AVAILABLE = False
-    # Create stub classes for testing before migration
-    SQLModel = object
-    AsyncSession = object
-    async_session_maker = None
+# SQLModel imports - migration is complete
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlmodel import SQLModel
+from app.db.connection_sqlmodel import get_session, init_db
+from app.db.models_sqlmodel import (
+    Thread, File, ThreadFile, ThreadFileAnnotation,
+    Message, ThreadStats, ProcessStatus, MessageRole
+)
 
 # SQLite imports for DB-agnostic tests
 from app.db.config import SCHEMA, MIGRATIONS
@@ -83,8 +73,6 @@ async def engine(test_database_url: str):
     This fixture is function-scoped to create tables for each test.
     Uses NullPool to avoid connection conflicts between concurrent tests.
     """
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     from sqlalchemy.pool import NullPool
     engine = create_async_engine(
@@ -115,8 +103,6 @@ async def session(engine) -> AsyncGenerator[AsyncSession, None]:
     Each test gets a clean session that rolls back at the end,
     ensuring tests don't affect each other.
     """
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     async_session = async_sessionmaker(
         engine,
@@ -150,8 +136,6 @@ def thread_data():
 @pytest_asyncio.fixture
 async def sample_thread(session, thread_data):
     """Create a sample thread in the database."""
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     import uuid
     thread = Thread(
@@ -182,8 +166,6 @@ def file_data():
 @pytest_asyncio.fixture
 async def sample_file(session, file_data):
     """Create a sample file in the database."""
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     file = File(**file_data)
     session.add(file)
@@ -197,7 +179,7 @@ async def sample_file(session, file_data):
 def message_data(sample_thread):
     """Generate sample message data."""
     return {
-        "thread_id": sample_thread.id if SQLMODEL_AVAILABLE else "test-thread-id",
+        "thread_id": sample_thread.id,
         "role": MessageRole.USER,
         "content": fake.paragraph(nb_sentences=3),
         "context_compact": fake.sentence(),
@@ -211,8 +193,6 @@ def message_data(sample_thread):
 @pytest_asyncio.fixture
 async def sample_message(session, message_data):
     """Create a sample message in the database."""
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     import uuid
     message = Message(
@@ -230,8 +210,6 @@ async def sample_message(session, message_data):
 @pytest_asyncio.fixture
 async def sample_thread_file(session, sample_thread, sample_file):
     """Create a sample thread-file association."""
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     thread_file = ThreadFile(
         thread_id=sample_thread.id,
@@ -263,8 +241,6 @@ def annotation_data():
 @pytest_asyncio.fixture
 async def sample_annotation(session, sample_thread, sample_file, annotation_data):
     """Create a sample thread-file annotation."""
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     import json
     annotation = ThreadFileAnnotation(
@@ -284,8 +260,6 @@ async def sample_annotation(session, sample_thread, sample_file, annotation_data
 @pytest_asyncio.fixture
 async def sample_thread_stats(session, sample_thread):
     """Create a sample thread stats record."""
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     import json
     stats = ThreadStats(
@@ -307,8 +281,6 @@ async def sample_thread_stats(session, sample_thread):
 @pytest_asyncio.fixture
 async def multiple_threads(session, thread_data):
     """Create multiple sample threads."""
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     import uuid
     threads = []
@@ -334,8 +306,6 @@ async def multiple_threads(session, thread_data):
 @pytest_asyncio.fixture
 async def multiple_messages(session, sample_thread):
     """Create multiple sample messages in a thread."""
-    if not SQLMODEL_AVAILABLE:
-        pytest.skip("SQLModel not available - migration not complete")
     
     import uuid
     messages = []

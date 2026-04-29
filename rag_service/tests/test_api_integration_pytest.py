@@ -15,31 +15,21 @@ import json
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Import will work after migration
-try:
-    from httpx import AsyncClient, ASGITransport
-    from fastapi import FastAPI
-    from app.db.models_sqlmodel import Thread, File, Message
-    from app.db.connection_sqlmodel import init_db, get_session
-    SQLMODEL_AVAILABLE = True
-except ImportError:
-    SQLMODEL_AVAILABLE = False
+from httpx import AsyncClient, ASGITransport
+from fastapi import FastAPI
+from app.db.models_sqlmodel import Thread, File, Message
+from app.db.connection_sqlmodel import init_db, get_session
 
 
-@pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")
+@pytest.mark.skip(reason="API integration tests need async database session fixture - TODO: Fix with proper test database setup")
 class TestAPIIntegration:
     """Test API endpoints with PostgreSQL database."""
 
     @pytest_asyncio.fixture
-    async def app(self):
-        """Create FastAPI app instance for testing."""
-        # This will need to be adapted to the actual app structure
-        # For now, we'll skip this test
-        pytest.skip("FastAPI app structure not yet available for testing")
+    async def client(self):
+        """Create async HTTP client for testing."""
+        from main import app
 
-    @pytest_asyncio.fixture
-    async def client(self, app):
-        """Create async HTTP client."""
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             yield ac
 
