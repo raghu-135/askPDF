@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import func
 
 from app.db.models_sqlmodel import File, Thread, ThreadFile, ThreadFileAnnotation
 from app.db.connection_sqlmodel import async_session_maker
@@ -161,6 +162,33 @@ class ThreadFileRepository:
                 }
                 for assoc in associations
             ]
+
+    async def count_threads_with_file(self, file_hash: str) -> int:
+        """Count how many threads currently reference a file."""
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(func.count(ThreadFile.thread_id)).where(ThreadFile.file_hash == file_hash)
+            )
+            return result.scalar() or 0
+
+    async def count_threads_with_file_for_model(
+        self,
+        file_hash: str,
+        embed_model: str
+    ) -> int:
+        """Count threads referencing a file with a specific embedding model."""
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(func.count(ThreadFile.thread_id))
+                .join(Thread, ThreadFile.thread_id == Thread.id)
+                .where(
+                    ThreadFile.file_hash == file_hash,
+                    Thread.embed_model == embed_model
+                )
+            )
+            return result.scalar() or 0
 
     def _load_annotations(self, raw: Optional[str]) -> List[Dict[str, Any]]:
         """Deserialize the annotation snapshot list from JSON."""
