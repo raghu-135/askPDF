@@ -210,7 +210,7 @@ export default function Home() {
       id: data.fileHash,
       fileHash: data.fileHash,
       fileName: data.title || data.url,
-      pdfUrl: `${API_BASE}/threads/${activeThread.id}/files/${data.fileHash}.pdf?t=${Date.now()}`,
+      pdfUrl: `${API_BASE}/api/threads/${activeThread.id}/files/${data.fileHash}/download?t=${Date.now()}`,
       sentences: transformedSentences,
       text: transformedSentences ? extractTextFromSentences(transformedSentences) : '',
       sourceType: 'web',
