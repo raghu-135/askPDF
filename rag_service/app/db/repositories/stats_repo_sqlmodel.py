@@ -132,6 +132,15 @@ class StatsRepository:
 
             await session.flush()
 
+    async def upsert_document_in_stats(
+        self,
+        thread_id: str,
+        file_hash: str,
+        meta: Dict[str, Any]
+    ) -> None:
+        """Alias for update_documents_meta for backward compatibility."""
+        await self.update_documents_meta(thread_id, file_hash, meta)
+
     async def remove_document_from_stats(
         self,
         thread_id: str,

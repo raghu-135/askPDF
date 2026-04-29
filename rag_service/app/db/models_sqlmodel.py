@@ -24,6 +24,21 @@ class ProcessStatus(str, Enum):
     FAILED = "failed"
     UNKNOWN = "unknown"
 
+    @classmethod
+    def is_completed(cls, status: str) -> bool:
+        """Check if status is completed."""
+        return status == cls.COMPLETED.value
+
+    @classmethod
+    def is_failed(cls, status: str) -> bool:
+        """Check if status is failed."""
+        return status == cls.FAILED.value
+
+    @classmethod
+    def is_running(cls, status: str) -> bool:
+        """Check if status is running."""
+        return status == cls.RUNNING.value
+
 
 class MessageRole(str, Enum):
     """Role values for chat messages."""
