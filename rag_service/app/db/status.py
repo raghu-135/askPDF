@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-from app.db.models import ProcessStatus
+from app.db.models_sqlmodel import ProcessStatus
 
 
 def _parse_settings(raw: Optional[str]) -> Dict[str, Any]:
