@@ -175,12 +175,13 @@ class ThreadFileRepository:
     async def count_threads_with_file_for_model(
         self,
         file_hash: str,
-        embed_model: str
+        embed_model: str,
+        exclude_thread_id: Optional[str] = None,
     ) -> int:
         """Count threads referencing a file with a specific embedding model."""
         session = await self._get_session()
         async with session.begin():
-            result = await session.execute(
+            query = (
                 select(func.count(ThreadFile.thread_id))
                 .join(Thread, ThreadFile.thread_id == Thread.id)
                 .where(
@@ -188,6 +189,9 @@ class ThreadFileRepository:
                     Thread.embed_model == embed_model
                 )
             )
+            if exclude_thread_id:
+                query = query.where(ThreadFile.thread_id != exclude_thread_id)
+            result = await session.execute(query)
             return result.scalar() or 0
 
     def _load_annotations(self, raw: Optional[str]) -> List[Dict[str, Any]]:
