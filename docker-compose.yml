@@ -69,9 +69,15 @@ services:
       - TRAFILATURA_DEDUPLICATE=False
       - TRAFILATURA_FAVOR_RECALL=True
       - TRAFILATURA_FAST=False
+      # PostgreSQL configuration
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      - POSTGRES_POOL_SIZE=10
+      - POSTGRES_MAX_OVERFLOW=20
     env_file:
       - .env
     depends_on:
+      postgresql:
+        condition: service_healthy
       weaviate:
         condition: service_healthy
       gotenberg:
@@ -130,13 +136,18 @@ services:
   postgresql:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: test_askpdf
+      POSTGRES_DB: askpdf
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d askpdf"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   weaviate_data:

@@ -16,10 +16,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Import will work after migration
 try:
     from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+    from sqlalchemy import text
     from sqlmodel import SQLModel, select
     from app.db.connection_sqlmodel import get_session, init_db
     from app.db.models_sqlmodel import Thread
-    SQLMODEL_AVAILABLE = True
+    # Only mark as available if TEST_DATABASE_URL is explicitly set
+    SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:
     SQLMODEL_AVAILABLE = False
 
@@ -53,7 +55,7 @@ class TestPostgreSQLConnection:
         """Verify connection to PostgreSQL succeeds."""
         async with test_engine.connect() as conn:
             # Simple query to test connection
-            result = await conn.execute("SELECT 1")
+            result = await conn.execute(text("SELECT 1"))
             assert result is not None
 
     @pytest.mark.asyncio
@@ -74,10 +76,10 @@ class TestPostgreSQLConnection:
         """Verify tables are created from SQLModel models."""
         # Check if Thread table exists
         async with test_engine.connect() as conn:
-            result = await conn.execute(
+            result = await conn.execute(text(
                 "SELECT table_name FROM information_schema.tables "
                 "WHERE table_schema = 'public' AND table_name = 'threads'"
-            )
+            ))
             tables = result.fetchall()
             assert len(tables) > 0, "Thread table not created"
 

@@ -31,7 +31,8 @@ try:
         Thread, File, ThreadFile, ThreadFileAnnotation,
         Message, ThreadStats, ProcessStatus, MessageRole
     )
-    SQLMODEL_AVAILABLE = True
+    # Only mark as available if TEST_DATABASE_URL is explicitly set
+    SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:
     SQLMODEL_AVAILABLE = False
     # Create stub classes for testing before migration
@@ -63,27 +64,32 @@ def test_database_url() -> str:
     In Docker: Use the postgres service
     Locally: Use localhost postgres
     """
-    base_url = os.getenv(
-        "TEST_DATABASE_URL",
-        "postgresql+asyncpg://postgres:postgres@localhost:5432"
-    )
-    # Generate random database name for each test session
+    test_url = os.getenv("TEST_DATABASE_URL")
+    if test_url:
+        # If TEST_DATABASE_URL is set (by run_tests.sh), use it as-is
+        return test_url
+    
+    # Otherwise, generate a random database name for local testing
+    base_url = "postgresql+asyncpg://postgres:postgres@localhost:5432"
     random_db_name = f"test_askpdf_{uuid.uuid4().hex[:12]}"
     return f"{base_url}/{random_db_name}"
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="function")
 async def engine(test_database_url: str):
     """
     Create a test database engine.
     
-    This fixture is session-scoped to create the engine once per test session.
+    This fixture is function-scoped to create tables for each test.
+    Uses NullPool to avoid connection conflicts between concurrent tests.
     """
     if not SQLMODEL_AVAILABLE:
         pytest.skip("SQLModel not available - migration not complete")
     
+    from sqlalchemy.pool import NullPool
     engine = create_async_engine(
         test_database_url,
+        poolclass=NullPool,
         echo=False,
         future=True
     )
@@ -94,7 +100,7 @@ async def engine(test_database_url: str):
     
     yield engine
     
-    # Drop all tables after tests
+    # Drop all tables after test
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
     
@@ -115,7 +121,9 @@ async def session(engine) -> AsyncGenerator[AsyncSession, None]:
     async_session = async_sessionmaker(
         engine,
         class_=AsyncSession,
-        expire_on_commit=False
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False
     )
     
     async with async_session() as session:
