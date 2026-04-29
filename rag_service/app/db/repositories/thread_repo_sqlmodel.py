@@ -48,9 +48,8 @@ class ThreadRepository:
         async with session.begin():
             session.add(thread)
             await session.flush()
-            await session.commit()
             await session.refresh(thread)
-            return thread
+        return thread
 
     async def get(self, thread_id: str) -> Optional[Thread]:
         """Get a thread by ID."""
@@ -89,7 +88,6 @@ class ThreadRepository:
             # Use JSONB utility for safe mutation with change tracking
             merge_jsonb_field(thread, "settings", settings or {})
             await session.flush()
-            await session.commit()
             return thread.settings
 
     async def list_all(self) -> List[Dict[str, Any]]:
@@ -138,9 +136,8 @@ class ThreadRepository:
 
             thread.name = name
             await session.flush()
-            await session.commit()
             await session.refresh(thread)
-            return thread
+        return thread
 
     async def delete(self, thread_id: str) -> bool:
         """Delete a thread and all associated data (cascade handled by DB)."""
@@ -154,5 +151,4 @@ class ThreadRepository:
                 return False
 
             await session.delete(thread)
-            await session.commit()
-            return True
+        return True

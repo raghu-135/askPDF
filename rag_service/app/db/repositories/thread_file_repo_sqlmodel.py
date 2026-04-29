@@ -55,8 +55,7 @@ class ThreadFileRepository:
             )
             session.add(association)
             await session.flush()
-            await session.commit()
-            return True
+        return True
 
     async def get_files(self, thread_id: str) -> List[File]:
         """Get all files associated with a thread."""
@@ -97,8 +96,7 @@ class ThreadFileRepository:
                 return False
 
             await session.delete(association)
-            await session.commit()
-            return True
+        return True
 
     async def is_file_in_thread(self, thread_id: str, file_hash: str) -> bool:
         """Check if a file is associated with a thread."""
@@ -237,9 +235,8 @@ class ThreadFileRepository:
                 existing.annotations_json = annotations_json
                 existing.updated_at = now
                 await session.flush()
-                await session.commit()
                 await session.refresh(existing)
-                return self._serialize_annotation_row(existing)
+                return_row = existing
             else:
                 # Create new
                 new_annotation = ThreadFileAnnotation(
@@ -251,9 +248,9 @@ class ThreadFileRepository:
                 )
                 session.add(new_annotation)
                 await session.flush()
-                await session.commit()
                 await session.refresh(new_annotation)
-                return self._serialize_annotation_row(new_annotation)
+                return_row = new_annotation
+        return self._serialize_annotation_row(return_row)
 
     async def delete_annotations(
         self,
@@ -273,9 +270,7 @@ class ThreadFileRepository:
                 annotation = result.scalar_one_or_none()
                 if annotation:
                     await session.delete(annotation)
-                    await session.commit()
-                    return 1
-                return 0
+                return 1 if annotation else 0
             else:
                 result = await session.execute(
                     select(ThreadFileAnnotation).where(
@@ -286,5 +281,4 @@ class ThreadFileRepository:
                 count = len(annotations)
                 for annotation in annotations:
                     await session.delete(annotation)
-                await session.commit()
-                return count
+            return count

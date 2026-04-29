@@ -63,9 +63,8 @@ class MessageRepository:
         async with session.begin():
             session.add(message)
             await session.flush()
-            await session.commit()
             await session.refresh(message)
-            return message
+        return message
 
     async def get(self, message_id: str) -> Optional[Message]:
         """Get a message by ID."""
@@ -129,8 +128,7 @@ class MessageRepository:
 
             message.context_compact = context_compact
             await session.flush()
-            await session.commit()
-            return True
+        return True
 
     async def update_reasoning(
         self,
@@ -152,8 +150,7 @@ class MessageRepository:
             message.reasoning_available = True
             message.reasoning_format = reasoning_format
             await session.flush()
-            await session.commit()
-            return True
+        return True
 
     async def update_web_sources(
         self,
@@ -173,8 +170,7 @@ class MessageRepository:
             # Use JSONB utility for safe mutation with change tracking
             merge_jsonb_field(message, "web_sources", web_sources)
             await session.flush()
-            await session.commit()
-            return True
+        return True
 
     async def delete(self, message_id: str) -> bool:
         """Delete a message by ID."""
@@ -188,8 +184,7 @@ class MessageRepository:
                 return False
 
             await session.delete(message)
-            await session.commit()
-            return True
+        return True
 
     async def delete_pair(self, message_id: str) -> List[str]:
         """
@@ -259,8 +254,7 @@ class MessageRepository:
                 if msg:
                     await session.delete(msg)
 
-            await session.commit()
-            return deleted_ids
+        return deleted_ids
 
     async def delete_for_thread(self, thread_id: str) -> int:
         """Delete all messages for a thread. Returns count deleted."""
@@ -274,9 +268,7 @@ class MessageRepository:
 
             for message in messages:
                 await session.delete(message)
-
-            await session.commit()
-            return count
+        return count
 
     async def get_count(self, thread_id: str) -> int:
         """Get the total number of messages in a thread."""

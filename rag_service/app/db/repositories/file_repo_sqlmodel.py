@@ -71,7 +71,6 @@ class FileRepository:
                 if source_type:
                     existing.source_type = source_type
                 await session.flush()
-                await session.commit()
                 await session.refresh(existing)
                 return existing
 
@@ -86,9 +85,8 @@ class FileRepository:
             )
             session.add(file)
             await session.flush()
-            await session.commit()
             await session.refresh(file)
-            return file
+        return file
 
     async def get(self, file_hash: str) -> Optional[File]:
         """Get a file by hash."""
@@ -116,8 +114,7 @@ class FileRepository:
 
             file.parsed_sentences_json = parsed_data_json
             await session.flush()
-            await session.commit()
-            return True
+        return True
 
     async def get_parsed_sentences(
         self,
@@ -173,8 +170,7 @@ class FileRepository:
             # Use replace_jsonb_field for complete replacement
             replace_jsonb_field(file, "file_status", normalized)
             await session.flush()
-            await session.commit()
-            return True
+        return True
 
     async def update_parsing_status(
         self,
@@ -330,8 +326,7 @@ class FileRepository:
 
             replace_jsonb_field(file, "file_status", normalized)
             await session.flush()
-            await session.commit()
-            return True
+        return True
 
     async def _claim_indexing_status(
         self,
@@ -397,8 +392,7 @@ class FileRepository:
 
             replace_jsonb_field(file, "file_status", normalized)
             await session.flush()
-            await session.commit()
-            return True
+        return True
 
     async def remove_thread_indexing_status(
         self,
@@ -452,8 +446,7 @@ class FileRepository:
                 return False
 
             await session.delete(file)
-            await session.commit()
-            return True
+        return True
 
     async def complete_parsing_atomically(
         self,
@@ -494,9 +487,8 @@ class FileRepository:
 
             replace_jsonb_field(file, "file_status", normalized)
             await session.flush()
-            await session.commit()
             await session.refresh(file)
-            return True
+        return True
 
     async def fail_parsing_atomically(
         self,
@@ -531,8 +523,7 @@ class FileRepository:
 
             replace_jsonb_field(file, "file_status", normalized)
             await session.flush()
-            await session.commit()
-            return True
+        return True
 
     async def is_processing_complete(self, file_hash: str) -> bool:
         """Check if both parsing and indexing are completed."""

@@ -60,10 +60,9 @@ class StatsRepository:
                 )
                 session.add(stats)
                 await session.flush()
-                await session.commit()
                 await session.refresh(stats)
 
-            return {
+        return {
                 "thread_id": stats.thread_id,
                 "total_qa_pairs": stats.total_qa_pairs,
                 "total_qa_chars": stats.total_qa_chars,
@@ -100,7 +99,6 @@ class StatsRepository:
                 stats.avg_qa_chars = new_chars / new_pairs
 
             await session.flush()
-            await session.commit()
 
     async def update_documents_meta(
         self,
@@ -133,7 +131,6 @@ class StatsRepository:
                 merge_jsonb_field(stats, "documents_meta", current_meta)
 
             await session.flush()
-            await session.commit()
 
     async def remove_document_from_stats(
         self,
@@ -156,7 +153,6 @@ class StatsRepository:
                 del current_meta[file_hash]
                 merge_jsonb_field(stats, "documents_meta", current_meta)
                 await session.flush()
-                await session.commit()
 
     async def recompute_qa_stats(self, thread_id: str) -> None:
         """
@@ -199,7 +195,6 @@ class StatsRepository:
                 stats.avg_qa_chars = avg
 
             await session.flush()
-            await session.commit()
 
     async def get_stats(self, thread_id: str) -> Optional[Dict[str, Any]]:
         """Get thread stats with computed fields."""
