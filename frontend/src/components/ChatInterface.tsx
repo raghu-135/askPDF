@@ -46,7 +46,7 @@ import {
     getPromptTools,
     getPromptPreview
 } from '../lib/api';
-import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/chat-utils';
+import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/models-api';
 import ChatSettingsDialog from './ChatSettingsDialog';
 
 interface ChatMessage extends Message {

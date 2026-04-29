@@ -24,6 +24,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Uploa
 from fastapi.responses import FileResponse
 
 from app.db import (
+    DEFAULT_SENTENCES_JSON,
     get_file,
     get_file_parsed_sentences,
     get_file_status,
@@ -238,8 +239,10 @@ async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str):
             raise HTTPException(status_code=404, detail="File is not attached to this thread")
 
         parsed_data = await get_file_parsed_sentences(file_hash)
-        if not parsed_data:
-            raise HTTPException(status_code=404, detail="Parsed sentences not found")
+        # Return data even if sentences is null (parsing pending) - never 404
+        if parsed_data is None:
+            # File exists but no parsing record yet - return default (matches DB init)
+            return DEFAULT_SENTENCES_JSON
         return parsed_data
     except HTTPException:
         raise

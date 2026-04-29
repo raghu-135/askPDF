@@ -47,7 +47,8 @@ import {
   deleteThread,
   updateThread,
 } from '../lib/api';
-import { fetchAvailableEmbedModels, formatDate } from '../lib/chat-utils';
+import { fetchAvailableEmbedModels, checkEmbedModelReady } from '../lib/models-api';
+import { formatDate } from '../lib/date-utils';
 
 
 interface ThreadSidebarProps {
@@ -122,10 +123,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         setIsEmbedModelValid(false);
         return;
       }
-      const res = await fetch(`${apiBase}/health/is_embed_model_ready?model=${encodeURIComponent(newThreadEmbedModel)}`);
-      const data = await res.json();
-
-      if (!data.embed_model_ready) {
+      const isReady = await checkEmbedModelReady(newThreadEmbedModel, apiBase);
+      if (!isReady) {
         setIsEmbedModelValid(false);
         return;
       }
@@ -182,8 +181,6 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     setEditingName(thread.name);
   };
 
-  // formatDate now imported from chat-utils
-
   // Add validation check when embedding model changes
   useEffect(() => {
     if (!newThreadEmbedModel) {
@@ -203,9 +200,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         return;
       }
       try {
-        const res = await fetch(`${apiBase}/api/health/embed-model/${encodeURIComponent(newThreadEmbedModel)}`);
-        const data = await res.json();
-        setIsEmbedModelValid(data.embed_model_ready === true);
+        const isReady = await checkEmbedModelReady(newThreadEmbedModel, apiBase);
+        setIsEmbedModelValid(isReady);
       } catch (error) {
         setIsEmbedModelValid(false);
       } finally {

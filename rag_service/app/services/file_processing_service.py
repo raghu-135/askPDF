@@ -116,7 +116,7 @@ async def queue_file_processing(
         )
 
     parsed_data = await get_file_parsed_sentences(file_hash)
-    if parsed_data:
+    if parsed_data and parsed_data.get("sentences"):
         if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
             await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
     elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
@@ -133,7 +133,8 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
     parsing_status = (current_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
 
     if ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
-        if await get_file_parsed_sentences(file_hash):
+        parsed = await get_file_parsed_sentences(file_hash)
+        if parsed and parsed.get("sentences"):
             return
 
     started_at = datetime.utcnow().isoformat()
@@ -222,8 +223,8 @@ async def _background_index(
             raise Exception(result.get("message", "Indexing failed"))
         logger.info(f"Background indexing completed for %s in thread %s", file_hash, thread_id)
 
-        if markdown_content is None:
-            await _background_parse(file_hash, file_name, backend_url)
+        # Trigger PDF parsing for sentence extraction (needed for both PDFs and web sources)
+        await _background_parse(file_hash, file_name, backend_url)
     except Exception as e:
         traceback.print_exc()
         finished_at = datetime.utcnow().isoformat()

@@ -127,6 +127,19 @@ services:
       timeout: 10s
       retries: 3
 
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: test_askpdf
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
 volumes:
   weaviate_data:
   pdf_data:
+  postgres_data:
+

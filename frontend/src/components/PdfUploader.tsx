@@ -1,6 +1,4 @@
-import { Button, Tooltip, CircularProgress, Box, Typography } from "@mui/material";
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
+import { Button, Tooltip } from "@mui/material";
 import React from "react";
 import { getFileStatus, getParsedSentences, FileStatus, ProcessStatusHelper, uploadPdf as apiUploadPdf } from "../lib/api";
 
