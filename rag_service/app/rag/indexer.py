@@ -260,12 +260,13 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     Generate embeddings for each chunk using the specified embedding model.
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
     """
+    from app.agent.agent import invoke_with_retry
     embed_model = get_embedding_model(embedding_model_name)
     batch_size = 100  # LLM API/server strict batch size limits
     vectors = []
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
-        batch_vectors = await embed_model.aembed_documents(batch)
+        batch_vectors = await invoke_with_retry(embed_model.aembed_documents, batch)
         vectors.extend(batch_vectors)
     return vectors
 
