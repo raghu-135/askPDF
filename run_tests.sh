@@ -303,7 +303,9 @@ fi
 # Build environment variables for test databases
 TEST_ENV_VARS="-e DATA_DIR=$TEST_DATA_DIR"
 if [ "$POSTGRES_AVAILABLE" = "true" ] && [ -n "$TEST_POSTGRES_DB" ]; then
-    TEST_ENV_VARS="$TEST_ENV_VARS -e TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/$TEST_POSTGRES_DB"
+    TEST_DB_URL="postgresql+asyncpg://postgres:postgres@postgresql:5432/$TEST_POSTGRES_DB"
+    # Override both DATABASE_URL and TEST_DATABASE_URL to ensure all code paths use test DB
+    TEST_ENV_VARS="$TEST_ENV_VARS -e DATABASE_URL=$TEST_DB_URL -e TEST_DATABASE_URL=$TEST_DB_URL"
 fi
 
 echo "Running pytest tests..."
