@@ -23,16 +23,16 @@ A full-stack PDF Document and Webpages research assistant with **Text-to-Speech 
 
 ### 🧠 Reasoning / Thinking Trace Support
 - **Multi-Provider Extraction**: Automatically extracts chain-of-thought reasoning from responses, supporting structured blocks (Anthropic Claude, OpenAI `o`-series, Responses API) and `<think>` tags (DeepSeek, QwQ, Qwen3-Thinking)
-- **Stored in Database**: Reasoning traces are persisted in SQLite alongside the answer and can be re-displayed after page reload
+- **Stored in Database**: Reasoning traces are persisted in PostgreSQL alongside the answer and can be re-displayed after page reload
 - **Shown in UI**: Expandable reasoning panel in chat bubbles lets you inspect the AI's internal thinking step-by-step, toggleable via an intuitive "Reasoning Mode" button.
 
 ### 💬 RAG-Powered Chat, Threads & Semantic Memory
-- **Threaded Chat**: Organize conversations into threads with persistent SQLite storage for messages and file associations
+- **Threaded Chat**: Organize conversations into threads with persistent PostgreSQL storage for messages and file associations
 - **Per-Thread Collections**: Each thread has its own isolated vector collection in Weaviate, locked to a specific embedding model
 - **Comprehensive Retrieval**: AI searches context from multiple sources, retrieving PDF chunks, captured web pages, AND past Q&A pairs (semantic memory) simultaneously.
 - **Semantic Recollection**: The UI highlights which past chat messages were "recalled" and used by the AI to answer the current question
 - **Quick Actions**: "Read Aloud" and "Copy" buttons integrated right into each assistant bubble for quick convenience.
-- **Internet Search (DuckDuckGo)**: Optionally augment answers with live web search results for up-to-date or external information; web sources are stored in SQLite and displayed after page reload
+- **Internet Search (DuckDuckGo)**: Optionally augment answers with live web search results for up-to-date or external information; web sources are stored in PostgreSQL and displayed after page reload
 - **Context Management**: Intelligent token budgeting that scales proportionally to the configured context window, ensuring the most relevant content chunks (PDFs/Websites), recent history, and semantic memories fit the LLM context window
 
 ### ⚙️ Per-Thread Prompt & Behaviour Settings
@@ -43,7 +43,7 @@ A full-stack PDF Document and Webpages research assistant with **Text-to-Speech 
 - **Max Iterations**: Set the maximum number of tool-use rounds the orchestrator may take (range: 1–30)
 - **Intent Agent Toggle**: Enable or disable the Intent Agent per thread; also configure how many rewrite iterations it is allowed
 - **Prompt Preview**: Live preview of the fully composed system prompt before saving, so you know exactly what the LLM will see
-- **Persistent Settings**: All thread settings are saved to SQLite and restored automatically when returning to a thread
+- **Persistent Settings**: All thread settings are saved to PostgreSQL and restored automatically when returning to a thread
 ### 🌐 Internet Search (DuckDuckGo)
 
 You can enable **Internet Search** in the chat panel to let the AI answer questions using both your PDF and live web results (via DuckDuckGo). This is useful for:
@@ -54,8 +54,8 @@ You can enable **Internet Search** in the chat panel to let the AI answer questi
 **How it works:**
 - When enabled, the app performs a DuckDuckGo search for your question and injects the top results into the LLM's context window, along with your Document content.
 - The LLM then answers using both sources.
-- Web search results (source URLs and snippets) are stored in SQLite and Weaviate, so they are still visible in the chat after a page reload.
-- When a message is deleted, its associated web search results are also removed from SQLite and Weaviate.
+- Web search results (source URLs and snippets) are stored in PostgreSQL and Weaviate, so they are still visible in the chat after a page reload.
+- When a message is deleted, its associated web search results are also removed from PostgreSQL and Weaviate.
 
 **Privacy:**
 - All queries are sent to DuckDuckGo only when Internet Search is enabled.
@@ -91,11 +91,11 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Docker Compose                                 │
-├─────────────────┬─────────────────┬─────────────────────────────────────────┤
-│    Frontend     │   RAG Service   │       Weaviate                          │
-│   (Next.js)     │    (FastAPI)    │   (Vector DB)                           │
-│   Port: 3000    │   Port: 8000    │   Port: 8080                            │
-└─────────────────┴─────────────────┴─────────────────────────────────────────┘
+├─────────────────┬─────────────────┬─────────────────┬───────────────────────┤
+│    Frontend     │   RAG Service   │   PostgreSQL    │      Weaviate         │
+│   (Next.js)     │    (FastAPI)    │   (Primary DB)  │   (Vector DB)        │
+│   Port: 3000    │   Port: 8000    │   Port: 5432    │   Port: 8080         │
+└─────────────────┴─────────────────┴─────────────────┴───────────────────────┘
                                           │
                                           ▼
                             ┌──────────────────────────────────────────────┐
@@ -111,7 +111,9 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 |---------|------|-------------|
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
 | **RAG Service** | 8000 | FastAPI server for PDF processing, document indexing, AI chat, thread/message/file management |
+| **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, annotations, and web sources |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
+| **Gotenberg** | 3001 | Chromium-based service for webpage capture and HTML-to-PDF conversion |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
 
@@ -270,7 +272,10 @@ docker-compose up --build
 | **LangChain** | LLM/Embedding integration |
 | **LangGraph** | Stateful multi-agent workflow (Orchestrator + Intent Agent) |
 | **Weaviate Client** | Vector database operations |
-| **aiosqlite** | Async SQLite for threads, messages, settings, annotations, and web sources |
+| **SQLModel** | ORM built on SQLAlchemy for PostgreSQL operations |
+| **SQLAlchemy** | Async database operations with PostgreSQL |
+| **Alembic** | Database migration management |
+| **asyncpg** | Async PostgreSQL driver |
 
 ### Frontend
 | Technology | Purpose |
@@ -284,14 +289,20 @@ docker-compose up --build
 
 ```
 askpdf/
-├── docker-compose.yml          # Multi-service orchestration
+├── docker-compose.yml          # Multi-service orchestration (PostgreSQL, Weaviate, Gotenberg)
+├── run_tests.sh               # Comprehensive test runner with PostgreSQL support
 ├── rag_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── main.py                 # FastAPI entrypoint (v2.0.0 modular)
+│   ├── main.py                 # FastAPI entrypoint
 │   ├── pytest.ini              # Test configuration
+│   ├── alembic.ini             # Database migration configuration
+│   ├── alembic/                # Database migrations
+│   │   ├── versions/           # Migration scripts
+│   │   └── env.py              # Alembic environment
 │   ├── app/
-│   │   ├── api/                # REST API route handlers
+│   │   ├── api/                # REST API route handlers (modular)
+│   │   │   ├── __init__.py     # API router aggregation
 │   │   │   ├── threads.py      # Thread CRUD, settings, prompt tools/preview endpoints
 │   │   │   ├── files.py        # File upload, download, status, annotations, web sources
 │   │   │   ├── messages.py     # Message CRUD and chat endpoints
@@ -301,14 +312,19 @@ askpdf/
 │   │   │   ├── agent_helpers.py # Agent utility functions
 │   │   │   ├── reasoning.py    # Multi-provider reasoning/thinking trace extraction
 │   │   │   └── tool_registry.py # Tool registration and management
-│   │   ├── db/                 # Data layer
-│   │   │   ├── __init__.py     # Database initialization
-│   │   │   ├── database.py     # SQLite thread/message/file/settings management
-│   │   │   ├── annotations_db.py # Annotation persistence
-│   │   │   ├── file_repository.py # File metadata storage
-│   │   │   ├── message_repository.py # Message CRUD operations
-│   │   │   ├── settings_repository.py # Thread settings persistence
-│   │   │   ├── thread_repository.py # Thread CRUD operations
+│   │   ├── db/                 # Data layer (PostgreSQL + SQLModel)
+│   │   │   ├── __init__.py     # Database initialization and session management
+│   │   │   ├── config.py       # Database configuration
+│   │   │   ├── connection_sqlmodel.py # Async PostgreSQL connection
+│   │   │   ├── models_sqlmodel.py # SQLModel models (Thread, Message, File, etc.)
+│   │   │   ├── status.py       # File processing status tracking
+│   │   │   ├── jsonb_utils.py  # JSONB field utilities
+│   │   │   ├── repositories/   # Repository pattern for data access
+│   │   │   │   ├── thread_repo_sqlmodel.py
+│   │   │   │   ├── message_repo_sqlmodel.py
+│   │   │   │   ├── file_repo_sqlmodel.py
+│   │   │   │   ├── thread_file_repo_sqlmodel.py
+│   │   │   │   └── stats_repo_sqlmodel.py
 │   │   │   └── vector/         # Vector database layer
 │   │   │       ├── adapter.py   # Weaviate adapter (DocumentChunk, ChatMemoryChunk, WebSearchChunk)
 │   │   │       ├── config.py    # Vector DB configuration
@@ -330,8 +346,28 @@ askpdf/
 │   │       ├── capture.py      # Playwright-based webpage capture
 │   │       ├── markdown_generator.py # HTML to Markdown conversion
 │   │       └── utils.py        # Capture utilities
-│   └── tests/                  # Test suite
-│       ├── test_*.py           # Unit and integration tests
+│   └── tests/                  # Comprehensive test suite
+│       ├── conftest.py         # Pytest configuration and fixtures
+│       ├── fixtures/           # Test fixtures for models
+│       │   ├── thread_fixtures.py
+│       │   ├── message_fixtures.py
+│       │   ├── file_fixtures.py
+│       │   ├── annotation_fixtures.py
+│       │   └── status_fixtures.py
+│       ├── test_database_connection_pytest.py
+│       ├── test_models_sqlmodel_pytest.py
+│       ├── test_thread_repository_pytest.py
+│       ├── test_message_repository_pytest.py
+│       ├── test_file_repository_pytest.py
+│       ├── test_thread_file_repository_pytest.py
+│       ├── test_stats_repository_pytest.py
+│       ├── test_repository_transactions_pytest.py
+│       ├── test_jsonb_operations_pytest.py
+│       ├── test_api_endpoints_pytest.py
+│       ├── test_api_integration_pytest.py
+│       ├── test_schema_validation_pytest.py
+│       ├── test_parsing_pytest.py
+│       ├── test_parsing_service.py
 │       └── *.pdf               # Test PDF files
 └── frontend/
     ├── Dockerfile
@@ -354,10 +390,16 @@ askpdf/
         │   ├── ThreadSidebar.tsx   # Thread management UI
         │   └── TextViewer.tsx      # Alternative text display
         ├── hooks/
-        │   └── usePersistAnnotations.ts  # Annotation persistence hook
+        │   ├── usePersistAnnotations.ts  # Annotation persistence hook
+        │   ├── useFileProcessing.ts     # File processing state management
+        │   └── useTtsPrefetchCache.ts   # TTS audio prefetching
         ├── lib/
         │   ├── api.ts          # Unified RAG API client
-        │   └── tts-api.ts      # TTS API client
+        │   ├── tts-api.ts      # TTS API client
+        │   ├── models-api.ts   # Model discovery utilities
+        │   ├── thread-utils.ts # Thread-related utilities
+        │   ├── date-utils.ts  # Date formatting utilities
+        │   └── bbox-derivation.ts # Bounding box calculations
         └── theme.ts            # MUI theme configuration
 ```
 The application expects an OpenAI-compatible API at the URL specified by `LLM_API_URL` in your `.env` file (default: `http://host.docker.internal:12434`).
@@ -482,7 +524,7 @@ Returns the fully composed system prompt that will be sent to the LLM, given a s
 ```
 
 #### `GET /api/threads/{thread_id}/messages` / `DELETE /api/messages/{message_id}`
-List and delete messages in a thread. Deleting a message also removes associated web-search results from Weaviate.
+List and delete messages in a thread. Deleting a message also removes associated web-search results from PostgreSQL and Weaviate.
 
 #### `GET /api/models`
 Fetch available models from LLM server.
@@ -504,8 +546,11 @@ Service health check endpoint.
 |----------|---------|---------|-------------|
 | `NEXT_PUBLIC_API_URL` | Frontend | `http://localhost:8000` | RAG API URL |
 | `WEAVIATE_URL` | RAG Service | `http://weaviate:8080` | Weaviate endpoint URL |
-| `WEAVIATE_HYBRID_ALPHA` | RAG Service | `0.5` | Hybrid search alpha (query-vs-vector blend) |
+| `WEAVIATE_HYBRID_ALPHA` | RAG Service | `0.7` | Hybrid search alpha (query-vs-vector blend) |
 | `LLM_API_URL` | RAG Service | `http://host.docker.internal:12434` | LLM server URL (Change to `...:11434` for default Ollama) |
+| `DATABASE_URL` | RAG Service | `postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf` | PostgreSQL connection string |
+| `POSTGRES_POOL_SIZE` | RAG Service | `10` | PostgreSQL connection pool size |
+| `POSTGRES_MAX_OVERFLOW` | RAG Service | `20` | PostgreSQL max overflow connections |
 | `DEFAULT_EMBEDDING_MODEL` | RAG Service | `BAAI/bge-m3` | Default embedding model used for new threads when not explicitly chosen |
 | `LOCAL_EMBEDDING_MODELS` | RAG Service | `BAAI/bge-m3` | Comma-separated list of embedding models that should be run locally in the RAG service |
 | `USE_LOCAL_EMBEDDINGS` | RAG Service | `true` | Toggle to enable/disable local embeddings in the RAG service |
@@ -513,23 +558,23 @@ Service health check endpoint.
 | `USE_LOCAL_RERANKER` | RAG Service | `true` | Toggle to enable/disable reranking |
 | `EMBEDDING_DEVICE` | RAG Service | `cpu` | Device for local embeddings (`cpu` or `cuda`) |
 | `RERANKER_DEVICE` | RAG Service | `cpu` | Device for local reranker (`cpu` or `cuda`) |
-| `DEFAULT_TOKEN_BUDGET` | RAG Service | `128000` | Default context-window size in tokens |
+| `DEFAULT_TOKEN_BUDGET` | RAG Service | `8192` | Default context-window size in tokens |
 | `DEFAULT_MAX_ITERATIONS` | RAG Service | `10` | Default max orchestrator tool-call rounds |
 | `MIN_MAX_ITERATIONS` | RAG Service | `1` | Minimum allowed value for max iterations |
 | `MAX_MAX_ITERATIONS` | RAG Service | `30` | Maximum allowed value for max iterations |
 | `INTENT_AGENT_MAX_ITERATIONS` | RAG Service | `1` | Default iteration budget for the Intent Agent |
-
-### Vector Storage Behavior
-
-- Weaviate uses three independent collections: `DocumentChunk`, `ChatMemoryChunk`, and `WebSearchChunk` (all thread-filtered).
-- No Qdrant migration is required. If a thread has files in SQLite but vectors are missing in Weaviate, the app triggers lazy async re-embedding.
-- For webpages, re-embedding is snapshot-first (`/static/webpages/<file_hash>.html`), then falls back to live recapture if snapshot content is missing.
 | `MAX_CUSTOM_INSTRUCTIONS_CHARS` | RAG Service | `2000` | Max characters for custom instructions |
 | `MAX_SYSTEM_ROLE_CHARS` | RAG Service | `500` | Max characters for system role override |
 | `MAX_TOOL_INSTRUCTION_CHARS` | RAG Service | `500` | Max characters per tool instruction override |
 | `MAX_ITERATIONS_SUFFICIENT_COVERAGE` | RAG Service | `2` | Iteration threshold for "sufficient coverage" early-exit hint |
 | `MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE` | RAG Service | `4` | Iteration threshold for "probably sufficient" hint |
 | `WEB_SEARCH_ITERATION_BONUS` | RAG Service | `2` | Extra iterations granted when web search is enabled |
+
+### Vector Storage Behavior
+
+- Weaviate uses three independent collections: `DocumentChunk`, `ChatMemoryChunk`, and `WebSearchChunk` (all thread-filtered).
+- If a thread has files in PostgreSQL but vectors are missing in Weaviate, the app triggers lazy async re-embedding.
+- For webpages, re-embedding is snapshot-first (`/static/webpages/<file_hash>.html`), then falls back to live recapture if snapshot content is missing.
 
 ### Voice Styles
 
@@ -597,16 +642,68 @@ Frontend: Play audio, highlight current sentence
 On audio end: Auto-advance to next sentence
 ```
 
+## 🧪 Testing
+
+The project includes a comprehensive test suite with PostgreSQL support. Use the `run_tests.sh` script to run tests:
+
+```bash
+./run_tests.sh [options]
+```
+
+### Test Options
+
+- `--help` - Show help message
+- `--verbose` - Run with verbose output
+- `--file <file>` - Run specific test file
+- `--test <test>` - Run specific test function
+- `--coverage` - Run with coverage report
+- `--standalone` - Run standalone test scripts
+- `--pdf <path>` - Path to PDF file (for standalone tests)
+- `--db-tests` - Run PostgreSQL database tests
+- `--db-only` - Run only database tests
+- `--api` - Run API endpoint tests
+- `--schema` - Run schema validation tests
+- `--all-tests` - Run all DB-agnostic tests
+
+### Examples
+
+```bash
+./run_tests.sh                          # Run all pytest tests
+./run_tests.sh --verbose                # Run with verbose output
+./run_tests.sh --file test_parsing_pytest.py  # Run specific file
+./run_tests.sh --db-tests               # Run PostgreSQL database tests
+./run_tests.sh --db-only                # Run only database tests
+./run_tests.sh --api                    # Run API endpoint tests
+./run_tests.sh --coverage               # Run with coverage
+```
+
+### Test Categories
+
+- **Database Tests**: PostgreSQL connection, SQLModel models, repository operations, transactions, JSONB operations
+- **API Tests**: Endpoint testing, integration tests
+- **Schema Tests**: Schema validation tests
+- **Parsing Tests**: PDF parsing with Docling and pdfplumber
+
+The test runner automatically:
+- Builds Docker images to capture latest code changes
+- Creates a unique test PostgreSQL database for each run
+- Cleans up test databases after completion
+- Provides isolated test environments
+
 ## 🐳 Docker Details
 
-The application uses Docker Compose with three services:
+The application uses Docker Compose with five services:
 
 1. **frontend**: Next.js dev server with hot reload
 2. **rag-service**: FastAPI with LangChain/LangGraph, PDF processing, and chat
-3. **weaviate**: Official Weaviate image with persistent storage
+3. **postgresql**: PostgreSQL database for persistent storage
+4. **weaviate**: Official Weaviate image with persistent storage
+5. **gotenberg**: Chromium-based service for webpage capture
 
 ### Volumes
-- \`weaviate_data\`: Persistent vector storage
+- `weaviate_data`: Persistent vector storage
+- `postgres_data`: Persistent PostgreSQL storage
+- `pdf_data`: PDF file storage
 - Source directories mounted for development hot-reload
 
 ## 🤝 Contributing
