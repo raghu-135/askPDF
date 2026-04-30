@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 try:
     from sqlmodel import select
     from app.db.models_sqlmodel import Message, Thread, MessageRole
-    from app.db.repositories.message_repo import MessageRepository
+    from app.db.repositories.message_repo_sqlmodel import MessageRepository
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:

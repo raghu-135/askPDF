@@ -217,8 +217,30 @@ class TestFileRepository:
     @pytest.mark.asyncio
     async def test_status_normalization(self, repo, sample_file):
         """Verify status normalization functions work."""
-        # Skip this test - _normalize_file_status doesn't exist in current implementation
-        pytest.skip("Status normalization function not implemented")
+        from app.db.status import _normalize_file_status
+
+        # Test with empty input
+        result = _normalize_file_status({})
+        assert "parsing" in result
+        assert "indexing" in result
+        assert "indexing_status" in result
+        assert result["parsing"]["status"] == "unknown"
+
+        # Test with parsing status
+        result = _normalize_file_status({"parsing": {"status": "completed"}})
+        assert result["parsing"]["status"] == "completed"
+        assert result["parsing_status"]["status"] == "completed"
+
+        # Test with indexing models
+        result = _normalize_file_status({
+            "indexing_status": {
+                "models": {
+                    "model1": {"status": "running", "threads": {"t1": {"status": "completed"}}}
+                }
+            }
+        })
+        assert "model1" in result["indexing_status"]["models"]
+        assert result["indexing_status"]["models"]["model1"]["status"] == "running"
 
     @pytest.mark.asyncio
     async def test_file_with_different_source_types(self, repo):

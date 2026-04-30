@@ -17,6 +17,7 @@ import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sqlmodel import select
+from sqlalchemy.exc import IntegrityError
 from app.db.models_sqlmodel import ThreadFile, Thread, File, ThreadFileAnnotation
 from app.db.repositories.thread_file_repo_sqlmodel import ThreadFileRepository
 
@@ -376,12 +377,6 @@ class TestThreadFileRepository:
             )
         )
         assert len(result.scalars().all()) == 0
-
-    @pytest.mark.asyncio
-    async def test_duplicate_add_ignored(self, repo, sample_thread, sample_file):
-        """Verify duplicate associations cause unique constraint violation."""
-        # Skip this test - unique constraint testing with async session is complex
-        pytest.skip("Unique constraint testing requires different session setup")
 
     @pytest.mark.asyncio
     async def test_annotation_timestamps(self, repo, sample_thread, sample_file):
