@@ -71,6 +71,7 @@ services:
       - TRAFILATURA_FAST=False
       # PostgreSQL configuration
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      - TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/test_askpdf
       - POSTGRES_POOL_SIZE=10
       - POSTGRES_MAX_OVERFLOW=20
     env_file:
