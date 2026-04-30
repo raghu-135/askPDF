@@ -156,7 +156,7 @@ fi
 TEST_RUN_ID=$(uuidgen 2>/dev/null || echo "test_$(date +%s)_$$")
 echo "Test run ID: $TEST_RUN_ID"
 
-# Set up test database directory for SQLite (inside the container's /data volume)
+# Set up test database directory (inside the container's /data volume)
 TEST_DATA_DIR="/data/test_$TEST_RUN_ID"
 echo "Test data directory: $TEST_DATA_DIR (will be created inside container)"
 
@@ -202,7 +202,7 @@ fi
 cleanup() {
     echo "Cleaning up test databases..."
     
-    # Remove SQLite test data directory inside container
+    # Remove test data directory inside container
     echo "Removing test data directory from container: $TEST_DATA_DIR"
     $DOCKER_COMPOSE exec -T rag-service rm -rf "$TEST_DATA_DIR" 2>/dev/null || true
     
@@ -256,9 +256,8 @@ if [ "$DB_TESTS" = "true" ]; then
 fi
 
 # Handle integration flag - run DB-agnostic integration tests
-# Note: SQLite integration tests removed after PostgreSQL migration
 if [ "$INTEGRATION_TESTS" = "true" ]; then
-    echo "WARNING: SQLite integration tests removed. Use --api for API tests or --db-tests for database tests."
+    echo "WARNING: Integration tests removed. Use --api for API tests or --db-tests for database tests."
     exit 1
 fi
 

@@ -261,7 +261,7 @@ docker-compose up --build
    - **Max Iterations** — maximum number of tool-use rounds before a forced final answer.
    - **Intent Agent** — toggle on/off; configure its iteration budget.
 3. Click **Prompt Preview** to see the exact system prompt the LLM will receive.
-4. Click **Save** — settings are persisted per-thread in SQLite.
+4. Click **Save** — settings are persisted per-thread in PostgreSQL.
 
 ## 🛠️ Technology Stack
 
@@ -615,7 +615,7 @@ RAG Service: Orchestrator Agent begins tool-call loop (up to max_iterations)
   ↓
   ├── search_documents          → Weaviate: top-K PDF chunks for thread
   ├── search_conversation_history → Weaviate: semantic memory recall
-  ├── search_web                → DuckDuckGo (if enabled); stored in SQLite + Weaviate
+  ├── search_web                → DuckDuckGo (if enabled); stored in PostgreSQL + Weaviate
   ├── search_document_by_id     → targeted per-document search
   ├── list_uploaded_documents   → enumerate PDFs in thread
   └── ask_for_clarification     → present choices to user
@@ -624,7 +624,7 @@ RAG Service: Force final answer when budget exhausted
   ↓
 RAG Service: Extract reasoning trace (structured blocks or <think> tags)
   ↓
-RAG Service: Store answer + reasoning + web_sources in SQLite
+RAG Service: Store answer + reasoning + web_sources in PostgreSQL
   ↓
 Frontend: Display markdown answer, expandable reasoning panel, web source cards
 ```

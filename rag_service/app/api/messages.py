@@ -100,7 +100,7 @@ async def delete_message_endpoint(message_id: str):
                     assistant_msg_id = all_msgs[i + 1].id
                     break
 
-        # IDs that will be removed from SQLite (this + its pair counterpart)
+        # IDs that will be removed from database (this + its pair counterpart)
         ids_to_delete: set = {message_id}
         if assistant_msg_id and assistant_msg_id != message_id:
             ids_to_delete.add(assistant_msg_id)
@@ -135,7 +135,7 @@ async def delete_message_endpoint(message_id: str):
             if orphaned:
                 await db.delete_web_chunks_by_urls(message.thread_id, list(orphaned))
 
-        # Delete from SQLite (pair-aware)
+        # Delete from database (pair-aware)
         deleted_ids = await delete_message_pair(message_id)
 
         # Recompute QA stats to reflect the deletion

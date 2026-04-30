@@ -10,7 +10,6 @@ beautifulsoup4
 lxml
 opencv-python-headless
 langchain-openai
-aiosqlite
 tiktoken
 
 pdfminer.six

@@ -23,7 +23,7 @@ from app.db import ProcessStatus
 from app.db.repositories.file_repo_sqlmodel import FileRepository
 from app.db.repositories.thread_file_repo_sqlmodel import ThreadFileRepository
 
-# Legacy SQLite imports (for backward compatibility during migration)
+# Database operations (SQLModel/PostgreSQL)
 from app.db import (
     add_file_to_thread,
     create_or_get_file,
