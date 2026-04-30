@@ -27,8 +27,11 @@ from app.db.vector import get_vector_db
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+# Configure logging - LOG_LEVEL must be explicitly set
+_log_level_str = os.environ.get("LOG_LEVEL")
+if _log_level_str is None:
+    raise RuntimeError("LOG_LEVEL environment variable is required")
+log_level = _log_level_str.upper()
 logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

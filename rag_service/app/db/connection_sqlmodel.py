@@ -15,19 +15,25 @@ from sqlmodel import SQLModel
 
 logger = logging.getLogger(__name__)
 
-# Database URLs from environment
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/askpdf"
-)
-TEST_DATABASE_URL = os.getenv(
-    "TEST_DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/test_askpdf"
-)
+# Database URLs from environment - must be explicitly set
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if DATABASE_URL is None:
+    raise RuntimeError("DATABASE_URL environment variable is required")
 
-# Connection pool settings
-POOL_SIZE = int(os.getenv("POSTGRES_POOL_SIZE", "10"))
-MAX_OVERFLOW = int(os.getenv("POSTGRES_MAX_OVERFLOW", "20"))
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+if TEST_DATABASE_URL is None:
+    raise RuntimeError("TEST_DATABASE_URL environment variable is required")
+
+# Connection pool settings - must be explicitly set
+_POSTGRES_POOL_SIZE = os.environ.get("POSTGRES_POOL_SIZE")
+if _POSTGRES_POOL_SIZE is None:
+    raise RuntimeError("POSTGRES_POOL_SIZE environment variable is required")
+POOL_SIZE = int(_POSTGRES_POOL_SIZE)
+
+_POSTGRES_MAX_OVERFLOW = os.environ.get("POSTGRES_MAX_OVERFLOW")
+if _POSTGRES_MAX_OVERFLOW is None:
+    raise RuntimeError("POSTGRES_MAX_OVERFLOW environment variable is required")
+MAX_OVERFLOW = int(_POSTGRES_MAX_OVERFLOW)
 
 
 def create_engine(database_url: str = None, poolclass=None):
@@ -39,7 +45,7 @@ def create_engine(database_url: str = None, poolclass=None):
         return create_async_engine(
             url,
             poolclass=NullPool,
-            echo=os.getenv("SQL_ECHO", "false").lower() == "true",
+            echo=os.environ.get("SQL_ECHO", "false").lower() == "true",
             future=True
         )
     
@@ -48,7 +54,7 @@ def create_engine(database_url: str = None, poolclass=None):
         pool_size=POOL_SIZE,
         max_overflow=MAX_OVERFLOW,
         pool_pre_ping=True,  # Verify connection health before using
-        echo=os.getenv("SQL_ECHO", "false").lower() == "true",
+        echo=os.environ.get("SQL_ECHO", "false").lower() == "true",
         future=True
     )
 

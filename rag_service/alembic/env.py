@@ -30,9 +30,12 @@ if config.config_file_name is not None:
 # Set target metadata
 target_metadata = SQLModel.metadata
 
-# Get database URL from environment or config
+# Get database URL from environment - must be explicitly set
 def get_url():
-    return os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/askpdf")
+    url = os.environ.get("DATABASE_URL")
+    if url is None:
+        raise RuntimeError("DATABASE_URL environment variable is required")
+    return url
 
 
 def run_migrations_offline() -> None:

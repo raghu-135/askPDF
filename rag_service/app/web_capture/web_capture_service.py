@@ -32,8 +32,10 @@ STATIC_DIR = "/static"
 os.makedirs(WEBPAGES_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-# Gotenberg configuration
-GOTENBERG_URL = os.getenv("GOTENBERG_URL", "http://gotenberg:3000")
+# Gotenberg configuration - must be explicitly set
+GOTENBERG_URL = os.environ.get("GOTENBERG_URL")
+if GOTENBERG_URL is None:
+    raise RuntimeError("GOTENBERG_URL environment variable is required")
 
 
 def _url_to_hash(url: str) -> str:
