@@ -45,7 +45,23 @@ export function deriveBBoxes(sentence: BackendSentence): BBox[] {
   // Use bboxes array if available (multi-line sentences), otherwise use single bbox
   const bboxSources = sentence.bboxes || [sentence.bbox];
 
-  return bboxSources.map((bbox) => {
+  // Filter out null/undefined bboxes (web content may not have bounding boxes)
+  const validBboxes = bboxSources.filter((bbox): bbox is NonNullable<typeof bbox> => bbox != null);
+
+  // If no valid bboxes, create a default one for the sentence
+  if (validBboxes.length === 0) {
+    return [{
+      page: sentence.page || 1,
+      x: 0,
+      y: 0,
+      width: 0,
+      height: 0,
+      page_width: sentence.page_width || 800,
+      page_height: sentence.page_height || 600,
+    }];
+  }
+
+  return validBboxes.map((bbox) => {
     // Handle both old format [x0, y0, x1, y1] and new format with page info
     if (Array.isArray(bbox)) {
       // Old format: [x0, y0, x1, y1]
