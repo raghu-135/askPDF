@@ -19,10 +19,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Import will work after migration
 try:
     from sqlmodel import select
-    from app.db.models_sqlmodel import Message, MessageRole
-    from app.db.repositories.message_repo import MessageRepository
-    from app.db.status import _parse_json_list
-    SQLMODEL_AVAILABLE = True
+    from app.db.models_sqlmodel import Message, Thread, MessageRole
+    from app.db.repositories.message_repo_sqlmodel import MessageRepository
+    # Only mark as available if TEST_DATABASE_URL is explicitly set
+    SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:
     SQLMODEL_AVAILABLE = False
 
@@ -294,7 +294,7 @@ class TestMessageRepository:
     async def test_message_role_enum(self, repo, sample_thread):
         """Verify MessageRole enum handling."""
         import uuid
-        roles = [MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM]
+        roles = [MessageRole.USER, MessageRole.ASSISTANT]
         
         for role in roles:
             message = Message(

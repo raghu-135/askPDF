@@ -19,6 +19,8 @@ from app.db import (
     get_file_status,
     get_scoped_indexing_status,
     upsert_document_in_stats,
+    update_file_parsed_sentences,
+    update_parsing_status,
 )
 
 from unstructured.partition.pdf import partition_pdf
@@ -260,12 +262,13 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     Generate embeddings for each chunk using the specified embedding model.
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
     """
+    from app.agent.agent import invoke_with_retry
     embed_model = get_embedding_model(embedding_model_name)
     batch_size = 100  # LLM API/server strict batch size limits
     vectors = []
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
-        batch_vectors = await embed_model.aembed_documents(batch)
+        batch_vectors = await invoke_with_retry(embed_model.aembed_documents, batch)
         vectors.extend(batch_vectors)
     return vectors
 
@@ -347,6 +350,13 @@ async def index_document_for_thread(
             if markdown_content:
                 logger.info(f"Using markdown content for web source indexing: {file_hash}")
                 chunks = parse_markdown_to_chunks(markdown_content)
+                # Save markdown chunks as parsed sentences for TTS enablement
+                sentences = [{"id": i, "text": chunk, "page": 1} for i, chunk in enumerate(chunks)]
+                parsed_data = {"version": "1.0", "sentences": sentences}
+                await update_file_parsed_sentences(file_hash, json.dumps(parsed_data))
+                # Mark parsing as completed for web sources
+                await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
+                logger.info(f"Saved {len(sentences)} sentences and marked parsing complete for web source: {file_hash}")
             else:
                 chunks = await get_chunks(file_hash)
             if not chunks:

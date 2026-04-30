@@ -82,19 +82,36 @@ MAX_CUSTOM_INSTRUCTIONS_CHARS = get_env_int("MAX_CUSTOM_INSTRUCTIONS_CHARS")
 MAX_SYSTEM_ROLE_CHARS = get_env_int("MAX_SYSTEM_ROLE_CHARS")
 MAX_TOOL_INSTRUCTION_CHARS = get_env_int("MAX_TOOL_INSTRUCTION_CHARS")
 
-INTENT_AGENT_MAX_ITERATIONS = get_env_int("INTENT_AGENT_MAX_ITERATIONS", default=1)
-MAX_ITERATIONS_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_SUFFICIENT_COVERAGE", default=2)
-MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE", default=4)
-WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS", default=2)
+INTENT_AGENT_MAX_ITERATIONS = get_env_int("INTENT_AGENT_MAX_ITERATIONS")
+MAX_ITERATIONS_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_SUFFICIENT_COVERAGE")
+MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE")
+WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS")
 
-DEFAULT_EMBEDDING_MODEL = os.getenv("DEFAULT_EMBEDDING_MODEL", "").strip()
-DEFAULT_RERANKER_MODEL = os.getenv("DEFAULT_RERANKER_MODEL", "").strip()
-USE_LOCAL_EMBEDDINGS = os.getenv("USE_LOCAL_EMBEDDINGS", "true").lower() == "true"
-USE_LOCAL_RERANKER = os.getenv("USE_LOCAL_RERANKER", "true").lower() == "true"
+_DEFAULT_EMBEDDING_MODEL = os.environ.get("DEFAULT_EMBEDDING_MODEL")
+if _DEFAULT_EMBEDDING_MODEL is None:
+    raise RuntimeError("DEFAULT_EMBEDDING_MODEL environment variable is required")
+DEFAULT_EMBEDDING_MODEL = _DEFAULT_EMBEDDING_MODEL.strip()
+
+_DEFAULT_RERANKER_MODEL = os.environ.get("DEFAULT_RERANKER_MODEL")
+if _DEFAULT_RERANKER_MODEL is None:
+    raise RuntimeError("DEFAULT_RERANKER_MODEL environment variable is required")
+DEFAULT_RERANKER_MODEL = _DEFAULT_RERANKER_MODEL.strip()
+
+_USE_LOCAL_EMBEDDINGS = os.environ.get("USE_LOCAL_EMBEDDINGS")
+if _USE_LOCAL_EMBEDDINGS is None:
+    raise RuntimeError("USE_LOCAL_EMBEDDINGS environment variable is required")
+USE_LOCAL_EMBEDDINGS = _USE_LOCAL_EMBEDDINGS.lower() == "true"
+
+_USE_LOCAL_RERANKER = os.environ.get("USE_LOCAL_RERANKER")
+if _USE_LOCAL_RERANKER is None:
+    raise RuntimeError("USE_LOCAL_RERANKER environment variable is required")
+USE_LOCAL_RERANKER = _USE_LOCAL_RERANKER.lower() == "true"
 
 
 def _split_env_list(name: str) -> List[str]:
-    raw = os.getenv(name, "")
+    raw = os.environ.get(name)
+    if raw is None:
+        raise RuntimeError(f"{name} environment variable is required")
     parts = [p.strip() for p in raw.split(",") if p.strip()]
     return parts
 
@@ -343,7 +360,10 @@ def get_local_embedding_model(model_name: str) -> LocalEmbeddingWrapper:
 
     name = normalize_model_name(model_name)
     if name not in _local_embedder_cache:
-        device = os.getenv("EMBEDDING_DEVICE", "cpu").strip() or "cpu"
+        _device = os.environ.get("EMBEDDING_DEVICE")
+        if _device is None:
+            raise RuntimeError("EMBEDDING_DEVICE environment variable is required")
+        device = _device.strip() or "cpu"
         model = SentenceTransformer(name, device=device, trust_remote_code=True)
         _local_embedder_cache[name] = LocalEmbeddingWrapper(model)
     return _local_embedder_cache[name]
@@ -364,7 +384,10 @@ def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerank
     if CrossEncoder is None:
         raise RuntimeError("sentence-transformers is not installed; cannot load local reranker.")
     if name not in _local_reranker_cache:
-        device = os.getenv("RERANKER_DEVICE", "cpu").strip() or "cpu"
+        _device = os.environ.get("RERANKER_DEVICE")
+        if _device is None:
+            raise RuntimeError("RERANKER_DEVICE environment variable is required")
+        device = _device.strip() or "cpu"
         model = CrossEncoder(name, device=device, trust_remote_code=True)
         _local_reranker_cache[name] = LocalRerankerWrapper(model)
     return _local_reranker_cache[name]

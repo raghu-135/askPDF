@@ -143,8 +143,6 @@ local_settings.py
 # Backend specific
 backend/app/helper.py
 *.db
-*.sqlite
-*.sqlite3
 
 # PDFs (uploaded files - optional, uncomment if you don't want to track test PDFs)
 # *.pdf

@@ -18,9 +18,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Import will work after migration
 try:
     from sqlmodel import select
-    from sqlalchemy import text
     from app.db.models_sqlmodel import Thread, File, ThreadFileAnnotation
-    SQLMODEL_AVAILABLE = True
+    from app.db.jsonb_utils import set_jsonb_field, merge_jsonb_field, replace_jsonb_field
+    from sqlalchemy.orm.attributes import flag_modified
+    from sqlalchemy import Integer
+    # Only mark as available if TEST_DATABASE_URL is explicitly set
+    SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:
     SQLMODEL_AVAILABLE = False
 
@@ -189,10 +192,10 @@ class TestJSONBOperations:
         await session.commit()
         insert_time = time.time() - start
         
-        # Query by JSONB content
+        # Query by JSONB content using string comparison
         start = time.time()
         result = await session.execute(
-            select(Thread).where(Thread.settings["index"] == 50)
+            select(Thread).where(Thread.settings["index"].astext.cast(Integer) == 50)
         )
         thread = result.scalar_one_or_none()
         query_time = time.time() - start
@@ -240,8 +243,8 @@ class TestJSONBOperations:
         await session.commit()
         await session.refresh(thread)
         
-        # Update only section2
-        thread.settings["section2"]["value"] = "updated"
+        # Update only section2 using merge_jsonb_field
+        merge_jsonb_field(thread, "settings", {"section2": {"value": "updated"}})
         await session.commit()
         await session.refresh(thread)
         

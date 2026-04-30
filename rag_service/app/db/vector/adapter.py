@@ -58,7 +58,10 @@ class WeaviateAdapter:
         if not weaviate_url:
             raise ValueError("WEAVIATE_URL environment variable is not set")
 
-        self.hybrid_alpha = float(os.getenv("WEAVIATE_HYBRID_ALPHA", "0.5"))
+        _hybrid_alpha = os.environ.get("WEAVIATE_HYBRID_ALPHA")
+        if _hybrid_alpha is None:
+            raise RuntimeError("WEAVIATE_HYBRID_ALPHA environment variable is required")
+        self.hybrid_alpha = float(_hybrid_alpha)
         parsed = urlparse(weaviate_url if "://" in weaviate_url else f"http://{weaviate_url}")
         host = parsed.hostname or "weaviate"
         port = parsed.port or 8080

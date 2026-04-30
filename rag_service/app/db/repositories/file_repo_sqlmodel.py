@@ -1,32 +1,30 @@
 """
-file_repo.py - File CRUD operations.
+file_repo_sqlmodel.py - File CRUD operations with SQLModel.
 
-This module provides repository methods for managing file entities in the database,
-including file status management for parsing and indexing operations.
+This module provides repository methods for managing file entities
+using SQLModel with PostgreSQL, including JSONB status handling and
+parsed sentences management.
 """
 
 import json
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
-import aiosqlite
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 
-from app.db.config import DB_PATH
-from app.db.models import File, ProcessStatus
-from app.db.repositories.base import BaseRepository
-
+from app.db.models_sqlmodel import File, ProcessStatus
+from app.db.jsonb_utils import set_jsonb_field, merge_jsonb_field, replace_jsonb_field
+from app.db.connection_sqlmodel import async_session_maker
 from app.db.status import (
-    _parse_json_list,
     _normalize_file_status,
     _copy_process_section,
     _collapse_process_sections,
     get_scoped_indexing_status,
 )
 
-# Default value for parsed_sentences_json column - used at row creation and API fallback
+# Default values for file columns
 DEFAULT_SENTENCES_JSON = {"version": "1.0", "sentences": None}
-
-# Default value for file_status column - used at row creation
 DEFAULT_FILE_STATUS = {
     "parsing": {"status": "unknown"},
     "parsing_status": {"status": "unknown"},
@@ -35,8 +33,18 @@ DEFAULT_FILE_STATUS = {
 }
 
 
-class FileRepository(BaseRepository):
-    """Repository for file database operations."""
+class FileRepository:
+    """Repository for file database operations using SQLModel."""
+
+    def __init__(self, session: Optional[AsyncSession] = None):
+        """Initialize with optional session for dependency injection."""
+        self._session = session
+
+    async def _get_session(self) -> AsyncSession:
+        """Get a database session - injected for tests, default for production."""
+        if self._session is not None:
+            return self._session
+        return async_session_maker()
 
     async def create_or_get(
         self,
@@ -46,126 +54,123 @@ class FileRepository(BaseRepository):
         source_type: str = "pdf",
     ) -> File:
         """Create a new file record or return existing one."""
-        async def _create_or_get_in_transaction(db):
-            # Try to insert with initialized columns, ignore if exists
-            await db.execute(
-                "INSERT OR IGNORE INTO files (file_hash, file_name, file_path, source_type, parsed_sentences_json, file_status) VALUES (?, ?, ?, ?, ?, ?)",
-                (file_hash, file_name, file_path, source_type, json.dumps(DEFAULT_SENTENCES_JSON), json.dumps(DEFAULT_FILE_STATUS))
+        session = await self._get_session()
+        async with session.begin():
+            # Try to get existing file
+            result = await session.execute(
+                select(File).where(File.file_hash == file_hash)
             )
-            if file_name or file_path or source_type:
-                await db.execute(
-                    """
-                    UPDATE files
-                    SET
-                        file_name = COALESCE(NULLIF(?, ''), file_name),
-                        file_path = COALESCE(file_path, ?),
-                        source_type = COALESCE(NULLIF(?, ''), source_type)
-                    WHERE file_hash = ?
-                    """,
-                    (file_name, file_path, source_type, file_hash),
-                )
-            await db.commit()
+            existing = result.scalar_one_or_none()
 
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT file_hash, file_name, file_path, source_type FROM files WHERE file_hash = ?",
-                (file_hash,)
-            )
-            row = await cursor.fetchone()
-            return File(
-                file_hash=row["file_hash"],
-                file_name=row["file_name"],
-                file_path=row["file_path"],
-                source_type=row["source_type"] or "pdf",
-            )
+            if existing:
+                # Update fields if provided
+                if file_name:
+                    existing.file_name = file_name
+                if file_path:
+                    existing.file_path = file_path
+                if source_type:
+                    existing.source_type = source_type
+                await session.flush()
+                await session.refresh(existing)
+                return existing
 
-        try:
-            return await self._transaction(_create_or_get_in_transaction)
-        except Exception:
-            raise
+            # Create new file
+            file = File(
+                file_hash=file_hash,
+                file_name=file_name,
+                file_path=file_path,
+                source_type=source_type,
+                parsed_sentences_json=json.dumps(DEFAULT_SENTENCES_JSON),
+                file_status=dict(DEFAULT_FILE_STATUS),
+            )
+            session.add(file)
+            await session.flush()
+            await session.refresh(file)
+        return file
 
     async def get(self, file_hash: str) -> Optional[File]:
         """Get a file by hash."""
-        row = await self._fetch_one(
-            "SELECT file_hash, file_name, file_path, source_type FROM files WHERE file_hash = ?",
-            (file_hash,)
-        )
-        if row:
-            return File(
-                file_hash=row["file_hash"],
-                file_name=row["file_name"],
-                file_path=row["file_path"],
-                source_type=row["source_type"] or "pdf",
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(File).where(File.file_hash == file_hash)
             )
-        return None
+            return result.scalar_one_or_none()
 
-    async def update_parsed_sentences(self, file_hash: str, parsed_data_json: str) -> bool:
+    async def update_parsed_sentences(
+        self,
+        file_hash: str,
+        parsed_data_json: str
+    ) -> bool:
         """Store parsed sentences JSON in the files table."""
-        cursor = await self._execute(
-            "UPDATE files SET parsed_sentences_json = ? WHERE file_hash = ?",
-            (parsed_data_json, file_hash)
-        )
-        return cursor.rowcount > 0
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(File).where(File.file_hash == file_hash)
+            )
+            file = result.scalar_one_or_none()
+            if not file:
+                return False
 
-    async def get_parsed_sentences(self, file_hash: str) -> Optional[Dict[str, Any]]:
+            file.parsed_sentences_json = parsed_data_json
+            await session.flush()
+        return True
+
+    async def get_parsed_sentences(
+        self,
+        file_hash: str
+    ) -> Optional[Dict[str, Any]]:
         """Retrieve parsed sentences JSON from the files table."""
-        row = await self._fetch_one(
-            "SELECT parsed_sentences_json FROM files WHERE file_hash = ?",
-            (file_hash,)
-        )
-        if row and row["parsed_sentences_json"]:
-            try:
-                return json.loads(row["parsed_sentences_json"])
-            except Exception:
-                return None
-        return None
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(File.parsed_sentences_json).where(File.file_hash == file_hash)
+            )
+            data = result.scalar_one_or_none()
+            if data:
+                try:
+                    return json.loads(data)
+                except Exception:
+                    return None
+            return None
 
     async def get_status(self, file_hash: str) -> Optional[Dict[str, Any]]:
         """Retrieve file_status JSON from the files table."""
-        row = await self._fetch_one(
-            "SELECT file_status FROM files WHERE file_hash = ?",
-            (file_hash,)
-        )
-        if row and row["file_status"]:
-            try:
-                return _normalize_file_status(json.loads(row["file_status"]))
-            except Exception:
-                return _normalize_file_status({})
-        return None
-
-    async def update_status(self, file_hash: str, status_data: Dict[str, Any]) -> bool:
-        """Update file_status JSON for a file, merging with existing status."""
-        async def _update_status_in_transaction(db):
-            # Get existing status
-            cursor = await db.execute(
-                "SELECT file_status FROM files WHERE file_hash = ?",
-                (file_hash,)
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(File.file_status).where(File.file_hash == file_hash)
             )
-            row = await cursor.fetchone()
-            existing: Dict[str, Any] = {}
-            if row and row["file_status"]:
-                try:
-                    existing = _normalize_file_status(json.loads(row["file_status"]))
-                except Exception:
-                    existing = _normalize_file_status({})
+            status = result.scalar_one_or_none()
+            if status:
+                return _normalize_file_status(status)
+            return _normalize_file_status({})
 
-            # Merge status data
+    async def update_status(
+        self,
+        file_hash: str,
+        status_data: Dict[str, Any]
+    ) -> bool:
+        """Update file_status JSON for a file, merging with existing status."""
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(File).where(File.file_hash == file_hash)
+            )
+            file = result.scalar_one_or_none()
+            if not file:
+                return False
+
+            # Get existing status and merge
+            existing = _normalize_file_status(file.file_status or {})
             merged = {**existing, **status_data}
             merged["updated_at"] = datetime.utcnow().isoformat()
             normalized = _normalize_file_status(merged)
 
-            # Update
-            cursor = await db.execute(
-                "UPDATE files SET file_status = ? WHERE file_hash = ?",
-                (json.dumps(normalized), file_hash)
-            )
-            await db.commit()
-            return cursor.rowcount > 0
-
-        try:
-            return await self._transaction(_update_status_in_transaction)
-        except Exception:
-            raise
+            # Use replace_jsonb_field for complete replacement
+            replace_jsonb_field(file, "file_status", normalized)
+            await session.flush()
+        return True
 
     async def update_parsing_status(
         self,
@@ -178,10 +183,14 @@ class FileRepository(BaseRepository):
     ) -> bool:
         """Update parsing section of file_status."""
         if claim:
-            return await self._claim_file_status(file_hash, "parsing", status, started_at=started_at)
+            return await self._claim_file_status(
+                file_hash, "parsing", status, started_at=started_at
+            )
 
         current_status = await self.get_status(file_hash) or {}
-        parsing = _copy_process_section(current_status.get("parsing_status") or current_status.get("parsing"))
+        parsing = _copy_process_section(
+            current_status.get("parsing_status") or current_status.get("parsing")
+        )
         parsing["status"] = status
         if started_at:
             parsing["started_at"] = started_at
@@ -191,6 +200,7 @@ class FileRepository(BaseRepository):
             parsing["error"] = error
         else:
             parsing.pop("error", None)
+
         return await self.update_status(
             file_hash,
             {
@@ -289,23 +299,19 @@ class FileRepository(BaseRepository):
         started_at: Optional[str] = None,
     ) -> bool:
         """Atomically claim a process section if it is not already running or completed."""
-        async def _claim_in_transaction(db):
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT file_status FROM files WHERE file_hash = ?",
-                (file_hash,),
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(File).where(File.file_hash == file_hash)
             )
-            row = await cursor.fetchone()
-            if not row:
+            file = result.scalar_one_or_none()
+            if not file:
                 return False
 
-            try:
-                current = _normalize_file_status(json.loads(row["file_status"])) if row["file_status"] else _normalize_file_status({})
-            except Exception:
-                current = _normalize_file_status({})
-
+            current = _normalize_file_status(file.file_status or {})
             section_payload = _copy_process_section(current.get(section))
             current_status = section_payload.get("status", ProcessStatus.UNKNOWN.value)
+
             if ProcessStatus.is_running(current_status) or ProcessStatus.is_completed(current_status):
                 return False
 
@@ -318,19 +324,9 @@ class FileRepository(BaseRepository):
             merged["updated_at"] = datetime.utcnow().isoformat()
             normalized = _normalize_file_status(merged)
 
-            cursor = await db.execute(
-                "UPDATE files SET file_status = ? WHERE file_hash = ?",
-                (json.dumps(normalized), file_hash),
-            )
-            if cursor.rowcount <= 0:
-                return False
-            await db.commit()
-            return True
-
-        try:
-            return await self._transaction(_claim_in_transaction)
-        except Exception:
-            raise
+            replace_jsonb_field(file, "file_status", normalized)
+            await session.flush()
+        return True
 
     async def _claim_indexing_status(
         self,
@@ -341,30 +337,28 @@ class FileRepository(BaseRepository):
         started_at: Optional[str],
     ) -> bool:
         """Atomically claim indexing status for a model/thread."""
-        async def _claim_in_transaction(db):
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT file_status FROM files WHERE file_hash = ?",
-                (file_hash,),
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(File).where(File.file_hash == file_hash)
             )
-            row = await cursor.fetchone()
-            if not row:
+            file = result.scalar_one_or_none()
+            if not file:
                 return False
 
-            try:
-                current = _normalize_file_status(json.loads(row["file_status"])) if row["file_status"] else _normalize_file_status({})
-            except Exception:
-                current = _normalize_file_status({})
-
+            current = _normalize_file_status(file.file_status or {})
             indexing_status = current.get("indexing_status", {})
             models = dict(indexing_status.get("models", {}))
+
             if embedding_model:
                 model_status = _copy_process_section(models.get(embedding_model))
                 threads = dict(model_status.get("threads", {}))
                 thread_status = _copy_process_section(threads.get(thread_id))
                 current_status = thread_status.get("status", ProcessStatus.UNKNOWN.value)
+
                 if ProcessStatus.is_running(current_status) or ProcessStatus.is_completed(current_status):
                     return False
+
                 thread_status["status"] = status
                 if started_at:
                     thread_status["started_at"] = started_at
@@ -376,8 +370,10 @@ class FileRepository(BaseRepository):
             else:
                 summary = _copy_process_section(indexing_status.get("summary"))
                 current_status = summary.get("status", ProcessStatus.UNKNOWN.value)
+
                 if ProcessStatus.is_running(current_status) or ProcessStatus.is_completed(current_status):
                     return False
+
                 summary["status"] = status
                 if started_at:
                     summary["started_at"] = started_at
@@ -394,21 +390,16 @@ class FileRepository(BaseRepository):
             merged["updated_at"] = datetime.utcnow().isoformat()
             normalized = _normalize_file_status(merged)
 
-            cursor = await db.execute(
-                "UPDATE files SET file_status = ? WHERE file_hash = ?",
-                (json.dumps(normalized), file_hash),
-            )
-            if cursor.rowcount <= 0:
-                return False
-            await db.commit()
-            return True
+            replace_jsonb_field(file, "file_status", normalized)
+            await session.flush()
+        return True
 
-        try:
-            return await self._transaction(_claim_in_transaction)
-        except Exception:
-            raise
-
-    async def remove_thread_indexing_status(self, file_hash: str, embedding_model: str, thread_id: str) -> bool:
+    async def remove_thread_indexing_status(
+        self,
+        file_hash: str,
+        embedding_model: str,
+        thread_id: str
+    ) -> bool:
         """Remove a thread-scoped indexing entry and recompute the remaining summaries."""
         current_status = _normalize_file_status(await self.get_status(file_hash) or {})
         indexing_status = current_status.get("indexing_status", {})
@@ -445,8 +436,105 @@ class FileRepository(BaseRepository):
 
     async def delete(self, file_hash: str) -> bool:
         """Delete a file row once all thread associations have been removed."""
-        cursor = await self._execute(
-            "DELETE FROM files WHERE file_hash = ?",
-            (file_hash,),
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(File).where(File.file_hash == file_hash)
+            )
+            file = result.scalar_one_or_none()
+            if not file:
+                return False
+
+            await session.delete(file)
+        return True
+
+    async def complete_parsing_atomically(
+        self,
+        file_hash: str,
+        parsed_data_json: str,
+        finished_at: str
+    ) -> bool:
+        """
+        Atomically store parsed sentences AND update parsing status to completed.
+        This ensures both operations happen in a single transaction - no race conditions.
+        """
+        session = await self._get_session()
+        async with session.begin():
+            # Fetch file with row-level lock to prevent race conditions
+            result = await session.execute(
+                select(File).where(File.file_hash == file_hash).with_for_update()
+            )
+            file = result.scalar_one_or_none()
+            if not file:
+                return False
+
+            # Update parsed sentences
+            file.parsed_sentences_json = parsed_data_json
+
+            # Get current status and update parsing section
+            current_status = _normalize_file_status(file.file_status or {})
+            parsing = _copy_process_section(
+                current_status.get("parsing_status") or current_status.get("parsing")
+            )
+            parsing["status"] = ProcessStatus.COMPLETED.value
+            parsing["finished_at"] = finished_at
+            parsing.pop("error", None)
+
+            # Merge into status and use replace_jsonb_field for atomic update
+            merged = {**current_status, "parsing": parsing, "parsing_status": parsing}
+            merged["updated_at"] = datetime.utcnow().isoformat()
+            normalized = _normalize_file_status(merged)
+
+            replace_jsonb_field(file, "file_status", normalized)
+            await session.flush()
+            await session.refresh(file)
+        return True
+
+    async def fail_parsing_atomically(
+        self,
+        file_hash: str,
+        error: str,
+        finished_at: str
+    ) -> bool:
+        """
+        Atomically update parsing status to failed with error message.
+        Uses row-level locking to prevent race conditions.
+        """
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(File).where(File.file_hash == file_hash).with_for_update()
+            )
+            file = result.scalar_one_or_none()
+            if not file:
+                return False
+
+            current_status = _normalize_file_status(file.file_status or {})
+            parsing = _copy_process_section(
+                current_status.get("parsing_status") or current_status.get("parsing")
+            )
+            parsing["status"] = ProcessStatus.FAILED.value
+            parsing["finished_at"] = finished_at
+            parsing["error"] = error
+
+            merged = {**current_status, "parsing": parsing, "parsing_status": parsing}
+            merged["updated_at"] = datetime.utcnow().isoformat()
+            normalized = _normalize_file_status(merged)
+
+            replace_jsonb_field(file, "file_status", normalized)
+            await session.flush()
+        return True
+
+    async def is_processing_complete(self, file_hash: str) -> bool:
+        """Check if both parsing and indexing are completed."""
+        status = await self.get_status(file_hash)
+        if not status:
+            return False
+
+        parsing = status.get("parsing", {})
+        indexing = status.get("indexing", {})
+
+        return (
+            parsing.get("status") == ProcessStatus.COMPLETED.value
+            and indexing.get("status") == ProcessStatus.COMPLETED.value
         )
-        return cursor.rowcount > 0

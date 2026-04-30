@@ -21,14 +21,17 @@ from app.api.threads import router as threads_router
 from app.api.files import router as files_router
 from app.api.messages import router as messages_router
 from app.api.models import router as models_router
-from app.db import init_db
+from app.db.connection_sqlmodel import init_db, close_db
 from app.db.vector import get_vector_db
 
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+# Configure logging - LOG_LEVEL must be explicitly set
+_log_level_str = os.environ.get("LOG_LEVEL")
+if _log_level_str is None:
+    raise RuntimeError("LOG_LEVEL environment variable is required")
+log_level = _log_level_str.upper()
 logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -43,7 +46,7 @@ async def lifespan(app: FastAPI):
     """
     logger.info("--- RAG Service Starting ---")
     try:
-        logger.info("Initializing SQLite database...")
+        logger.info("Initializing PostgreSQL database with SQLModel...")
         await init_db()
         logger.info("Database initialization complete.")
     except Exception as e:
@@ -59,6 +62,12 @@ async def lifespan(app: FastAPI):
         
     yield
     logger.info("--- RAG Service Shutting Down ---")
+    try:
+        logger.info("Closing database connections...")
+        await close_db()
+        logger.info("Database connections closed.")
+    except Exception as e:
+        logger.error(f"Error during database shutdown: {e}")
 
 app = FastAPI(
     title="RAG Service",

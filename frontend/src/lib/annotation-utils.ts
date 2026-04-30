@@ -35,7 +35,7 @@ function base64ToBytes(base64: string): Uint8Array {
 }
 
 /**
- * Recursively encode annotation payload values so SQLite JSON can preserve dates and bytes.
+ * Recursively encode annotation payload values so database JSON can preserve dates and bytes.
  */
 function encodeAnnotationValue(value: any): any {
   if (value instanceof Date) {

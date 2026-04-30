@@ -9,7 +9,7 @@ import os
 import sys
 import pytest
 import pytest_asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 import json
 
@@ -19,9 +19,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Import will work after migration
 try:
     from sqlmodel import select
-    from app.db.models_sqlmodel import ThreadStats, Message
-    from app.db.repositories.stats_repo import StatsRepository
-    SQLMODEL_AVAILABLE = True
+    from app.db.models_sqlmodel import ThreadStats, Thread, Message
+    from app.db.repositories.stats_repo_sqlmodel import StatsRepository
+    # Only mark as available if TEST_DATABASE_URL is explicitly set
+    SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:
     SQLMODEL_AVAILABLE = False
 
@@ -473,7 +474,7 @@ class TestStatsRepository:
     @pytest.mark.asyncio
     async def test_last_qa_at_timestamp(self, repo, sample_thread):
         """Verify last_qa_at timestamp updates."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         stats = ThreadStats(
             thread_id=sample_thread.id,
@@ -482,7 +483,7 @@ class TestStatsRepository:
             avg_qa_chars=100.0,
             last_qa_at=now,
             documents_meta=json.dumps({}),
-            last_updated_at=datetime.utcnow()
+            last_updated_at=datetime.now(timezone.utc)
         )
         repo.add(stats)
         await repo.commit()
@@ -492,9 +493,9 @@ class TestStatsRepository:
         assert isinstance(stats.last_qa_at, datetime)
         
         # Update
-        new_time = datetime.utcnow()
+        new_time = datetime.now(timezone.utc)
         stats.last_qa_at = new_time
         await repo.commit()
         await repo.refresh(stats)
         
-        assert stats.last_qa_at >= now
+        assert stats.last_qa_at.replace(tzinfo=None) >= now.replace(tzinfo=None)

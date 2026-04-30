@@ -182,7 +182,7 @@ async def get_pdf_data_endpoint(thread_id: str, file_hash: str):
     if not os.path.exists(pdf_path):
         raise HTTPException(status_code=404, detail=f"PDF file not found: {file_hash}")
 
-    # Retrieve parsed sentences from SQLite
+    # Retrieve parsed sentences from database
     parsed_data = await get_file_parsed_sentences(file_hash)
     if parsed_data:
         sentences = parsed_data.get("sentences", [])
@@ -225,7 +225,7 @@ async def download_pdf_endpoint(thread_id: str, file_hash: str):
 @router.get("/threads/{thread_id}/files/{file_hash}/sentences")
 async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str):
     """
-    Retrieve parsed sentences for a file from SQLite.
+    Retrieve parsed sentences for a file from database.
     Returns the JSON object with version and sentences array.
     """
     try:
@@ -259,7 +259,7 @@ async def get_file_status_endpoint(
     embedding_model: Optional[str] = None,
 ):
     """
-    Retrieve file status (parsing and indexing status) from SQLite.
+    Retrieve file status (parsing and indexing status) from database.
     """
     try:
         # Verify thread exists
@@ -311,7 +311,7 @@ async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        # Remove from SQLite
+        # Remove from database
         removed = await remove_file_from_thread(thread_id, file_hash)
         if removed:
             await cleanup_detached_file(file_hash, thread_id, thread.embed_model)

@@ -16,18 +16,11 @@ import json
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-# Import will work after migration
-try:
-    from sqlmodel import select
-    from app.db.models_sqlmodel import File, ProcessStatus
-    from app.db.repositories.file_repo import FileRepository
-    from app.db.status import _normalize_file_status
-    SQLMODEL_AVAILABLE = True
-except ImportError:
-    SQLMODEL_AVAILABLE = False
+from sqlmodel import select
+from app.db.models_sqlmodel import File, ThreadFile, ProcessStatus
+from app.db.repositories.file_repo_sqlmodel import FileRepository
 
 
-@pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")
 class TestFileRepository:
     """Test FileRepository operations."""
 
@@ -224,16 +217,30 @@ class TestFileRepository:
     @pytest.mark.asyncio
     async def test_status_normalization(self, repo, sample_file):
         """Verify status normalization functions work."""
-        # Test with various status formats
-        status_formats = [
-            {"parsing_status": {"status": "completed"}},
-            {"parsing": {"status": "completed"}},
-            {"parsing": {"status": "completed"}, "parsing_status": {"status": "completed"}}
-        ]
-        
-        for status in status_formats:
-            normalized = _normalize_file_status(status)
-            assert "parsing" in normalized or "parsing_status" in normalized
+        from app.db.status import _normalize_file_status
+
+        # Test with empty input
+        result = _normalize_file_status({})
+        assert "parsing" in result
+        assert "indexing" in result
+        assert "indexing_status" in result
+        assert result["parsing"]["status"] == "unknown"
+
+        # Test with parsing status
+        result = _normalize_file_status({"parsing": {"status": "completed"}})
+        assert result["parsing"]["status"] == "completed"
+        assert result["parsing_status"]["status"] == "completed"
+
+        # Test with indexing models
+        result = _normalize_file_status({
+            "indexing_status": {
+                "models": {
+                    "model1": {"status": "running", "threads": {"t1": {"status": "completed"}}}
+                }
+            }
+        })
+        assert "model1" in result["indexing_status"]["models"]
+        assert result["indexing_status"]["models"]["model1"]["status"] == "running"
 
     @pytest.mark.asyncio
     async def test_file_with_different_source_types(self, repo):

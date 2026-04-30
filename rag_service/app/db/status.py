@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-from app.db.models import ProcessStatus
+from app.db.models_sqlmodel import ProcessStatus
 
 
 def _parse_settings(raw: Optional[str]) -> Dict[str, Any]:
@@ -23,7 +23,7 @@ def _parse_settings(raw: Optional[str]) -> Dict[str, Any]:
 
 
 def _parse_json_list(raw: Optional[str]) -> Optional[List[Dict[str, Any]]]:
-    """Deserialize a JSON-encoded list from a SQLite text column."""
+    """Deserialize a JSON-encoded list from a database text column."""
     if not raw:
         return None
     try:

@@ -107,7 +107,7 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
                 status_code=400,
                 detail="embed_model is required (set DEFAULT_EMBEDDING_MODEL or pass embed_model).",
             )
-        # Create thread in SQLite
+        # Create thread in database
         from app.db import create_thread
         thread = await create_thread(req.name, embed_model)
 
@@ -270,7 +270,7 @@ async def delete_thread_endpoint(thread_id: str):
         db = get_vector_db()
         await db.delete_thread_data(thread_id)
 
-        # Delete from SQLite
+        # Delete from database
         from app.db import delete_thread as db_delete_thread
         deleted = await db_delete_thread(thread_id)
         if not deleted:

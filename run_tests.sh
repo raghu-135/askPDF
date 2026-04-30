@@ -156,7 +156,7 @@ fi
 TEST_RUN_ID=$(uuidgen 2>/dev/null || echo "test_$(date +%s)_$$")
 echo "Test run ID: $TEST_RUN_ID"
 
-# Set up test database directory for SQLite (inside the container's /data volume)
+# Set up test database directory (inside the container's /data volume)
 TEST_DATA_DIR="/data/test_$TEST_RUN_ID"
 echo "Test data directory: $TEST_DATA_DIR (will be created inside container)"
 
@@ -177,14 +177,9 @@ if ! $DOCKER_COMPOSE ps rag-service | grep -q "Up"; then
     sleep 10
 fi
 
-# Check if PostgreSQL is needed and running
-if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
-    echo "Checking if PostgreSQL service is running..."
-    if ! $DOCKER_COMPOSE ps postgresql 2>/dev/null | grep -q "Up"; then
-        echo "PostgreSQL service is not running. Please add PostgreSQL to docker-compose.yml first."
-        echo "See migration plan for PostgreSQL service configuration."
-        exit 1
-    fi
+# Check if PostgreSQL is running and create test database
+# PostgreSQL is now the primary database for all tests
+if $DOCKER_COMPOSE ps postgresql 2>/dev/null | grep -q "Up"; then
     echo "PostgreSQL service is running."
     
     # Generate unique PostgreSQL database name
@@ -197,22 +192,24 @@ if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
         echo "Failed to create test database. Cleaning up..."
         exit 1
     }
+    POSTGRES_AVAILABLE="true"
+else
+    echo "WARNING: PostgreSQL service is not running. Database tests will be skipped."
+    POSTGRES_AVAILABLE="false"
 fi
 
 # Cleanup function to remove test databases
 cleanup() {
     echo "Cleaning up test databases..."
     
-    # Remove SQLite test data directory inside container
+    # Remove test data directory inside container
     echo "Removing test data directory from container: $TEST_DATA_DIR"
     $DOCKER_COMPOSE exec -T rag-service rm -rf "$TEST_DATA_DIR" 2>/dev/null || true
     
     # Drop PostgreSQL test database if it was created
-    if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
-        if [ -n "$TEST_POSTGRES_DB" ]; then
-            echo "Dropping test PostgreSQL database: $TEST_POSTGRES_DB"
-            $DOCKER_COMPOSE exec -T postgresql psql -U postgres -c "DROP DATABASE IF EXISTS \"$TEST_POSTGRES_DB\";" 2>/dev/null || true
-        fi
+    if [ "$POSTGRES_AVAILABLE" = "true" ] && [ -n "$TEST_POSTGRES_DB" ]; then
+        echo "Dropping test PostgreSQL database: $TEST_POSTGRES_DB"
+        $DOCKER_COMPOSE exec -T postgresql psql -U postgres -c "DROP DATABASE IF EXISTS \"$TEST_POSTGRES_DB\";" 2>/dev/null || true
     fi
     
     echo "Cleanup complete."
@@ -260,7 +257,8 @@ fi
 
 # Handle integration flag - run DB-agnostic integration tests
 if [ "$INTEGRATION_TESTS" = "true" ]; then
-    PYTEST_CMD="pytest /app/tests/test_app_integration_pytest.py $VERBOSE"
+    echo "WARNING: Integration tests removed. Use --api for API tests or --db-tests for database tests."
+    exit 1
 fi
 
 # Handle api flag - run API endpoint tests
@@ -273,9 +271,9 @@ if [ "$SCHEMA_TESTS" = "true" ]; then
     PYTEST_CMD="pytest /app/tests/test_schema_validation_pytest.py $VERBOSE"
 fi
 
-# Handle all-tests flag - run all DB-agnostic tests
+# Handle all-tests flag - run all API and schema tests
 if [ "$ALL_TESTS" = "true" ]; then
-    PYTEST_CMD="pytest /app/tests/test_schema_validation_pytest.py /app/tests/test_app_integration_pytest.py /app/tests/test_api_endpoints_pytest.py $VERBOSE"
+    PYTEST_CMD="pytest /app/tests/test_schema_validation_pytest.py /app/tests/test_api_endpoints_pytest.py /app/tests/test_api_integration_pytest.py $VERBOSE"
 fi
 
 if [ -n "$TEST_FILE" ]; then
@@ -303,14 +301,16 @@ fi
 
 # Build environment variables for test databases
 TEST_ENV_VARS="-e DATA_DIR=$TEST_DATA_DIR"
-if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
-    TEST_ENV_VARS="$TEST_ENV_VARS -e TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/$TEST_POSTGRES_DB"
+if [ "$POSTGRES_AVAILABLE" = "true" ] && [ -n "$TEST_POSTGRES_DB" ]; then
+    TEST_DB_URL="postgresql+asyncpg://postgres:postgres@postgresql:5432/$TEST_POSTGRES_DB"
+    # Override both DATABASE_URL and TEST_DATABASE_URL to ensure all code paths use test DB
+    TEST_ENV_VARS="$TEST_ENV_VARS -e DATABASE_URL=$TEST_DB_URL -e TEST_DATABASE_URL=$TEST_DB_URL"
 fi
 
 echo "Running pytest tests..."
 echo "Command: $PYTEST_CMD"
 echo "Test environment: DATA_DIR=$TEST_DATA_DIR"
-if [ "$DB_TESTS" = "true" ] || [ "$DB_ONLY" = "true" ]; then
+if [ "$POSTGRES_AVAILABLE" = "true" ] && [ -n "$TEST_POSTGRES_DB" ]; then
     echo "Test PostgreSQL database: $TEST_POSTGRES_DB"
 fi
 
