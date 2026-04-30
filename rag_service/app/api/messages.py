@@ -49,7 +49,7 @@ async def get_thread_messages_endpoint(
             "messages": [
                 {
                     "id": m.id,
-                    "role": m.role.value,
+                    "role": m.role.value if hasattr(m.role, 'value') else str(m.role),
                     "content": m.content,
                     "context_compact": m.context_compact,
                     "reasoning": m.reasoning,
