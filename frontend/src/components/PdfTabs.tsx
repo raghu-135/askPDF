@@ -6,6 +6,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import LanguageIcon from '@mui/icons-material/Language';
+import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
 import type { BackendSentence, BBox } from '../lib/bbox-derivation';
 
 type Sentence = Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] };
@@ -17,7 +18,7 @@ export type PdfTab = {
   pdfUrl: string;
   sentences: Sentence[] | null;
   text?: string;
-  sourceType?: 'pdf' | 'web';
+  sourceType?: 'pdf' | 'web' | 'browser';
   sourceUrl?: string;
   parsingStatus?: 'pending' | 'completed' | 'failed';
 };
@@ -30,19 +31,34 @@ type Props = {
   /** When provided, shows a remove-from-thread trash icon on each tab. */
   onTabRemove?: (tabId: string) => void;
   darkMode?: boolean;
+  /** Whether to show the browser tab */
+  showBrowserTab?: boolean;
+  /** Callback when browser tab is clicked */
+  onBrowserTabClick?: () => void;
 };
 
-const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, onTabRemove, darkMode = false }: Props) {
-  if (tabs.length === 0) {
+const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, onTabRemove, darkMode = false, showBrowserTab = false, onBrowserTabClick }: Props) {
+  const browserTabId = 'browser-tab';
+
+  if (tabs.length === 0 && !showBrowserTab) {
     return null;
   }
 
   const activeIndex = tabs.findIndex(t => t.id === activeTabId);
   const currentIndex = activeIndex >= 0 ? activeIndex : 0;
+  const isBrowserActive = activeTabId === browserTabId;
+  const displayIndex = isBrowserActive ? 0 : (showBrowserTab ? currentIndex + 1 : currentIndex);
 
   const handleTabChange = (_event: React.SyntheticEvent, newIndex: number) => {
-    if (tabs[newIndex]) {
-      onTabChange(tabs[newIndex].id);
+    // Handle browser tab click
+    if (showBrowserTab && newIndex === 0) {
+      onBrowserTabClick?.();
+      return;
+    }
+    // Adjust index for regular tabs (browser tab is at index 0)
+    const adjustedIndex = showBrowserTab ? newIndex - 1 : newIndex;
+    if (tabs[adjustedIndex]) {
+      onTabChange(tabs[adjustedIndex].id);
     }
   };
 
@@ -68,7 +84,7 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
     >
       <Box sx={{ position: 'relative' }}>
         <Tabs
-          value={currentIndex}
+          value={displayIndex}
           onChange={handleTabChange}
           variant="scrollable"
           scrollButtons="auto"
@@ -84,6 +100,23 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
             },
           }}
         >
+          {showBrowserTab && (
+            <Tab
+              key={browserTabId}
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <OpenInBrowserIcon fontSize="small" />
+                  <Typography component="span">Browser</Typography>
+                </Box>
+              }
+              sx={{
+                '&.Mui-selected': {
+                  bgcolor: 'action.selected',
+                },
+                pr: 1.5,
+              }}
+            />
+          )}
           {tabs.map((tab) => {
             const isWeb = tab.sourceType === 'web';
             const label = isWeb

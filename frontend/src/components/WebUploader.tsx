@@ -4,13 +4,10 @@ import {
   InputAdornment,
   TextField,
   Tooltip,
-  Button,
 } from "@mui/material";
 import LanguageIcon from "@mui/icons-material/Language";
 import ClearIcon from "@mui/icons-material/Clear";
-import OpenInBrowserIcon from "@mui/icons-material/OpenInBrowser";
 import { addWebSourceToThread } from "../lib/api";
-import { useRouter } from "next/router";
 
 type IndexedData = {
   fileHash: string;
@@ -58,7 +55,6 @@ const WebUploader = React.memo(function WebUploader({
   onSubmit,
   isLoading: externalLoading
 }: Props) {
-  const router = useRouter();
   const [internalUrl, setInternalUrl] = useState("");
   const [internalLoading, setInternalLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -138,54 +134,43 @@ const WebUploader = React.memo(function WebUploader({
   };
 
   const inner = (
-    <>
-      <TextField
-        size="small"
-        placeholder="https://example.com"
-        value={url}
-        onChange={(e) => {
-          setUrl(e.target.value);
-          setError(null);
-        }}
-        disabled={isDisabled}
-        error={!!error}
-        helperText={error || undefined}
-        sx={{ minWidth: 300, flex: 1 }}
-        InputProps={{
-          startAdornment: (
-            <InputAdornment position="start">
-              <LanguageIcon fontSize="small" color="action" />
-            </InputAdornment>
-          ),
-          endAdornment: url ? (
-            <InputAdornment position="end">
-              <IconButton
-                size="small"
-                onClick={handleClear}
-                tabIndex={-1}
-              >
-                <ClearIcon fontSize="small" />
-              </IconButton>
-            </InputAdornment>
-          ) : null,
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && url.trim()) {
-            e.preventDefault();
-            onSubmit?.();
-          }
-        }}
-      />
-      <Button
-        variant="outlined"
-        size="small"
-        startIcon={<OpenInBrowserIcon />}
-        onClick={() => router.push('/browse')}
-        sx={{ ml: 1, whiteSpace: 'nowrap' }}
-      >
-        Browse Web
-      </Button>
-    </>
+    <TextField
+      size="small"
+      placeholder="https://example.com"
+      value={url}
+      onChange={(e) => {
+        setUrl(e.target.value);
+        setError(null);
+      }}
+      disabled={isDisabled}
+      error={!!error}
+      helperText={error || undefined}
+      sx={{ minWidth: 300, flex: 1 }}
+      InputProps={{
+        startAdornment: (
+          <InputAdornment position="start">
+            <LanguageIcon fontSize="small" color="action" />
+          </InputAdornment>
+        ),
+        endAdornment: url ? (
+          <InputAdornment position="end">
+            <IconButton
+              size="small"
+              onClick={handleClear}
+              tabIndex={-1}
+            >
+              <ClearIcon fontSize="small" />
+            </IconButton>
+          </InputAdornment>
+        ) : null,
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && url.trim()) {
+          e.preventDefault();
+          onSubmit?.();
+        }
+      }}
+    />
   );
 
   if (tooltipText && (!threadId || disabled)) {
