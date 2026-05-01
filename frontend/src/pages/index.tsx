@@ -3,6 +3,7 @@ import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
 import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
+import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, Tabs, Tab, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
@@ -83,6 +84,8 @@ export default function Home() {
   // Sidebar refresh trigger
   const [sidebarVersion, setSidebarVersion] = useState(0);
 
+  // Browser panel state
+  const [showBrowser, setShowBrowser] = useState(false);
 
   // Resizable chat panel
   const [chatWidth, setChatWidth] = useState(450);
@@ -420,6 +423,17 @@ export default function Home() {
                 />
               )}
 
+              {/* Browser Toggle */}
+              <Tooltip title={showBrowser ? "Hide Browser" : "Show Browser"}>
+                <IconButton
+                  color={showBrowser ? "primary" : "default"}
+                  onClick={() => setShowBrowser(d => !d)}
+                  size="small"
+                >
+                  <OpenInBrowserIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+
               {/* PDF Dark Mode Toggle */}
               <Tooltip title={pdfDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
                 <IconButton
@@ -459,7 +473,14 @@ export default function Home() {
 
           {/* PDF Viewer Area - unified for both PDFs and web-converted PDFs */}
           <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            {isPdfLoading ? (
+            {showBrowser ? (
+              <iframe
+                src="http://localhost:8090"
+                style={{ width: '100%', height: '100%', border: 'none' }}
+                title="Browser"
+                allow="camera;microphone"
+              />
+            ) : isPdfLoading ? (
               <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
                 <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
                 <Typography sx={{ ml: 2 }}>Loading documents...</Typography>

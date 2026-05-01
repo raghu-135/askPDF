@@ -150,8 +150,22 @@ services:
       timeout: 5s
       retries: 5
 
+  neko:
+    image: lscr.io/linuxserver/firefox:latest
+    ports:
+      - "8090:3000"
+      - "8091:3001"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+    shm_size: '2gb'
+    volumes:
+      - neko_config:/config
+
 volumes:
   weaviate_data:
   pdf_data:
   postgres_data:
+  neko_config:
 
