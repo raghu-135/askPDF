@@ -62,8 +62,8 @@ RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/capture-api
 # Ensure the captures directory exists with proper permissions
 RUN mkdir -p /captures && chown -R abc:abc /captures
 
-# Expose only the Selkies web UI and internal capture API.
-# CDP remains loopback-only inside the container.
-EXPOSE 3000 8080
+# Expose only the Selkies web UI for iframe access.
+# CDP and capture API remain internal to the container.
+EXPOSE 3000
 
 # The base image already has ENTRYPOINT ["/init"] which runs s6-rc

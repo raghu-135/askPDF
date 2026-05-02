@@ -157,7 +157,7 @@ services:
       context: ./browser_capture
       dockerfile: Dockerfile
     ports:
-      - "127.0.0.1:8090:3000"  # Browser web UI for the host app iframe
+      - "127.0.0.1:8090:3000"  # Browser web UI for iframe access (localhost only)
     environment:
       - PUID=1000
       - PGID=1000
@@ -169,6 +169,14 @@ services:
       # Enable Selkies clipboard functionality
       - SELKIES_CLIPBOARD_ENABLED=true
       - SELKIES_CLIPBOARD_BRIDGE_ENABLED=true
+      # Disable Selkies gaming features
+      - SELKIES_GAMEPAD_ENABLED=false
+      - SELKIES_UI_SIDEBAR_SHOW_GAMEPADS=false
+      - SELKIES_UI_SIDEBAR_SHOW_GAMING_MODE=false
+      # Disable Selkies sharing features  
+      - SELKIES_UI_SIDEBAR_SHOW_SHARING=false
+      # Disable Selkies apps features
+      - SELKIES_UI_SIDEBAR_SHOW_APPS=false
     shm_size: '2gb'
     volumes:
       - browser_captures:/captures
