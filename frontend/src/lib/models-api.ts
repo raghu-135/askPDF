@@ -2,14 +2,16 @@
  * Model-related API calls for fetching and checking model health/status.
  */
 
+// Use relative URL for proper client-side and server-side operation
+const API_BASE = "/api";
+
 /**
  * Fetches available embedding models from the backend RAG API.
- * @param ragApiUrl - The base URL of the RAG API.
  * @returns A promise resolving to an array of embedding model names.
  */
-export const fetchAvailableEmbedModels = async (ragApiUrl: string): Promise<string[]> => {
+export const fetchAvailableEmbedModels = async (): Promise<string[]> => {
   try {
-    const res = await fetch(`${ragApiUrl}/api/models`);
+    const res = await fetch(`${API_BASE}/models`);
     const data = await res.json();
     if (data.embedding_models || data.not_embedding_models) {
       return [...(data.embedding_models || []), ...(data.not_embedding_models || [])];
@@ -30,12 +32,11 @@ export const fetchAvailableEmbedModels = async (ragApiUrl: string): Promise<stri
 
 /**
  * Fetches available LLM models from the backend RAG API.
- * @param ragApiUrl - The base URL of the RAG API.
  * @returns A promise resolving to an array of LLM model names.
  */
-export const fetchAvailableLlmModels = async (ragApiUrl: string): Promise<string[]> => {
+export const fetchAvailableLlmModels = async (): Promise<string[]> => {
   try {
-    const res = await fetch(`${ragApiUrl}/api/models`);
+    const res = await fetch(`${API_BASE}/models`);
     const data = await res.json();
     if (data.llm_models || data.not_llm_models) {
       return [...(data.llm_models || []), ...(data.not_llm_models || [])];
@@ -53,12 +54,11 @@ export const fetchAvailableLlmModels = async (ragApiUrl: string): Promise<string
 /**
  * Checks if the specified embedding model is ready on the backend.
  * @param model - The embedding model name to check.
- * @param apiBase - The base URL of the backend API.
  * @returns A promise resolving to true if the model is ready, false otherwise.
  */
-export const checkEmbedModelReady = async (model: string, apiBase: string): Promise<boolean> => {
+export const checkEmbedModelReady = async (model: string): Promise<boolean> => {
   try {
-    const res = await fetch(`${apiBase}/api/health/embed-model/${encodeURIComponent(model)}`);
+    const res = await fetch(`${API_BASE}/health/embed-model/${encodeURIComponent(model)}`);
     const data = await res.json();
     return data.embed_model_ready === true;
   } catch {
@@ -69,15 +69,13 @@ export const checkEmbedModelReady = async (model: string, apiBase: string): Prom
 /**
  * Checks if the specified LLM (chat) model is ready and supports tool calling.
  * @param model - The LLM model name to check.
- * @param apiBase - The base URL of the backend API.
  * @returns A promise resolving to { ready: boolean, supportsTools: boolean }.
  */
 export const checkLlmModelReady = async (
-  model: string,
-  apiBase: string
+  model: string
 ): Promise<{ ready: boolean; supportsTools: boolean }> => {
   try {
-    const res = await fetch(`${apiBase}/api/health/chat-model/${encodeURIComponent(model)}`);
+    const res = await fetch(`${API_BASE}/health/chat-model/${encodeURIComponent(model)}`);
     const data = await res.json();
     return {
       ready: data.ready === true || data.chat_model_ready === true,

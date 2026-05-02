@@ -8,7 +8,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=http://rag-service:8000
       - NEXT_PUBLIC_DEFAULT_EMBED_MODEL=BAAI/bge-m3
     depends_on:
       rag-service:
@@ -165,9 +165,10 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=Etc/UTC
-      - CDP_URL=http://localhost:9222
-      # Enable Brave remote debugging - CRITICAL for Playwright CDP connection
+      # Enable Brave remote debugging for Selenium WebDriver connection
       - BRAVE_CLI=--remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 --no-first-run --no-default-browser-check
+      # Direct CDP connection to browser within same container
+      - BROWSER_DEBUG_URL=localhost:9222
       # Additional flags for the browser
       - CUSTOM_PORT=3000
       - CUSTOM_HTTPS_PORT=3001

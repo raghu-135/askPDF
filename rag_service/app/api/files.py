@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.db import (
     DEFAULT_SENTENCES_JSON,
@@ -99,7 +99,7 @@ async def upload_pdf_endpoint(
     # Return immediately with sentences: null to indicate parsing not yet done
     return {
         "sentences": None,
-        "pdfUrl": f"/api/threads/{thread_id}/files/{file_hash}/download",
+        "pdfUrl": f"/threads/{thread_id}/files/{file_hash}/download",
         "fileHash": file_hash,
         "fileName": file.filename,
     }
@@ -192,14 +192,14 @@ async def get_pdf_data_endpoint(thread_id: str, file_hash: str):
         sentences = parsed_data.get("sentences", [])
         return {
             "sentences": sentences,
-            "pdfUrl": f"/api/threads/{thread_id}/files/{file_hash}/download",
+            "pdfUrl": f"/threads/{thread_id}/files/{file_hash}/download",
             "fileHash": file_hash,
         }
 
     # If not parsed yet, return empty sentences
     return {
         "sentences": [],
-        "pdfUrl": f"/api/threads/{thread_id}/files/{file_hash}/download",
+        "pdfUrl": f"/threads/{thread_id}/files/{file_hash}/download",
         "fileHash": file_hash,
     }
 
@@ -224,6 +224,27 @@ async def download_pdf_endpoint(thread_id: str, file_hash: str):
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="PDF not found")
     return FileResponse(file_path, media_type="application/pdf")
+
+
+@router.head("/threads/{thread_id}/files/{file_hash}/download")
+async def check_pdf_exists_endpoint(thread_id: str, file_hash: str):
+    """
+    Lightweight check to verify PDF is ready for download.
+    Returns 200 if file exists and is attached to thread, 404 otherwise.
+    """
+    # Verify thread exists
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Verify file is attached to thread
+    if not await is_file_in_thread(thread_id, file_hash):
+        raise HTTPException(status_code=404, detail="File is not attached to this thread")
+
+    file_path = f"/static/{file_hash}.pdf"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return Response(status_code=200)
 
 
 @router.get("/threads/{thread_id}/files/{file_hash}/sentences")
@@ -597,12 +618,13 @@ async def capture_browser_page_endpoint(
         )
         
         return {
-            "status": "accepted",
+            "status": "ready",
             "thread_id": thread_id,
             "file_hash": capture["file_hash"],
             "url": capture["url"],
             "title": capture["title"],
             "indexing": "in_progress",
+            "ready": True,
         }
         
     except httpx.HTTPError as e:

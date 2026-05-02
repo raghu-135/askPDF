@@ -85,12 +85,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   // Load threads and embedding models on mount
   useEffect(() => {
     loadThreads();
-    const ragApiUrl = process.env.NEXT_PUBLIC_API_URL;
-    if (!ragApiUrl) {
-      console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
-      return;
-    }
-    fetchAvailableEmbedModels(ragApiUrl).then((models) => {
+    fetchAvailableEmbedModels().then((models) => {
       setAvailableEmbedModels(models);
       const envDefault = process.env.NEXT_PUBLIC_DEFAULT_EMBED_MODEL;
       const defaultModel = envDefault || models[0] || '';
@@ -117,13 +112,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
     try {
       // Check if the embedding model is valid before proceeding
-      const apiBase = process.env.NEXT_PUBLIC_API_URL;
-      if (!apiBase) {
-        console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
-        setIsEmbedModelValid(false);
-        return;
-      }
-      const isReady = await checkEmbedModelReady(newThreadEmbedModel, apiBase);
+      const isReady = await checkEmbedModelReady(newThreadEmbedModel);
       if (!isReady) {
         setIsEmbedModelValid(false);
         return;
@@ -192,15 +181,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     const validateEmbedModel = async () => {
       setIsCheckingEmbedModel(true);
       setIsEmbedModelValid(null);
-      const apiBase = process.env.NEXT_PUBLIC_API_URL;
-      if (!apiBase) {
-        console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
-        setIsEmbedModelValid(false);
-        setIsCheckingEmbedModel(false);
-        return;
-      }
       try {
-        const isReady = await checkEmbedModelReady(newThreadEmbedModel, apiBase);
+        const isReady = await checkEmbedModelReady(newThreadEmbedModel);
         setIsEmbedModelValid(isReady);
       } catch (error) {
         setIsEmbedModelValid(false);

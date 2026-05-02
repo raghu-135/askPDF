@@ -14,11 +14,10 @@ RUN apt-get update && apt-get install -y \
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Playwright and FastAPI
-RUN pip install playwright fastapi uvicorn python-multipart
+# Install FastAPI and dependencies for direct CDP
+RUN pip install fastapi uvicorn python-multipart requests reportlab websockets
 
-# Install Chromium browser for Playwright
-RUN playwright install chromium
+# ChromeDriver will be downloaded automatically by webdriver-manager
 
 # Copy service code
 COPY service/ /app/
@@ -39,14 +38,14 @@ RUN echo '#!/command/with-contenv bash\n\
 exec 2>&1\n\
 echo "[capture-api] Starting..."\n\
 \n\
-# Wait for browser CDP to be ready\n\
+# Wait for browser to be ready\n\
 sleep 15\n\
-echo "[capture-api] Waiting for CDP on port 9222..."\n\
+echo "[capture-api] Waiting for browser on port 9222..."\n\
 while ! curl -s http://localhost:9222/json/version > /dev/null 2>&1; do\n\
-    echo "[capture-api] CDP not ready yet, waiting..."\n\
+    echo "[capture-api] Browser not ready yet, waiting..."\n\
     sleep 3\n\
 done\n\
-echo "[capture-api] CDP is ready!"\n\
+echo "[capture-api] Browser is ready!"\n\
 \n\
 # Start the API server\n\
 cd /app\n\

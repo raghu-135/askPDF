@@ -23,7 +23,7 @@ import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
-import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage } from "../lib/api";
+import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage, pollForFileReady } from "../lib/api";
 import { loadThreadTabs, createPdfTabFromUpload, createWebTabFromIndexed, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
@@ -214,7 +214,7 @@ export default function Home() {
       id: data.fileHash,
       fileHash: data.fileHash,
       fileName: data.title || data.url,
-      pdfUrl: `${API_BASE}/api/threads/${activeThread.id}/files/${data.fileHash}/download?t=${Date.now()}`,
+      pdfUrl: `${API_BASE}/threads/${activeThread.id}/files/${data.fileHash}/download?t=${Date.now()}`,
       sentences: transformedSentences,
       text: transformedSentences ? extractTextFromSentences(transformedSentences) : '',
       sourceType: 'web',
@@ -309,12 +309,25 @@ export default function Home() {
   // Handle adding browser page to thread
   const handleAddBrowserToThread = async () => {
     if (!activeThread || isBrowserCapturing) return;
-    
+
     setIsBrowserCapturing(true);
     try {
       const result = await captureBrowserPage(activeThread.id);
-      
-      // Add new PDF tab
+
+      // Pre-verify file is accessible before creating tab
+      const isReady = await pollForFileReady(activeThread.id, result.file_hash, {
+        maxAttempts: 10,
+        intervalMs: 500,
+        timeoutMs: 5000,
+      });
+
+      if (!isReady) {
+        console.error("Browser capture: File not ready after polling");
+        alert("Failed to load captured page. The file may still be processing. Please try again in a moment.");
+        return;
+      }
+
+      // NOW safe to create tab - file is verified ready
       const newTab: PdfTab = {
         id: `browser-${result.file_hash}`,
         fileName: result.title,
@@ -323,15 +336,16 @@ export default function Home() {
         sentences: null,
         sourceType: 'browser',
         sourceUrl: result.url,
+        parsingStatus: 'pending',
       };
-      
+
       setPdfTabs(prev => [...prev, newTab]);
       setActiveTabId(newTab.id);
       setIsBrowserActive(false);
-      
-      // Note: The new tab starts with parsingStatus=null which triggers
-      // the existing polling mechanism in the useEffect
-      
+
+      // Note: parsingStatus='pending' triggers the polling useEffect
+      // which checks /status endpoint until processing completes
+
     } catch (err: any) {
       console.error("Failed to capture browser page:", err);
       alert(`Failed to capture page: ${err.message}`);

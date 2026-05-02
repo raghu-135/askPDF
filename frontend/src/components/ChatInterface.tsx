@@ -270,7 +270,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!activeThread) return;
         try {
             setIsEmbedModelValid(null);
-            const ready = await checkEmbedModelReady(activeThread.embed_model, ragApiUrl);
+            const ready = await checkEmbedModelReady(activeThread.embed_model);
             setIsEmbedModelValid(ready);
             if (!ready) {
                 setIndexingStatus('blocked');
@@ -393,16 +393,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         scrollToBottom();
     }, [messages, autoScroll]);
 
-    // Fetch available LLM models using chat-utils
+    // Fetch available LLM models
     useEffect(() => {
-        if (!ragApiUrl) return;
-        fetchAvailableLlmModels(ragApiUrl)
+        fetchAvailableLlmModels()
             .then(setAvailableModels)
             .catch(err => {
                 console.error("Failed to fetch models", err);
                 setAvailableModels([]);
             });
-    }, [ragApiUrl]);
+    }, []);
 
     // Validate LLM model when changed using chat-utils
     const handleLlmModelChange = async (model: string) => {
@@ -419,7 +418,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
         if (!model) return;
         try {
-            const result = await checkLlmModelReady(model, ragApiUrl);
+            const result = await checkLlmModelReady(model);
             setIsLlmModelValid(result.ready);
             setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
         } catch (err) {
@@ -493,7 +492,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setLlmModel(savedLlm);
             setIsLlmModelValid(null);
             setIsLlmToolsSupported(null);
-            checkLlmModelReady(savedLlm, ragApiUrl).then((result) => {
+            checkLlmModelReady(savedLlm).then((result) => {
                 setIsLlmModelValid(result.ready);
                 setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
             });
@@ -511,7 +510,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (savedWebSearch === '1' || savedWebSearch === '0') {
             setUseWebSearch(savedWebSearch === '1');
         }
-    }, [ragApiUrl]);
+    }, []);
 
 
     const handleSend = async (overrideInput?: string | React.SyntheticEvent) => {
