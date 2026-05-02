@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import requests
 import websockets
+from weasyprint import HTML, CSS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,12 +54,201 @@ async def get_active_tab_via_cdp():
         if not tabs:
             raise Exception("No tabs available")
         
-        # For now, return the first tab (could enhance to find truly active tab)
-        active_tab = tabs[0]
-        return active_tab
+        # Log all available tabs for debugging
+        logger.info(f"Available tabs: {[tab.get('url', 'unknown') for tab in tabs]}")
+        
+        # Find the best tab to capture - prefer content tabs over system panels
+        content_tab = None
+        speedreader_tab = None
+        
+        for tab in tabs:
+            url = tab.get('url', '')
+            title = tab.get('title', '')
+            
+            # Skip system/internal pages
+            if url.startswith(('chrome://', 'chrome-extension://', 'about:')):
+                continue
+                
+            # Look for reader mode content
+            if 'speedreader' in title.lower() or 'reader' in title.lower():
+                if url.startswith('http'):
+                    content_tab = tab
+                    break
+                    
+            # Look for regular web content as fallback
+            if url.startswith(('http://', 'https://')):
+                if not content_tab:  # First content tab
+                    content_tab = tab
+        
+        # If we found a content tab, use it
+        if content_tab:
+            logger.info(f"Selected content tab: {content_tab.get('url')} - {content_tab.get('title')}")
+            return content_tab
+        
+        # Fallback to first non-system tab
+        for tab in tabs:
+            url = tab.get('url', '')
+            if not url.startswith(('chrome://', 'chrome-extension://', 'about:')):
+                logger.info(f"Fallback to tab: {url} - {tab.get('title')}")
+                return tab
+        
+        # Last resort - first tab
+        logger.warning(f"Using first available tab: {tabs[0].get('url')} - {tabs[0].get('title')}")
+        return tabs[0]
         
     except Exception as e:
         logger.error(f"Failed to get active tab: {e}")
+        raise
+
+
+async def capture_page_html_via_cdp(websocket_url):
+    """Capture page HTML content using CDP when PDF generation fails"""
+    logger.info(f"Capturing HTML via CDP: {websocket_url}")
+    try:
+        async with websockets.connect(websocket_url, max_size=100*1024*1024) as websocket:
+            # Enable Page and DOM domains
+            await websocket.send(json.dumps({"id": 1, "method": "Page.enable"}))
+            await websocket.recv()
+            await websocket.send(json.dumps({"id": 2, "method": "DOM.enable"}))
+            await websocket.recv()
+            
+            # Wait for page to be fully loaded, especially for reader mode content
+            await websocket.send(json.dumps({
+                "id": 3,
+                "method": "Page.waitForLoadEvent",
+                "params": {}
+            }))
+            response = await websocket.recv()
+            result = json.loads(response)
+            
+            # Handle console messages that might interfere
+            while 'method' in result:
+                response = await websocket.recv()
+                result = json.loads(response)
+            
+            # Additional wait for dynamic content (reader mode)
+            await websocket.send(json.dumps({
+                "id": 4,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": "new Promise(resolve => setTimeout(resolve, 2000))"
+                }
+            }))
+            response = await websocket.recv()
+            result = json.loads(response)
+            
+            # Handle console messages that might interfere
+            while 'method' in result:
+                response = await websocket.recv()
+                result = json.loads(response)
+            
+            # Get document root
+            await websocket.send(json.dumps({"id": 5, "method": "DOM.getDocument"}))
+            response = await websocket.recv()
+            result = json.loads(response)
+            
+            # Handle console messages that might interfere
+            while 'method' in result:
+                response = await websocket.recv()
+                result = json.loads(response)
+            
+            if 'result' not in result:
+                raise Exception(f"Failed to get document: {result}")
+            
+            root_node_id = result['result']['root']['nodeId']
+            
+            # Get outer HTML of root node
+            await websocket.send(json.dumps({
+                "id": 6,
+                "method": "DOM.getOuterHTML",
+                "params": {"nodeId": root_node_id}
+            }))
+            response = await websocket.recv()
+            result = json.loads(response)
+            
+            # Handle console messages that might interfere
+            while 'method' in result:
+                response = await websocket.recv()
+                result = json.loads(response)
+            
+            if 'result' not in result or 'outerHTML' not in result['result']:
+                raise Exception(f"Failed to get outer HTML: {result}")
+            
+            html_content = result['result']['outerHTML']
+            logger.info(f"Captured HTML content: {len(html_content)} characters")
+            
+            # Check if we got meaningful content (not just "Speedreader" loading)
+            if len(html_content) < 1000 or "speedreader" in html_content.lower() and len(html_content.split()) < 50:
+                logger.warning("HTML content appears to be loading state, waiting longer...")
+                # Wait additional time and try once more
+                await websocket.send(json.dumps({
+                    "id": 7,
+                    "method": "Runtime.evaluate",
+                    "params": {
+                        "expression": "new Promise(resolve => setTimeout(resolve, 3000))"
+                    }
+                }))
+                response = await websocket.recv()
+                result = json.loads(response)
+                
+                # Handle console messages that might interfere
+                while 'method' in result:
+                    response = await websocket.recv()
+                    result = json.loads(response)
+                
+                # Get HTML again
+                await websocket.send(json.dumps({
+                    "id": 8,
+                    "method": "DOM.getOuterHTML",
+                    "params": {"nodeId": root_node_id}
+                }))
+                response = await websocket.recv()
+                result = json.loads(response)
+                
+                # Handle console messages that might interfere
+                while 'method' in result:
+                    response = await websocket.recv()
+                    result = json.loads(response)
+                
+                if 'result' in result and 'outerHTML' in result['result']:
+                    html_content = result['result']['outerHTML']
+                    logger.info(f"Re-captured HTML content after wait: {len(html_content)} characters")
+            
+            return html_content
+            
+    except Exception as e:
+        logger.error(f"HTML capture failed: {e}")
+        raise
+
+
+def convert_html_to_pdf_weasyprint(html_content, pdf_options=None):
+    """Convert HTML content to PDF using WeasyPrint"""
+    try:
+        # Default PDF options similar to CDP
+        if pdf_options is None:
+            pdf_options = {
+                'margin_top': '0.4in',
+                'margin_bottom': '0.4in',
+                'margin_left': '0.4in',
+                'margin_right': '0.4in'
+            }
+        
+        # Create HTML object
+        html_doc = HTML(string=html_content)
+        
+        # Generate PDF
+        pdf_data = html_doc.write_pdf(**pdf_options)
+        
+        # Validate PDF size (100MB limit)
+        MAX_PDF_SIZE = 100 * 1024 * 1024  # 100MB
+        if len(pdf_data) > MAX_PDF_SIZE:
+            raise Exception(f"PDF size ({len(pdf_data)} bytes) exceeds maximum allowed size of {MAX_PDF_SIZE} bytes (100MB)")
+        
+        logger.info(f"WeasyPrint conversion successful: {len(pdf_data)} bytes")
+        return pdf_data
+        
+    except Exception as e:
+        logger.error(f"WeasyPrint conversion failed: {e}")
         raise
 
 
@@ -168,7 +358,30 @@ async def capture_page():
             "marginRight": 0.4
         }
         
-        pdf_data = await generate_pdf_via_cdp(websocket_url, pdf_options)
+        try:
+            pdf_data = await generate_pdf_via_cdp(websocket_url, pdf_options)
+            logger.info("CDP PDF generation successful")
+        except Exception as cdp_error:
+            logger.warning(f"CDP PDF generation failed: {cdp_error}")
+            # Check if it's the "Printing is not available" error
+            if "Printing is not available" in str(cdp_error):
+                logger.info("Falling back to HTML capture + WeasyPrint conversion")
+                try:
+                    # Capture HTML content
+                    html_content = await capture_page_html_via_cdp(websocket_url)
+                    
+                    # Convert HTML to PDF using WeasyPrint
+                    pdf_data = convert_html_to_pdf_weasyprint(html_content)
+                    logger.info("WeasyPrint fallback successful")
+                except Exception as fallback_error:
+                    logger.error(f"WeasyPrint fallback also failed: {fallback_error}")
+                    raise HTTPException(
+                        status_code=500, 
+                        detail=f"Both CDP and WeasyPrint PDF generation failed. CDP error: {cdp_error}. WeasyPrint error: {fallback_error}"
+                    )
+            else:
+                # Re-raise the original CDP error if it's not the "Printing is not available" error
+                raise
         
         # Save PDF
         file_id = str(uuid.uuid4())

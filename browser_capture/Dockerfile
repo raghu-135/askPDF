@@ -9,6 +9,12 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     curl \
     xclip \
+    libpango-1.0-0 \
+    libharfbuzz0b \
+    libpangoft2-1.0-0 \
+    libfontconfig1 \
+    libcairo2 \
+    libgdk-pixbuf-xlib-2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
@@ -16,7 +22,7 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install FastAPI and dependencies for direct CDP
-RUN pip install fastapi uvicorn python-multipart requests websockets
+RUN pip install fastapi uvicorn python-multipart requests websockets weasyprint
 
 # ChromeDriver will be downloaded automatically by webdriver-manager
 
