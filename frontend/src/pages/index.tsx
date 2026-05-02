@@ -23,7 +23,7 @@ import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
-import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE } from "../lib/api";
+import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage } from "../lib/api";
 import { loadThreadTabs, createPdfTabFromUpload, createWebTabFromIndexed, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
@@ -86,6 +86,7 @@ export default function Home() {
   // Browser tab state
   const [showBrowserTab, setShowBrowserTab] = useState(false);
   const [isBrowserActive, setIsBrowserActive] = useState(false);
+  const [isBrowserCapturing, setIsBrowserCapturing] = useState(false);
 
   // Resizable chat panel
   const [chatWidth, setChatWidth] = useState(450);
@@ -305,6 +306,40 @@ export default function Home() {
     );
   };
 
+  // Handle adding browser page to thread
+  const handleAddBrowserToThread = async () => {
+    if (!activeThread || isBrowserCapturing) return;
+    
+    setIsBrowserCapturing(true);
+    try {
+      const result = await captureBrowserPage(activeThread.id);
+      
+      // Add new PDF tab
+      const newTab: PdfTab = {
+        id: `browser-${result.file_hash}`,
+        fileName: result.title,
+        fileHash: result.file_hash,
+        pdfUrl: `/api/threads/${activeThread.id}/files/${result.file_hash}/download`,
+        sentences: null,
+        sourceType: 'browser',
+        sourceUrl: result.url,
+      };
+      
+      setPdfTabs(prev => [...prev, newTab]);
+      setActiveTabId(newTab.id);
+      setIsBrowserActive(false);
+      
+      // Note: The new tab starts with parsingStatus=null which triggers
+      // the existing polling mechanism in the useEffect
+      
+    } catch (err: any) {
+      console.error("Failed to capture browser page:", err);
+      alert(`Failed to capture page: ${err.message}`);
+    } finally {
+      setIsBrowserCapturing(false);
+    }
+  };
+
   // Handle resize with optimized performance
   const handleMouseDown = useCallback(() => {
     setIsResizing(true);
@@ -463,6 +498,8 @@ export default function Home() {
                 setIsBrowserActive(true);
                 setActiveTabId('browser-tab');
               }}
+              onAddBrowserToThread={activeThread ? handleAddBrowserToThread : undefined}
+              isBrowserCapturing={isBrowserCapturing}
             />
           )}
 

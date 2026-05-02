@@ -14,12 +14,16 @@ Endpoints:
 - PUT /api/threads/{thread_id}/files/{file_hash}/annotations - Update annotations
 - POST /api/threads/{thread_id}/web-sources - Add web source
 - POST /api/threads/{thread_id}/web-sources/{url_hash}/refresh - Refresh web source
+- POST /api/threads/{thread_id}/browser-capture - Capture current browser page
 """
 
 import hashlib
+import os
+import shutil
 import traceback
 from typing import Any, Dict, Optional
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -530,6 +534,82 @@ async def refresh_web_source_endpoint(
             "title": new_capture["title"],
             "indexing": "in_progress",
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Browser capture service configuration
+CAPTURE_SERVICE_URL = os.environ.get("CAPTURE_SERVICE_URL", "http://browser-capture:8080")
+
+
+@router.post("/threads/{thread_id}/browser-capture")
+async def capture_browser_page_endpoint(
+    thread_id: str,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Capture the current browser page via browser-capture service,
+    convert to PDF, and add to thread.
+    """
+    try:
+        thread = await get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        
+        # Call browser-capture service
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{CAPTURE_SERVICE_URL}/capture",
+                timeout=60.0
+            )
+            response.raise_for_status()
+            capture = response.json()
+        
+        # Copy from shared volume /captures to /static for serving
+        capture_path = f"/captures/{capture['file_hash']}.pdf"
+        static_path = f"/static/{capture['file_hash']}.pdf"
+        
+        if not os.path.exists(static_path):
+            if os.path.exists(capture_path):
+                shutil.copy(capture_path, static_path)
+            else:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Captured PDF not found at {capture_path}"
+                )
+        
+        # Queue for processing (similar to web sources)
+        await queue_file_processing(
+            background_tasks=background_tasks,
+            thread=thread,
+            file_hash=capture["file_hash"],
+            file_name=capture["title"],
+            file_path=capture["url"],
+            source_type="browser",
+            indexing_metadata={
+                "source_kind": "browser_capture",
+                "url": capture["url"],
+                "title": capture["title"],
+            },
+        )
+        
+        return {
+            "status": "accepted",
+            "thread_id": thread_id,
+            "file_hash": capture["file_hash"],
+            "url": capture["url"],
+            "title": capture["title"],
+            "indexing": "in_progress",
+        }
+        
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=503, 
+            detail=f"Browser capture service unavailable: {e}"
+        )
     except HTTPException:
         raise
     except Exception as e:

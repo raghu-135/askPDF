@@ -35,6 +35,7 @@ services:
       - WEAVIATE_HYBRID_ALPHA=0.7
       - DATA_DIR=/data
       - GOTENBERG_URL=http://gotenberg:3000
+      - CAPTURE_SERVICE_URL=http://browser-capture:8080
       - DEFAULT_EMBEDDING_MODEL=BAAI/bge-m3
       - DEFAULT_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
       - LOCAL_EMBEDDING_MODELS=BAAI/bge-m3
@@ -87,6 +88,7 @@ services:
       - ./rag_service:/app
       - ./data:/data
       - pdf_data:/static
+      - browser_captures:/captures:ro  # Read access to browser captures
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -150,22 +152,38 @@ services:
       timeout: 5s
       retries: 5
 
-  neko:
-    image: lscr.io/linuxserver/brave:latest
+  browser-capture:
+    build:
+      context: ./browser_capture
+      dockerfile: Dockerfile
     ports:
-      - "8090:3000"
-      - "8091:3001"
+      - "8090:3000"      # Browser web UI
+      - "8091:3001"      # Browser HTTPS
+      - "9222:9222"      # CDP debugging port
+      - "8082:8080"      # Capture API
     environment:
       - PUID=1000
       - PGID=1000
       - TZ=Etc/UTC
+      - CDP_URL=http://localhost:9222
+      # Enable Brave remote debugging - CRITICAL for Playwright CDP connection
+      - BRAVE_CLI=--remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 --no-first-run --no-default-browser-check
+      # Additional flags for the browser
+      - CUSTOM_PORT=3000
+      - CUSTOM_HTTPS_PORT=3001
     shm_size: '2gb'
     volumes:
-      - neko_config:/config
+      - browser_captures:/captures
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
 volumes:
   weaviate_data:
   pdf_data:
   postgres_data:
-  neko_config:
+  browser_captures:
 

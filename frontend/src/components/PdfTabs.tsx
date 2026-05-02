@@ -1,12 +1,13 @@
 import React from 'react';
 import { truncateFileName } from '../lib/pdf-utils';
-import { Box, Tabs, Tab, IconButton, Tooltip, Typography } from '@mui/material';
+import { Box, Tabs, Tab, IconButton, Tooltip, Typography, CircularProgress } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import LanguageIcon from '@mui/icons-material/Language';
 import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
+import AddIcon from '@mui/icons-material/Add';
 import type { BackendSentence, BBox } from '../lib/bbox-derivation';
 
 type Sentence = Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] };
@@ -35,9 +36,13 @@ type Props = {
   showBrowserTab?: boolean;
   /** Callback when browser tab is clicked */
   onBrowserTabClick?: () => void;
+  /** Callback when add-to-thread button is clicked on browser tab */
+  onAddBrowserToThread?: () => void;
+  /** Whether browser capture is in progress */
+  isBrowserCapturing?: boolean;
 };
 
-const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, onTabRemove, darkMode = false, showBrowserTab = false, onBrowserTabClick }: Props) {
+const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, onTabRemove, darkMode = false, showBrowserTab = false, onBrowserTabClick, onAddBrowserToThread, isBrowserCapturing = false }: Props) {
   const browserTabId = 'browser-tab';
 
   if (tabs.length === 0 && !showBrowserTab) {
@@ -107,6 +112,28 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <OpenInBrowserIcon fontSize="small" />
                   <Typography component="span">Browser</Typography>
+                  {/* Add to Thread button - only when browser tab is active */}
+                  {isBrowserActive && onAddBrowserToThread && (
+                    <Tooltip title="Add current page to thread">
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddBrowserToThread();
+                          }}
+                          disabled={isBrowserCapturing}
+                          sx={{ ml: 0.5, p: 0.3 }}
+                        >
+                          {isBrowserCapturing ? (
+                            <CircularProgress size={14} />
+                          ) : (
+                            <AddIcon fontSize="small" />
+                          )}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
                 </Box>
               }
               sx={{

@@ -347,6 +347,24 @@ export async function addWebSourceToThread(
   return res.json();
 }
 
+export async function captureBrowserPage(threadId: string): Promise<{
+  status: string;
+  file_hash: string;
+  url: string;
+  title: string;
+  indexing: string;
+}> {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/browser-capture`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const error = await res.text();
+    throw new Error(error);
+  }
+  return res.json();
+}
+
 export type RefreshStatus = 'unchanged' | 'confirmation_required' | 'accepted' | 'refreshed';
 
 export interface RefreshWebSourceResult {
