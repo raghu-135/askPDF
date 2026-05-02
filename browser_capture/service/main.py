@@ -7,12 +7,11 @@ import os
 import hashlib
 import uuid
 import base64
-import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import requests
@@ -23,18 +22,11 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Browser Capture Service - Direct CDP")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 CAPTURES_DIR = Path("/captures")
 CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 
 BROWSER_DEBUG_URL = os.environ.get("BROWSER_DEBUG_URL", "localhost:9222")
+FILE_HASH_PATTERN = re.compile(r"^[a-f0-9]{32}$")
 
 
 class CaptureResponse(BaseModel):
@@ -176,23 +168,7 @@ async def capture_page():
             "marginRight": 0.4
         }
         
-        try:
-            pdf_data = await generate_pdf_via_cdp(websocket_url, pdf_options)
-        except Exception as cdp_error:
-            logger.warning(f"CDP approach failed: {cdp_error}")
-            # Fallback: Create placeholder PDF
-            import io
-            from reportlab.pdfgen import canvas
-            from reportlab.lib.pagesizes import letter
-            
-            buffer = io.BytesIO()
-            p = canvas.Canvas(buffer, pagesize=letter)
-            p.drawString(100, 750, f"Page Capture: {tab_title}")
-            p.drawString(100, 730, f"URL: {tab_url}")
-            p.drawString(100, 710, "CDP WebSocket failed - showing placeholder")
-            p.save()
-            pdf_data = buffer.getvalue()
-            buffer.close()
+        pdf_data = await generate_pdf_via_cdp(websocket_url, pdf_options)
         
         # Save PDF
         file_id = str(uuid.uuid4())
@@ -224,6 +200,9 @@ async def capture_page():
 @app.get("/captures/{file_hash}")
 async def get_capture(file_hash: str):
     """Download a captured PDF by hash."""
+    if not FILE_HASH_PATTERN.fullmatch(file_hash):
+        raise HTTPException(status_code=400, detail="Invalid file hash")
+
     pdf_path = CAPTURES_DIR / f"{file_hash}.pdf"
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
@@ -238,6 +217,9 @@ async def get_capture(file_hash: str):
 @app.get("/captures/{file_hash}/exists")
 async def check_capture_exists(file_hash: str):
     """Check if a capture exists without downloading."""
+    if not FILE_HASH_PATTERN.fullmatch(file_hash):
+        raise HTTPException(status_code=400, detail="Invalid file hash")
+
     pdf_path = CAPTURES_DIR / f"{file_hash}.pdf"
     return {"exists": pdf_path.exists()}
 

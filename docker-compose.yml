@@ -157,21 +157,18 @@ services:
       context: ./browser_capture
       dockerfile: Dockerfile
     ports:
-      - "8090:3000"      # Browser web UI
-      - "8091:3001"      # Browser HTTPS
-      - "9222:9222"      # CDP debugging port
-      - "8082:8080"      # Capture API
+      - "127.0.0.1:8090:3000"  # Browser web UI for the host app iframe
     environment:
       - PUID=1000
       - PGID=1000
       - TZ=Etc/UTC
-      # Enable Brave remote debugging for Selenium WebDriver connection
-      - BRAVE_CLI=--remote-debugging-address=0.0.0.0 --remote-debugging-port=9222 --no-first-run --no-default-browser-check
-      # Direct CDP connection to browser within same container
-      - BROWSER_DEBUG_URL=localhost:9222
-      # Additional flags for the browser
+      # CDP is loopback-only inside this container; rag-service talks to the capture API over Docker DNS.
+      - BRAVE_CLI=--remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --no-first-run --no-default-browser-check
+      - BROWSER_DEBUG_URL=127.0.0.1:9222
       - CUSTOM_PORT=3000
-      - CUSTOM_HTTPS_PORT=3001
+      # Enable Selkies clipboard functionality
+      - SELKIES_CLIPBOARD_ENABLED=true
+      - SELKIES_CLIPBOARD_BRIDGE_ENABLED=true
     shm_size: '2gb'
     volumes:
       - browser_captures:/captures
@@ -187,4 +184,3 @@ volumes:
   pdf_data:
   postgres_data:
   browser_captures:
-

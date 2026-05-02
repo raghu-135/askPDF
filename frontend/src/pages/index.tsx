@@ -524,7 +524,7 @@ export default function Home() {
                 src="http://localhost:8090"
                 style={{ width: '100%', height: '100%', border: 'none' }}
                 title="Browser"
-                allow="camera;microphone"
+                allow="camera; microphone; clipboard-read; clipboard-write"
               />
             ) : isPdfLoading ? (
               <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>

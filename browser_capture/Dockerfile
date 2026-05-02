@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-venv \
     curl \
+    xclip \
     && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
@@ -15,7 +16,7 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install FastAPI and dependencies for direct CDP
-RUN pip install fastapi uvicorn python-multipart requests reportlab websockets
+RUN pip install fastapi uvicorn python-multipart requests websockets
 
 # ChromeDriver will be downloaded automatically by webdriver-manager
 
@@ -61,7 +62,8 @@ RUN touch /etc/s6-overlay/s6-rc.d/user/contents.d/capture-api
 # Ensure the captures directory exists with proper permissions
 RUN mkdir -p /captures && chown -R abc:abc /captures
 
-# Expose ports: 3000/3001 (browser), 9222 (CDP), 8080 (API)
-EXPOSE 3000 3001 9222 8080
+# Expose only the Selkies web UI and internal capture API.
+# CDP remains loopback-only inside the container.
+EXPOSE 3000 8080
 
 # The base image already has ENTRYPOINT ["/init"] which runs s6-rc
