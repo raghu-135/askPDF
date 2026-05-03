@@ -155,7 +155,7 @@ services:
   browser-capture:
     build:
       context: ./browser_capture
-      dockerfile: Dockerfile.playwright
+      dockerfile: Dockerfile
     ports:
       - "127.0.0.1:8090:3000"  # Browser web UI for iframe access (localhost only)
     environment:

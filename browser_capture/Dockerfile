@@ -2,29 +2,25 @@ FROM lscr.io/linuxserver/brave:latest
 
 USER root
 
-# Install Python and dependencies
+# Install Python and system dependencies for Playwright
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-venv \
     curl \
     xclip \
-    libpango-1.0-0 \
-    libharfbuzz0b \
-    libpangoft2-1.0-0 \
-    libfontconfig1 \
-    libcairo2 \
-    libgdk-pixbuf-xlib-2.0-0 \
+    # Playwright browser dependencies
+    wget \
+    gnupg \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install FastAPI and dependencies for direct CDP
-RUN pip install fastapi uvicorn python-multipart requests websockets weasyprint
-
-# ChromeDriver will be downloaded automatically by webdriver-manager
+# Install FastAPI and dependencies for enhanced CDP
+RUN pip install fastapi uvicorn python-multipart requests websockets
 
 # Copy service code
 COPY service/ /app/
@@ -41,23 +37,7 @@ RUN echo 'longrun' > /etc/s6-overlay/s6-rc.d/capture-api/type
 RUN printf '%s\n' 'svc-docker' 'svc-xorg' 'svc-selkies' > /etc/s6-overlay/s6-rc.d/capture-api/dependencies
 
 # Create the run script
-RUN echo '#!/command/with-contenv bash\n\
-exec 2>&1\n\
-echo "[capture-api] Starting..."\n\
-\n\
-# Wait for browser to be ready\n\
-sleep 15\n\
-echo "[capture-api] Waiting for browser on port 9222..."\n\
-while ! curl -s http://localhost:9222/json/version > /dev/null 2>&1; do\n\
-    echo "[capture-api] Browser not ready yet, waiting..."\n\
-    sleep 3\n\
-done\n\
-echo "[capture-api] Browser is ready!"\n\
-\n\
-# Start the API server\n\
-cd /app\n\
-export PYTHONPATH=/app\n\
-exec /opt/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8080 --log-level info --app-dir /app' > /etc/s6-overlay/s6-rc.d/capture-api/run
+RUN echo '#!/command/with-contenv bash\nexec 2>&1\necho "[capture-api] Starting..."\n\n# Wait for browser to be ready\nsleep 15\necho "[capture-api] Waiting for browser on port 9222..."\nwhile ! curl -s http://localhost:9222/json/version > /dev/null 2>&1; do\n    echo "[capture-api] Browser not ready yet, waiting..."\n    sleep 3\ndone\necho "[capture-api] Browser is ready!"\n\n# Start the API server\ncd /app\nexport PYTHONPATH=/app\nexec /opt/venv/bin/uvicorn main_playwright:app --host 0.0.0.0 --port 8080 --log-level info --app-dir /app' > /etc/s6-overlay/s6-rc.d/capture-api/run
 
 RUN chmod +x /etc/s6-overlay/s6-rc.d/capture-api/run
 
