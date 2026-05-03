@@ -16,7 +16,6 @@ declare const process: {
 };
 import dynamic from "next/dynamic";
 import PdfUploader from "../components/PdfUploader";
-import WebUploader from "../components/WebUploader";
 
 const PdfViewer = dynamic(() => import("../components/PdfViewer"), { ssr: false });
 import PlayerControls from "../components/PlayerControls";
@@ -24,7 +23,7 @@ import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
 import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage, pollForFileReady } from "../lib/api";
-import { loadThreadTabs, createPdfTabFromUpload, createWebTabFromIndexed, extractTextFromSentences } from "../lib/thread-utils";
+import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
 
@@ -72,10 +71,6 @@ export default function Home() {
 
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
-
-  // Unified upload state
-  const [webUrl, setWebUrl] = useState("");
-  const [isWebLoading, setIsWebLoading] = useState(false);
 
   // Right panel tab state (0 = Threads, 1 = Chat)
   const [rightPanelTab, setRightPanelTab] = useState(0);
@@ -195,74 +190,6 @@ export default function Home() {
 
     return () => clearInterval(pollInterval);
   }, [activeTab?.fileHash, activeTab?.parsingStatus, activeThread?.id]);
-
-  // Handle web source indexed
-  const handleWebIndexed = async (data: { fileHash: string; url: string; title?: string; status: string; message?: string }) => {
-    if (data.status !== 'accepted' || !activeThread || !data.fileHash) return;
-
-    // Fetch PDF data immediately so PdfViewer has sentences on first load
-    let pdfData;
-    try {
-      const { getPdfByHash } = await import("../lib/api");
-      pdfData = await getPdfByHash(data.fileHash, activeThread.id);
-    } catch (err) {
-      console.warn('PDF data not yet available, creating tab with empty sentences:', err);
-    }
-
-    const transformedSentences = pdfData?.sentences ? transformSentences(pdfData.sentences) : [];
-    const newTab: PdfTab = {
-      id: data.fileHash,
-      fileHash: data.fileHash,
-      fileName: data.title || data.url,
-      pdfUrl: `${API_BASE}/threads/${activeThread.id}/files/${data.fileHash}/download?t=${Date.now()}`,
-      sentences: transformedSentences,
-      text: transformedSentences ? extractTextFromSentences(transformedSentences) : '',
-      sourceType: 'web',
-      sourceUrl: data.url,
-    };
-
-    // Only add if not already present
-    setPdfTabs(prev => {
-      if (prev.some(t => t.id === newTab.id)) return prev;
-      return [...prev, newTab];
-    });
-    setActiveTabId(newTab.id);
-
-    try {
-      const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
-      setActiveThread(updatedThread);
-      setSidebarVersion(v => v + 1);
-    } catch (error) {
-      console.error('Failed to refresh thread after web source:', error);
-    }
-
-    setCurrentPdfId(null);
-    setCurrentChatId(null);
-    setPlayRequestId(null);
-    setActiveSource('pdf');
-  };
-
-  // Shared web submit handler (used by both WebUploader Enter key and PdfUploader button)
-  const handleWebSubmit = async () => {
-    if (!webUrl.trim() || !activeThread) return;
-    setIsWebLoading(true);
-    try {
-      const { addWebSourceToThread } = await import("../lib/api");
-      const result = await addWebSourceToThread(activeThread.id, webUrl.trim());
-      handleWebIndexed({
-        fileHash: result.file_hash,
-        url: webUrl.trim(),
-        title: result.title,
-        status: "accepted",
-      });
-      setWebUrl("");
-    } catch (err: any) {
-      const msg = err?.message || "Failed to index webpage";
-      handleWebIndexed({ fileHash: "", url: webUrl.trim(), status: "error", message: msg });
-    } finally {
-      setIsWebLoading(false);
-    }
-  };
 
   // Handle remove source from thread (deletes from DB + Weaviate, closes tab)
   const handleTabRemove = async (tabId: string) => {
@@ -420,23 +347,7 @@ export default function Home() {
           <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit' }}>
             <Stack direction="row" spacing={2} alignItems="center" justifyContent="flex-start" flexWrap="wrap" useFlexGap>
 
-              {/* Web Uploader (Search Box) - Now on the left */}
-              <WebUploader
-                threadId={activeThread?.id ?? null}
-                onIndexed={(data) => {
-                  handleWebIndexed(data);
-                  setWebUrl("");
-                }}
-                disabled={!activeThread}
-                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
-                value={webUrl}
-                onChange={setWebUrl}
-                onClear={() => setWebUrl("")}
-                onSubmit={handleWebSubmit}
-                isLoading={isWebLoading}
-              />
-
-              {/* PDF Uploader (Unified Button) - Now on the right */}
+              {/* PDF Uploader */}
               <PdfUploader
                 threadId={activeThread?.id ?? null}
                 embeddingModel={activeThread?.embed_model ?? null}
@@ -444,9 +355,6 @@ export default function Home() {
                 onParsingComplete={handleParsingComplete}
                 disabled={!activeThread}
                 tooltipText={!activeThread ? "Select or create a thread first" : undefined}
-                webUrl={webUrl}
-                onWebSubmit={handleWebSubmit}
-                isWebLoading={isWebLoading}
               />
 
               {/* Player Controls */}
@@ -557,7 +465,6 @@ export default function Home() {
                   <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
                     <li>Use the <b>Threads</b> tab on the right to create a new thread with an embedding model.</li>
                     <li>Click <b>Upload PDF</b> to add PDF documents to your thread.</li>
-                    <li>Enter a URL and click <b>Add Webpage</b> to index a website.</li>
                     <li>Switch to the <b>Chat</b> tab to ask questions about your sources using AI.</li>
                     <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
                     <li>Double-click any text to start audio playback from that point.</li>

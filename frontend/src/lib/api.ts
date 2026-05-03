@@ -331,19 +331,6 @@ export async function updateThreadFileAnnotations(
   };
 }
 
-export async function addWebSourceToThread(
-  threadId: string,
-  url: string
-): Promise<{ status: string; file_hash: string; url: string; title?: string; indexing: string }> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/web-sources`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url })
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
 export async function captureBrowserPage(threadId: string): Promise<{
   status: string;
   file_hash: string;
@@ -402,46 +389,6 @@ export async function pollForFileReady(
   }
 
   return false;
-}
-
-export type RefreshStatus = 'unchanged' | 'confirmation_required' | 'accepted' | 'refreshed';
-
-export interface RefreshWebSourceResult {
-  status: RefreshStatus;
-  message?: string;
-  thread_id: string;
-  url_hash?: string;
-  file_hash?: string;
-  old_file_hash?: string;
-  new_file_hash?: string;
-  url?: string;
-  title?: string;
-  indexing?: string;
-  new_content_hash?: string;
-}
-
-/**
- * Refresh a web source by recapturing it as a new PDF.
- *
- * With unified PDF flow, this removes the old PDF, recaptures the URL,
- * and adds the new PDF to the thread.
- */
-export async function refreshWebSource(
-  threadId: string,
-  urlHash: string,
-  contentHash: string | null,
-  confirmed: boolean,
-): Promise<RefreshWebSourceResult> {
-  const res = await fetch(
-    `${API_BASE}/threads/${threadId}/web-sources/${urlHash}/refresh`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content_hash: contentHash, confirmed }),
-    }
-  );
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
 }
 
 export async function removeSourceFromThread(

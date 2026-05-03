@@ -60,8 +60,7 @@ async def _upsert_document_stats(
 ) -> None:
     """Persist thread-local document inventory metadata used by retrieval and agents."""
     file = await get_file(file_hash)
-    source_type = (file.source_type if file and file.source_type else "pdf")
-    url = metadata.get("url") or metadata.get("original_url") or (file.file_path if file and source_type == "web" else None)
+    source_type = "pdf"
     title = metadata.get("title") or (file.file_name if file else file_hash)
     content_hash = metadata.get("content_hash")
 
@@ -73,8 +72,6 @@ async def _upsert_document_stats(
         "indexing_status": ProcessStatus.COMPLETED.value,
         "indexed_at": indexed_at,
     }
-    if url:
-        doc_meta["url"] = url
     if title:
         doc_meta["title"] = title
     if content_hash:
@@ -585,35 +582,12 @@ async def index_web_search_for_thread(
 
 _reembed_locks: Dict[str, asyncio.Lock] = {}
 
-WEBPAGES_DIR = "/static/webpages"
-
 
 def _thread_reembed_lock(thread_id: str) -> asyncio.Lock:
     """Return the per-thread lock used to avoid concurrent re-embed runs."""
     if thread_id not in _reembed_locks:
         _reembed_locks[thread_id] = asyncio.Lock()
     return _reembed_locks[thread_id]
-
-
-def _get_markdown_for_pdf_hash(pdf_hash: str) -> Optional[str]:
-    """
-    Look up markdown content for a PDF hash by scanning web capture mapping files.
-    Returns markdown content if found, None otherwise.
-    """
-    try:
-        if not os.path.exists(WEBPAGES_DIR):
-            return None
-        for filename in os.listdir(WEBPAGES_DIR):
-            if not filename.endswith(".mapping.json"):
-                continue
-            mapping_path = os.path.join(WEBPAGES_DIR, filename)
-            with open(mapping_path, "r", encoding="utf-8") as f:
-                mapping = json.load(f)
-            if mapping.get("pdf_hash") == pdf_hash:
-                return mapping.get("markdown_content")
-    except Exception as e:
-        logger.warning(f"Failed to lookup markdown for PDF hash {pdf_hash}: {e}")
-    return None
 
 
 async def trigger_reembed_for_missing_sources(
@@ -654,18 +628,13 @@ async def trigger_reembed_for_missing_sources(
                     break
                 if await db.has_file_indexed(thread_id, f.file_hash, embedding_model_name):
                     continue
-                # Check if this is a web source (has markdown content in mapping)
-                markdown_content = _get_markdown_for_pdf_hash(f.file_hash)
-                # Unified flow - web sources use markdown, uploaded PDFs use PDF parsing
                 result = await index_document_for_thread(
                     thread_id=thread_id,
                     file_hash=f.file_hash,
                     embedding_model_name=embedding_model_name,
-                    markdown_content=markdown_content,
                 )
                 if result.get("status") == "success":
-                    source_type = "web" if markdown_content else "pdf"
-                    reindexed_files.append({"file_hash": f.file_hash, "source_type": source_type})
+                    reindexed_files.append({"file_hash": f.file_hash, "source_type": "pdf"})
             except Exception as item_err:
                 logger.warning("Skipping re-embed for file %s: %s", f.file_hash, item_err)
 

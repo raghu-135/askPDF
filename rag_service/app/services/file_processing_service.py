@@ -38,7 +38,6 @@ from app.services.nlp_service import split_into_sentences
 from app.services.parsing_service import extract_text_with_coordinates
 
 logger = logging.getLogger(__name__)
-WEBPAGES_DIR = "/static/webpages"
 
 
 def _default_file_status(file_hash: str) -> Dict[str, Any]:

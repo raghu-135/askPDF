@@ -10,12 +10,6 @@ type Props = {
   onParsingComplete?: (fileHash: string, sentences: any[]) => void;
   disabled?: boolean;
   tooltipText?: string;
-  /** Current web URL value - when provided, button switches to web mode */
-  webUrl?: string;
-  /** Handler for web URL submission when in web mode */
-  onWebSubmit?: () => void;
-  /** Loading state for web submission */
-  isWebLoading?: boolean;
 };
 
 const PdfUploader = React.memo(function PdfUploader({
@@ -26,9 +20,6 @@ const PdfUploader = React.memo(function PdfUploader({
   onParsingComplete,
   disabled,
   tooltipText,
-  webUrl,
-  onWebSubmit,
-  isWebLoading = false
 }: Props) {
   const inputId = "pdf-upload-input";
   const [isUploading, setIsUploading] = React.useState(false);
@@ -37,8 +28,7 @@ const PdfUploader = React.memo(function PdfUploader({
     status: FileStatus;
   } | null>(null);
 
-  const isWebMode = !!webUrl?.trim();
-  const isDisabled = disabled || isUploading || isWebLoading;
+  const isDisabled = disabled || isUploading;
 
   // Poll for file status (parsing and indexing)
   React.useEffect(() => {
@@ -145,20 +135,7 @@ const PdfUploader = React.memo(function PdfUploader({
   };
 
 
-  const handleButtonClick = () => {
-    if (isWebMode && onWebSubmit) {
-      onWebSubmit();
-    }
-    // If not in web mode, the label click will trigger file input
-  };
-
-  const buttonLabel = isWebLoading 
-    ? "Uploading..." 
-    : isWebMode 
-      ? "Upload webpage" 
-      : isUploading 
-        ? "Uploading..." 
-        : "Upload PDF";
+  const buttonLabel = isUploading ? "Uploading..." : "Upload PDF";
 
   const button = (
     <>
@@ -168,14 +145,13 @@ const PdfUploader = React.memo(function PdfUploader({
         accept="application/pdf"
         onChange={handleChange}
         style={{ display: "none" }}
-        disabled={isDisabled || isWebMode}
+        disabled={isDisabled}
       />
-      <label htmlFor={inputId} style={{ cursor: isWebMode ? 'default' : 'pointer' }}>
+      <label htmlFor={inputId}>
         <Button
           variant="contained"
           component="span"
           disabled={isDisabled}
-          onClick={isWebMode ? handleButtonClick : undefined}
         >
           {buttonLabel}
         </Button>

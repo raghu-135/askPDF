@@ -12,8 +12,6 @@ Endpoints:
 - DELETE /api/threads/{thread_id}/files/{file_hash} - Remove file from thread
 - GET /api/threads/{thread_id}/files/{file_hash}/annotations - Get annotations
 - PUT /api/threads/{thread_id}/files/{file_hash}/annotations - Update annotations
-- POST /api/threads/{thread_id}/web-sources - Add web source
-- POST /api/threads/{thread_id}/web-sources/{url_hash}/refresh - Refresh web source
 - POST /api/threads/{thread_id}/browser-capture - Capture current browser page
 """
 
@@ -44,8 +42,6 @@ from app.models.requests import (
     ThreadFileAnnotationsResponse,
     ThreadFileAnnotationsUpdateRequest,
     ThreadFileRequest,
-    WebSourceRequest,
-    RefreshWebSourceRequest,
 )
 from app.services.file_processing_service import (
     _default_file_status,
@@ -53,7 +49,6 @@ from app.services.file_processing_service import (
     queue_file_processing,
 )
 from app.services.file_cleanup_service import cleanup_detached_file
-from app.web_capture import capture_webpage_as_pdf, get_webpage_pdf_by_url_hash
 
 router = APIRouter(tags=["files"])
 
@@ -410,151 +405,6 @@ async def update_thread_file_annotations_endpoint(
             created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
             updated_at=row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else row["updated_at"],
         ).dict()
-    except HTTPException:
-        raise
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/threads/{thread_id}/web-sources")
-async def add_web_source_to_thread_endpoint(
-    thread_id: str,
-    req: WebSourceRequest,
-    background_tasks: BackgroundTasks,
-):
-    """
-    Add a webpage URL to a thread: capture as PDF, record in DB, and trigger background indexing.
-    """
-    try:
-        thread = await get_thread(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
-
-        if not req.url.startswith(("http://", "https://")):
-            raise HTTPException(
-                status_code=400, detail="URL must start with http:// or https://"
-            )
-
-        # Capture webpage and convert to PDF
-        capture = await capture_webpage_as_pdf(req.url, force=False)
-
-        # Use the PDF hash as the file identifier
-        pdf_hash = capture["file_hash"]
-        url_hash = capture["url_hash"]
-
-        markdown_content = capture.get("markdown_content") or ""
-        content_hash = hashlib.md5(markdown_content.encode("utf-8")).hexdigest() if markdown_content else None
-
-        await queue_file_processing(
-            background_tasks=background_tasks,
-            thread=thread,
-            file_hash=pdf_hash,
-            file_name=capture["title"],
-            file_path=req.url,
-            source_type="web",
-            indexing_metadata={
-                "source_kind": "webpage",
-                "url": req.url,
-                "title": capture["title"],
-                "url_hash": url_hash,
-                **({"content_hash": content_hash} if content_hash else {}),
-            },
-            markdown_content=markdown_content,
-        )
-
-        return {
-            "status": "accepted",
-            "thread_id": thread_id,
-            "file_hash": pdf_hash,
-            "url_hash": url_hash,
-            "url": req.url,
-            "title": capture["title"],
-            "source_type": "web",
-            "indexing": "in_progress",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/threads/{thread_id}/web-sources/{url_hash}/refresh")
-async def refresh_web_source_endpoint(
-    thread_id: str,
-    url_hash: str,
-    req: RefreshWebSourceRequest,
-    background_tasks: BackgroundTasks,
-):
-    """
-    Refresh a web source by recapturing it as a new PDF.
-    """
-    try:
-        thread = await get_thread(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
-
-        # Look up the URL from the mapping file
-        mapping = await get_webpage_pdf_by_url_hash(url_hash)
-        if not mapping:
-            raise HTTPException(status_code=404, detail="Web source mapping not found. The page may not have been captured yet.")
-
-        url = mapping["url"]
-        old_pdf_hash = mapping["pdf_hash"]
-
-        # Content-change check (compare PDF content hashes)
-        from app.db import get_thread_shape
-        if req.content_hash and not req.confirmed:
-            # Read stored content_hash from thread_stats for the old PDF
-            shape = await get_thread_shape(thread_id)
-            stored_meta = shape["documents"].get(old_pdf_hash, {})
-            stored_hash = stored_meta.get("content_hash")
-
-            if stored_hash and stored_hash == req.content_hash:
-                return {
-                    "status": "unchanged",
-                    "message": "Page content has not changed since last index. No re-indexing needed.",
-                    "thread_id": thread_id,
-                    "url_hash": url_hash,
-                    "file_hash": old_pdf_hash,
-                }
-
-            # Content changed → ask for confirmation
-            return {
-                "status": "confirmation_required",
-                "message": "Page content has changed. Re-indexing will remove the current indexed data and replace it with the new content.",
-                "thread_id": thread_id,
-                "url_hash": url_hash,
-                "file_hash": old_pdf_hash,
-                "new_content_hash": req.content_hash,
-            }
-
-        # Confirmed — remove old, recapture, add new
-        # 1. Remove old PDF from thread
-        await remove_source_from_thread_endpoint(thread_id, old_pdf_hash)
-
-        # 2. Recapture to new PDF
-        new_capture = await capture_webpage_as_pdf(url, force=True)
-        new_pdf_hash = new_capture["file_hash"]
-
-        # 3. Add new PDF to thread
-        add_result = await add_web_source_to_thread_endpoint(
-            thread_id=thread_id,
-            req=WebSourceRequest(url=url),
-            background_tasks=background_tasks,
-        )
-
-        return {
-            "status": "refreshed",
-            "thread_id": thread_id,
-            "url_hash": url_hash,
-            "old_file_hash": old_pdf_hash,
-            "new_file_hash": new_pdf_hash,
-            "url": url,
-            "title": new_capture["title"],
-            "indexing": "in_progress",
-        }
     except HTTPException:
         raise
     except Exception as e:
