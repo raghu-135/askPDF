@@ -607,7 +607,7 @@ async def capture_browser_page_endpoint(
             background_tasks=background_tasks,
             thread=thread,
             file_hash=capture["file_hash"],
-            file_name=capture["title"],
+            file_name=f"{capture['title']} - {capture['url']}",
             file_path=capture["url"],
             source_type="browser",
             indexing_metadata={

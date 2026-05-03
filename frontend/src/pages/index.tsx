@@ -327,24 +327,21 @@ export default function Home() {
         return;
       }
 
-      // NOW safe to create tab - file is verified ready
-      const newTab: PdfTab = {
-        id: `browser-${result.file_hash}`,
-        fileName: result.title,
+      // Backend returns combined "title - url", extract just the title for display
+      const displayTitle = result.title.includes(' - ')
+        ? result.title.split(' - ')[0]
+        : result.title;
+
+      // Transform to match PDF upload format and reuse handler for consistent behavior
+      const uploadData = {
         fileHash: result.file_hash,
-        pdfUrl: `/api/threads/${activeThread.id}/files/${result.file_hash}/download`,
+        fileName: displayTitle,
+        pdfUrl: `/threads/${activeThread.id}/files/${result.file_hash}/download`,
         sentences: null,
-        sourceType: 'browser',
-        sourceUrl: result.url,
-        parsingStatus: 'pending',
       };
 
-      setPdfTabs(prev => [...prev, newTab]);
-      setActiveTabId(newTab.id);
+      await handlePdfUploaded(uploadData);
       setIsBrowserActive(false);
-
-      // Note: parsingStatus='pending' triggers the polling useEffect
-      // which checks /status endpoint until processing completes
 
     } catch (err: any) {
       console.error("Failed to capture browser page:", err);
