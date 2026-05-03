@@ -5,11 +5,12 @@ Simple FastAPI service that captures the current browser page as PDF using direc
 
 import os
 import hashlib
-import uuid
 import base64
 import json
 import logging
 import re
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -23,11 +24,21 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Browser Capture Service - Direct CDP")
 
+# Thread pool for CPU-bound operations (WeasyPrint)
+_thread_pool = ThreadPoolExecutor(max_workers=4)
+
 CAPTURES_DIR = Path("/captures")
 CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 
 BROWSER_DEBUG_URL = os.environ.get("BROWSER_DEBUG_URL", "localhost:9222")
 FILE_HASH_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+
+# HTTP session with connection pooling for CDP requests
+_cdp_session = requests.Session()
+_cdp_session.headers.update({
+    "Connection": "keep-alive",
+    "Accept": "application/json"
+})
 
 
 class CaptureResponse(BaseModel):
@@ -45,8 +56,8 @@ class ErrorResponse(BaseModel):
 async def get_active_tab_via_cdp():
     """Get the currently active tab using direct CDP calls"""
     try:
-        # Get all tabs from debug interface
-        response = requests.get(f"http://{BROWSER_DEBUG_URL}/json", timeout=5)
+        # Get all tabs from debug interface (using pooled session)
+        response = _cdp_session.get(f"http://{BROWSER_DEBUG_URL}/json", timeout=5)
         if response.status_code != 200:
             raise Exception("Failed to get tabs from debug interface")
         
@@ -101,8 +112,54 @@ async def get_active_tab_via_cdp():
         raise
 
 
+async def _wait_for_content_ready(websocket, max_wait_ms=5000, poll_interval_ms=200):
+    """Poll CDP to detect when content is ready (adaptive wait)"""
+    import time
+    start_time = time.time() * 1000
+    msg_id = 100
+    
+    while (time.time() * 1000 - start_time) < max_wait_ms:
+        # Check document ready state and content length
+        await websocket.send(json.dumps({
+            "id": msg_id,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "JSON.stringify({readyState: document.readyState, bodyLength: document.body ? document.body.innerHTML.length : 0, hasContent: document.querySelector('article, main, .content, [class*=reader], [class*=article]') !== null})"
+            }
+        }))
+        
+        response = await websocket.recv()
+        result = json.loads(response)
+        
+        # Handle console messages
+        while 'method' in result:
+            response = await websocket.recv()
+            result = json.loads(response)
+        
+        if 'result' in result and 'result' in result['result'] and 'value' in result['result']['result']:
+            try:
+                state = json.loads(result['result']['result']['value'])
+                is_complete = state.get('readyState') == 'complete'
+                body_length = state.get('bodyLength', 0)
+                has_content_marker = state.get('hasContent', False)
+                
+                # Content is ready if: complete AND (has content marker OR substantial body)
+                if is_complete and (has_content_marker or body_length > 2000):
+                    elapsed = int(time.time() * 1000 - start_time)
+                    logger.info(f"Content ready after {elapsed}ms (readyState={state.get('readyState')}, bodyLength={body_length}, hasContent={has_content_marker})")
+                    return True
+            except (json.JSONDecodeError, KeyError):
+                pass
+        
+        msg_id += 1
+        await asyncio.sleep(poll_interval_ms / 1000)
+    
+    logger.warning(f"Content ready timeout after {max_wait_ms}ms, proceeding with current state")
+    return False
+
+
 async def capture_page_html_via_cdp(websocket_url):
-    """Capture page HTML content using CDP when PDF generation fails"""
+    """Capture page HTML content using CDP when PDF generation fails (optimized)"""
     logger.info(f"Capturing HTML via CDP: {websocket_url}")
     try:
         async with websockets.connect(websocket_url, max_size=100*1024*1024) as websocket:
@@ -112,35 +169,8 @@ async def capture_page_html_via_cdp(websocket_url):
             await websocket.send(json.dumps({"id": 2, "method": "DOM.enable"}))
             await websocket.recv()
             
-            # Wait for page to be fully loaded, especially for reader mode content
-            await websocket.send(json.dumps({
-                "id": 3,
-                "method": "Page.waitForLoadEvent",
-                "params": {}
-            }))
-            response = await websocket.recv()
-            result = json.loads(response)
-            
-            # Handle console messages that might interfere
-            while 'method' in result:
-                response = await websocket.recv()
-                result = json.loads(response)
-            
-            # Additional wait for dynamic content (reader mode)
-            await websocket.send(json.dumps({
-                "id": 4,
-                "method": "Runtime.evaluate",
-                "params": {
-                    "expression": "new Promise(resolve => setTimeout(resolve, 2000))"
-                }
-            }))
-            response = await websocket.recv()
-            result = json.loads(response)
-            
-            # Handle console messages that might interfere
-            while 'method' in result:
-                response = await websocket.recv()
-                result = json.loads(response)
+            # Adaptive wait for content (replaces fixed 5s delay)
+            await _wait_for_content_ready(websocket, max_wait_ms=5000, poll_interval_ms=200)
             
             # Get document root
             await websocket.send(json.dumps({"id": 5, "method": "DOM.getDocument"}))
@@ -178,23 +208,10 @@ async def capture_page_html_via_cdp(websocket_url):
             logger.info(f"Captured HTML content: {len(html_content)} characters")
             
             # Check if we got meaningful content (not just "Speedreader" loading)
-            if len(html_content) < 1000 or "speedreader" in html_content.lower() and len(html_content.split()) < 50:
+            if len(html_content) < 1000 or ("speedreader" in html_content.lower() and len(html_content.split()) < 50):
                 logger.warning("HTML content appears to be loading state, waiting longer...")
-                # Wait additional time and try once more
-                await websocket.send(json.dumps({
-                    "id": 7,
-                    "method": "Runtime.evaluate",
-                    "params": {
-                        "expression": "new Promise(resolve => setTimeout(resolve, 3000))"
-                    }
-                }))
-                response = await websocket.recv()
-                result = json.loads(response)
-                
-                # Handle console messages that might interfere
-                while 'method' in result:
-                    response = await websocket.recv()
-                    result = json.loads(response)
+                # One additional adaptive wait
+                await _wait_for_content_ready(websocket, max_wait_ms=3000, poll_interval_ms=300)
                 
                 # Get HTML again
                 await websocket.send(json.dumps({
@@ -221,28 +238,42 @@ async def capture_page_html_via_cdp(websocket_url):
         raise
 
 
-def convert_html_to_pdf_weasyprint(html_content, pdf_options=None):
-    """Convert HTML content to PDF using WeasyPrint"""
+def _sync_convert_html_to_pdf(html_content, pdf_options):
+    """Synchronous WeasyPrint conversion (runs in thread pool)"""
+    # Default PDF options similar to CDP
+    if pdf_options is None:
+        pdf_options = {
+            'margin_top': '0.4in',
+            'margin_bottom': '0.4in',
+            'margin_left': '0.4in',
+            'margin_right': '0.4in'
+        }
+    
+    # Create HTML object
+    html_doc = HTML(string=html_content)
+    
+    # Generate PDF
+    pdf_data = html_doc.write_pdf(**pdf_options)
+    
+    # Validate PDF size (100MB limit)
+    MAX_PDF_SIZE = 100 * 1024 * 1024  # 100MB
+    if len(pdf_data) > MAX_PDF_SIZE:
+        raise Exception(f"PDF size ({len(pdf_data)} bytes) exceeds maximum allowed size of {MAX_PDF_SIZE} bytes (100MB)")
+    
+    return pdf_data
+
+
+async def convert_html_to_pdf_weasyprint(html_content, pdf_options=None):
+    """Convert HTML content to PDF using WeasyPrint (async, non-blocking)"""
     try:
-        # Default PDF options similar to CDP
-        if pdf_options is None:
-            pdf_options = {
-                'margin_top': '0.4in',
-                'margin_bottom': '0.4in',
-                'margin_left': '0.4in',
-                'margin_right': '0.4in'
-            }
-        
-        # Create HTML object
-        html_doc = HTML(string=html_content)
-        
-        # Generate PDF
-        pdf_data = html_doc.write_pdf(**pdf_options)
-        
-        # Validate PDF size (100MB limit)
-        MAX_PDF_SIZE = 100 * 1024 * 1024  # 100MB
-        if len(pdf_data) > MAX_PDF_SIZE:
-            raise Exception(f"PDF size ({len(pdf_data)} bytes) exceeds maximum allowed size of {MAX_PDF_SIZE} bytes (100MB)")
+        # Offload CPU-bound conversion to thread pool
+        loop = asyncio.get_running_loop()
+        pdf_data = await loop.run_in_executor(
+            _thread_pool,
+            _sync_convert_html_to_pdf,
+            html_content,
+            pdf_options
+        )
         
         logger.info(f"WeasyPrint conversion successful: {len(pdf_data)} bytes")
         return pdf_data
@@ -292,25 +323,23 @@ async def generate_pdf_via_cdp(websocket_url, pdf_options):
 
 @app.get("/health")
 async def health():
-    """Health check for direct CDP service"""
+    """Health check for direct CDP service (optimized with pooled session)"""
     try:
-        # Check if browser debug interface is accessible
-        response = requests.get(f"http://{BROWSER_DEBUG_URL}/json/version", timeout=5)
-        if response.status_code != 200:
-            return {"status": "unhealthy", "browser": "debug_interface_not_accessible"}
-        
-        # Get browser info from debug interface
-        browser_info = response.json()
-        browser_version = browser_info.get('Browser', 'unknown')
-        
-        # Check if tabs are available
-        tabs_response = requests.get(f"http://{BROWSER_DEBUG_URL}/json", timeout=5)
+        # Check if browser debug interface is accessible and get tabs in one flow
+        tabs_response = _cdp_session.get(f"http://{BROWSER_DEBUG_URL}/json", timeout=5)
         if tabs_response.status_code != 200:
-            return {"status": "unhealthy", "browser": "no_tabs_accessible"}
+            return {"status": "unhealthy", "browser": "debug_interface_not_accessible"}
         
         tabs = tabs_response.json()
         if not tabs:
             return {"status": "unhealthy", "browser": "no_tabs_available"}
+        
+        # Get browser version info (reusing pooled connection)
+        version_response = _cdp_session.get(f"http://{BROWSER_DEBUG_URL}/json/version", timeout=5)
+        browser_version = "unknown"
+        if version_response.status_code == 200:
+            browser_info = version_response.json()
+            browser_version = browser_info.get('Browser', 'unknown')
         
         # Return healthy status with browser info
         return {
@@ -383,17 +412,12 @@ async def capture_page():
                 # Re-raise the original CDP error if it's not the "Printing is not available" error
                 raise
         
-        # Save PDF
-        file_id = str(uuid.uuid4())
-        pdf_path = CAPTURES_DIR / f"{file_id}.pdf"
-        
-        with open(pdf_path, 'wb') as f:
-            f.write(pdf_data)
-        
-        # Calculate hash and rename
+        # Compute hash and save directly to final path (streaming, no temp file)
         file_hash = hashlib.md5(pdf_data).hexdigest()
         final_path = CAPTURES_DIR / f"{file_hash}.pdf"
-        pdf_path.rename(final_path)
+        
+        with open(final_path, 'wb') as f:
+            f.write(pdf_data)
         
         logger.info(f"Capture complete: {file_hash} ({len(pdf_data)} bytes)")
         
