@@ -128,14 +128,29 @@ export default function Home() {
   };
 
 
-  // Handle PDF upload - create new tab
+  // Handle PDF upload - create new tab or focus existing
   const handlePdfUploaded = async (data: any) => {
+    const fileHash = data?.fileHash;
+
+    // Check if tab already exists for this file
+    const existingTab = pdfTabs.find(tab => tab.fileHash === fileHash);
+    if (existingTab) {
+      // Focus existing tab instead of creating duplicate
+      setActiveTabId(existingTab.id);
+      setIsBrowserActive(false);
+      setCurrentPdfId(null);
+      setCurrentChatId(null);
+      setPlayRequestId(null);
+      setActiveSource('pdf');
+      return;
+    }
+
     const newTab = createPdfTabFromUpload(data);
 
     setPdfTabs(prev => [...prev, newTab]);
     setActiveTabId(newTab.id);
 
-    if (activeThread && data?.fileHash) {
+    if (activeThread && fileHash) {
       try {
         const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
         setActiveThread(updatedThread);
@@ -173,22 +188,43 @@ export default function Home() {
       return;
     }
 
-    const pollInterval = setInterval(async () => {
+    let pollInterval: NodeJS.Timeout | null = null;
+
+    const pollSentences = async () => {
       try {
         // Single endpoint returns both status and sentences
         const parsedData = await getParsedSentences(activeTab.fileHash, activeThread.id);
-        if (parsedData.sentences !== null) {
+        if (parsedData?.sentences !== null && Array.isArray(parsedData.sentences) && parsedData.sentences.length > 0) {
           // Parsing complete - sentences is an array
           handleParsingComplete(activeTab.fileHash, parsedData.sentences);
-          clearInterval(pollInterval);
+          if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+          }
         }
-        // If sentences is null, parsing is still pending - continue polling
-      } catch (error) {
-        console.error("Failed to fetch parsed sentences", error);
+        // If sentences is null, undefined, not an array, or empty, parsing is still pending - continue polling
+      } catch (error: any) {
+        // Log error but don't crash - file may not be ready yet
+        if (error?.message?.includes('not attached')) {
+          console.log(`File ${activeTab.fileHash} not yet attached to thread, will retry...`);
+        } else {
+          console.error("Failed to fetch parsed sentences:", error);
+        }
+        // Continue polling - don't throw
       }
-    }, 5000);
+    };
 
-    return () => clearInterval(pollInterval);
+    // Run immediately
+    pollSentences();
+
+    // Then set up interval
+    pollInterval = setInterval(pollSentences, 5000);
+
+    return () => {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
   }, [activeTab?.fileHash, activeTab?.parsingStatus, activeThread?.id]);
 
   // Handle remove source from thread (deletes from DB + Weaviate, closes tab)

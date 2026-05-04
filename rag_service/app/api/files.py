@@ -256,7 +256,8 @@ async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str):
 
         # Verify file is attached to thread
         if not await is_file_in_thread(thread_id, file_hash):
-            raise HTTPException(status_code=404, detail="File is not attached to this thread")
+            # Return empty sentences instead of 404 - file may still be processing
+            return DEFAULT_SENTENCES_JSON
 
         parsed_data = await get_file_parsed_sentences(file_hash)
         # Return data even if sentences is null (parsing pending) - never 404

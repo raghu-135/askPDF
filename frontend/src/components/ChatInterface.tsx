@@ -451,7 +451,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         // Keep polling if either indexing is in progress OR embed model is not yet valid/checked
         if (indexingStatus !== 'indexing' && isEmbedModelValid === true) return;
 
-        const intervalId = setInterval(async () => {
+        const pollStatus = async () => {
             try {
                 const status = await getThreadIndexStatus(activeThread.id);
 
@@ -473,12 +473,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     status.status === 'blocked' ||
                     status.embed_model_ready === false
                 ) {
-                    clearInterval(intervalId);
+                    if (intervalId) {
+                        clearInterval(intervalId);
+                        intervalId = null;
+                    }
                 }
             } catch (error) {
                 console.error('Status check failed:', error);
+                // Don't throw - let polling continue
             }
-        }, 5000);
+        };
+
+        // Run immediately
+        pollStatus();
+
+        // Then set up interval
+        let intervalId: NodeJS.Timeout | null = setInterval(pollStatus, 5000);
 
         return () => clearInterval(intervalId);
     }, [activeThread?.id, indexingStatus, isEmbedModelValid]);
