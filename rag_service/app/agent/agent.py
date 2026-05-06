@@ -428,38 +428,6 @@ async def ask_for_clarification(options: List[str]) -> str:
     return json.dumps({"__clarification_options__": options})
 
 
-@tool
-async def list_uploaded_documents(config: RunnableConfig = None) -> str:
-    """
-    List indexed documents with file name, file hash, and upload order.
-    """
-    try:
-        conf = config.get("configurable", {}) if config else {}
-        thread_id = conf.get("thread_id")
-        if not thread_id:
-            return "No thread context found."
-
-        from app.db import get_thread_shape as _get_shape
-        shape = await _get_shape(thread_id)
-        docs = shape["documents"]
-
-        if not docs:
-            return "No documents are uploaded to this thread."
-
-        doc_list = [
-            {
-                "index": i + 1,
-                "file_name": meta["file_name"],
-                "file_hash": fh,
-                "source_type": meta.get("source_type", "pdf"),
-                "chunks": meta.get("chunk_count", 0),
-                "status": meta.get("indexing_status", "unknown"),
-            }
-            for i, (fh, meta) in enumerate(docs.items())
-        ]
-        return json.dumps(doc_list, indent=2)
-    except Exception as e:
-        return f"Error listing documents: {e}"
 
 
 @tool
