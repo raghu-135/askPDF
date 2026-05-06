@@ -2,8 +2,7 @@
  * Model-related API calls for fetching and checking model health/status.
  */
 
-// Use relative URL for proper client-side and server-side operation
-const API_BASE = "/api";
+import { API_BASE } from "./api";
 
 /**
  * Fetches available embedding models from the backend RAG API.
@@ -11,7 +10,7 @@ const API_BASE = "/api";
  */
 export const fetchAvailableEmbedModels = async (): Promise<string[]> => {
   try {
-    const res = await fetch(`${API_BASE}/models`);
+    const res = await fetch(`${API_BASE}/api/models`);
     const data = await res.json();
     if (data.embedding_models || data.not_embedding_models) {
       return [...(data.embedding_models || []), ...(data.not_embedding_models || [])];
@@ -36,7 +35,7 @@ export const fetchAvailableEmbedModels = async (): Promise<string[]> => {
  */
 export const fetchAvailableLlmModels = async (): Promise<string[]> => {
   try {
-    const res = await fetch(`${API_BASE}/models`);
+    const res = await fetch(`${API_BASE}/api/models`);
     const data = await res.json();
     if (data.llm_models || data.not_llm_models) {
       return [...(data.llm_models || []), ...(data.not_llm_models || [])];
@@ -58,7 +57,7 @@ export const fetchAvailableLlmModels = async (): Promise<string[]> => {
  */
 export const checkEmbedModelReady = async (model: string): Promise<boolean> => {
   try {
-    const res = await fetch(`${API_BASE}/health/embed-model/${encodeURIComponent(model)}`);
+    const res = await fetch(`${API_BASE}/api/health/embed-model/${encodeURIComponent(model)}`);
     const data = await res.json();
     return data.embed_model_ready === true;
   } catch {
@@ -75,7 +74,7 @@ export const checkLlmModelReady = async (
   model: string
 ): Promise<{ ready: boolean; supportsTools: boolean }> => {
   try {
-    const res = await fetch(`${API_BASE}/health/chat-model/${encodeURIComponent(model)}`);
+    const res = await fetch(`${API_BASE}/api/health/chat-model/${encodeURIComponent(model)}`);
     const data = await res.json();
     return {
       ready: data.ready === true || data.chat_model_ready === true,

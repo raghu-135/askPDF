@@ -4,9 +4,12 @@ import {
   type AnnotationTransferItem,
 } from "./annotation-utils";
 
-// Unified API base - use relative URL for proper client-side and server-side operation
-// Next.js dev server proxies /api to the RAG service
-export const API_BASE = "/api";
+// Unified API base - RAG service handles all endpoints
+const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+if (!apiUrl) {
+  console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
+}
+export const API_BASE = apiUrl || "";
 
 // ============ PDF Upload ============
 
@@ -59,7 +62,7 @@ export interface UploadResponse {
 export async function uploadPdf(file: File, threadId: string): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/threads/${threadId}/files/upload`, { method: "POST", body: form });
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/upload`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -76,7 +79,7 @@ export async function getFileStatus(
   if (options?.section) params.set("section", options.section);
   if (options?.embeddingModel) params.set("embedding_model", options.embeddingModel);
   const query = params.toString();
-  const url = `${API_BASE}/threads/${threadId}/files/${fileHash}/status${query ? `?${query}` : ""}`;
+  const url = `${API_BASE}/api/threads/${threadId}/files/${fileHash}/status${query ? `?${query}` : ""}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -89,13 +92,13 @@ export interface PdfData {
 }
 
 export async function getPdfByHash(fileHash: string, threadId: string): Promise<PdfData> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/files/${fileHash}`);
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/${fileHash}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getParsedSentences(fileHash: string, threadId: string): Promise<{ version: string; sentences: any[] }> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/files/${fileHash}/sentences`);
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/${fileHash}/sentences`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -103,7 +106,7 @@ export async function getParsedSentences(fileHash: string, threadId: string): Pr
 // ============ TTS ============
 
 export async function ttsSentence(text: string, voice: string, speed: number) {
-  const res = await fetch(`/api/tts`, {
+  const res = await fetch(`${API_BASE}/api/tts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, voice, speed })
@@ -184,7 +187,7 @@ export interface Message {
 }
 
 export async function createThread(name: string, embedModel: string): Promise<Thread> {
-  const res = await fetch(`${API_BASE}/threads`, {
+  const res = await fetch(`${API_BASE}/api/threads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, embed_model: embedModel })
@@ -194,19 +197,19 @@ export async function createThread(name: string, embedModel: string): Promise<Th
 }
 
 export async function listThreads(): Promise<{ threads: Thread[] }> {
-  const res = await fetch(`${API_BASE}/threads`);
+  const res = await fetch(`${API_BASE}/api/threads`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getThread(threadId: string): Promise<Thread & { files: ThreadFile[], stats: any }> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}`);
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function updateThread(threadId: string, name: string): Promise<Thread> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}`, {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name })
@@ -216,7 +219,7 @@ export async function updateThread(threadId: string, name: string): Promise<Thre
 }
 
 export async function getThreadSettings(threadId: string): Promise<ThreadSettings> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/settings`);
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/settings`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -225,7 +228,7 @@ export async function updateThreadSettings(
   threadId: string,
   settings: Partial<ThreadSettings>
 ): Promise<ThreadSettings> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/settings`, {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings)
@@ -235,7 +238,7 @@ export async function updateThreadSettings(
 }
 
 export async function getPromptTools(): Promise<{ tools: PromptToolDefinition[]; defaults: PromptDefaults }> {
-  const res = await fetch(`${API_BASE}/threads/prompt-tools`);
+  const res = await fetch(`${API_BASE}/api/threads/prompt-tools`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -249,7 +252,7 @@ export async function getPromptPreview(payload: {
   intent_agent_ran?: boolean;
   reasoning_mode?: boolean;
 }): Promise<{ prompt: string }> {
-  const res = await fetch(`${API_BASE}/threads/prompt-preview`, {
+  const res = await fetch(`${API_BASE}/api/threads/prompt-preview`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -259,7 +262,7 @@ export async function getPromptPreview(payload: {
 }
 
 export async function deleteThread(threadId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}`, {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}`, {
     method: "DELETE"
   });
   if (!res.ok) throw new Error(await res.text());
@@ -271,7 +274,7 @@ export async function addFileToThread(
   fileName: string,
   text?: string
 ): Promise<any> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/files`, {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/files`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -285,7 +288,7 @@ export async function addFileToThread(
 }
 
 export async function getThreadFiles(threadId: string): Promise<{ files: ThreadFile[] }> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/files`);
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/files`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -302,7 +305,7 @@ export async function getThreadFileAnnotations(
   threadId: string,
   fileHash: string
 ): Promise<ThreadFileAnnotationsResponse> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/files/${fileHash}/annotations`);
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/${fileHash}/annotations`);
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return {
@@ -316,7 +319,7 @@ export async function updateThreadFileAnnotations(
   fileHash: string,
   annotations: AnnotationTransferItem[]
 ): Promise<ThreadFileAnnotationsResponse> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/files/${fileHash}/annotations`, {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/${fileHash}/annotations`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -339,7 +342,7 @@ export async function captureBrowserPage(threadId: string): Promise<{
   indexing: string;
   ready?: boolean;
 }> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/browser-capture`, {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/browser-capture`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });
@@ -374,7 +377,7 @@ export async function pollForFileReady(
 
     try {
       const res = await fetch(
-        `${API_BASE}/threads/${threadId}/files/${fileHash}/download`,
+        `${API_BASE}/api/threads/${threadId}/files/${fileHash}/download`,
         { method: "HEAD" }
       );
       if (res.ok) {
@@ -395,7 +398,7 @@ export async function removeSourceFromThread(
   threadId: string,
   fileHash: string
 ): Promise<{ status: string; removed_from_db: boolean }> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/files/${fileHash}`, {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/${fileHash}`, {
     method: "DELETE"
   });
   if (!res.ok) throw new Error(await res.text());
@@ -407,13 +410,13 @@ export async function getThreadMessages(
   limit: number = 100,
   offset: number = 0
 ): Promise<{ messages: Message[] }> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/messages?limit=${limit}&offset=${offset}`);
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/messages?limit=${limit}&offset=${offset}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function deleteMessage(messageId: string): Promise<{ deleted_ids: string[] }> {
-  const res = await fetch(`${API_BASE}/messages/${messageId}`, {
+  const res = await fetch(`${API_BASE}/api/messages/${messageId}`, {
     method: "DELETE"
   });
   if (!res.ok) throw new Error(await res.text());
@@ -486,7 +489,7 @@ export async function threadChat(
 
   while (true) {
     try {
-      const res = await fetch(`${API_BASE}/threads/${threadId}/chat`, {
+      const res = await fetch(`${API_BASE}/api/threads/${threadId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -519,7 +522,7 @@ export async function getThreadIndexStatus(threadId: string): Promise<{
   stats: any;
   embed_model_ready?: boolean;
 }> {
-  const res = await fetch(`${API_BASE}/threads/${threadId}/indexing/status`);
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/indexing/status`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

@@ -3,15 +3,6 @@ const nextConfig = {
   devIndicators: false,
   // Enable gzip compression for API responses
   compress: true,
-  // Proxy API requests to RAG service
-  async rewrites() {
-    return [
-      {
-        source: '/api/:path*',
-        destination: 'http://rag-service:8000/api/:path*',
-      },
-    ];
-  },
   // Optimize package imports for better tree-shaking
   experimental: {
     optimizePackageImports: ['@mui/material', '@mui/icons-material', '@mui/system', '@embedpdf/core'],

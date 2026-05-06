@@ -26,7 +26,10 @@ async def repair_thread_documents_meta(thread_id: str, embedding_model: str, fil
     vector_db = get_vector_db()
     attached_hashes = {f.file_hash for f in files}
     shape = await get_thread_shape(thread_id)
-    for stale_hash in list(shape.get("documents", {}).keys()):
+    # Filter out non-dict entries (e.g., 'updated_at' timestamp added by merge_jsonb_field)
+    documents = shape.get("documents", {})
+    file_hashes = {k for k, v in documents.items() if isinstance(v, dict)}
+    for stale_hash in list(file_hashes):
         if stale_hash not in attached_hashes:
             await remove_document_from_stats(thread_id, stale_hash)
 

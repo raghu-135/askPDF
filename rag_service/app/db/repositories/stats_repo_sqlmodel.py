@@ -31,15 +31,21 @@ class StatsRepository:
             return self._session
         return async_session_maker()
 
-    def _load_documents_meta(self, raw: Optional[str]) -> Dict[str, Any]:
+    def _load_documents_meta(self, raw: Optional[Any]) -> Dict[str, Any]:
         """Deserialize the documents_meta JSON column."""
         if not raw:
             return {}
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
+        # If already a dict, return it directly
+        if isinstance(raw, dict):
+            return raw
+        # If it's a string, try to parse it as JSON
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
 
     async def get_or_create(self, thread_id: str) -> Dict[str, Any]:
         """Get or create thread stats row."""
@@ -99,6 +105,10 @@ class StatsRepository:
                 stats.avg_qa_chars = new_chars / new_pairs
 
             await session.flush()
+
+    async def increment_qa_stats(self, thread_id: str, qa_chars: int) -> None:
+        """Alias for record_qa for backward compatibility."""
+        await self.record_qa(thread_id, qa_chars)
 
     async def update_documents_meta(
         self,
@@ -228,9 +238,7 @@ class StatsRepository:
                 "total_qa_chars": stats.total_qa_chars,
                 "avg_qa_chars": round(stats.avg_qa_chars, 1),
                 "last_qa_at": stats.last_qa_at,
-                "documents": self._load_documents_meta(
-                    json.dumps(stats.documents_meta) if stats.documents_meta else None
-                ),
+                "documents": self._load_documents_meta(stats.documents_meta),
             }
 
     async def get_thread_shape(self, thread_id: str) -> Dict[str, Any]:

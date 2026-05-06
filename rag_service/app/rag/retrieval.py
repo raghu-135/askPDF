@@ -15,7 +15,13 @@ async def get_document_name_lookup(thread_id: str) -> Dict[str, str]:
 
     try:
         shape = await get_thread_shape(thread_id)
-        return {fh: meta.get("file_name", fh) for fh, meta in shape.get("documents", {}).items()}
+        documents = shape.get("documents", {})
+        # Filter out non-dict entries (e.g., 'updated_at' timestamp added by merge_jsonb_field)
+        return {
+            fh: meta.get("file_name", fh)
+            for fh, meta in documents.items()
+            if isinstance(meta, dict)
+        }
     except Exception as exc:
         logger.warning("Failed to load thread document metadata: %s", exc)
         return {}

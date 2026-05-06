@@ -1,5 +1,3 @@
-const API_BASE = "/api";
-
 /**
  * Fetches available TTS voices from the unified frontend TTS API.
  * Accepts multiple payload shapes and normalizes the result to voice ids.
@@ -7,7 +5,7 @@ const API_BASE = "/api";
  * @returns A normalized list of available voice ids.
  */
 export async function getVoices(): Promise<string[]> {
-    const res = await fetch(`${API_BASE}/tts?action=voices`);
+    const res = await fetch(`/api/tts?action=voices`);
     if (!res.ok) {
         console.error("Failed to fetch voices");
         return [];
@@ -38,7 +36,7 @@ export async function getVoices(): Promise<string[]> {
  * @returns Audio URL payload from the TTS API.
  */
 export async function ttsSentence(text: string, voice: string, speed: number): Promise<{ audioUrl: string }> {
-    const res = await fetch(`${API_BASE}/tts`, {
+    const res = await fetch(`/api/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, voice, speed }),
