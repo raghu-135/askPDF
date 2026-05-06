@@ -843,7 +843,7 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
         if not thread_id:
             return "No thread context found."
 
-        from database import get_thread_shape as _get_shape
+        from app.db import get_thread_shape as _get_shape
         shape = await _get_shape(thread_id)
 
         qa_pairs = shape["total_qa_pairs"]
