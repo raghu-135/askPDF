@@ -1,6 +1,8 @@
 /**
- * Retry utilities for API calls with exponential backoff
+ * Retry utilities for API calls with exponential backoff and smart error handling
  */
+
+import { classifyError, shouldStopPolling, isRetryableError, isNotFoundError, getRateLimitDelay } from './error-utils';
 
 export interface RetryOptions {
   maxRetries?: number;
@@ -14,6 +16,8 @@ export interface RetryResult<T> {
   data?: T;
   error?: any;
   attempts: number;
+  stopped?: boolean; // For polling operations
+  resourceNotFound?: boolean; // For deleted resources
 }
 
 /**
@@ -27,7 +31,7 @@ export async function withRetry<T>(
     maxRetries = 3,
     baseDelay = 1000,
     maxDelay = 10000,
-    retryableErrors = () => true
+    retryableErrors = isRetryableError
   } = options;
 
   let lastError: any;
@@ -48,22 +52,26 @@ export async function withRetry<T>(
         return {
           success: false,
           error: lastError,
-          attempts: attempt
+          attempts: attempt,
+          resourceNotFound: isNotFoundError(lastError)
         };
       }
       
       // Calculate delay with exponential backoff
       const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
-      console.warn(`Retry attempt ${attempt}/${maxRetries} failed, retrying in ${delay}ms:`, error);
+      // Use rate limit delay if applicable
+      const actualDelay = getRateLimitDelay(lastError, delay);
+      console.warn(`Retry attempt ${attempt}/${maxRetries} failed, retrying in ${actualDelay}ms:`, error);
       
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise(resolve => setTimeout(resolve, actualDelay));
     }
   }
   
   return {
     success: false,
     error: lastError,
-    attempts: maxRetries
+    attempts: maxRetries,
+    resourceNotFound: isNotFoundError(lastError)
   };
 }
 
@@ -78,12 +86,12 @@ export async function withPollingRetry<T>(
     shouldStop?: (result: T) => boolean;
     retryableErrors?: (error: any) => boolean;
   } = {}
-): Promise<{ success: boolean; data?: T; error?: any; stopped: boolean }> {
+): Promise<{ success: boolean; data?: T; error?: any; stopped: boolean; resourceNotFound?: boolean }> {
   const {
     maxRetries = 3,
     interval = 5000,
     shouldStop = () => false,
-    retryableErrors = () => true
+    retryableErrors = isRetryableError
   } = options;
 
   let consecutiveFailures = 0;
@@ -97,7 +105,8 @@ export async function withPollingRetry<T>(
         return {
           success: true,
           data: result,
-          stopped: true
+          stopped: true,
+          resourceNotFound: false
         };
       }
       
@@ -106,27 +115,34 @@ export async function withPollingRetry<T>(
       
     } catch (error) {
       consecutiveFailures++;
-      console.error(`Polling attempt ${consecutiveFailures}/${maxRetries} failed:`, error);
+      const errorClassified = classifyError(error);
       
-      // Check if error is retryable
-      if (!retryableErrors(error)) {
+      console.error(`Polling attempt ${consecutiveFailures}/${maxRetries} failed (${errorClassified.type}):`, error);
+      
+      // Check if error should stop polling
+      if (shouldStopPolling(error) || !retryableErrors(error)) {
         return {
           success: false,
           error,
-          stopped: false
+          stopped: false,
+          resourceNotFound: isNotFoundError(error)
         };
       }
     }
     
     // Wait before next attempt
     if (consecutiveFailures < maxRetries) {
-      await new Promise(resolve => setTimeout(resolve, interval));
+      // Use rate limit delay if applicable
+      const lastError = consecutiveFailures > 0 ? new Error('Previous error') : null;
+      const actualDelay = lastError ? getRateLimitDelay(lastError, interval) : interval;
+      await new Promise(resolve => setTimeout(resolve, actualDelay));
     }
   }
   
   return {
     success: false,
     error: consecutiveFailures > 0 ? new Error(`Max retries (${maxRetries}) exceeded`) : undefined,
-    stopped: false
+    stopped: false,
+    resourceNotFound: false
   };
 }

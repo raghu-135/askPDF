@@ -47,6 +47,7 @@ import {
     getPromptPreview
 } from '../lib/api';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
+import { isRetryableError } from '../lib/error-utils';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/models-api';
 import ChatSettingsDialog from './ChatSettingsDialog';
 
@@ -477,7 +478,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         status.status === 'blocked' ||
                         status.embed_model_ready === false
                     ),
-                    retryableErrors: (error) => true // All errors are retryable for status checks
+                    retryableErrors: (error) => isRetryableError(error) // Use smart error classification
                 }
             );
 
@@ -498,15 +499,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 }
             }
 
+            // Handle polling termination
             if (result.stopped || !result.success) {
-                // Stop polling on success or max retries exceeded
+                // Clear polling interval
                 if (intervalId) {
                     clearInterval(intervalId);
                     intervalId = null;
                 }
                 
                 if (!result.success) {
-                    setIndexingStatus('error');
+                    // Handle different error types
+                    if (result.resourceNotFound) {
+                        // Thread was deleted - reset to initial state
+                        console.log('Thread no longer exists, stopping polling');
+                        setIndexingStatus('checking');
+                        setIsEmbedModelValid(false);
+                    } else {
+                        // Other error - set error state
+                        setIndexingStatus('error');
+                    }
                 }
             }
         };

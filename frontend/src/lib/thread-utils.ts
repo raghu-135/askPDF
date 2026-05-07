@@ -23,9 +23,21 @@ export async function loadThreadTabs(thread: Thread): Promise<PdfTab[]> {
         sentences: transformedSentences,
         text: extractTextFromSentences(transformedSentences),
         sourceType: 'pdf',
+        parsingStatus: 'completed',
       });
     } catch (err) {
-      console.warn(`Failed to load file ${file.file_hash}:`, err);
+      console.warn(`Failed to load file ${file.file_hash}, creating tab with pending status:`, err);
+      // Create tab with basic info even if API call fails
+      loadedTabs.push({
+        id: file.file_hash,
+        fileName: file.file_name,
+        fileHash: file.file_hash,
+        pdfUrl: `${API_BASE}/api/threads/${thread.id}/files/${file.file_hash}/download?t=${Date.now()}`,
+        sentences: null,
+        text: '',
+        sourceType: 'pdf',
+        parsingStatus: 'pending',
+      });
     }
   }
   

@@ -14,7 +14,8 @@ import {
   type FileStatus,
   type ProcessStatus,
   ProcessStatusHelper,
-} from '@/lib/api';
+} from '../lib/api';
+import { isRetryableError, isNotFoundError } from '../lib/error-utils';
 
 interface UseFileProcessingReturn {
   status: FileStatus | null;
@@ -86,6 +87,16 @@ export function useFileProcessing(
       } catch (e) {
         sentenceAttempts++;
         console.log(`Sentences fetch attempt ${sentenceAttempts} failed, retrying...`);
+        
+        // Check if error should stop retrying
+        if (!isRetryableError(e)) {
+          if (isNotFoundError(e)) {
+            console.log('File or thread no longer exists, stopping sentences fetch');
+          } else {
+            console.log('Permanent error in sentences fetch:', e?.message);
+          }
+          break;
+        }
         
         if (sentenceAttempts < maxSentenceRetries) {
           await new Promise(resolve => setTimeout(resolve, sentenceRetryDelay));
@@ -177,7 +188,26 @@ export function useFileProcessing(
         // Continue polling for pending/running states
       } catch (e) {
         console.error('Polling error:', e);
-        // Don't stop polling on transient errors
+        
+        // Check if error should stop polling
+        if (!isRetryableError(e)) {
+          if (isNotFoundError(e)) {
+            // File or thread was deleted
+            console.log('File or thread no longer exists, stopping polling');
+            setError('Resource not found');
+          } else {
+            // Other permanent error
+            setError(`Polling failed: ${e?.message || 'Unknown error'}`);
+          }
+          setIsPolling(false);
+          if (pollIntervalId) {
+            clearInterval(pollIntervalId);
+          }
+          return;
+        }
+        
+        // Transient error - continue polling
+        console.log('Transient error, continuing polling:', e?.message);
       }
     };
 

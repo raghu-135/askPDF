@@ -1,6 +1,7 @@
 import { Button, Tooltip } from "@mui/material";
 import React from "react";
 import { getFileStatus, getParsedSentences, FileStatus, ProcessStatusHelper, uploadPdf as apiUploadPdf } from "../lib/api";
+import { isRetryableError, isNotFoundError } from "../lib/error-utils";
 
 type Props = {
   threadId?: string | null;
@@ -83,6 +84,16 @@ const PdfUploader = React.memo(function PdfUploader({
             onParsingComplete(fileStatus.fileHash, parsedData.sentences);
           } catch (error) {
             console.error("Failed to fetch parsed sentences", error);
+            
+            // Check if error should stop retrying
+            if (!isRetryableError(error)) {
+              if (isNotFoundError(error)) {
+                console.log('File or thread no longer exists, stopping sentences fetch');
+              } else {
+                console.log('Permanent error in sentences fetch:', error?.message);
+              }
+              // Don't retry for permanent errors
+            }
           }
         }
 
@@ -95,6 +106,16 @@ const PdfUploader = React.memo(function PdfUploader({
         }
       } catch (error) {
         console.error("Failed to check file status", error);
+        
+        // Check if error should stop polling
+        if (!isRetryableError(error)) {
+          if (isNotFoundError(error)) {
+            console.log('File or thread no longer exists, stopping polling');
+          } else {
+            console.log('Permanent error in file status polling:', error?.message);
+          }
+          clearInterval(pollInterval);
+        }
       }
     }, 5000);
 
@@ -128,6 +149,13 @@ const PdfUploader = React.memo(function PdfUploader({
       onUploaded({ ...data, fileName: file.name });
     } catch (error) {
       console.error("Upload failed", error);
+      
+      // Provide better error feedback
+      if (isNotFoundError(error)) {
+        console.error('Thread not found for upload');
+      } else if (!isRetryableError(error)) {
+        console.error('Permanent upload error:', error?.message);
+      }
     } finally {
       setIsUploading(false);
       e.target.value = ""; // reset
