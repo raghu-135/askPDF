@@ -10,6 +10,8 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
       - NEXT_PUBLIC_DEFAULT_EMBED_MODEL=BAAI/bge-m3
+    env_file:
+      - .env
     depends_on:
       rag-service:
         condition: service_healthy
@@ -33,47 +35,7 @@ services:
       - LOG_LEVEL=INFO
       - WEAVIATE_URL=http://weaviate:8080
       - WEAVIATE_HYBRID_ALPHA=0.7
-      - DATA_DIR=/data
       - CAPTURE_SERVICE_URL=http://browser-capture:8080
-      - DEFAULT_EMBEDDING_MODEL=BAAI/bge-m3
-      - DEFAULT_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
-      - LOCAL_EMBEDDING_MODELS=BAAI/bge-m3
-      - USE_LOCAL_EMBEDDINGS=true
-      - USE_LOCAL_RERANKER=true
-      - EMBEDDING_DEVICE=cpu
-      - RERANKER_DEVICE=cpu
-      - RERANK_TOP_K_MULTIPLIER=6
-      - DEFAULT_TOKEN_BUDGET=8192
-      - DEFAULT_MAX_ITERATIONS=10
-      - MIN_MAX_ITERATIONS=1
-      - MAX_MAX_ITERATIONS=30
-      - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
-      - MAX_SYSTEM_ROLE_CHARS=500
-      - MAX_TOOL_INSTRUCTION_CHARS=500
-      - INTENT_AGENT_MAX_ITERATIONS=1
-      - MAX_ITERATIONS_SUFFICIENT_COVERAGE=2
-      - MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE=4
-      - WEB_SEARCH_ITERATION_BONUS=2
-      # Docling Tuning Options (Accuracy vs Speed)
-      - DOCLING_DO_OCR=True # OCRs images/scans, preserves digital text.
-      - DOCLING_DO_TABLE_STRUCTURE=True
-      - DOCLING_TABLE_MODE=ACCURATE # ACCURATE is better for tables but slower.
-      - DOCLING_FORCE_FULL_PAGE_OCR=False # KEEP FALSE for digital PDFs to avoid noise and degradation.
-      - DOCLING_DO_FORMULA_ENRICHMENT=False # use when you have formulas in your PDFs
-      # Web capture extraction tuning
-      - TRAFILATURA_INCLUDE_TABLES=True
-      - TRAFILATURA_INCLUDE_IMAGES=True
-      - TRAFILATURA_INCLUDE_LINKS=True
-      - TRAFILATURA_INCLUDE_FORMATTING=True
-      - TRAFILATURA_INCLUDE_COMMENTS=False
-      - TRAFILATURA_DEDUPLICATE=False
-      - TRAFILATURA_FAVOR_RECALL=True
-      - TRAFILATURA_FAST=False
-      # PostgreSQL configuration
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
-      - TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/test_askpdf
-      - POSTGRES_POOL_SIZE=10
-      - POSTGRES_MAX_OVERFLOW=20
     env_file:
       - .env
     depends_on:
