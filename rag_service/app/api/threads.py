@@ -301,9 +301,20 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
         db = get_vector_db()
         embed_model_ready = await check_embed_model_ready(thread.embed_model)
 
+        # Track files list for stats query
+        files = []
+
         if file_hash:
             # Check specific file using file_status
             file_status = await get_file_status(file_hash)
+            # Handle case where file doesn't exist yet (returns empty dict)
+            if not file_status:
+                return {
+                    "thread_id": thread_id,
+                    "status": "not_ready",
+                    "stats": {"total_documents": 0, "total_chunks": 0, "total_chars": 0, "documents": {}},
+                    "embed_model_ready": embed_model_ready,
+                }
             scoped_indexing = get_scoped_indexing_status(
                 file_status,
                 embedding_model=thread.embed_model,
@@ -342,9 +353,11 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                             break
                 status = "ready" if all_indexed else "not_ready"
 
+        # Build file hashes list for stats query
+        file_hashes = [file_hash] if file_hash else ([f.file_hash for f in files] if files else [])
         stats = await db.get_thread_stats(
             thread_id=thread_id,
-            file_hashes=[f.file_hash for f in files] if not file_hash else [file_hash],
+            file_hashes=file_hashes,
             embedding_model_name=thread.embed_model,
         )
 

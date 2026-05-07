@@ -1,6 +1,7 @@
 import { Button, Tooltip } from "@mui/material";
 import React from "react";
 import { getFileStatus, getParsedSentences, FileStatus, ProcessStatusHelper, uploadPdf as apiUploadPdf } from "../lib/api";
+import { isRetryableError, isNotFoundError } from "../lib/error-utils";
 
 type Props = {
   threadId?: string | null;
@@ -10,12 +11,6 @@ type Props = {
   onParsingComplete?: (fileHash: string, sentences: any[]) => void;
   disabled?: boolean;
   tooltipText?: string;
-  /** Current web URL value - when provided, button switches to web mode */
-  webUrl?: string;
-  /** Handler for web URL submission when in web mode */
-  onWebSubmit?: () => void;
-  /** Loading state for web submission */
-  isWebLoading?: boolean;
 };
 
 const PdfUploader = React.memo(function PdfUploader({
@@ -26,9 +21,6 @@ const PdfUploader = React.memo(function PdfUploader({
   onParsingComplete,
   disabled,
   tooltipText,
-  webUrl,
-  onWebSubmit,
-  isWebLoading = false
 }: Props) {
   const inputId = "pdf-upload-input";
   const [isUploading, setIsUploading] = React.useState(false);
@@ -37,8 +29,7 @@ const PdfUploader = React.memo(function PdfUploader({
     status: FileStatus;
   } | null>(null);
 
-  const isWebMode = !!webUrl?.trim();
-  const isDisabled = disabled || isUploading || isWebLoading;
+  const isDisabled = disabled || isUploading;
 
   // Poll for file status (parsing and indexing)
   React.useEffect(() => {
@@ -93,6 +84,16 @@ const PdfUploader = React.memo(function PdfUploader({
             onParsingComplete(fileStatus.fileHash, parsedData.sentences);
           } catch (error) {
             console.error("Failed to fetch parsed sentences", error);
+            
+            // Check if error should stop retrying
+            if (!isRetryableError(error)) {
+              if (isNotFoundError(error)) {
+                console.log('File or thread no longer exists, stopping sentences fetch');
+              } else {
+                console.log('Permanent error in sentences fetch:', error?.message);
+              }
+              // Don't retry for permanent errors
+            }
           }
         }
 
@@ -105,6 +106,16 @@ const PdfUploader = React.memo(function PdfUploader({
         }
       } catch (error) {
         console.error("Failed to check file status", error);
+        
+        // Check if error should stop polling
+        if (!isRetryableError(error)) {
+          if (isNotFoundError(error)) {
+            console.log('File or thread no longer exists, stopping polling');
+          } else {
+            console.log('Permanent error in file status polling:', error?.message);
+          }
+          clearInterval(pollInterval);
+        }
       }
     }, 5000);
 
@@ -138,6 +149,13 @@ const PdfUploader = React.memo(function PdfUploader({
       onUploaded({ ...data, fileName: file.name });
     } catch (error) {
       console.error("Upload failed", error);
+      
+      // Provide better error feedback
+      if (isNotFoundError(error)) {
+        console.error('Thread not found for upload');
+      } else if (!isRetryableError(error)) {
+        console.error('Permanent upload error:', error?.message);
+      }
     } finally {
       setIsUploading(false);
       e.target.value = ""; // reset
@@ -145,20 +163,7 @@ const PdfUploader = React.memo(function PdfUploader({
   };
 
 
-  const handleButtonClick = () => {
-    if (isWebMode && onWebSubmit) {
-      onWebSubmit();
-    }
-    // If not in web mode, the label click will trigger file input
-  };
-
-  const buttonLabel = isWebLoading 
-    ? "Uploading..." 
-    : isWebMode 
-      ? "Upload webpage" 
-      : isUploading 
-        ? "Uploading..." 
-        : "Upload PDF";
+  const buttonLabel = isUploading ? "Uploading..." : "Upload PDF";
 
   const button = (
     <>
@@ -168,14 +173,13 @@ const PdfUploader = React.memo(function PdfUploader({
         accept="application/pdf"
         onChange={handleChange}
         style={{ display: "none" }}
-        disabled={isDisabled || isWebMode}
+        disabled={isDisabled}
       />
-      <label htmlFor={inputId} style={{ cursor: isWebMode ? 'default' : 'pointer' }}>
+      <label htmlFor={inputId}>
         <Button
           variant="contained"
           component="span"
           disabled={isDisabled}
-          onClick={isWebMode ? handleButtonClick : undefined}
         >
           {buttonLabel}
         </Button>

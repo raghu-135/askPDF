@@ -4,7 +4,7 @@ import {
   type AnnotationTransferItem,
 } from "./annotation-utils";
 
-// Unified API base - RAG service now handles all endpoints
+// Unified API base - RAG service handles all endpoints
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 if (!apiUrl) {
   console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
@@ -106,7 +106,7 @@ export async function getParsedSentences(fileHash: string, threadId: string): Pr
 // ============ TTS ============
 
 export async function ttsSentence(text: string, voice: string, speed: number) {
-  const res = await fetch(`/api/tts`, {
+  const res = await fetch(`${API_BASE}/api/tts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, voice, speed })
@@ -163,7 +163,7 @@ export interface ThreadFile {
   file_hash: string;
   file_name: string;
   file_path?: string;
-  source_type?: 'pdf' | 'web';
+  source_type?: 'pdf';
 }
 
 export interface WebSource {
@@ -334,57 +334,64 @@ export async function updateThreadFileAnnotations(
   };
 }
 
-export async function addWebSourceToThread(
-  threadId: string,
-  url: string
-): Promise<{ status: string; file_hash: string; url: string; title?: string; indexing: string }> {
-  const res = await fetch(`${API_BASE}/api/threads/${threadId}/web-sources`, {
+export async function captureBrowserPage(threadId: string): Promise<{
+  status: string;
+  file_hash: string;
+  url: string;
+  title: string;
+  indexing: string;
+  ready?: boolean;
+}> {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/browser-capture`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url })
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const error = await res.text();
+    throw new Error(error);
+  }
   return res.json();
-}
-
-export type RefreshStatus = 'unchanged' | 'confirmation_required' | 'accepted' | 'refreshed';
-
-export interface RefreshWebSourceResult {
-  status: RefreshStatus;
-  message?: string;
-  thread_id: string;
-  url_hash?: string;
-  file_hash?: string;
-  old_file_hash?: string;
-  new_file_hash?: string;
-  url?: string;
-  title?: string;
-  indexing?: string;
-  new_content_hash?: string;
 }
 
 /**
- * Refresh a web source by recapturing it as a new PDF.
- *
- * With unified PDF flow, this removes the old PDF, recaptures the URL,
- * and adds the new PDF to the thread.
+ * Poll for file ready status using HEAD request.
+ * Returns true when file is confirmed accessible, false on timeout.
  */
-export async function refreshWebSource(
+export async function pollForFileReady(
   threadId: string,
-  urlHash: string,
-  contentHash: string | null,
-  confirmed: boolean,
-): Promise<RefreshWebSourceResult> {
-  const res = await fetch(
-    `${API_BASE}/api/threads/${threadId}/web-sources/${urlHash}/refresh`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content_hash: contentHash, confirmed }),
+  fileHash: string,
+  options: {
+    maxAttempts?: number;
+    intervalMs?: number;
+    timeoutMs?: number;
+  } = {}
+): Promise<boolean> {
+  const { maxAttempts = 10, intervalMs = 500, timeoutMs = 5000 } = options;
+  const startTime = Date.now();
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Check timeout
+    if (Date.now() - startTime > timeoutMs) {
+      return false;
     }
-  );
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/threads/${threadId}/files/${fileHash}/download`,
+        { method: "HEAD" }
+      );
+      if (res.ok) {
+        return true;
+      }
+    } catch (e) {
+      // Network error, will retry
+    }
+
+    // Wait before next attempt
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  return false;
 }
 
 export async function removeSourceFromThread(
@@ -436,7 +443,7 @@ export async function threadChat(
   user_message_id: string | null;
   assistant_message_id: string | null;
   used_chat_ids: string[];
-  document_sources: { text: string; file_hash: string; score: number; source_type?: 'pdf' | 'webpage'; title?: string; url?: string }[];
+  document_sources: { text: string; file_hash: string; score: number; source_type?: 'pdf'; title?: string; url?: string }[];
   web_sources?: WebSource[];
   reasoning?: string;
   reasoning_available?: boolean;

@@ -15,20 +15,19 @@ async def get_document_name_lookup(thread_id: str) -> Dict[str, str]:
 
     try:
         shape = await get_thread_shape(thread_id)
-        return {fh: meta.get("file_name", fh) for fh, meta in shape.get("documents", {}).items()}
+        documents = shape.get("documents", {})
+        # Filter out non-dict entries (e.g., 'updated_at' timestamp added by merge_jsonb_field)
+        return {
+            fh: meta.get("file_name", fh)
+            for fh, meta in documents.items()
+            if isinstance(meta, dict)
+        }
     except Exception as exc:
         logger.warning("Failed to load thread document metadata: %s", exc)
         return {}
 
 
 def _format_document_label(source_type: str, name: str, url: Optional[str]) -> str:
-    stype = (source_type or "document").lower()
-    if stype in {"webpage", "web"}:
-        title = name or "Webpage"
-        if url:
-            return f"Webpage: {title} | {url}"
-        return f"Webpage: {title}"
-    # Default to PDF-style label
     label_name = name or "Document"
     return f"PDF: {label_name}"
 
@@ -38,7 +37,7 @@ def group_document_chunks(
     hash_to_name: Optional[Dict[str, str]] = None,
     char_budget: Optional[int] = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
-    """Group document chunks (PDFs + webpages) and prepare context + source metadata."""
+    """Group document chunks and prepare context + source metadata."""
 
     hash_to_name = hash_to_name or {}
     document_sources: List[Dict[str, Any]] = []
@@ -54,9 +53,7 @@ def group_document_chunks(
             break
 
         fh = chunk.get("file_hash") or ""
-        source_type = chunk.get("source_kind") or chunk.get("source_type") or "pdf"
-        if source_type == "web":
-            source_type = "webpage"
+        source_type = "pdf"
         url = chunk.get("url") or ""
         title = chunk.get("title") or ""
         fallback_name = hash_to_name.get(fh, fh or "document")

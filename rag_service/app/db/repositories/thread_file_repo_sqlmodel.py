@@ -66,7 +66,7 @@ class ThreadFileRepository:
                 select(File)
                 .join(ThreadFile, File.file_hash == ThreadFile.file_hash)
                 .where(ThreadFile.thread_id == thread_id)
-                .order_by(ThreadFile.added_at.desc())
+                .order_by(ThreadFile.added_at.asc())
             )
             return list(result.scalars().all())
 

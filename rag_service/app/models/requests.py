@@ -37,12 +37,6 @@ class ThreadFileRequest(BaseModel):
     file_path: Optional[str] = None
 
 
-class WebSourceRequest(BaseModel):
-    """Request body for indexing a webpage into a thread."""
-
-    url: str
-
-
 class ThreadFileAnnotationsUpdateRequest(BaseModel):
     """Request body for persisting a thread/file annotation snapshot."""
 
@@ -147,11 +141,6 @@ class PromptPreviewRequest(BaseModel):
     use_web_search: bool = False
     intent_agent_ran: bool = True
     reasoning_mode: bool = True
-
-
-class RefreshWebSourceRequest(BaseModel):
-    content_hash: Optional[str] = None
-    confirmed: bool = False
 
 
 class PdfParseRequest(BaseModel):

@@ -12,16 +12,18 @@ Endpoints:
 - DELETE /api/threads/{thread_id}/files/{file_hash} - Remove file from thread
 - GET /api/threads/{thread_id}/files/{file_hash}/annotations - Get annotations
 - PUT /api/threads/{thread_id}/files/{file_hash}/annotations - Update annotations
-- POST /api/threads/{thread_id}/web-sources - Add web source
-- POST /api/threads/{thread_id}/web-sources/{url_hash}/refresh - Refresh web source
+- POST /api/threads/{thread_id}/browser-capture - Capture current browser page
 """
 
 import hashlib
+import os
+import shutil
 import traceback
 from typing import Any, Dict, Optional
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.db import (
     DEFAULT_SENTENCES_JSON,
@@ -40,8 +42,6 @@ from app.models.requests import (
     ThreadFileAnnotationsResponse,
     ThreadFileAnnotationsUpdateRequest,
     ThreadFileRequest,
-    WebSourceRequest,
-    RefreshWebSourceRequest,
 )
 from app.services.file_processing_service import (
     _default_file_status,
@@ -49,7 +49,6 @@ from app.services.file_processing_service import (
     queue_file_processing,
 )
 from app.services.file_cleanup_service import cleanup_detached_file
-from app.web_capture import capture_webpage_as_pdf, get_webpage_pdf_by_url_hash
 
 router = APIRouter(tags=["files"])
 
@@ -95,7 +94,7 @@ async def upload_pdf_endpoint(
     # Return immediately with sentences: null to indicate parsing not yet done
     return {
         "sentences": None,
-        "pdfUrl": f"/api/threads/{thread_id}/files/{file_hash}/download",
+        "pdfUrl": f"/threads/{thread_id}/files/{file_hash}/download",
         "fileHash": file_hash,
         "fileName": file.filename,
     }
@@ -188,14 +187,14 @@ async def get_pdf_data_endpoint(thread_id: str, file_hash: str):
         sentences = parsed_data.get("sentences", [])
         return {
             "sentences": sentences,
-            "pdfUrl": f"/api/threads/{thread_id}/files/{file_hash}/download",
+            "pdfUrl": f"/threads/{thread_id}/files/{file_hash}/download",
             "fileHash": file_hash,
         }
 
     # If not parsed yet, return empty sentences
     return {
         "sentences": [],
-        "pdfUrl": f"/api/threads/{thread_id}/files/{file_hash}/download",
+        "pdfUrl": f"/threads/{thread_id}/files/{file_hash}/download",
         "fileHash": file_hash,
     }
 
@@ -222,6 +221,27 @@ async def download_pdf_endpoint(thread_id: str, file_hash: str):
     return FileResponse(file_path, media_type="application/pdf")
 
 
+@router.head("/threads/{thread_id}/files/{file_hash}/download")
+async def check_pdf_exists_endpoint(thread_id: str, file_hash: str):
+    """
+    Lightweight check to verify PDF is ready for download.
+    Returns 200 if file exists and is attached to thread, 404 otherwise.
+    """
+    # Verify thread exists
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Verify file is attached to thread
+    if not await is_file_in_thread(thread_id, file_hash):
+        raise HTTPException(status_code=404, detail="File is not attached to this thread")
+
+    file_path = f"/static/{file_hash}.pdf"
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="PDF not found")
+    return Response(status_code=200)
+
+
 @router.get("/threads/{thread_id}/files/{file_hash}/sentences")
 async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str):
     """
@@ -236,7 +256,8 @@ async def get_file_parsed_sentences_endpoint(thread_id: str, file_hash: str):
 
         # Verify file is attached to thread
         if not await is_file_in_thread(thread_id, file_hash):
-            raise HTTPException(status_code=404, detail="File is not attached to this thread")
+            # Return empty sentences instead of 404 - file may still be processing
+            return DEFAULT_SENTENCES_JSON
 
         parsed_data = await get_file_parsed_sentences(file_hash)
         # Return data even if sentences is null (parsing pending) - never 404
@@ -392,144 +413,76 @@ async def update_thread_file_annotations_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/threads/{thread_id}/web-sources")
-async def add_web_source_to_thread_endpoint(
+# Browser capture service configuration
+CAPTURE_SERVICE_URL = os.environ.get("CAPTURE_SERVICE_URL", "http://browser-capture:8080")
+
+
+@router.post("/threads/{thread_id}/browser-capture")
+async def capture_browser_page_endpoint(
     thread_id: str,
-    req: WebSourceRequest,
     background_tasks: BackgroundTasks,
 ):
     """
-    Add a webpage URL to a thread: capture as PDF, record in DB, and trigger background indexing.
+    Capture the current browser page via browser-capture service,
+    convert to PDF, and add to thread.
     """
     try:
         thread = await get_thread(thread_id)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
-
-        if not req.url.startswith(("http://", "https://")):
-            raise HTTPException(
-                status_code=400, detail="URL must start with http:// or https://"
+        
+        # Call browser-capture service
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{CAPTURE_SERVICE_URL}/capture",
+                timeout=60.0
             )
-
-        # Capture webpage and convert to PDF
-        capture = await capture_webpage_as_pdf(req.url, force=False)
-
-        # Use the PDF hash as the file identifier
-        pdf_hash = capture["file_hash"]
-        url_hash = capture["url_hash"]
-
-        markdown_content = capture.get("markdown_content") or ""
-        content_hash = hashlib.md5(markdown_content.encode("utf-8")).hexdigest() if markdown_content else None
-
+            response.raise_for_status()
+            capture = response.json()
+        
+        # Copy from shared volume /captures to /static for serving
+        capture_path = f"/captures/{capture['file_hash']}.pdf"
+        static_path = f"/static/{capture['file_hash']}.pdf"
+        
+        if not os.path.exists(static_path):
+            if os.path.exists(capture_path):
+                shutil.copy(capture_path, static_path)
+            else:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Captured PDF not found at {capture_path}"
+                )
+        
+        # Queue for processing (similar to web sources)
         await queue_file_processing(
             background_tasks=background_tasks,
             thread=thread,
-            file_hash=pdf_hash,
-            file_name=capture["title"],
-            file_path=req.url,
-            source_type="web",
+            file_hash=capture["file_hash"],
+            file_name=f"{capture['title']} - {capture['url']}",
+            file_path=capture["url"],
+            source_type="browser",
             indexing_metadata={
-                "source_kind": "webpage",
-                "url": req.url,
+                "source_kind": "browser_capture",
+                "url": capture["url"],
                 "title": capture["title"],
-                "url_hash": url_hash,
-                **({"content_hash": content_hash} if content_hash else {}),
             },
-            markdown_content=markdown_content,
         )
-
+        
         return {
-            "status": "accepted",
+            "status": "ready",
             "thread_id": thread_id,
-            "file_hash": pdf_hash,
-            "url_hash": url_hash,
-            "url": req.url,
+            "file_hash": capture["file_hash"],
+            "url": capture["url"],
             "title": capture["title"],
-            "source_type": "web",
             "indexing": "in_progress",
+            "ready": True,
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/threads/{thread_id}/web-sources/{url_hash}/refresh")
-async def refresh_web_source_endpoint(
-    thread_id: str,
-    url_hash: str,
-    req: RefreshWebSourceRequest,
-    background_tasks: BackgroundTasks,
-):
-    """
-    Refresh a web source by recapturing it as a new PDF.
-    """
-    try:
-        thread = await get_thread(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
-
-        # Look up the URL from the mapping file
-        mapping = await get_webpage_pdf_by_url_hash(url_hash)
-        if not mapping:
-            raise HTTPException(status_code=404, detail="Web source mapping not found. The page may not have been captured yet.")
-
-        url = mapping["url"]
-        old_pdf_hash = mapping["pdf_hash"]
-
-        # Content-change check (compare PDF content hashes)
-        from app.db import get_thread_shape
-        if req.content_hash and not req.confirmed:
-            # Read stored content_hash from thread_stats for the old PDF
-            shape = await get_thread_shape(thread_id)
-            stored_meta = shape["documents"].get(old_pdf_hash, {})
-            stored_hash = stored_meta.get("content_hash")
-
-            if stored_hash and stored_hash == req.content_hash:
-                return {
-                    "status": "unchanged",
-                    "message": "Page content has not changed since last index. No re-indexing needed.",
-                    "thread_id": thread_id,
-                    "url_hash": url_hash,
-                    "file_hash": old_pdf_hash,
-                }
-
-            # Content changed → ask for confirmation
-            return {
-                "status": "confirmation_required",
-                "message": "Page content has changed. Re-indexing will remove the current indexed data and replace it with the new content.",
-                "thread_id": thread_id,
-                "url_hash": url_hash,
-                "file_hash": old_pdf_hash,
-                "new_content_hash": req.content_hash,
-            }
-
-        # Confirmed — remove old, recapture, add new
-        # 1. Remove old PDF from thread
-        await remove_source_from_thread_endpoint(thread_id, old_pdf_hash)
-
-        # 2. Recapture to new PDF
-        new_capture = await capture_webpage_as_pdf(url, force=True)
-        new_pdf_hash = new_capture["file_hash"]
-
-        # 3. Add new PDF to thread
-        add_result = await add_web_source_to_thread_endpoint(
-            thread_id=thread_id,
-            req=WebSourceRequest(url=url),
-            background_tasks=background_tasks,
+        
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=503, 
+            detail=f"Browser capture service unavailable: {e}"
         )
-
-        return {
-            "status": "refreshed",
-            "thread_id": thread_id,
-            "url_hash": url_hash,
-            "old_file_hash": old_pdf_hash,
-            "new_file_hash": new_pdf_hash,
-            "url": url,
-            "title": new_capture["title"],
-            "indexing": "in_progress",
-        }
     except HTTPException:
         raise
     except Exception as e:

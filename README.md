@@ -14,6 +14,13 @@ A full-stack PDF Document and Webpages research assistant with **Text-to-Speech 
 - **PDF Annotations**: Add highlights, underlines, strikeouts, shapes, freehand drawings, and comments directly on PDFs. Annotations are persisted per-thread and synchronized across sessions.
 - **Centralized Controls**: Unified player in the footer manages all audio sources (Speed 0.5x - 2.0x)
 
+### 🌐 Enhanced Web Capture
+- **Selenium-Based Capture**: Robust webpage capture using Selenium WebDriver with Brave browser
+- **PDF Conversion**: Automatic fallback to WeasyPrint for PDF generation when CDP fails
+- **Interactive Browser**: Full browser interaction support with copy-paste functionality
+- **Containerized Service**: Dedicated browser_capture service for isolated web processing
+- **Async Processing**: Non-blocking webpage capture with status tracking and retry logic
+
 ### 🤖 Multi-Agent AI Architecture
 - **Orchestrator Agent**: A LangGraph-powered agent that plans, selects tools, and synthesizes answers across multiple iterations
 - **Intent Agent** *(optional, per-thread)*: A lightweight pre-processing agent that parses intents, captures, and rewrites the user's question before passing it to the orchestrator — improving query clarity and search precision. Can be dynamically disabled for non-reasoning models via the new "Reasoning Mode" toggle.
@@ -89,20 +96,20 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              Docker Compose                                 │
-├─────────────────┬─────────────────┬─────────────────┬───────────────────────┤
-│    Frontend     │   RAG Service   │   PostgreSQL    │      Weaviate         │
-│   (Next.js)     │    (FastAPI)    │   (Primary DB)  │   (Vector DB)        │
-│   Port: 3000    │   Port: 8000    │   Port: 5432    │   Port: 8080         │
-└─────────────────┴─────────────────┴─────────────────┴───────────────────────┘
-                                          │
-                                          ▼
-                            ┌──────────────────────────────────────────────┐
-                            │         DMR / Ollama / LMStudio / LLM        │
-                            │            (OpenAI-compatible)               │
-                            │             Port: 12434 (default)            │
-                            └──────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                      Docker Compose                                           │
+├─────────────────┬─────────────────┬─────────────────┬─────────────────┬───────────────────────┤
+│    Frontend     │   RAG Service   │  Browser Capture│   PostgreSQL    │      Weaviate         │
+│   (Next.js)     │    (FastAPI)    │   (Selenium)    │   (Primary DB)  │   (Vector DB)        │
+│   Port: 3000    │   Port: 8000    │   Port: 7800    │   Port: 5432    │   Port: 8080         │
+└─────────────────┴─────────────────┴─────────────────┴─────────────────┴───────────────────────┘
+                                                   │
+                                                   ▼
+                                     ┌──────────────────────────────────────────────┐
+                                     │         DMR / Ollama / LMStudio / LLM        │
+                                     │            (OpenAI-compatible)               │
+                                     │             Port: 12434 (default)            │
+                                     └──────────────────────────────────────────────┘
 ```
 
 ### Services Overview
@@ -111,9 +118,9 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 |---------|------|-------------|
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
 | **RAG Service** | 8000 | FastAPI server for PDF processing, document indexing, AI chat, thread/message/file management |
-| **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, annotations, and web sources |
+| **Browser Capture** | 7800 | Selenium-based service for interactive webpage capture and PDF conversion |
+| **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, and annotations |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
-| **Gotenberg** | 3001 | Chromium-based service for webpage capture and HTML-to-PDF conversion |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
 
@@ -277,6 +284,14 @@ docker-compose up --build
 | **Alembic** | Database migration management |
 | **asyncpg** | Async PostgreSQL driver |
 
+### Browser Capture Service
+| Technology | Purpose |
+|------------|---------|
+| **Selenium** | WebDriver automation for webpage capture |
+| **Brave Browser** | Headless browser for web rendering |
+| **WeasyPrint** | PDF conversion fallback |
+| **FastAPI** | Service API framework |
+
 ### Frontend
 | Technology | Purpose |
 |------------|---------|
@@ -284,13 +299,19 @@ docker-compose up --build
 | **Material-UI (MUI)** | UI components (v7) |
 | **EmbedPDF** | Headless PDF rendering with annotation support |
 | **react-markdown** | Chat message rendering |
+| **React Query** | Async state management and retry logic |
 
 ## 📁 Project Structure
 
 ```
 askpdf/
-├── docker-compose.yml          # Multi-service orchestration (PostgreSQL, Weaviate, Gotenberg)
+├── docker-compose.yml          # Multi-service orchestration (PostgreSQL, Weaviate, Browser Capture)
 ├── run_tests.sh               # Comprehensive test runner with PostgreSQL support
+├── browser_capture/           # Selenium-based webpage capture service
+│   ├── Dockerfile
+│   ├── service/
+│   │   └── main.py           # Selenium WebDriver service with Brave browser
+│   └── start.sh              # Service startup script
 ├── rag_service/
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -342,10 +363,6 @@ askpdf/
 │   │   │   ├── nlp_service.py              # NLP utilities (sentence segmentation)
 │   │   │   ├── parsing_service.py          # PDF/webpage parsing with Docling/pdfplumber
 │   │   │   └── thread_management_service.py # Thread operations
-│   │   └── web_capture/        # Webpage capture functionality
-│   │       ├── capture.py      # Playwright-based webpage capture
-│   │       ├── markdown_generator.py # HTML to Markdown conversion
-│   │       └── utils.py        # Capture utilities
 │   └── tests/                  # Comprehensive test suite
 │       ├── conftest.py         # Pytest configuration and fixtures
 │       ├── fixtures/           # Test fixtures for models
@@ -383,8 +400,6 @@ askpdf/
         │   │   ├── AnnotationToolbar.tsx      # Annotation tool selector
         │   │   ├── AnnotationSelectionMenu.tsx  # Contextual annotation properties
         │   │   └── constants.ts     # Annotation color presets
-        │   ├── WebUploader.tsx     # Webpage URL uploader
-        │   ├── WebViewer.tsx       # Webpage reader
         │   ├── PlayerControls.tsx  # Audio playback controls
         │   ├── ChatInterface.tsx   # RAG chat UI (thread-aware, settings dialog, reasoning panel)
         │   ├── ThreadSidebar.tsx   # Thread management UI
@@ -696,9 +711,9 @@ The application uses Docker Compose with five services:
 
 1. **frontend**: Next.js dev server with hot reload
 2. **rag-service**: FastAPI with LangChain/LangGraph, PDF processing, and chat
-3. **postgresql**: PostgreSQL database for persistent storage
-4. **weaviate**: Official Weaviate image with persistent storage
-5. **gotenberg**: Chromium-based service for webpage capture
+3. **browser_capture**: Selenium-based service for interactive webpage capture
+4. **postgresql**: PostgreSQL database for persistent storage
+5. **weaviate**: Official Weaviate image with persistent storage
 
 ### Volumes
 - `weaviate_data`: Persistent vector storage

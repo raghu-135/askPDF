@@ -1,11 +1,13 @@
 import React from 'react';
 import { truncateFileName } from '../lib/pdf-utils';
-import { Box, Tabs, Tab, IconButton, Tooltip, Typography } from '@mui/material';
+import { Box, Tabs, Tab, IconButton, Tooltip, Typography, CircularProgress } from '@mui/material';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import LanguageIcon from '@mui/icons-material/Language';
+import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
+import AddIcon from '@mui/icons-material/Add';
 import type { BackendSentence, BBox } from '../lib/bbox-derivation';
 
 type Sentence = Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] };
@@ -17,7 +19,7 @@ export type PdfTab = {
   pdfUrl: string;
   sentences: Sentence[] | null;
   text?: string;
-  sourceType?: 'pdf' | 'web';
+  sourceType?: 'pdf' | 'browser';
   sourceUrl?: string;
   parsingStatus?: 'pending' | 'completed' | 'failed';
 };
@@ -30,19 +32,38 @@ type Props = {
   /** When provided, shows a remove-from-thread trash icon on each tab. */
   onTabRemove?: (tabId: string) => void;
   darkMode?: boolean;
+  /** Whether to show the browser tab */
+  showBrowserTab?: boolean;
+  /** Callback when browser tab is clicked */
+  onBrowserTabClick?: () => void;
+  /** Callback when add-to-thread button is clicked on browser tab */
+  onAddBrowserToThread?: () => void;
+  /** Whether browser capture is in progress */
+  isBrowserCapturing?: boolean;
 };
 
-const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, onTabRemove, darkMode = false }: Props) {
-  if (tabs.length === 0) {
+const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, onTabClose, onTabRemove, darkMode = false, showBrowserTab = false, onBrowserTabClick, onAddBrowserToThread, isBrowserCapturing = false }: Props) {
+  const browserTabId = 'browser-tab';
+
+  if (tabs.length === 0 && !showBrowserTab) {
     return null;
   }
 
   const activeIndex = tabs.findIndex(t => t.id === activeTabId);
   const currentIndex = activeIndex >= 0 ? activeIndex : 0;
+  const isBrowserActive = activeTabId === browserTabId;
+  const displayIndex = isBrowserActive ? 0 : (showBrowserTab ? currentIndex + 1 : currentIndex);
 
   const handleTabChange = (_event: React.SyntheticEvent, newIndex: number) => {
-    if (tabs[newIndex]) {
-      onTabChange(tabs[newIndex].id);
+    // Handle browser tab click
+    if (showBrowserTab && newIndex === 0) {
+      onBrowserTabClick?.();
+      return;
+    }
+    // Adjust index for regular tabs (browser tab is at index 0)
+    const adjustedIndex = showBrowserTab ? newIndex - 1 : newIndex;
+    if (tabs[adjustedIndex]) {
+      onTabChange(tabs[adjustedIndex].id);
     }
   };
 
@@ -68,7 +89,7 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
     >
       <Box sx={{ position: 'relative' }}>
         <Tabs
-          value={currentIndex}
+          value={displayIndex}
           onChange={handleTabChange}
           variant="scrollable"
           scrollButtons="auto"
@@ -84,19 +105,58 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
             },
           }}
         >
+          {showBrowserTab && (
+            <Tab
+              key={browserTabId}
+              label={
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <OpenInBrowserIcon fontSize="small" />
+                  <Typography component="span">Browser</Typography>
+                  {/* Add to Thread button - only when browser tab is active */}
+                  {isBrowserActive && onAddBrowserToThread && (
+                    <Tooltip title="Add current page to thread">
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddBrowserToThread();
+                          }}
+                          disabled={isBrowserCapturing}
+                          sx={{ ml: 0.5, p: 0.3 }}
+                        >
+                          {isBrowserCapturing ? (
+                            <CircularProgress size={14} />
+                          ) : (
+                            <AddIcon fontSize="small" />
+                          )}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
+                  )}
+                </Box>
+              }
+              sx={{
+                '&.Mui-selected': {
+                  bgcolor: 'action.selected',
+                },
+                pr: 1.5,
+              }}
+            />
+          )}
           {tabs.map((tab) => {
-            const isWeb = tab.sourceType === 'web';
-            const label = isWeb
+            const isBrowser = tab.sourceType === 'browser';
+            const label = isBrowser
               ? (tab.sourceUrl ? new URL(tab.sourceUrl).hostname : tab.fileName)
               : truncateFileName(tab.fileName);
-            const fullTitle = isWeb ? (tab.sourceUrl || tab.fileName) : tab.fileName;
+            const fullTitle = isBrowser ? (tab.sourceUrl || tab.fileName) : tab.fileName;
 
             return (
               <Tab
                 key={tab.id}
                 label={
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    {isWeb
+                    {isBrowser
                       ? (
                         <Tooltip title="Open source webpage">
                           <span
