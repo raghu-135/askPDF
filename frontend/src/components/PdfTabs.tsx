@@ -19,7 +19,7 @@ export type PdfTab = {
   pdfUrl: string;
   sentences: Sentence[] | null;
   text?: string;
-  sourceType?: 'pdf' | 'web' | 'browser';
+  sourceType?: 'pdf' | 'browser';
   sourceUrl?: string;
   parsingStatus?: 'pending' | 'completed' | 'failed';
 };
@@ -145,18 +145,18 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
             />
           )}
           {tabs.map((tab) => {
-            const isWeb = tab.sourceType === 'web';
-            const label = isWeb
+            const isBrowser = tab.sourceType === 'browser';
+            const label = isBrowser
               ? (tab.sourceUrl ? new URL(tab.sourceUrl).hostname : tab.fileName)
               : truncateFileName(tab.fileName);
-            const fullTitle = isWeb ? (tab.sourceUrl || tab.fileName) : tab.fileName;
+            const fullTitle = isBrowser ? (tab.sourceUrl || tab.fileName) : tab.fileName;
 
             return (
               <Tab
                 key={tab.id}
                 label={
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    {isWeb
+                    {isBrowser
                       ? (
                         <Tooltip title="Open source webpage">
                           <span

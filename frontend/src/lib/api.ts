@@ -163,7 +163,7 @@ export interface ThreadFile {
   file_hash: string;
   file_name: string;
   file_path?: string;
-  source_type?: 'pdf' | 'web';
+  source_type?: 'pdf';
 }
 
 export interface WebSource {
@@ -443,7 +443,7 @@ export async function threadChat(
   user_message_id: string | null;
   assistant_message_id: string | null;
   used_chat_ids: string[];
-  document_sources: { text: string; file_hash: string; score: number; source_type?: 'pdf' | 'webpage'; title?: string; url?: string }[];
+  document_sources: { text: string; file_hash: string; score: number; source_type?: 'pdf'; title?: string; url?: string }[];
   web_sources?: WebSource[];
   reasoning?: string;
   reasoning_available?: boolean;

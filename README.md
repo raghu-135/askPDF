@@ -111,9 +111,8 @@ You can use free, open-source models with Docker Model Runner, Ollama, or LMStud
 |---------|------|-------------|
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
 | **RAG Service** | 8000 | FastAPI server for PDF processing, document indexing, AI chat, thread/message/file management |
-| **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, annotations, and web sources |
+| **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, and annotations |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
-| **Gotenberg** | 3001 | Chromium-based service for webpage capture and HTML-to-PDF conversion |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
 
 
@@ -289,7 +288,7 @@ docker-compose up --build
 
 ```
 askpdf/
-├── docker-compose.yml          # Multi-service orchestration (PostgreSQL, Weaviate, Gotenberg)
+├── docker-compose.yml          # Multi-service orchestration (PostgreSQL, Weaviate)
 ├── run_tests.sh               # Comprehensive test runner with PostgreSQL support
 ├── rag_service/
 │   ├── Dockerfile
@@ -342,10 +341,7 @@ askpdf/
 │   │   │   ├── nlp_service.py              # NLP utilities (sentence segmentation)
 │   │   │   ├── parsing_service.py          # PDF/webpage parsing with Docling/pdfplumber
 │   │   │   └── thread_management_service.py # Thread operations
-│   │   └── web_capture/        # Webpage capture functionality
-│   │       ├── capture.py      # Playwright-based webpage capture
-│   │       ├── markdown_generator.py # HTML to Markdown conversion
-│   │       └── utils.py        # Capture utilities
+│   │   └── browser_capture/   # Browser-based interactive capture suite
 │   └── tests/                  # Comprehensive test suite
 │       ├── conftest.py         # Pytest configuration and fixtures
 │       ├── fixtures/           # Test fixtures for models
@@ -383,8 +379,6 @@ askpdf/
         │   │   ├── AnnotationToolbar.tsx      # Annotation tool selector
         │   │   ├── AnnotationSelectionMenu.tsx  # Contextual annotation properties
         │   │   └── constants.ts     # Annotation color presets
-        │   ├── WebUploader.tsx     # Webpage URL uploader
-        │   ├── WebViewer.tsx       # Webpage reader
         │   ├── PlayerControls.tsx  # Audio playback controls
         │   ├── ChatInterface.tsx   # RAG chat UI (thread-aware, settings dialog, reasoning panel)
         │   ├── ThreadSidebar.tsx   # Thread management UI
@@ -692,13 +686,12 @@ The test runner automatically:
 
 ## 🐳 Docker Details
 
-The application uses Docker Compose with five services:
+The application uses Docker Compose with four services:
 
 1. **frontend**: Next.js dev server with hot reload
 2. **rag-service**: FastAPI with LangChain/LangGraph, PDF processing, and chat
 3. **postgresql**: PostgreSQL database for persistent storage
 4. **weaviate**: Official Weaviate image with persistent storage
-5. **gotenberg**: Chromium-based service for webpage capture
 
 ### Volumes
 - `weaviate_data`: Persistent vector storage
