@@ -46,6 +46,7 @@ import {
     getPromptTools,
     getPromptPreview
 } from '../lib/api';
+import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/models-api';
 import ChatSettingsDialog from './ChatSettingsDialog';
 
@@ -94,7 +95,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'blocked'>('checking');
+    const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'blocked' | 'error'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
     const [contextWindow, setContextWindow] = useState<number>(0);
     const [maxIterations, setMaxIterations] = useState(0);
@@ -262,23 +263,35 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         } catch (error) {
             console.error('Failed to check index status:', error);
-            setIndexingStatus('ready'); // Assume ready if check fails
+            // Set to error state instead of falsely claiming ready
+            setIndexingStatus('error');
+            // Don't change embed model status - keep previous state
         }
     };
 
     const checkEmbedModelStatus = async () => {
         if (!activeThread) return;
-        try {
-            setIsEmbedModelValid(null);
-            const ready = await checkEmbedModelReady(activeThread.embed_model);
-            setIsEmbedModelValid(ready);
-            if (!ready) {
+        
+        setIsEmbedModelValid(null);
+        
+        const result = await withRetry(
+            () => checkEmbedModelReady(activeThread.embed_model),
+            {
+                maxRetries: 2,
+                baseDelay: 1000,
+                retryableErrors: (error) => true // All errors are retryable for model checks
+            }
+        );
+        
+        if (result.success && result.data !== undefined) {
+            setIsEmbedModelValid(result.data);
+            if (!result.data) {
                 setIndexingStatus('blocked');
             }
-        } catch (error) {
-            console.error('Failed to check embed model status:', error);
+        } else {
+            console.error('Failed to check embed model status after retries:', result.error);
             setIsEmbedModelValid(false);
-            setIndexingStatus('blocked');
+            setIndexingStatus('error');
         }
     };
 
@@ -451,46 +464,61 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         // Keep polling if either indexing is in progress OR embed model is not yet valid/checked
         if (indexingStatus !== 'indexing' && isEmbedModelValid === true) return;
 
-        const pollStatus = async () => {
-            try {
-                const status = await getThreadIndexStatus(activeThread.id);
+        let intervalId: NodeJS.Timeout | null = null;
 
+        const pollStatus = async () => {
+            const result = await withPollingRetry(
+                () => getThreadIndexStatus(activeThread.id),
+                {
+                    maxRetries: 3,
+                    interval: 5000,
+                    shouldStop: (status) => (
+                        (status.status === 'ready' && status.embed_model_ready === true) ||
+                        status.status === 'blocked' ||
+                        status.embed_model_ready === false
+                    ),
+                    retryableErrors: (error) => true // All errors are retryable for status checks
+                }
+            );
+
+            if (result.success && result.data) {
                 // Update indexing status
-                if (status.status === 'ready') {
+                if (result.data.status === 'ready') {
                     setIndexingStatus('ready');
-                } else if (status.status === 'blocked') {
+                } else if (result.data.status === 'blocked') {
                     setIndexingStatus('blocked');
+                } else {
+                    // 'not_ready' means still indexing
+                    setIndexingStatus('indexing');
                 }
 
                 // Update embedding model status
-                if (status.embed_model_ready !== undefined) {
-                    setIsEmbedModelValid(status.embed_model_ready);
+                if (result.data.embed_model_ready !== undefined) {
+                    setIsEmbedModelValid(result.data.embed_model_ready);
                 }
+            }
 
-                // If resolved, stop polling
-                if (
-                    (status.status === 'ready' && status.embed_model_ready === true) ||
-                    status.status === 'blocked' ||
-                    status.embed_model_ready === false
-                ) {
-                    if (intervalId) {
-                        clearInterval(intervalId);
-                        intervalId = null;
-                    }
+            if (result.stopped || !result.success) {
+                // Stop polling on success or max retries exceeded
+                if (intervalId) {
+                    clearInterval(intervalId);
+                    intervalId = null;
                 }
-            } catch (error) {
-                console.error('Status check failed:', error);
-                // Don't throw - let polling continue
+                
+                if (!result.success) {
+                    setIndexingStatus('error');
+                }
             }
         };
 
-        // Run immediately
+        // Start polling
         pollStatus();
 
-        // Then set up interval
-        let intervalId: NodeJS.Timeout | null = setInterval(pollStatus, 5000);
-
-        return () => clearInterval(intervalId);
+        return () => {
+            if (intervalId) {
+                clearInterval(intervalId);
+            }
+        };
     }, [activeThread?.id, indexingStatus, isEmbedModelValid]);
 
     // Load browser memory settings (last selected LLM, context window, and web search) on mount
@@ -1239,19 +1267,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         placeholder={
                             (indexingStatus === 'blocked' || isEmbedModelValid === false)
                                 ? "Blocked: Selected embedding model is unavailable on server."
-                                : indexingStatus !== 'ready'
-                                    ? "Indexing your document. This may take a moment..."
-                                    : isEmbedModelValid === null
-                                    ? "Checking embedding model..."
-                                    : (llmModel && isLlmModelValid === null)
-                                            ? "Checking chat model..."
-                                            : isLlmModelValid === false
-                                                ? "Selected model is not a valid chat model."
-                                                : isLlmToolsSupported === false
-                                                    ? "This model does not support tool calling — please pick another model."
-                                                    : !llmModel
-                                                        ? "Select LLM model..."
-                                                        : "Ask a question..." + (input ? "\n(Shift+Enter for new line)" : "")
+                                : indexingStatus === 'error'
+                                    ? "Connection error. Please refresh to retry."
+                                    : indexingStatus !== 'ready'
+                                        ? "Indexing your document. This may take a moment..."
+                                        : !llmModel
+                                            ? "Select LLM model..."
+                                            : "Ask a question about your documents..." + (input ? "\n(Shift+Enter for new line)" : "")
                         }
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
@@ -1261,7 +1283,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 handleSend();
                             }
                         }}
-                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                        disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                         sx={{
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: theme.palette.background.paper,
@@ -1279,9 +1301,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <IconButton
                         color="primary"
                         onClick={handleSend}
-                        disabled={loading || !llmModel || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                        disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                     >
-                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false)) ? <CircularProgress size={24} /> : <SendIcon />}
+                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false) || indexingStatus === 'error') ? <CircularProgress size={24} /> : <SendIcon />}
                     </IconButton>
                 </Box>
             </Box>

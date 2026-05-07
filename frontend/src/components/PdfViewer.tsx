@@ -938,13 +938,13 @@ const PdfViewer = React.memo(function PdfViewer({
 }: Props) {
   const theme = useTheme();
   const { engine, isLoading, error } = usePdfiumEngine();
-  const plugins = useMemo(() => buildPlugins(pdfUrl), [pdfUrl]);
+  const plugins = useMemo(() => buildPlugins(pdfUrl), [fileHash]);
   const [pdfLoaded, setPdfLoaded] = useState(false);
   const isHistoryProcessingRef = useRef(false);
 
   useEffect(() => {
     setPdfLoaded(false);
-  }, [pdfUrl]);
+  }, [fileHash]);
 
   if (error) {
     return (
@@ -986,7 +986,7 @@ const PdfViewer = React.memo(function PdfViewer({
         overflow: "hidden",
       }}
     >
-      <EmbedPDF key={pdfUrl} engine={engine} plugins={plugins}>
+      <EmbedPDF key={fileHash} engine={engine} plugins={plugins}>
         {(ctx: PDFContextState) =>
           ctx.activeDocumentId ? (
             <EmbedPdfDocumentBody

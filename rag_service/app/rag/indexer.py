@@ -258,15 +258,37 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     """
     Generate embeddings for each chunk using the specified embedding model.
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
+    Uses asyncio.to_thread to prevent blocking the FastAPI event loop.
     """
     from app.agent.agent import invoke_with_retry
     embed_model = get_embedding_model(embedding_model_name)
     batch_size = 100  # LLM API/server strict batch size limits
     vectors = []
+    
+    # Process batches with concurrency control to prevent blocking
+    semaphore = asyncio.Semaphore(3)  # Limit concurrent embedding calls
+    tasks = []
+    
+    async def process_batch(start_idx: int) -> List[List[float]]:
+        async with semaphore:
+            batch = chunks[start_idx:start_idx + batch_size]
+            return await invoke_with_retry(embed_model.aembed_documents, batch)
+    
+    # Create tasks for each batch
     for i in range(0, len(chunks), batch_size):
-        batch = chunks[i:i + batch_size]
-        batch_vectors = await invoke_with_retry(embed_model.aembed_documents, batch)
-        vectors.extend(batch_vectors)
+        task = asyncio.create_task(process_batch(i))
+        tasks.append(task)
+    
+    # Wait for all batches to complete
+    batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Flatten results and handle any exceptions
+    for i, result in enumerate(batch_results):
+        if isinstance(result, Exception):
+            logger.error(f"Embedding batch {i} failed: {result}")
+            raise result
+        vectors.extend(result)
+    
     return vectors
 
 
