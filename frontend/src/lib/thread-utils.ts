@@ -9,6 +9,8 @@ export async function loadThreadTabs(thread: Thread): Promise<PdfTab[]> {
   const threadData = await getThread(thread.id);
   if (!threadData.files || threadData.files.length === 0) return [];
   const loadedTabs: PdfTab[] = [];
+  
+  // Process files in the order returned by backend (already ordered by added_at DESC)
   for (const file of threadData.files) {
     try {
       const pdfData = await getPdfByHash(file.file_hash, thread.id);
@@ -26,6 +28,8 @@ export async function loadThreadTabs(thread: Thread): Promise<PdfTab[]> {
       console.warn(`Failed to load file ${file.file_hash}:`, err);
     }
   }
+  
+  // Return tabs in the same order as backend (most recent first)
   return loadedTabs;
 }
 
