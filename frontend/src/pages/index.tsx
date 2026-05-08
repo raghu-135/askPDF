@@ -380,7 +380,7 @@ export default function Home() {
         {/* Left Column: PDF Content & Controls */}
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, borderRight: 1, borderColor: 'divider' }}>
           {/* Top Controls Bar */}
-          <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit' }}>
+          <Box sx={{ px: 2, height: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center' }}>
             <Stack direction="row" spacing={2} alignItems="center" justifyContent="flex-start" flexWrap="wrap" useFlexGap>
 
               {/* PDF Uploader */}
@@ -583,7 +583,7 @@ export default function Home() {
                   icon={<ForumIcon fontSize="small" />}
                   iconPosition="start"
                   label="Threads"
-                  sx={{ minHeight: 56, textTransform: 'none', flex: 2 }}
+                  sx={{ minHeight: 48, textTransform: 'none', flex: 2 }}
                   onClick={() => handleThreadSelect(null)}
                 />
                 <Tab
@@ -591,7 +591,7 @@ export default function Home() {
                   iconPosition="start"
                   label={activeThread ? activeThread.name : "Chat"}
                   disabled={!activeThread}
-                  sx={{ minHeight: 56, textTransform: 'none', flex: 8 }}
+                  sx={{ minHeight: 48, textTransform: 'none', flex: 8 }}
                 />
               </Tabs>
             </Box>
