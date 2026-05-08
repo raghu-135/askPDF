@@ -87,38 +87,17 @@ MAX_ITERATIONS_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_SUFFICIENT_COVE
 MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE")
 WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS")
 
-_DEFAULT_EMBEDDING_MODEL = os.environ.get("DEFAULT_EMBEDDING_MODEL")
-if _DEFAULT_EMBEDDING_MODEL is None:
-    raise RuntimeError("DEFAULT_EMBEDDING_MODEL environment variable is required")
-DEFAULT_EMBEDDING_MODEL = _DEFAULT_EMBEDDING_MODEL.strip()
+_LOCAL_EMBEDDING_MODEL = os.environ.get("LOCAL_EMBEDDING_MODEL")
+if _LOCAL_EMBEDDING_MODEL is None:
+    raise RuntimeError("LOCAL_EMBEDDING_MODEL environment variable is required")
+LOCAL_EMBEDDING_MODEL = _LOCAL_EMBEDDING_MODEL.strip()
 
-_DEFAULT_RERANKER_MODEL = os.environ.get("DEFAULT_RERANKER_MODEL")
-if _DEFAULT_RERANKER_MODEL is None:
-    raise RuntimeError("DEFAULT_RERANKER_MODEL environment variable is required")
-DEFAULT_RERANKER_MODEL = _DEFAULT_RERANKER_MODEL.strip()
+_LOCAL_RERANKER_MODEL = os.environ.get("LOCAL_RERANKER_MODEL")
+if _LOCAL_RERANKER_MODEL is None:
+    raise RuntimeError("LOCAL_RERANKER_MODEL environment variable is required")
+LOCAL_RERANKER_MODEL = _LOCAL_RERANKER_MODEL.strip()
 
-_USE_LOCAL_EMBEDDINGS = os.environ.get("USE_LOCAL_EMBEDDINGS")
-if _USE_LOCAL_EMBEDDINGS is None:
-    raise RuntimeError("USE_LOCAL_EMBEDDINGS environment variable is required")
-USE_LOCAL_EMBEDDINGS = _USE_LOCAL_EMBEDDINGS.lower() == "true"
-
-_USE_LOCAL_RERANKER = os.environ.get("USE_LOCAL_RERANKER")
-if _USE_LOCAL_RERANKER is None:
-    raise RuntimeError("USE_LOCAL_RERANKER environment variable is required")
-USE_LOCAL_RERANKER = _USE_LOCAL_RERANKER.lower() == "true"
-
-
-def _split_env_list(name: str) -> List[str]:
-    raw = os.environ.get(name)
-    if raw is None:
-        raise RuntimeError(f"{name} environment variable is required")
-    parts = [p.strip() for p in raw.split(",") if p.strip()]
-    return parts
-
-
-LOCAL_EMBEDDING_MODELS = _split_env_list("LOCAL_EMBEDDING_MODELS")
-if DEFAULT_EMBEDDING_MODEL and DEFAULT_EMBEDDING_MODEL not in LOCAL_EMBEDDING_MODELS:
-    LOCAL_EMBEDDING_MODELS.append(DEFAULT_EMBEDDING_MODEL)
+LOCAL_EMBEDDING_MODELS = [LOCAL_EMBEDDING_MODEL]
 
 # Context allocation ratios (must sum to 1.0)
 RATIO_LLM_RESPONSE = 0.25      # Reserve 25% for answer
@@ -225,19 +204,21 @@ async def fetch_available_models():
                 # OpenAI-compatible: models are in data['data']
                 models = data.get('data', []) if isinstance(data, dict) else data
                 model_ids = [m['id'] if isinstance(m, dict) and 'id' in m else m for m in models]
-                embedding_models = [m for m in model_ids if is_embedding_model_by_keyword(m)]
+                remote_embedding_models = [m for m in model_ids if is_embedding_model_by_keyword(m) and m not in LOCAL_EMBEDDING_MODELS]
                 llm_models = [m for m in model_ids if is_llm_model_by_keyword(m)]
-                not_embedding_models = [m for m in model_ids if m not in embedding_models]
+                not_embedding_models = [m for m in model_ids if m not in remote_embedding_models and m not in LOCAL_EMBEDDING_MODELS]
                 not_llm_models = [m for m in model_ids if m not in llm_models]
-                for local_model in LOCAL_EMBEDDING_MODELS:
-                    if local_model not in embedding_models:
-                        embedding_models.insert(0, local_model)
-                    if local_model not in model_ids:
-                        model_ids.insert(0, local_model)
+                
+                # Combine remote models with local models for all_models
+                all_embedding_models = LOCAL_EMBEDDING_MODELS + remote_embedding_models
+                all_models = LOCAL_EMBEDDING_MODELS + [m for m in model_ids if m not in LOCAL_EMBEDDING_MODELS]
+                
                 result = {
-                    "embedding_models": embedding_models,
+                    "embedding_models": remote_embedding_models,
+                    "local_embedding_models": LOCAL_EMBEDDING_MODELS,
+                    "all_embedding_models": all_embedding_models,
                     "llm_models": llm_models,
-                    "all_models": model_ids,
+                    "all_models": all_models,
                     "not_embedding_models": not_embedding_models,
                     "not_llm_models": not_llm_models
                 }
@@ -252,7 +233,9 @@ async def fetch_available_models():
         logger.error(error_msg)
         # Fall back to local-only list
         return {
-            "embedding_models": LOCAL_EMBEDDING_MODELS,
+            "embedding_models": [],  # No remote models available
+            "local_embedding_models": LOCAL_EMBEDDING_MODELS,
+            "all_embedding_models": LOCAL_EMBEDDING_MODELS,
             "llm_models": [],
             "all_models": LOCAL_EMBEDDING_MODELS,
             "not_embedding_models": [],
@@ -349,8 +332,6 @@ def is_local_embedding_model(model_name: str) -> bool:
 
 
 def should_use_local_embeddings(model_name: str) -> bool:
-    if not USE_LOCAL_EMBEDDINGS:
-        return False
     return is_local_embedding_model(model_name)
 
 
@@ -370,13 +351,11 @@ def get_local_embedding_model(model_name: str) -> LocalEmbeddingWrapper:
 
 
 def should_use_local_reranker(model_name: str) -> bool:
-    if not USE_LOCAL_RERANKER:
-        return False
     return bool(normalize_model_name(model_name))
 
 
 def get_reranker_model(model_name: Optional[str] = None) -> Optional[LocalRerankerWrapper]:
-    name = normalize_model_name(model_name or DEFAULT_RERANKER_MODEL)
+    name = normalize_model_name(model_name or LOCAL_RERANKER_MODEL)
     if not name:
         return None
     if not should_use_local_reranker(name):
@@ -500,8 +479,8 @@ async def check_chat_model_ready(model_name: str) -> bool:
                     # Verify integrity: if the model name in the response same as the requested model name?
                     resp_model = data.get("model", "")
                     if resp_model and model_name not in resp_model and resp_model not in model_name:
-                        logger.warning(f"Chat model mismatch! Requested: {model_name}, Got: {resp_model}. Continuing anyway...")
-
+                        logger.error(f"Chat model mismatch! Requested: {model_name}, Got: {resp_model}")
+                        return False
                     # Verify it actually generated a message structure
                     choices = data.get("choices", [])
                     return bool(choices and choices[0].get("message", {}).get("content") is not None)
@@ -640,7 +619,8 @@ async def check_embed_model_ready(model_name: str, use_cache: bool = True) -> bo
                     resp_model = data.get("model", "")
                     # Verify integrity: if the model name in the response same as the requested model name?
                     if resp_model and model_name not in resp_model and resp_model not in model_name:
-                        logger.warning(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}. Continuing anyway...")
+                        logger.error(f"Embedding model mismatch! Requested: {model_name}, Got: {resp_model}")
+                        return False
                     return True
                 except Exception:
                     return False

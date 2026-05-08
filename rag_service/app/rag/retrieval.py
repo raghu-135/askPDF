@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.db import get_thread_shape
-from app.models.llm_server_client import get_reranker_model, DEFAULT_RERANKER_MODEL
+from app.models.llm_server_client import get_reranker_model, LOCAL_RERANKER_MODEL
 from app.db.vector import get_vector_db
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ async def rerank_document_chunks(
     if not chunks:
         return chunks
 
-    reranker = get_reranker_model(model_name or DEFAULT_RERANKER_MODEL)
+    reranker = get_reranker_model(model_name or LOCAL_RERANKER_MODEL)
     if reranker is None:
         return chunks
 

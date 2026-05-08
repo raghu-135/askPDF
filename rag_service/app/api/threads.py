@@ -39,7 +39,7 @@ from app.db import (
 )
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import (
-    DEFAULT_EMBEDDING_MODEL,
+    LOCAL_EMBEDDING_MODEL,
     check_embed_model_ready,
     merge_thread_settings,
 )
@@ -101,11 +101,11 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
 async def create_thread_endpoint(req: ThreadCreateRequest):
     """Create a new chat thread."""
     try:
-        embed_model = (req.embed_model or "").strip() or DEFAULT_EMBEDDING_MODEL
+        embed_model = (req.embed_model or "").strip() or LOCAL_EMBEDDING_MODEL
         if not embed_model:
             raise HTTPException(
                 status_code=400,
-                detail="embed_model is required (set DEFAULT_EMBEDDING_MODEL or pass embed_model).",
+                detail="embed_model is required (set LOCAL_EMBEDDING_MODEL or pass embed_model).",
             )
         # Create thread in database
         from app.db import create_thread

@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from app.models.llm_server_client import (
-    DEFAULT_EMBEDDING_MODEL,
+    LOCAL_EMBEDDING_MODEL,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_TOKEN_BUDGET,
     INTENT_AGENT_MAX_ITERATIONS,
@@ -20,7 +20,7 @@ class ThreadCreateRequest(BaseModel):
     """Request body for creating a thread."""
 
     name: str
-    embed_model: str = Field(default=DEFAULT_EMBEDDING_MODEL)
+    embed_model: str = Field(default=LOCAL_EMBEDDING_MODEL)
 
 
 class ThreadUpdateRequest(BaseModel):

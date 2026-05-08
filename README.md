@@ -273,11 +273,8 @@ Environment variables are now managed using a `.env` file for better security an
 **Model Configuration**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEFAULT_EMBEDDING_MODEL` | `BAAI/bge-m3` | Default embedding model for document indexing |
-| `DEFAULT_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Default reranker model for result refinement |
-| `LOCAL_EMBEDDING_MODELS` | `BAAI/bge-m3` | Comma-separated list of available local embedding models |
-| `USE_LOCAL_EMBEDDINGS` | `true` | Enable local embedding model usage |
-| `USE_LOCAL_RERANKER` | `true` | Enable local reranker model usage |
+| `LOCAL_EMBEDDING_MODEL` | `BAAI/bge-m3` | Single local embedding model to use |
+| `LOCAL_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Single local reranker model to use |
 | `EMBEDDING_DEVICE` | `cpu` | Device for embedding models (cpu/cuda/mps) |
 | `RERANKER_DEVICE` | `cpu` | Device for reranker models (cpu/cuda/mps) |
 
@@ -319,7 +316,6 @@ Environment variables are now managed using a `.env` file for better security an
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | RAG service API URL for frontend communication |
-| `NEXT_PUBLIC_DEFAULT_EMBED_MODEL` | `BAAI/bge-m3` | Default embedding model for frontend display |
 
 **RAG Service - Core Configuration**
 | Variable | Default | Description |

@@ -9,7 +9,6 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
-      - NEXT_PUBLIC_DEFAULT_EMBED_MODEL=BAAI/bge-m3
     env_file:
       - .env
     depends_on:
