@@ -92,11 +92,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   // Helper function to get icon and color for model type
   const getModelIcon = (modelName: string) => {
     if (availableEmbedModels.embedding_models.includes(modelName)) {
-      return <CheckCircleIcon sx={{ fontSize: 16 }} color="success" />;
+      return <CheckCircleIcon fontSize="inherit" color="primary" />;
     } else if (availableEmbedModels.local_embedding_models.includes(modelName)) {
-      return <CheckCircleIcon sx={{ fontSize: 16, color: 'orange' }} />;
+      return <CheckCircleIcon fontSize="inherit" sx={{ color: 'orange' }} />;
     } else if (availableEmbedModels.not_embedding_models.includes(modelName)) {
-      return <ErrorIcon sx={{ fontSize: 16 }} color="error" />;
+      return <ErrorIcon fontSize="inherit" color="error" />;
     }
     return null;
   };
