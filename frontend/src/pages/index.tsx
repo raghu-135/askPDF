@@ -104,6 +104,9 @@ export default function Home() {
     setPlayRequestId(null);
     setActiveSource('pdf');
     setChatSentences([]);
+    
+    // Reset browser state when leaving thread context
+    setIsBrowserActive(false);
 
     if (thread) {
       try {
