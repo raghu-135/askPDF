@@ -26,8 +26,8 @@ services:
 
   rag-service:
     build:
-      context: .
-      dockerfile: rag_service/Dockerfile
+      context: ./rag_service
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:

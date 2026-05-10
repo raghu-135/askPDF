@@ -2,13 +2,14 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
     HF_HOME=/models/hf \
     TRANSFORMERS_CACHE=/models/hf \
     SENTENCE_TRANSFORMERS_HOME=/models/hf
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
     tesseract-ocr \
     libmagic-dev \
@@ -18,11 +19,10 @@ RUN apt-get update && apt-get install -y \
     libsndfile1 \
     espeak-ng \
     curl \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY rag_service/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY requirements.txt requirements.txt
+RUN pip install -r requirements.txt
 
 ARG DOWNLOAD_LOCAL_MODELS=true
 RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
@@ -30,7 +30,11 @@ RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
       python -m spacy download en_core_web_sm; \
     fi
 
-COPY rag_service /app
+RUN mkdir -p /models/hf /static
+
+COPY alembic alembic
+COPY app app
+COPY alembic.ini main.py ./
 
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
