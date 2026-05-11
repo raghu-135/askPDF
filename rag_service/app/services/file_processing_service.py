@@ -21,7 +21,6 @@ from app.db import ProcessStatus
 
 # SQLModel repositories for atomic transactions
 from app.db.repositories.file_repo_sqlmodel import FileRepository
-from app.db.repositories.thread_file_repo_sqlmodel import ThreadFileRepository
 
 # Database operations (SQLModel/PostgreSQL)
 from app.db import (
@@ -32,9 +31,7 @@ from app.db import (
     update_indexing_status,
     update_parsing_status,
 )
-from app.db.vector import get_vector_db
 from app.rag.indexer import index_document_for_thread
-from app.services.nlp_service import split_into_sentences
 from app.services.parsing_service import extract_text_with_coordinates
 
 logger = logging.getLogger(__name__)

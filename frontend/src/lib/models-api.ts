@@ -3,29 +3,32 @@
  */
 
 import { API_BASE } from "./api";
+import ErrorIcon from '@mui/icons-material/Error';
 
 /**
  * Fetches available embedding models from the backend RAG API.
- * @returns A promise resolving to an array of embedding model names.
+ * @returns A promise resolving to a map with embedding model categories.
  */
-export const fetchAvailableEmbedModels = async (): Promise<string[]> => {
+export const fetchAvailableEmbedModels = async (): Promise<{
+  embedding_models: string[];
+  local_embedding_models: string[];
+  not_embedding_models: string[];
+}> => {
   try {
     const res = await fetch(`${API_BASE}/api/models`);
     const data = await res.json();
-    if (data.embedding_models || data.not_embedding_models) {
-      return [...(data.embedding_models || []), ...(data.not_embedding_models || [])];
-    } else if (data.all_models) {
-      // If all_models is an array of objects, extract id or return as is
-      if (Array.isArray(data.all_models) && data.all_models.length > 0 && typeof data.all_models[0] === 'object' && 'id' in data.all_models[0]) {
-        return data.all_models.map((m: any) => m.id);
-      }
-      return data.all_models;
-    } else {
-      return [];
-    }
+    return {
+      embedding_models: data.embedding_models || [],
+      local_embedding_models: data.local_embedding_models || [],
+      not_embedding_models: data.not_embedding_models || [],
+    };
   } catch (err) {
     console.warn("Failed to fetch embedding models", err);
-    return [];
+    return {
+      embedding_models: [],
+      local_embedding_models: [],
+      not_embedding_models: [],
+    };
   }
 };
 

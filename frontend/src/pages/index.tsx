@@ -104,6 +104,9 @@ export default function Home() {
     setPlayRequestId(null);
     setActiveSource('pdf');
     setChatSentences([]);
+    
+    // Reset browser state when leaving thread context
+    setIsBrowserActive(false);
 
     if (thread) {
       try {
@@ -380,9 +383,9 @@ export default function Home() {
         {/* Left Column: PDF Content & Controls */}
         <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, borderRight: 1, borderColor: 'divider' }}>
           {/* Top Controls Bar */}
-          <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit' }}>
-            <Stack direction="row" spacing={2} alignItems="center" justifyContent="flex-start" flexWrap="wrap" useFlexGap>
-
+          <Box sx={{ px: 2, height: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            {/* Left side controls */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
               {/* PDF Uploader */}
               <PdfUploader
                 threadId={activeThread?.id ?? null}
@@ -413,14 +416,16 @@ export default function Home() {
                   onHighlightEnabledChange={setHighlightEnabled}
                 />
               )}
+            </Box>
 
+            {/* Right side icons */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               {/* PDF Dark Mode Toggle */}
               <Tooltip title={pdfDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
                 <IconButton
                   color={pdfDarkMode ? "primary" : "default"}
                   onClick={() => setPdfDarkMode(d => !d)}
                   size="small"
-                  sx={{ ml: 'auto' }}
                 >
                   {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
                 </IconButton>
@@ -436,7 +441,7 @@ export default function Home() {
                   {isRightPanelOpen ? <KeyboardDoubleArrowRightIcon fontSize="small" /> : <KeyboardDoubleArrowLeftIcon fontSize="small" />}
                 </IconButton>
               </Tooltip>
-            </Stack>
+            </Box>
           </Box>
 
           {/* PDF Tabs */}
@@ -583,7 +588,7 @@ export default function Home() {
                   icon={<ForumIcon fontSize="small" />}
                   iconPosition="start"
                   label="Threads"
-                  sx={{ minHeight: 56, textTransform: 'none', flex: 2 }}
+                  sx={{ minHeight: 48, textTransform: 'none', flex: 2 }}
                   onClick={() => handleThreadSelect(null)}
                 />
                 <Tab
@@ -591,7 +596,7 @@ export default function Home() {
                   iconPosition="start"
                   label={activeThread ? activeThread.name : "Chat"}
                   disabled={!activeThread}
-                  sx={{ minHeight: 56, textTransform: 'none', flex: 8 }}
+                  sx={{ minHeight: 48, textTransform: 'none', flex: 8 }}
                 />
               </Tabs>
             </Box>

@@ -39,6 +39,9 @@ import SpeakerNotesIcon from '@mui/icons-material/SpeakerNotes';
 import SpeakerNotesOffIcon from '@mui/icons-material/SpeakerNotesOff';
 import DescriptionIcon from '@mui/icons-material/Description';
 import LockIcon from '@mui/icons-material/Lock';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import WarningIcon from '@mui/icons-material/Warning';
+import ErrorIcon from '@mui/icons-material/Error';
 
 import {
   Thread,
@@ -73,7 +76,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     return `Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
   });
   const [newThreadEmbedModel, setNewThreadEmbedModel] = useState('');
-  const [availableEmbedModels, setAvailableEmbedModels] = useState<string[]>([]);
+  const [availableEmbedModels, setAvailableEmbedModels] = useState<{
+    local_embedding_models: string[];
+    embedding_models: string[];
+    not_embedding_models: string[];
+  }>({ local_embedding_models: [], embedding_models: [], not_embedding_models: [] });
   const [creating, setCreating] = useState(false);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -82,13 +89,25 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [isCheckingEmbedModel, setIsCheckingEmbedModel] = useState(false);
 
 
+  // Helper function to get icon and color for model type
+  const getModelIcon = (modelName: string) => {
+    if (availableEmbedModels.embedding_models.includes(modelName)) {
+      return <CheckCircleIcon fontSize="inherit" color="primary" />;
+    } else if (availableEmbedModels.local_embedding_models.includes(modelName)) {
+      return <CheckCircleIcon fontSize="inherit" sx={{ color: 'orange' }} />;
+    } else if (availableEmbedModels.not_embedding_models.includes(modelName)) {
+      return <ErrorIcon fontSize="inherit" color="error" />;
+    }
+    return null;
+  };
+
   // Load threads and embedding models on mount
   useEffect(() => {
     loadThreads();
     fetchAvailableEmbedModels().then((models) => {
       setAvailableEmbedModels(models);
-      const envDefault = process.env.NEXT_PUBLIC_DEFAULT_EMBED_MODEL;
-      const defaultModel = envDefault || models[0] || '';
+      const allModels = [...models.embedding_models, ...models.local_embedding_models, ...models.not_embedding_models];
+      const defaultModel = allModels[0] || '';
       if (!newThreadEmbedModel && defaultModel) {
         setNewThreadEmbedModel(defaultModel);
       }
@@ -392,9 +411,24 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               label="Embedding Model"
               onChange={(e) => setNewThreadEmbedModel(e.target.value)}
             >
-              {availableEmbedModels.map((model) => (
+              {[...availableEmbedModels.embedding_models, ...availableEmbedModels.local_embedding_models, ...availableEmbedModels.not_embedding_models].map((model) => (
                 <MenuItem key={model} value={model}>
-                  {model}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    {getModelIcon(model)}
+                    <Box>
+                      {model}
+                      {availableEmbedModels.local_embedding_models.includes(model) && (
+                        <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
+                          (slower)
+                        </Typography>
+                      )}
+                      {availableEmbedModels.not_embedding_models.includes(model) && (
+                        <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
+                          (may not work)
+                        </Typography>
+                      )}
+                    </Box>
+                  </Box>
                 </MenuItem>
               ))}
             </Select>

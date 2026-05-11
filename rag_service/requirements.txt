@@ -6,14 +6,9 @@ langchain-text-splitters
 httpx
 pydantic
 unstructured[pdf]
-opencv-python-headless
 langchain-openai
-tiktoken
 
-pdfminer.six
-pi_heif
 langgraph
-langchain
 langchain-core
 langchain-community
 ddgs
@@ -23,16 +18,10 @@ pdfplumber>=0.10.0
 spacy>=3.7.0
 docling>=2.0.0
 pymupdf>=1.23.0
-numpy
-pydub
 markdown
-pytest>=8.0.0
-pytest-asyncio>=0.21.0
-faker>=19.0.0
 
 # PostgreSQL + SQLModel (Migration)
 sqlmodel>=0.0.21
 sqlalchemy[asyncio]>=2.0.0
 asyncpg>=0.29.0
 alembic>=1.13.0
-psycopg2-binary>=2.9.9
