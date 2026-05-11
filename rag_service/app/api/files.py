@@ -290,7 +290,23 @@ async def get_file_status_endpoint(
 
         # Verify file is attached to thread
         if not await is_file_in_thread(thread_id, file_hash):
-            raise HTTPException(status_code=404, detail="File is not attached to this thread")
+            # Check if file exists and is being processed
+            file = await get_file(file_hash)
+            if file:
+                # File exists but not yet attached - return processing status
+                # This handles the race condition where processing starts before attachment is committed
+                status = _scoped_status_payload(
+                    file_hash=file_hash,
+                    status=await get_file_status(file_hash),
+                    embedding_model=thread.embed_model,
+                    thread_id=thread_id,
+                )
+                # Override status to indicate processing
+                status["parsing"] = {"status": "pending"}
+                status["indexing"] = {"status": "pending"}
+                return status
+            else:
+                raise HTTPException(status_code=404, detail="File is not attached to this thread")
 
         file = await get_file(file_hash)
         if not file:
