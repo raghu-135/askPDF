@@ -383,7 +383,7 @@ async def get_thread_file_annotations_endpoint(thread_id: str, file_hash: str):
                 thread_id=thread_id,
                 file_hash=file_hash,
                 annotations=[],
-            ).dict()
+            ).model_dump()
 
         return ThreadFileAnnotationsResponse(
             thread_id=thread_id,
@@ -391,7 +391,7 @@ async def get_thread_file_annotations_endpoint(thread_id: str, file_hash: str):
             annotations=row["annotations"],
             created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
             updated_at=row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else row["updated_at"],
-        ).dict()
+        ).model_dump()
     except HTTPException:
         raise
     except Exception as e:
@@ -421,7 +421,7 @@ async def update_thread_file_annotations_endpoint(
             annotations=row["annotations"],
             created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
             updated_at=row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else row["updated_at"],
-        ).dict()
+        ).model_dump()
     except HTTPException:
         raise
     except Exception as e:

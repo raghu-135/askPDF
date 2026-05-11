@@ -150,6 +150,12 @@ async def get_thread_endpoint(thread_id: str):
                 embedding_model_name=thread.embed_model,
             )
         )
+        # Proactively ensure all collections exist for this thread's embedding model
+        asyncio.create_task(
+            get_vector_db().collection_manager.ensure_collections_for_thread(
+                embedding_model_name=thread.embed_model
+            )
+        )
         db = get_vector_db()
         stats = await db.get_thread_stats(
             thread_id=thread_id,

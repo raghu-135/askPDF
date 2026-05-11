@@ -298,6 +298,66 @@ class TestFileEndpoints:
         # but we can at least check the endpoint exists
         assert response.status_code in [200, 500]  # May fail due to missing dependencies
 
+
+class TestProactiveCollectionCreation:
+    """Test proactive collection creation during thread access."""
+    
+    @pytest.fixture
+    def sample_thread(self, client):
+        """Create a sample thread for collection tests."""
+        response = client.post(
+            "/api/threads",
+            json={"name": "Test Thread", "embed_model": "BAAI/bge-m3"}
+        )
+        return response.json()["id"]
+    
+    @patch('app.db.vector.get_vector_db')
+    @patch('app.rag.indexer.trigger_reembed_for_missing_sources')
+    def test_thread_access_triggers_collection_creation(self, mock_reembed, mock_get_db, client, sample_thread):
+        """Test that accessing a thread triggers proactive collection creation."""
+        # Mock vector DB and collection manager
+        mock_db = AsyncMock()
+        mock_collection_manager = AsyncMock()
+        mock_db.collection_manager = mock_collection_manager
+        mock_get_db.return_value = mock_db
+        
+        # Access thread endpoint
+        response = client.get(f"/api/threads/{sample_thread}")
+        assert response.status_code == 200
+        
+        # Should trigger both reembed and collection creation
+        mock_reembed.assert_called_once()
+        mock_collection_manager.ensure_collections_for_thread.assert_called_once()
+        
+        # Should be called with the thread's embedding model
+        call_args = mock_collection_manager.ensure_collections_for_thread.call_args
+        assert call_args[0][0] == "BAAI/bge-m3"
+    
+    @patch('app.db.vector.get_vector_db')
+    @patch('app.rag.indexer.trigger_reembed_for_missing_sources')
+    def test_thread_access_handles_collection_creation_failure(self, mock_reembed, mock_get_db, client, sample_thread):
+        """Test that collection creation failures don't break thread access."""
+        # Mock vector DB to raise exception during collection creation
+        mock_db = AsyncMock()
+        mock_collection_manager = AsyncMock()
+        mock_collection_manager.ensure_collections_for_thread.side_effect = Exception("Collection creation failed")
+        mock_db.collection_manager = mock_collection_manager
+        mock_get_db.return_value = mock_db
+        
+        # Thread access should still succeed despite collection creation failure
+        # (since it runs as background task)
+        response = client.get(f"/api/threads/{sample_thread}")
+        assert response.status_code == 200
+        
+        # Should still attempt collection creation
+        mock_collection_manager.ensure_collections_for_thread.assert_called_once()
+    
+    def test_nonexistent_thread_returns_404(self, client):
+        """Test that accessing nonexistent thread returns 404."""
+        response = client.get("/api/threads/nonexistent-id")
+        assert response.status_code == 404
+        assert "Thread not found" in response.json()["detail"]
+
     def test_remove_file_from_thread(self, client, sample_thread):
         """Test removing a file from a thread."""
         response = client.delete(f"/api/threads/{sample_thread}/files/abc123")

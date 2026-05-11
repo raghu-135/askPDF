@@ -183,7 +183,9 @@ class WeaviateAdapter:
             logger.debug(f"Collection '{name}' already exists")
             return
         
+        logger.warning(f"Collection '{name}' is missing, creating it now...")
         try:
+            logger.info(f"Creating collection '{name}' with {len(properties)} properties for vector storage")
             self.client.collections.create(
                 name=name,
                 vector_config=wvc.config.Configure.Vectors.self_provided(),
@@ -192,7 +194,7 @@ class WeaviateAdapter:
                     for prop_name, prop_dtype in properties
                 ],
             )
-            logger.info(f"Created collection '{name}'")
+            logger.info(f"Successfully created collection '{name}' - ready for vector embeddings")
         except WeaviateBaseError as e:
             logger.error(f"Failed to create collection '{name}': {e}")
             raise VectorDBError(f"Could not create collection '{name}'") from e
