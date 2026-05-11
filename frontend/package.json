@@ -5,7 +5,6 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "export": "next export",
     "analyze": "ANALYZE=true next build"
   },
   "dependencies": {
@@ -25,8 +24,6 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^7.0.0",
     "@mui/material": "^7.0.0",
-    "@mui/system": "^7.0.0",
-    "@mui/types": "^7.0.0",
     "kokoro-js": "^1.2.1",
     "next": "^15.5.15",
     "react": "^19.2.5",
@@ -39,11 +36,5 @@
     "@types/node": "^25.5.2",
     "@types/react": "^19.2.14",
     "typescript": "^6.0.2"
-  },
-  "optionalDependencies": {
-    "@next/swc-linux-arm64-gnu": "15.1.6",
-    "@next/swc-linux-arm64-musl": "15.1.6",
-    "@next/swc-linux-x64-gnu": "15.1.6",
-    "@next/swc-linux-x64-musl": "15.1.6"
   }
 }

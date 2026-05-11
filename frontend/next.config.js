@@ -1,11 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'standalone',
   devIndicators: false,
   // Enable gzip compression for API responses
   compress: true,
   // Optimize package imports for better tree-shaking
   experimental: {
-    optimizePackageImports: ['@mui/material', '@mui/icons-material', '@mui/system', '@embedpdf/core'],
+    optimizePackageImports: ['@mui/material', '@mui/icons-material', '@embedpdf/core'],
   },
   transpilePackages: [
     '@embedpdf/core',
@@ -24,9 +25,12 @@ const nextConfig = {
   ],
 };
 
-// Bundle analyzer configuration
-const withBundleAnalyzer = require('@next/bundle-analyzer')({
-  enabled: process.env.ANALYZE === 'true',
-});
+if (process.env.ANALYZE === 'true') {
+  const withBundleAnalyzer = require('@next/bundle-analyzer')({
+    enabled: true,
+  });
 
-module.exports = withBundleAnalyzer(nextConfig);
+  module.exports = withBundleAnalyzer(nextConfig);
+} else {
+  module.exports = nextConfig;
+}
