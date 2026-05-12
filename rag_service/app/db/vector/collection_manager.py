@@ -180,8 +180,16 @@ class ModelAwareCollectionManager:
     async def _ensure_collection_for_vectors(self, base_name: str, embedding_model_name: str, description: str):
         """Ensure a specific collection exists and is ready for vector embeddings."""
         try:
-            # Get or create the collection
-            collection = await self.get_collection(base_name, embedding_model_name)
+            # Get collection name for this model
+            collection_name = self.registry.get_collection_name(base_name, embedding_model_name)
+            
+            # Check if collection already exists before creating
+            if self.client.collections.exists(collection_name):
+                logger.debug(f"Model-aware collection '{collection_name}' already exists for {description}")
+                collection = self.client.collections.use(collection_name)
+            else:
+                logger.info(f"Creating new model-aware collection '{collection_name}' for {description}")
+                collection = await self.get_collection(base_name, embedding_model_name)
             
             # Validate that the collection can accept vectors for this model
             try:

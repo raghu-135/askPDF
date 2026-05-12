@@ -890,17 +890,18 @@ class WeaviateAdapter:
         _validate_not_empty(file_hash, "file_hash")
         _validate_not_empty(embedding_model_name, "embedding_model_name")
         
-        filt = (
-            wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
-            & wvc.query.Filter.by_property("file_hash").equal(file_hash)
-        )
-        col = self.client.collections.use(CollectionNames.DOCUMENT)
+        # Use model-aware collection for deduplication
         try:
+            col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
+            filt = (
+                wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
+                & wvc.query.Filter.by_property("file_hash").equal(file_hash)
+            )
             response = await asyncio.to_thread(col.aggregate.over_all, filters=filt)
             has_indexed = bool(getattr(response, "total_count", 0) > 0)
-            logger.debug(f"File '{file_hash}' indexed check: {has_indexed}")
+            logger.debug(f"File '{file_hash}' indexed check in model-aware collection: {has_indexed}")
             return has_indexed
-        except WeaviateBaseError as e:
+        except Exception as e:
             logger.error(f"Failed to check if file indexed: {e}")
             raise VectorDBQueryError("Could not check if file is indexed") from e
 
@@ -921,17 +922,24 @@ class WeaviateAdapter:
         _validate_not_empty(thread_id, "thread_id")
         _validate_not_empty(message_id, "message_id")
         
-        filt = (
-            wvc.query.Filter.by_property("thread_id").equal(thread_id)
-            & wvc.query.Filter.by_property("message_id").equal(message_id)
-        )
-        col = self.client.collections.use(CollectionNames.CHAT_MEMORY)
+        # Use model-aware collection for deduplication
         try:
+            # Get embedding model from thread to use correct model-aware collection
+            from app.db import get_thread
+            thread = await get_thread(thread_id)
+            if not thread:
+                return False
+            
+            col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, thread.embed_model)
+            filt = (
+                wvc.query.Filter.by_property("thread_id").equal(thread_id)
+                & wvc.query.Filter.by_property("message_id").equal(message_id)
+            )
             response = await asyncio.to_thread(col.aggregate.over_all, filters=filt)
             has_indexed = bool(getattr(response, "total_count", 0) > 0)
-            logger.debug(f"Chat memory for message '{message_id}' indexed check: {has_indexed}")
+            logger.debug(f"Chat memory for message '{message_id}' indexed check in model-aware collection: {has_indexed}")
             return has_indexed
-        except WeaviateBaseError as e:
+        except Exception as e:
             logger.error(f"Failed to check if chat memory indexed: {e}")
             raise VectorDBQueryError("Could not check if chat memory is indexed") from e
 
