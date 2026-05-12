@@ -90,11 +90,23 @@ class EmbeddingModelRegistry:
         parts = collection_name.split('_')
         if len(parts) >= 3:
             # Reconstruct model name (this is approximate)
-            model_part = '_'.join(parts[-2])
-            # Try to find matching model in cache
-            for cached_name, info in self._model_cache.items():
-                if info['sanitized_name'] == model_part:
-                    return cached_name
+            # Collection format: base_name_sanitized_model_name_dimensions
+            # We need to find everything between base_name and dimensions
+            # Remove base_name and dimensions, then join the rest
+            base_names = ['DocumentChunk', 'ChatMemory', 'WebSearch']
+            for base_name in base_names:
+                if collection_name.startswith(base_name + '_'):
+                    # Remove base_name prefix
+                    remaining = collection_name[len(base_name) + 1:]  # +1 for underscore
+                    # Remove dimensions suffix
+                    remaining_parts = remaining.split('_')
+                    if len(remaining_parts) >= 2:
+                        # Remove last part (dimensions) and join the rest
+                        model_part = '_'.join(remaining_parts[:-1])
+                        # Try to find matching model in cache
+                        for cached_name, info in self._model_cache.items():
+                            if info['sanitized_name'] == model_part:
+                                return cached_name
         return None
     
     def is_model_compatible(self, collection_name: str, model_name: str) -> bool:
@@ -104,10 +116,10 @@ class EmbeddingModelRegistry:
             if not collection_model:
                 return False
             
-            collection_info = self._model_cache[collection_model]
+            collection_info = self._model_cache.get(collection_model)
             model_info = self._model_cache.get(model_name)
             
-            if not model_info:
+            if not collection_info or not model_info:
                 return False
             
             return (collection_info['dimensions'] == model_info['dimensions'] and

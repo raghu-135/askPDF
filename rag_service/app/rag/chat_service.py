@@ -119,6 +119,7 @@ async def prefetch_context(
                 limit=budget["semantic_limit"],
                 char_budget=budget["semantic_history_chars"],
                 use_reranker=use_reranker,
+                embedding_model_name=embed_model_name,
             )
         except Exception as exc:
             logger.warning(f"Prefetch semantic history failed: {exc}")

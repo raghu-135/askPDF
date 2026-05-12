@@ -220,14 +220,36 @@ class WeaviateAdapter:
         
         try:
             # Use batch insert for better performance
-            with collection.batch.dynamic() as batch:
-                for p in points:
-                    batch.add_object(
-                        properties=p["properties"],
-                        vector=p["vector"],
-                        uuid=str(uuid.uuid4()),
-                    )
-                    inserted_count += 1
+            batch = collection.batch.dynamic()
+            
+            # Handle both sync and async collection interfaces
+            if hasattr(batch, '__aenter__'):
+                # Async context manager
+                async with batch as batch_ctx:
+                    for p in points:
+                        await batch_ctx.add_object(
+                            properties=p["properties"],
+                            vector=p["vector"],
+                            uuid=str(uuid.uuid4()),
+                        )
+                        inserted_count += 1
+            else:
+                # Handle case where batch might be a coroutine (test scenarios)
+                if hasattr(batch, '__await__'):
+                    batch = await batch
+                
+                # Sync context manager - wrap in asyncio.to_thread
+                def _sync_batch_insert():
+                    with batch as batch_ctx:
+                        for p in points:
+                            batch_ctx.add_object(
+                                properties=p["properties"],
+                                vector=p["vector"],
+                                uuid=str(uuid.uuid4()),
+                            )
+                            return len(points)
+                
+                inserted_count = await asyncio.to_thread(_sync_batch_insert)
             
             logger.info(f"Inserted {inserted_count} points into model-aware collection")
             return inserted_count
@@ -333,6 +355,10 @@ class WeaviateAdapter:
         _validate_not_empty(embedding_model_name, "embedding_model_name")
         _validate_not_empty(file_hash, "file_hash")
         _validate_embeddings_match_texts(texts, embeddings)
+        
+        # Validate vectors against model dimensions
+        if not await self.collection_manager.validate_vectors_for_model(embeddings, embedding_model_name):
+            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model_name}'")
         
         logger.info(f"Indexing {len(texts)} PDF chunks for thread '{thread_id}', file '{file_hash}'")
         
@@ -545,6 +571,10 @@ class WeaviateAdapter:
             logger.error(f"Failed to search knowledge sources: {e}")
             raise VectorDBQueryError("Could not search knowledge sources") from e
 
+        # Handle case where response might be a coroutine (in test scenarios)
+        if hasattr(response, '__await__'):
+            response = await response
+
         results: List[Dict[str, Any]] = []
         for obj in response.objects:
             p = obj.properties
@@ -637,6 +667,7 @@ class WeaviateAdapter:
         self,
         thread_id: str,
         query_vector: List[float],
+        embedding_model_name: str,
         limit: int = 3,
         exclude_message_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
@@ -645,6 +676,7 @@ class WeaviateAdapter:
         Args:
             thread_id: Thread identifier.
             query_vector: Query embedding vector.
+            embedding_model_name: Embedding model name.
             limit: Maximum number of results to return.
             exclude_message_ids: Optional list of message IDs to exclude.
             
@@ -657,6 +689,7 @@ class WeaviateAdapter:
         """
         _validate_not_empty(thread_id, "thread_id")
         _validate_not_empty(query_vector, "query_vector")
+        _validate_not_empty(embedding_model_name, "embedding_model_name")
         if limit <= 0:
             raise ValueError("limit must be positive")
         
@@ -960,11 +993,10 @@ class WeaviateAdapter:
         _validate_not_empty(file_hash, "file_hash")
         _validate_not_empty(embedding_model_name, "embedding_model_name")
         
-        filt = (
-            wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
-            & wvc.query.Filter.by_property("file_hash").equal(file_hash)
-        )
-        col = self.client.collections.use(CollectionNames.DOCUMENT)
+        # Use model-aware collection - no need for embed_model filter
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
+        
+        filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
         try:
             response = await asyncio.to_thread(col.aggregate.over_all, filters=filt)
             count = int(getattr(response, "total_count", 0) or 0)
@@ -1000,15 +1032,22 @@ class WeaviateAdapter:
         
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
 
-        doc_col = self.client.collections.use(CollectionNames.DOCUMENT)
-        chat_col = self.client.collections.use(CollectionNames.CHAT_MEMORY)
-        web_col = self.client.collections.use(CollectionNames.WEB_SEARCH)
+        # Use model-aware collections if embedding_model_name is provided
+        if embedding_model_name:
+            doc_col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
+            chat_col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model_name)
+            web_col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model_name)
+        else:
+            # Fallback to old collections for backward compatibility
+            doc_col = self.client.collections.use(CollectionNames.DOCUMENT)
+            chat_col = self.client.collections.use(CollectionNames.CHAT_MEMORY)
+            web_col = self.client.collections.use(CollectionNames.WEB_SEARCH)
 
         try:
             if file_hashes and embedding_model_name:
+                # Use model-aware collection - no need for embed_model filter
                 doc_filter = (
-                    wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
-                    & wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)
+                    wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)
                 )
                 doc_total = await asyncio.to_thread(doc_col.aggregate.over_all, filters=doc_filter)
                 pdf_count = await asyncio.to_thread(

@@ -54,13 +54,16 @@ class TestEmbeddingModelRegistry:
     
     @pytest.mark.asyncio
     async def test_model_compatibility_check(self, registry):
-        """Test model compatibility checking."""
-        # Setup compatible model
+        """Test collection naming with model and dimensions."""
+        # Mock model info for model-a (384 dimensions)
         registry._model_cache["model-a"] = {
             'dimensions': 384,
             'sanitized_name': 'model_a',
-            'is_local': True
+            'is_local': False
         }
+        
+        collection_name = registry.get_collection_name("DocumentChunk", "model-a")
+        assert collection_name == "DocumentChunk_model_a_384"
         
         # Test compatible collection
         assert registry.is_model_compatible("DocumentChunk_model_a_384", "model-a")
@@ -68,12 +71,13 @@ class TestEmbeddingModelRegistry:
         # Test incompatible collection
         assert not registry.is_model_compatible("DocumentChunk_model_b_768", "model-a")
         
-        # Test incompatible dimensions
+        # Test incompatible dimensions - add model-b with 768 dimensions
         registry._model_cache["model-b"] = {
             'dimensions': 768,
             'sanitized_name': 'model_b',
             'is_local': True
         }
+        
         assert not registry.is_model_compatible("DocumentChunk_model_a_384", "model-b")
 
 
@@ -107,7 +111,7 @@ class TestModelAwareCollectionManager:
             collection = await collection_manager.get_collection("DocumentChunk", "test-model")
             
             assert collection is not None
-            mock_client.collections.exists.assert_called_once_with("DocumentChunk_test-model_384")
+            mock_client.collections.exists.assert_called_once_with("DocumentChunk_test_model_384")
             mock_client.collections.create.assert_called_once()
     
     @pytest.mark.asyncio
@@ -131,7 +135,7 @@ class TestModelAwareCollectionManager:
             mock_client.collections.exists.assert_called_once()
     
     @pytest.mark.asyncio
-    async def test_vector_validation(self, collection_manager):
+    async def test_vector_validation(self, collection_manager, mock_client):
         """Test vector dimension validation."""
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
@@ -156,7 +160,16 @@ class TestWeaviateAdapterIntegration:
         with patch('app.db.vector.collection_manager.ModelAwareCollectionManager') as mock_manager_class:
             with patch('app.db.vector.model_registry.get_embedding_model_registry') as mock_registry:
                 mock_manager = AsyncMock()
-                mock_manager.get_collection.return_value = AsyncMock()
+                
+                # Create a proper mock collection with batch behavior
+                mock_collection = AsyncMock()
+                mock_batch = AsyncMock()
+                mock_batch.__aenter__ = AsyncMock(return_value=mock_batch)
+                mock_batch.__aexit__ = AsyncMock(return_value=None)
+                mock_batch.add_object = AsyncMock()
+                mock_collection.batch.dynamic.return_value = mock_batch
+                
+                mock_manager.get_collection.return_value = mock_collection
                 mock_manager_class.return_value = mock_manager
                 mock_registry.return_value = AsyncMock()
                 
@@ -171,8 +184,13 @@ class TestWeaviateAdapterIntegration:
         # Setup
         mock_collection = AsyncMock()
         adapter.collection_manager.get_collection.return_value = mock_collection
-        mock_collection.query.fetch_objects.return_value = AsyncMock()
-        mock_collection.query.fetch_objects.return_value.objects = []
+        
+        # Mock of actual query methods used in the code
+        mock_response = AsyncMock()
+        mock_response.objects = []
+        # The asyncio.to_thread will call the mock, so it should return the response directly
+        mock_collection.query.near_vector.return_value = mock_response
+        mock_collection.query.hybrid.return_value = mock_response
         
         # Test search
         result = await adapter.search_knowledge_sources(
@@ -185,10 +203,10 @@ class TestWeaviateAdapterIntegration:
         # Should call get_collection with correct parameters
         adapter.collection_manager.get_collection.assert_called_once_with("DocumentChunk", "test-model")
         
-        # Should not filter by embed_model (handled by collection isolation)
-        mock_collection.query.fetch_objects.assert_called_once()
+        # Should call near_vector since no query_text provided
+        mock_collection.query.near_vector.assert_called_once()
         # Check that embed_model filter is not in the call
-        call_args = mock_collection.query.fetch_objects.call_args
+        call_args = mock_collection.query.near_vector.call_args
         filters = call_args[1].get('filters')
         assert 'embed_model' not in str(filters)
     

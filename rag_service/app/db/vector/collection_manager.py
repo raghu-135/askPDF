@@ -39,7 +39,16 @@ class ModelAwareCollectionManager:
         collection_name = self.registry.get_collection_name(base_name, model_name)
         
         if collection_name not in self._collection_cache:
-            if not self.client.collections.exists(collection_name):
+            # Check if collection exists (this might be async in some clients)
+            try:
+                collection_exists = self.client.collections.exists(collection_name)
+                if hasattr(collection_exists, '__await__'):
+                    collection_exists = await collection_exists
+            except Exception as e:
+                logger.warning(f"Failed to check collection existence for '{collection_name}': {e}")
+                collection_exists = False
+                
+            if not collection_exists:
                 # Ensure model info is loaded
                 await self.registry.get_model_info(model_name)
                 dimensions = self.registry._dimension_cache.get(model_name)
@@ -49,7 +58,9 @@ class ModelAwareCollectionManager:
                 logger.info(f"Creating collection '{collection_name}' for model '{model_name}' ({dimensions} dimensions)")
                 await self._create_model_collection(collection_name, base_name, dimensions)
             
-            self._collection_cache[collection_name] = self.client.collections.use(collection_name)
+            # Cache the actual collection object
+            collection = self.client.collections.use(collection_name)
+            self._collection_cache[collection_name] = collection
         
         return self._collection_cache[collection_name]
     
