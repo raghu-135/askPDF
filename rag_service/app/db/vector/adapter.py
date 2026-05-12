@@ -222,34 +222,18 @@ class WeaviateAdapter:
             # Use batch insert for better performance
             batch = collection.batch.dynamic()
             
-            # Handle both sync and async collection interfaces
-            if hasattr(batch, '__aenter__'):
-                # Async context manager
-                async with batch as batch_ctx:
+            # Always wrap in asyncio.to_thread for consistent async behavior
+            def _sync_batch_insert():
+                with batch as batch_ctx:
                     for p in points:
-                        await batch_ctx.add_object(
+                        batch_ctx.add_object(
                             properties=p["properties"],
                             vector=p["vector"],
                             uuid=str(uuid.uuid4()),
                         )
-                        inserted_count += 1
-            else:
-                # Handle case where batch might be a coroutine (test scenarios)
-                if hasattr(batch, '__await__'):
-                    batch = await batch
-                
-                # Sync context manager - wrap in asyncio.to_thread
-                def _sync_batch_insert():
-                    with batch as batch_ctx:
-                        for p in points:
-                            batch_ctx.add_object(
-                                properties=p["properties"],
-                                vector=p["vector"],
-                                uuid=str(uuid.uuid4()),
-                            )
-                            return len(points)
-                
-                inserted_count = await asyncio.to_thread(_sync_batch_insert)
+                    return len(points)
+            
+            inserted_count = await asyncio.to_thread(_sync_batch_insert)
             
             logger.info(f"Inserted {inserted_count} points into model-aware collection")
             return inserted_count
@@ -434,6 +418,7 @@ class WeaviateAdapter:
                     "properties": {
                         "thread_id": thread_id,
                         "type": "chat_memory",
+                        "embed_model": embedding_model_name,
                         "message_id": message_id,
                         "chunk_id": i,
                         "question": question,
@@ -736,6 +721,7 @@ class WeaviateAdapter:
         self,
         thread_id: str,
         query_vector: List[float],
+        embedding_model_name: str,
         limit: int = 5,
         query_text: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -744,6 +730,7 @@ class WeaviateAdapter:
         Args:
             thread_id: Thread identifier.
             query_vector: Query embedding vector.
+            embedding_model_name: Name of embedding model to filter by.
             limit: Maximum number of results to return.
             query_text: Optional query text for hybrid search.
             
@@ -756,6 +743,7 @@ class WeaviateAdapter:
         """
         _validate_not_empty(thread_id, "thread_id")
         _validate_not_empty(query_vector, "query_vector")
+        _validate_not_empty(embedding_model_name, "embedding_model_name")
         if limit <= 0:
             raise ValueError("limit must be positive")
         
