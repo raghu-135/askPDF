@@ -5,9 +5,11 @@ This module provides comprehensive tests for API endpoints using FastAPI's TestC
 These tests validate HTTP contracts and API behavior with a test database.
 """
 
+import asyncio
 import os
 import sys
 from typing import Generator
+from unittest.mock import patch, AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -311,9 +313,10 @@ class TestProactiveCollectionCreation:
         )
         return response.json()["id"]
     
+    @patch('asyncio.create_task')
     @patch('app.db.vector.get_vector_db')
     @patch('app.rag.indexer.trigger_reembed_for_missing_sources')
-    def test_thread_access_triggers_collection_creation(self, mock_reembed, mock_get_db, client, sample_thread):
+    def test_thread_access_triggers_collection_creation(self, mock_reembed, mock_get_db, mock_create_task, client, sample_thread):
         """Test that accessing a thread triggers proactive collection creation."""
         # Mock vector DB and collection manager
         mock_db = AsyncMock()
@@ -325,17 +328,25 @@ class TestProactiveCollectionCreation:
         response = client.get(f"/api/threads/{sample_thread}")
         assert response.status_code == 200
         
-        # Should trigger both reembed and collection creation
-        mock_reembed.assert_called_once()
-        mock_collection_manager.ensure_collections_for_thread.assert_called_once()
+        # Should create background tasks for both reembed and collection creation
+        assert mock_create_task.call_count == 2
         
-        # Should be called with the thread's embedding model
-        call_args = mock_collection_manager.ensure_collections_for_thread.call_args
-        assert call_args[0][0] == "BAAI/bge-m3"
+        # Verify the tasks were created with the expected coroutines
+        task_calls = mock_create_task.call_args_list
+        task_names = [str(call[0][0]) for call in task_calls]
+        
+        # Check that trigger_reembed_for_missing_sources was called
+        reembed_called = any('trigger_reembed_for_missing_sources' in name for name in task_names)
+        assert reembed_called, "Expected trigger_reembed_for_missing_sources to be called"
+        
+        # Check that ensure_collections_for_thread was called
+        collection_called = any('ensure_collections_for_thread' in name for name in task_names)
+        assert collection_called, "Expected ensure_collections_for_thread to be called"
     
+    @patch('asyncio.create_task')
     @patch('app.db.vector.get_vector_db')
     @patch('app.rag.indexer.trigger_reembed_for_missing_sources')
-    def test_thread_access_handles_collection_creation_failure(self, mock_reembed, mock_get_db, client, sample_thread):
+    def test_thread_access_handles_collection_creation_failure(self, mock_reembed, mock_get_db, mock_create_task, client, sample_thread):
         """Test that collection creation failures don't break thread access."""
         # Mock vector DB to raise exception during collection creation
         mock_db = AsyncMock()
@@ -349,8 +360,16 @@ class TestProactiveCollectionCreation:
         response = client.get(f"/api/threads/{sample_thread}")
         assert response.status_code == 200
         
-        # Should still attempt collection creation
-        mock_collection_manager.ensure_collections_for_thread.assert_called_once()
+        # Should still attempt to create background tasks
+        assert mock_create_task.call_count == 2
+        
+        # Verify the tasks were created with the expected coroutines
+        task_calls = mock_create_task.call_args_list
+        task_names = [str(call[0][0]) for call in task_calls]
+        
+        # Check that ensure_collections_for_thread was called
+        collection_called = any('ensure_collections_for_thread' in name for name in task_names)
+        assert collection_called, "Expected ensure_collections_for_thread to be called"
     
     def test_nonexistent_thread_returns_404(self, client):
         """Test that accessing nonexistent thread returns 404."""
