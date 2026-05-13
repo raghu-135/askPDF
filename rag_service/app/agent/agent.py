@@ -177,6 +177,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         web_chunks = await db.search_web_chunks(
             thread_id=thread_id,
             query_vector=query_vector,
+            embedding_model_name=embedding_model,
             limit=max(3, max_results // 3),
             query_text=query,
         )
