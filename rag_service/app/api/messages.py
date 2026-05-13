@@ -115,11 +115,16 @@ async def delete_message_endpoint(message_id: str):
                     if url:
                         urls_to_check.add(url)
 
+        # Get thread to determine embedding model
+        thread = await get_thread(message.thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        
         db = get_vector_db()
 
         # Delete chat-memory vector
         vector_message_id = assistant_msg_id or message_id
-        await db.delete_chat_memory_by_message_id(message.thread_id, vector_message_id)
+        await db.delete_chat_memory_by_message_id(message.thread_id, vector_message_id, thread.embed_model)
 
         # Delete orphaned web_search chunks
         if urls_to_check:
@@ -133,7 +138,7 @@ async def delete_message_endpoint(message_id: str):
                             still_needed.add(url)
             orphaned = urls_to_check - still_needed
             if orphaned:
-                await db.delete_web_chunks_by_urls(message.thread_id, list(orphaned))
+                await db.delete_web_chunks_by_urls(message.thread_id, list(orphaned), thread.embed_model)
 
         # Delete from database (pair-aware)
         deleted_ids = await delete_message_pair(message_id)

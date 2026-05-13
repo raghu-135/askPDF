@@ -408,7 +408,11 @@ async def index_document_for_thread(
                 }
                 chunk_metadatas.append(chunk_metadata)
 
-            # 4. Index into document collection
+            # 4. Index into document collection using model-aware manager
+            # Validate vectors before indexing
+            if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model_name):
+                raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model_name}'")
+            
             indexed_count = await db_client.index_pdf_chunks(
                 thread_id=thread_id,
                 embedding_model_name=embedding_model_name,
@@ -494,6 +498,10 @@ async def index_chat_memory_for_thread(
         # 2. Generate embeddings
         vectors = await generate_embeddings(chunks, embedding_model_name)
         
+        # Validate vectors before indexing
+        if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model_name):
+            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model_name}'")
+        
         # 3. Store into vector database
         indexed_count = await db_client.index_chat_memory(
             thread_id=thread_id,
@@ -501,7 +509,8 @@ async def index_chat_memory_for_thread(
             question=question,
             answer=answer,
             texts=chunks,
-            embeddings=vectors
+            embeddings=vectors,
+            embedding_model_name=embedding_model_name
         )
         
         return {
@@ -549,6 +558,7 @@ async def index_chat_memory_from_compact_for_thread(
             answer=answer,
             texts=chunks,
             embeddings=vectors,
+            embedding_model_name=embedding_model_name
         )
         return {"status": "success", "chunks_count": indexed_count}
     except Exception as e:
@@ -588,11 +598,17 @@ async def index_web_search_for_thread(
     db_client = get_vector_db()
     try:
         vectors = await generate_embeddings(texts, embedding_model_name)
+        
+        # Validate vectors before indexing
+        if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model_name):
+            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model_name}'")
+        
         indexed_count = await db_client.index_web_search_chunks(
             thread_id=thread_id,
             query=query,
             texts=texts,
             embeddings=vectors,
+            embedding_model_name=embedding_model_name,
             urls=urls,
             titles=titles,
         )
