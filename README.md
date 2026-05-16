@@ -28,7 +28,7 @@ A **private, local PDF research assistant** that reads your documents aloud and 
    docker model pull ai/qwen3:latest
    docker model pull ai/nomic-embed-text-v1.5:latest
    ```
-3. Set LLM_RUL in `.env` file to:
+3. Set LLM_API_URL in `.env` file to:
    ```env
    LLM_API_URL=http://host.docker.internal:12434
    ```
@@ -40,7 +40,7 @@ A **private, local PDF research assistant** that reads your documents aloud and 
    ollama pull llama3.2
    ollama pull nomic-embed-text
    ```
-3. Set LLM_RUL in `.env` file to:
+3. Set LLM_API_URL in `.env` file to:
    ```env
    LLM_API_URL=http://host.docker.internal:11434
    ```
@@ -49,7 +49,7 @@ A **private, local PDF research assistant** that reads your documents aloud and 
 1. [Install LMStudio](https://lmstudio.ai/)
 2. Download a chat model and embedding model
 3. Start Local Server (port 1234)
-4. Set LLM_RUL in `.env` file to:
+4. Set LLM_API_URL in `.env` file to:
    ```env
    LLM_API_URL=http://host.docker.internal:1234/v1
    ```
