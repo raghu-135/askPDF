@@ -423,15 +423,23 @@ class TestProactiveCollectionCreation:
         )
         return response.json()["id"]
     
-    @patch('asyncio.create_task')
-    @patch('app.db.vector.get_vector_db')
-    @patch('app.rag.indexer.trigger_reembed_for_missing_sources')
-    def test_thread_access_triggers_collection_creation(self, mock_reembed, mock_get_db, mock_create_task, client, sample_thread):
+    @patch('app.api.threads.asyncio.create_task')
+    @patch('app.api.threads.repair_thread_documents_meta', new_callable=AsyncMock)
+    @patch('app.api.threads.check_embed_model_ready', new_callable=AsyncMock, return_value=True)
+    @patch('app.api.threads.get_vector_db')
+    @patch('app.api.threads.trigger_reembed_for_missing_sources')
+    def test_thread_access_triggers_collection_creation(self, mock_reembed, mock_get_db, mock_check_ready, mock_repair_meta, mock_create_task, client, sample_thread):
         """Test that accessing a thread triggers proactive collection creation."""
         # Mock vector DB and collection manager
         mock_db = AsyncMock()
         mock_collection_manager = AsyncMock()
         mock_db.collection_manager = mock_collection_manager
+        mock_db.get_thread_stats.return_value = {
+            "total_documents": 0,
+            "total_chunks": 0,
+            "total_chars": 0,
+            "documents": {},
+        }
         mock_get_db.return_value = mock_db
         
         # Access thread endpoint
@@ -440,29 +448,32 @@ class TestProactiveCollectionCreation:
         
         # Should create background tasks for both reembed and collection creation
         assert mock_create_task.call_count == 2
-        
-        # Verify the tasks were created with the expected coroutines
-        task_calls = mock_create_task.call_args_list
-        task_names = [str(call[0][0]) for call in task_calls]
-        
-        # Check that trigger_reembed_for_missing_sources was called
-        reembed_called = any('trigger_reembed_for_missing_sources' in name for name in task_names)
-        assert reembed_called, "Expected trigger_reembed_for_missing_sources to be called"
-        
-        # Check that ensure_collections_for_thread was called
-        collection_called = any('ensure_collections_for_thread' in name for name in task_names)
-        assert collection_called, "Expected ensure_collections_for_thread to be called"
+        mock_reembed.assert_called_once_with(
+            thread_id=sample_thread,
+            embedding_model_name="BAAI/bge-m3",
+        )
+        mock_collection_manager.ensure_collections_for_thread.assert_called_once_with(
+            embedding_model_name="BAAI/bge-m3"
+        )
     
-    @patch('asyncio.create_task')
-    @patch('app.db.vector.get_vector_db')
-    @patch('app.rag.indexer.trigger_reembed_for_missing_sources')
-    def test_thread_access_handles_collection_creation_failure(self, mock_reembed, mock_get_db, mock_create_task, client, sample_thread):
+    @patch('app.api.threads.asyncio.create_task')
+    @patch('app.api.threads.repair_thread_documents_meta', new_callable=AsyncMock)
+    @patch('app.api.threads.check_embed_model_ready', new_callable=AsyncMock, return_value=True)
+    @patch('app.api.threads.get_vector_db')
+    @patch('app.api.threads.trigger_reembed_for_missing_sources')
+    def test_thread_access_handles_collection_creation_failure(self, mock_reembed, mock_get_db, mock_check_ready, mock_repair_meta, mock_create_task, client, sample_thread):
         """Test that collection creation failures don't break thread access."""
         # Mock vector DB to raise exception during collection creation
         mock_db = AsyncMock()
         mock_collection_manager = AsyncMock()
         mock_collection_manager.ensure_collections_for_thread.side_effect = Exception("Collection creation failed")
         mock_db.collection_manager = mock_collection_manager
+        mock_db.get_thread_stats.return_value = {
+            "total_documents": 0,
+            "total_chunks": 0,
+            "total_chars": 0,
+            "documents": {},
+        }
         mock_get_db.return_value = mock_db
         
         # Thread access should still succeed despite collection creation failure
@@ -472,14 +483,9 @@ class TestProactiveCollectionCreation:
         
         # Should still attempt to create background tasks
         assert mock_create_task.call_count == 2
-        
-        # Verify the tasks were created with the expected coroutines
-        task_calls = mock_create_task.call_args_list
-        task_names = [str(call[0][0]) for call in task_calls]
-        
-        # Check that ensure_collections_for_thread was called
-        collection_called = any('ensure_collections_for_thread' in name for name in task_names)
-        assert collection_called, "Expected ensure_collections_for_thread to be called"
+        mock_collection_manager.ensure_collections_for_thread.assert_called_once_with(
+            embedding_model_name="BAAI/bge-m3"
+        )
     
     def test_nonexistent_thread_returns_404(self, client):
         """Test that accessing nonexistent thread returns 404."""
