@@ -60,6 +60,11 @@ interface ChatMessage extends Message {
     web_sources?: WebSource[];
 }
 
+type ClarificationChoice = {
+    text: string;
+    isOriginal: boolean;
+};
+
 interface ChatInterfaceProps {
     ragApiUrl?: string;
     activeThread: Thread | null;
@@ -115,7 +120,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [showContextHighlight, setShowContextHighlight] = useState(false);
     const [tooltipOpen, setTooltipOpen] = useState(false);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
-    const [clarificationOptions, setClarificationOptions] = useState<string[] | null>(null);
+    const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
     const [useIntentAgent, setUseIntentAgent] = useState(true);
     const [intentAgentMaxIterations, setIntentAgentMaxIterations] = useState(1);
     const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
@@ -562,11 +567,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }, []);
 
 
-    const handleSend = async (overrideInput?: string | React.SyntheticEvent) => {
+    const handleSend = async (
+        overrideInput?: string | React.SyntheticEvent,
+        options?: { isClarificationSelection?: boolean }
+    ) => {
         const textToSend = typeof overrideInput === 'string' ? overrideInput : input.trim();
         if (!textToSend || !llmModel || !activeThread) return;
 
-        const isClarificationSelection = typeof overrideInput === 'string';
+        const isClarificationSelection = Boolean(options?.isClarificationSelection);
         const priorClarificationIds = isClarificationSelection ? lastClarificationIdsRef.current : null;
 
         setInput('');
@@ -607,15 +615,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 systemRole,
                 effectiveToolInstructions,
                 customInstructions,
-                useIntentAgent,
-                useIntentAgent ? intentAgentMaxIterations : undefined,
+                isClarificationSelection ? false : useIntentAgent,
+                !isClarificationSelection && useIntentAgent ? intentAgentMaxIterations : undefined,
                 reasoningMode,
-                isClarificationSelection ? true : undefined
+                undefined
             );
 
             // Handle ambiguous query / clarification options
             if (response.clarification_options) {
-                setClarificationOptions(response.clarification_options);
+                setClarificationOptions([
+                    ...response.clarification_options.map((text) => ({ text, isOriginal: false })),
+                    { text: textToSend, isOriginal: true }
+                ]);
                 lastClarificationIdsRef.current = {
                     userId: response.user_message_id ?? null,
                     assistantId: response.assistant_message_id ?? null
@@ -1215,57 +1226,49 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
 
                 {clarificationOptions && (
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1, justifyContent: 'center', p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
-                        <Typography variant="caption" sx={{ width: '100%', textAlign: 'center', mb: 0.5, color: 'text.secondary', fontWeight: 'bold' }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+                        <Typography variant="caption" sx={{ width: '100%', textAlign: 'center', color: 'text.secondary', fontWeight: 'bold' }}>
                             I need a bit more clarification. Did you mean one of these?
                         </Typography>
-                        {clarificationOptions.map((opt, i) => (
-                            <Chip
+                        {clarificationOptions.map((choice, i) => (
+                            <Box
                                 key={i}
-                                label={opt}
-                                onClick={() => handleSend(opt)}
-                                color="primary"
-                                variant="outlined"
-                                size="medium"
                                 sx={{
-                                    cursor: 'pointer',
-                                    height: 'auto',
-                                    maxWidth: '100%',
-                                    '& .MuiChip-label': {
-                                        whiteSpace: 'normal',
-                                        display: 'block',
-                                        py: 1,
-                                        px: 2
-                                    },
-                                    '&:hover': { bgcolor: 'primary.main', color: 'white' }
+                                    display: 'flex',
+                                    gap: 1,
+                                    alignItems: 'flex-start',
+                                    width: '100%'
                                 }}
-                            />
+                            >
+                                <TextField
+                                    fullWidth
+                                    size="small"
+                                    multiline
+                                    maxRows={4}
+                                    label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
+                                    value={choice.text}
+                                    onChange={(event) => {
+                                        const nextText = event.target.value;
+                                        setClarificationOptions(prev => prev?.map((item, index) => (
+                                            index === i ? { ...item, text: nextText } : item
+                                        )) ?? null);
+                                    }}
+                                />
+                                <Tooltip title="Send this question">
+                                    <span>
+                                        <IconButton
+                                            color="primary"
+                                            size="small"
+                                            disabled={!choice.text.trim() || loading}
+                                            onClick={() => handleSend(choice.text.trim(), { isClarificationSelection: true })}
+                                            sx={{ mt: 0.5 }}
+                                        >
+                                            <SendIcon fontSize="small" />
+                                        </IconButton>
+                                    </span>
+                                </Tooltip>
+                            </Box>
                         ))}
-                        <Button
-                            size="small"
-                            variant="text"
-                            onClick={() => {
-                                setClarificationOptions(null);
-                                const lastIds = lastClarificationIdsRef.current;
-                                lastClarificationIdsRef.current = null;
-                                if (lastIds) {
-                                    setMessages(prev => prev.filter(m => {
-                                        if (m.id.startsWith('clarify-')) return false;
-                                        if (m.id === lastIds.userId || m.id === lastIds.assistantId) return false;
-                                        return true;
-                                    }));
-                                }
-                                if (lastIds && (lastIds.assistantId || lastIds.userId)) {
-                                    const deleteTargetId = lastIds.assistantId || lastIds.userId;
-                                    deleteMessage(deleteTargetId).catch(err => {
-                                        console.warn('Failed to delete clarification message pair:', err);
-                                    });
-                                }
-                            }}
-                            sx={{ fontSize: '0.7rem' }}
-                        >
-                            None of these
-                        </Button>
                     </Box>
                 )}
 
