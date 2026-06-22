@@ -8,8 +8,10 @@ These tests validate HTTP contracts and API behavior with a test database.
 import asyncio
 import os
 import sys
+from datetime import datetime
+from types import SimpleNamespace
 from typing import Generator
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +20,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from main import app
+from app.api import threads as threads_api
 
 
 @pytest.fixture(scope="function")
@@ -90,11 +93,118 @@ class TestThreadEndpoints:
         )
         thread_id = create_response.json()["id"]
         
-        response = client.get(f"/api/threads/{thread_id}")
+        with patch("app.api.threads.check_embed_model_ready", new_callable=AsyncMock, return_value=False):
+            response = client.get(f"/api/threads/{thread_id}")
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == thread_id
         assert data["name"] == "Test Thread"
+        assert data["embed_model_ready"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_thread_returns_metadata_when_embed_model_offline(self):
+        """Thread detail should not require vector dimensions when embeddings are offline."""
+        thread = SimpleNamespace(
+            id="thread-1",
+            name="Offline Thread",
+            embed_model="text-embedding-nomic-embed-text-v1.5",
+            settings={},
+            created_at=datetime(2026, 1, 1),
+        )
+        file = SimpleNamespace(
+            file_hash="file-1",
+            file_name="paper.pdf",
+            file_path="/data/paper.pdf",
+            source_type="pdf",
+        )
+
+        with (
+            patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.threads.get_thread_files", new_callable=AsyncMock, return_value=[file]),
+            patch("app.api.threads.repair_thread_documents_meta", new_callable=AsyncMock) as repair_meta,
+            patch("app.api.threads.check_embed_model_ready", new_callable=AsyncMock, return_value=False),
+            patch("app.api.threads.get_vector_db") as get_vector_db,
+            patch("app.api.threads.trigger_reembed_for_missing_sources", new_callable=AsyncMock) as trigger_reembed,
+        ):
+            data = await threads_api.get_thread_endpoint("thread-1")
+
+        assert data["id"] == "thread-1"
+        assert data["files"][0]["file_hash"] == "file-1"
+        assert data["embed_model_ready"] is False
+        assert data["stats"] == threads_api._empty_thread_stats()
+        assert data["stats_unavailable_reason"] == "Embedding model is not ready"
+        get_vector_db.assert_not_called()
+        repair_meta.assert_not_called()
+        trigger_reembed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_thread_index_status_blocks_when_embed_model_offline(self):
+        """Index status should not probe vector collections when embeddings are offline."""
+        thread = SimpleNamespace(
+            id="thread-1",
+            name="Offline Thread",
+            embed_model="text-embedding-nomic-embed-text-v1.5",
+            settings={},
+            created_at=datetime(2026, 1, 1),
+        )
+
+        with (
+            patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.threads.check_embed_model_ready", new_callable=AsyncMock, return_value=False),
+            patch("app.api.threads.get_vector_db") as get_vector_db,
+        ):
+            data = await threads_api.get_thread_index_status_endpoint("thread-1")
+
+        assert data == {
+            "thread_id": "thread-1",
+            "status": "blocked",
+            "stats": threads_api._empty_thread_stats(),
+            "embed_model_ready": False,
+        }
+        get_vector_db.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_thread_uses_real_stats_when_embed_model_ready(self):
+        """Ready embeddings should keep the existing vector stats path."""
+        thread = SimpleNamespace(
+            id="thread-1",
+            name="Ready Thread",
+            embed_model="BAAI/bge-m3",
+            settings={},
+            created_at=datetime(2026, 1, 1),
+        )
+        stats = {
+            "total_documents": 1,
+            "total_chunks": 3,
+            "total_chars": 1200,
+            "documents": {},
+        }
+        db = SimpleNamespace(
+            get_thread_stats=AsyncMock(return_value=stats),
+            collection_manager=SimpleNamespace(
+                ensure_collections_for_thread=Mock(return_value=None)
+            ),
+        )
+
+        with (
+            patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.threads.get_thread_files", new_callable=AsyncMock, return_value=[]),
+            patch("app.api.threads.repair_thread_documents_meta", new_callable=AsyncMock),
+            patch("app.api.threads.check_embed_model_ready", new_callable=AsyncMock, return_value=True),
+            patch("app.api.threads.get_vector_db", return_value=db),
+            patch("app.api.threads.trigger_reembed_for_missing_sources", Mock(return_value=None)),
+            patch("app.api.threads.asyncio.create_task"),
+        ):
+            data = await threads_api.get_thread_endpoint("thread-1")
+
+        assert data["embed_model_ready"] is True
+        assert data["stats"] == stats
+        assert data["stats_unavailable_reason"] is None
+        db.get_thread_stats.assert_awaited_once_with(
+            thread_id="thread-1",
+            file_hashes=[],
+            embedding_model_name="BAAI/bge-m3",
+        )
 
     def test_get_nonexistent_thread(self, client):
         """Test getting a thread that doesn't exist."""

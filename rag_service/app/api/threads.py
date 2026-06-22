@@ -59,6 +59,15 @@ from app.services.thread_management_service import repair_thread_documents_meta
 router = APIRouter(tags=["threads"])
 
 
+def _empty_thread_stats() -> dict:
+    return {
+        "total_documents": 0,
+        "total_chunks": 0,
+        "total_chars": 0,
+        "documents": {},
+    }
+
+
 @router.get("/threads/prompt-tools")
 async def prompt_tools_endpoint():
     """Return user-facing tool aliases and default prompts for prompt customization UI."""
@@ -143,25 +152,33 @@ async def get_thread_endpoint(thread_id: str):
             raise HTTPException(status_code=404, detail="Thread not found")
 
         files = await get_thread_files(thread_id)
-        await repair_thread_documents_meta(thread_id, thread.embed_model, files)
-        asyncio.create_task(
-            trigger_reembed_for_missing_sources(
+        embed_model_ready = await check_embed_model_ready(thread.embed_model)
+        stats = _empty_thread_stats()
+        stats_unavailable_reason = None
+
+        if embed_model_ready:
+            await repair_thread_documents_meta(thread_id, thread.embed_model, files)
+            asyncio.create_task(
+                trigger_reembed_for_missing_sources(
+                    thread_id=thread_id,
+                    embedding_model_name=thread.embed_model,
+                )
+            )
+            # Proactively ensure all collections exist for this thread's embedding model
+            asyncio.create_task(
+                get_vector_db().collection_manager.ensure_collections_for_thread(
+                    embedding_model_name=thread.embed_model
+                )
+            )
+            db = get_vector_db()
+            stats = await db.get_thread_stats(
                 thread_id=thread_id,
+                file_hashes=[f.file_hash for f in files],
                 embedding_model_name=thread.embed_model,
             )
-        )
-        # Proactively ensure all collections exist for this thread's embedding model
-        asyncio.create_task(
-            get_vector_db().collection_manager.ensure_collections_for_thread(
-                embedding_model_name=thread.embed_model
-            )
-        )
-        db = get_vector_db()
-        stats = await db.get_thread_stats(
-            thread_id=thread_id,
-            file_hashes=[f.file_hash for f in files],
-            embedding_model_name=thread.embed_model,
-        )
+        else:
+            stats_unavailable_reason = "Embedding model is not ready"
+
         return {
             "id": thread.id,
             "name": thread.name,
@@ -178,6 +195,8 @@ async def get_thread_endpoint(thread_id: str):
                 for f in files
             ],
             "stats": stats,
+            "embed_model_ready": embed_model_ready,
+            "stats_unavailable_reason": stats_unavailable_reason,
             "file_count": len(files),
         }
     except HTTPException:
@@ -304,8 +323,16 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        db = get_vector_db()
         embed_model_ready = await check_embed_model_ready(thread.embed_model)
+        if not embed_model_ready:
+            return {
+                "thread_id": thread_id,
+                "status": "blocked",
+                "stats": _empty_thread_stats(),
+                "embed_model_ready": False,
+            }
+
+        db = get_vector_db()
 
         # Track files list for stats query
         files = []
@@ -318,7 +345,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 return {
                     "thread_id": thread_id,
                     "status": "not_ready",
-                    "stats": {"total_documents": 0, "total_chunks": 0, "total_chars": 0, "documents": {}},
+                    "stats": _empty_thread_stats(),
                     "embed_model_ready": embed_model_ready,
                 }
             scoped_indexing = get_scoped_indexing_status(
@@ -366,10 +393,6 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
             file_hashes=file_hashes,
             embedding_model_name=thread.embed_model,
         )
-
-        # If vectors are missing and embedding model is offline, surface as blocked
-        if status != "ready" and not embed_model_ready:
-            status = "blocked"
 
         return {
             "thread_id": thread_id,

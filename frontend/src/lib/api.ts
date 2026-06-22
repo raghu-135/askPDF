@@ -190,7 +190,12 @@ export async function listThreads(): Promise<{ threads: Thread[] }> {
   return res.json();
 }
 
-export async function getThread(threadId: string): Promise<Thread & { files: ThreadFile[], stats: any }> {
+export async function getThread(threadId: string): Promise<Thread & {
+  files: ThreadFile[];
+  stats: any;
+  embed_model_ready?: boolean;
+  stats_unavailable_reason?: string | null;
+}> {
   const res = await fetch(`${API_BASE}/api/threads/${threadId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
