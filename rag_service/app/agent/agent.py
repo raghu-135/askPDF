@@ -29,6 +29,7 @@ from app.agent.agent_helpers import (
     collect_tool_sources,
 )
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
+from app.db import is_file_in_thread
 from app.db.vector import get_vector_db
 from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
@@ -454,6 +455,8 @@ async def search_document_by_id(
 
         if not thread_id or not embedding_model:
             return "No thread context found."
+        if not await is_file_in_thread(thread_id, file_hash):
+            return f"Document {file_hash} is not linked to this thread."
 
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
@@ -922,25 +925,32 @@ async def call_model(state: AgentState, config: RunnableConfig):
     if bundle:
         bundle_text = _format_prefetch_for_prompt(bundle)
         if bundle_text:
-            prompt_content += (
-                "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
-                "Pre-fetched context (recent turns, semantic history, document evidence, document list) is\n"
-                "already present in the PRE-FETCHED CONTEXT block below. Before calling any tool:\n"
-                "1. Assess whether the pre-fetched content answers the rewritten query with confidence.\n"
-                "   If YES, skip document/history tool calls — but NEVER skip search_web when it is available.\n"
-                "2. If document evidence is present but the rewritten query is more specific than the raw question:\n"
-                "   call search_documents or search_document_by_id ONCE with the rewritten query.\n"
-                "3. If the question targets a specific document and its file_hash is in the document list:\n"
-                "   prefer search_document_by_id (scoped) over search_documents (all documents).\n"
-                "4. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
-                "   conversation and semantic history are already in the pre-fetched block.\n"
-                + (
-                    "5. WEB SEARCH IS ENABLED AND MANDATORY: call search_web for this question IN PARALLEL\n"
-                    "   with any document search. Pre-fetched document evidence does NOT replace a web search.\n"
-                    "   Do not skip search_web regardless of how complete the pre-fetched content appears.\n"
-                    if use_web_search else ""
-                )
-            ) + bundle_text
+            if reasoning_mode:
+                prompt_content += (
+                    "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
+                    "Pre-fetched context (recent turns, semantic history, document evidence, document list) is\n"
+                    "already present in the PRE-FETCHED CONTEXT block below. Before calling any tool:\n"
+                    "1. Assess whether the pre-fetched content answers the rewritten query with confidence.\n"
+                    "   If YES, skip document/history tool calls — but NEVER skip search_web when it is available.\n"
+                    "2. If document evidence is present but the rewritten query is more specific than the raw question:\n"
+                    "   call search_documents or search_document_by_id ONCE with the rewritten query.\n"
+                    "3. If the question targets a specific document and its file_hash is in the document list:\n"
+                    "   prefer search_document_by_id (scoped) over search_documents (all documents).\n"
+                    "4. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
+                    "   conversation and semantic history are already in the pre-fetched block.\n"
+                    + (
+                        "5. WEB SEARCH IS ENABLED AND MANDATORY: call search_web for this question IN PARALLEL\n"
+                        "   with any document search. Pre-fetched document evidence does NOT replace a web search.\n"
+                        "   Do not skip search_web regardless of how complete the pre-fetched content appears.\n"
+                        if use_web_search else ""
+                    )
+                ) + bundle_text
+            else:
+                prompt_content += (
+                    "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
+                    "Use the PRE-FETCHED CONTEXT block below directly. Tool calls are disabled in compact mode;\n"
+                    "the system will run automatic retrieval after this response if evidence is insufficient."
+                ) + bundle_text
 
     prompt_template = build_chat_prompt()
     input_messages = prompt_template.format_messages(
@@ -1321,30 +1331,34 @@ def build_system_prompt(
     
     max_parallel_tools = 4 if use_web_search else 3
     
-    # Build tool registry/playbook sections
+    # Build tool registry/playbook sections only when tools are actually bound.
     EDIT = "(USER-CONFIGURABLE)"
-    tool_registry_section = (
-        f"\n\n{'=' * 64}\nTOOL REGISTRY {EDIT}:\n{'=' * 64}\n"
-        + "\n".join(
-            [
-                f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n    {item['description']}"
-                for item in catalog
-            ]
+    if reasoning_mode:
+        tool_registry_section = (
+            f"\n\n{'=' * 64}\nTOOL REGISTRY {EDIT}:\n{'=' * 64}\n"
+            + "\n".join(
+                [
+                    f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n    {item['description']}"
+                    for item in catalog
+                ]
+            )
         )
-    )
-    tool_playbook_section = (
-        f"\n\n{'=' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'=' * 64}\n"
-        + "\n".join(
-            [
-                f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
-                for item in catalog
-            ]
+        tool_playbook_section = (
+            f"\n\n{'=' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'=' * 64}\n"
+            + "\n".join(
+                [
+                    f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
+                    for item in catalog
+                ]
+            )
         )
-    )
+    else:
+        tool_registry_section = ""
+        tool_playbook_section = ""
 
     # Build web search mandate section if enabled
     web_search_mandate_section = ""
-    if use_web_search:
+    if use_web_search and reasoning_mode:
         LOCK = "(LOCKED — not overridable)"
         web_search_mandate_section = (
             f"\n\n{'=' * 64}\nWEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency\n"
