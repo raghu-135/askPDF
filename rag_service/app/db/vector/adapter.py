@@ -525,12 +525,15 @@ class WeaviateAdapter:
         # Use model-aware collection - no need for embed_model filter
         col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
         
-        # Only thread and file filters needed
+        # Document chunks are shared per file_hash + embedding model. When the
+        # caller supplies file filters, access has already been checked against
+        # the current thread's thread_files rows, so do not also require the
+        # chunk's original indexing thread_id to match.
         base_filter = wvc.query.Filter.by_property("thread_id").equal(thread_id)
         if file_hash:
-            base_filter = base_filter & wvc.query.Filter.by_property("file_hash").equal(file_hash)
-        if file_hashes:
-            base_filter = base_filter & wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)
+            base_filter = wvc.query.Filter.by_property("file_hash").equal(file_hash)
+        elif file_hashes:
+            base_filter = wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)
         kwargs = {
             "filters": base_filter,
             "limit": limit,

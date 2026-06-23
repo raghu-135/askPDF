@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 
-from app.db.models_sqlmodel import ThreadStats, Thread, Message
+from app.db.models_sqlmodel import ThreadStats, Thread, Message, File, ThreadFile
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
 
@@ -245,12 +245,53 @@ class StatsRepository:
         """
         Return a structured snapshot of the thread's content inventory.
         Used by the prefetch path in chat_service and by the get_thread_shape agent tool.
+
+        Thread-file associations are the source of truth for document membership.
+        The thread_stats.documents_meta JSON is only a cache for indexing details.
         """
-        stats = await self.get_stats(thread_id)
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(ThreadStats).where(ThreadStats.thread_id == thread_id)
+            )
+            stats_row = result.scalar_one_or_none()
+
+            files_result = await session.execute(
+                select(File)
+                .join(ThreadFile, File.file_hash == ThreadFile.file_hash)
+                .where(ThreadFile.thread_id == thread_id)
+                .order_by(ThreadFile.added_at.asc())
+            )
+            attached_files = list(files_result.scalars().all())
+
+        if stats_row:
+            documents_cache = self._load_documents_meta(stats_row.documents_meta)
+            total_qa_pairs = stats_row.total_qa_pairs
+            total_qa_chars = stats_row.total_qa_chars
+            avg_qa_chars = round(stats_row.avg_qa_chars, 1)
+            last_qa_at = stats_row.last_qa_at
+        else:
+            documents_cache = {}
+            total_qa_pairs = 0
+            total_qa_chars = 0
+            avg_qa_chars = 0.0
+            last_qa_at = None
+
+        documents: Dict[str, Any] = {}
+        for file in attached_files:
+            cached = documents_cache.get(file.file_hash, {})
+            cached = cached if isinstance(cached, dict) else {}
+            documents[file.file_hash] = {
+                **cached,
+                "file_name": file.file_name,
+                "source_type": file.source_type,
+                "file_path": file.file_path,
+            }
+
         return {
-            "total_qa_pairs": stats["total_qa_pairs"],
-            "total_qa_chars": stats["total_qa_chars"],
-            "avg_qa_chars": stats["avg_qa_chars"],
-            "last_qa_at": stats["last_qa_at"],
-            "documents": stats["documents"],
+            "total_qa_pairs": total_qa_pairs,
+            "total_qa_chars": total_qa_chars,
+            "avg_qa_chars": avg_qa_chars,
+            "last_qa_at": last_qa_at,
+            "documents": documents,
         }

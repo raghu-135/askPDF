@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Import will work after migration
 try:
     from sqlmodel import select
-    from app.db.models_sqlmodel import ThreadStats, Thread, Message
+    from app.db.models_sqlmodel import ThreadStats, Thread, Message, ThreadFile
     from app.db.repositories.stats_repo_sqlmodel import StatsRepository
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
@@ -318,6 +318,48 @@ class TestStatsRepository:
         assert "total_chars" in doc
         assert "indexing_status" in doc
         assert "indexed_at" in doc
+
+    @pytest.mark.asyncio
+    async def test_thread_shape_uses_attached_files_when_stats_missing(self, repo, sample_thread, sample_file):
+        """Attached files should appear in thread shape even without cached document metadata."""
+        thread_file = ThreadFile(
+            thread_id=sample_thread.id,
+            file_hash=sample_file.file_hash,
+            added_at=datetime.utcnow()
+        )
+        repo.add(thread_file)
+        await repo.commit()
+
+        shape = await StatsRepository(repo).get_thread_shape(sample_thread.id)
+
+        assert sample_file.file_hash in shape["documents"]
+        assert shape["documents"][sample_file.file_hash]["file_name"] == sample_file.file_name
+        assert shape["documents"][sample_file.file_hash]["source_type"] == sample_file.source_type
+
+    @pytest.mark.asyncio
+    async def test_thread_shape_ignores_stale_documents_meta(self, repo, sample_thread):
+        """Cached metadata for detached files should not define document membership."""
+        stats = ThreadStats(
+            thread_id=sample_thread.id,
+            total_qa_pairs=0,
+            total_qa_chars=0,
+            avg_qa_chars=0.0,
+            documents_meta={
+                "stale-file": {
+                    "file_name": "detached.pdf",
+                    "source_type": "pdf",
+                    "chunk_count": 10,
+                    "indexing_status": "completed",
+                }
+            },
+            last_updated_at=datetime.utcnow()
+        )
+        repo.add(stats)
+        await repo.commit()
+
+        shape = await StatsRepository(repo).get_thread_shape(sample_thread.id)
+
+        assert shape["documents"] == {}
 
     @pytest.mark.asyncio
     async def test_qa_stats_drift_prevention(self, repo, sample_thread):

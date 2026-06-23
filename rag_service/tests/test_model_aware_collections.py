@@ -209,6 +209,29 @@ class TestWeaviateAdapterIntegration:
         call_args = mock_collection.query.near_vector.call_args
         filters = call_args[1].get('filters')
         assert 'embed_model' not in str(filters)
+
+    @pytest.mark.asyncio
+    async def test_search_knowledge_sources_file_hash_filter_is_not_thread_scoped(self, adapter):
+        """File-filtered document search should find shared chunks indexed by another thread."""
+        mock_collection = AsyncMock()
+        adapter.collection_manager.get_collection.return_value = mock_collection
+
+        mock_response = AsyncMock()
+        mock_response.objects = []
+        mock_collection.query.near_vector.return_value = mock_response
+
+        await adapter.search_knowledge_sources(
+            thread_id="second-thread",
+            query_vector=[0.1] * 384,
+            embedding_model_name="test-model",
+            limit=5,
+            file_hashes=["shared-file-hash"],
+        )
+
+        call_args = mock_collection.query.near_vector.call_args
+        filters = str(call_args[1].get("filters"))
+        assert "shared-file-hash" in filters
+        assert "second-thread" not in filters
     
     @pytest.mark.asyncio
     async def test_dimension_mismatch_prevention(self, adapter):
