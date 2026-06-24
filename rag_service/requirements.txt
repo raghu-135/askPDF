@@ -8,10 +8,18 @@ pydantic
 unstructured[pdf]
 langchain-openai
 
-langgraph
-langchain-core
-langchain-community
-ddgs
+langgraph==1.2.6
+langchain-core==1.4.8
+langchain-community==0.4.2
+ddgs==9.14.4
+wikipedia==1.4.0
+mediawikiapi==1.3
+wikibase-rest-api-client==0.2.5
+arxiv==2.4.1
+xmltodict==1.0.4
+yfinance==1.4.1
+stackapi==0.3.1
+semanticscholar==0.12.0
 sentence_transformers
 torch
 pdfplumber>=0.10.0

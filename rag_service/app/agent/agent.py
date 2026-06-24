@@ -1,12 +1,12 @@
 import asyncio
 import logging
 import json
+import time
 from typing import TypedDict, List, Annotated, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.runnables import RunnableConfig
 
 from langgraph.graph import StateGraph, END, START
@@ -28,6 +28,11 @@ from app.agent.agent_helpers import (
     evidence_insufficient,
     collect_tool_sources,
 )
+from app.agent.external_research_tools import (
+    get_external_research_tools,
+    search_web,
+    search_web_intent,
+)
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
 from app.db import is_file_in_thread
 from app.db.vector import get_vector_db
@@ -35,8 +40,6 @@ from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, 
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
 logger = logging.getLogger(__name__)
-
-search_tool = DuckDuckGoSearchResults(output_format="list", num_results=6)
 
 async def invoke_with_retry(func, *args, **kwargs):
     max_retries = 10
@@ -271,153 +274,6 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         return f"Error retrieving chat memory: {e}"
 
 
-def _normalize_web_results(raw: Any, query: str) -> List[Dict[str, str]]:
-    if isinstance(raw, list):
-        return raw
-    if isinstance(raw, str):
-        try:
-            return json.loads(raw)
-        except Exception:
-            return [{"snippet": raw, "title": query, "link": ""}]
-    return []
-
-
-async def _run_web_search(query: str, max_results: Optional[int]) -> Optional[Dict[str, List[str]]]:
-    raw = await asyncio.to_thread(search_tool.invoke, query)
-    logger.info(f"Raw search results for '{query}': {raw}")
-    results_list = _normalize_web_results(raw, query)
-    if not results_list:
-        return None
-
-    texts = [r.get("snippet", r.get("body", "")) for r in results_list]
-    urls = [r.get("link", r.get("href", "")) for r in results_list]
-    titles = [r.get("title", "") for r in results_list]
-
-    valid = [(t, u, ti) for t, u, ti in zip(texts, urls, titles) if t.strip()]
-    if not valid:
-        return None
-
-    texts, urls, titles = zip(*valid)
-    texts = list(texts)
-    urls = list(urls)
-    titles = list(titles)
-    if max_results is not None:
-        texts = texts[:max_results]
-        urls = urls[:max_results]
-        titles = titles[:max_results]
-    return {"texts": texts, "urls": urls, "titles": titles}
-
-
-def _format_web_context(texts: List[str], urls: List[str], titles: List[str], scores: Optional[List[float]] = None) -> Dict[str, Any]:
-    web_groups: Dict[str, Dict[str, Any]] = {}
-    web_sources: List[Dict[str, Any]] = []
-    for idx, (text, url, title) in enumerate(zip(texts, urls, titles)):
-        if url not in web_groups:
-            web_groups[url] = {"title": title or url or "Internet Search", "texts": []}
-        web_groups[url]["texts"].append(text)
-        entry: Dict[str, Any] = {
-            "text": text[:200] + "...",
-            "url": url,
-            "title": title or "Internet Search",
-        }
-        if scores and idx < len(scores):
-            entry["score"] = scores[idx]
-        web_sources.append(entry)
-
-    context_parts = []
-    for url, group in web_groups.items():
-        combined_text = "\n".join(group["texts"])
-        context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
-
-    return {
-        "content": "\n\n".join(context_parts),
-        "__web_sources__": web_sources,
-    }
-
-
-@tool
-async def search_web(query: str, config: RunnableConfig = None) -> str:
-    """
-    Live web search for external or time-sensitive information.
-    Results are cached to the thread and returned with labeled sources.
-
-    Args:
-        query: Concise, keyword-rich search query.
-    """
-    try:
-        conf = config.get("configurable", {}) if config else {}
-        if not conf.get("use_web_search", False):
-            return "Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available. Answer using only the uploaded documents and conversation history."
-        use_reranker = conf.get("use_reranker", True)
-
-        logger.info(f"--- WEB SEARCH INITIATED --- Query: '{query}'")
-        thread_id = conf.get("thread_id")
-        embedding_model = conf.get("embedding_model")
-
-        result = await _run_web_search(query, max_results=6)
-        if not result:
-            return "Web search returned no usable text."
-
-        texts = result["texts"]
-        urls = result["urls"]
-        titles = result["titles"]
-        scores: Optional[List[float]] = None
-        if use_reranker:
-            web_chunks = [{"text": t, "url": urls[i], "title": titles[i]} for i, t in enumerate(texts)]
-            web_chunks = await rerank_document_chunks(query, web_chunks)
-            texts = [c.get("text", "") for c in web_chunks]
-            urls = [c.get("url", "") for c in web_chunks]
-            titles = [c.get("title", "") for c in web_chunks]
-            scores = [c.get("rerank_score") for c in web_chunks]
-
-        # ── Persist results in Weaviate for future retrieval ──
-        if thread_id and embedding_model and conf.get("web_search_index", True):
-            try:
-                from app.rag.indexer import index_web_search_for_thread
-                asyncio.create_task(
-                    index_web_search_for_thread(
-                        thread_id=thread_id,
-                        query=query,
-                        texts=texts,
-                        urls=urls,
-                        titles=titles,
-                        embedding_model_name=embedding_model,
-                    )
-                )
-            except Exception as idx_err:
-                logger.warning(f"Web search indexing skipped: {idx_err}")
-
-        return json.dumps(_format_web_context(texts, urls, titles, scores=scores))
-    except Exception as e:
-        logger.error(f"Web search failed: {e}", exc_info=True)
-        return f"Web search failed: {str(e)}"
-
-
-@tool
-async def search_web_intent(query: str, config: RunnableConfig = None) -> str:
-    """
-    Lightweight web lookup for intent disambiguation and time-sensitivity checks.
-    Use for query rewriting only; do not cite as evidence.
-
-    Args:
-        query: Concise query aimed at identifying a term or entity.
-    """
-    try:
-        conf = config.get("configurable", {}) if config else {}
-        if not conf.get("use_web_search", False):
-            return "Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available."
-
-        logger.info(f"--- INTENT WEB SEARCH INITIATED --- Query: '{query}'")
-        result = await _run_web_search(query, max_results=None)
-        if not result:
-            return "Web search returned no usable text."
-
-        return json.dumps(_format_web_context(result["texts"], result["urls"], result["titles"]))
-    except Exception as e:
-        logger.error(f"Intent web search failed: {e}", exc_info=True)
-        return f"Web search failed: {str(e)}"
-
-
 @tool
 async def ask_for_clarification(options: List[str]) -> str:
     """
@@ -632,6 +488,50 @@ def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
     )
 
 
+def format_orchestrator_tool_context(use_external_research: bool) -> str:
+    """Summarize the downstream Orchestrator's active tools for intent handoff."""
+    catalog = get_tool_catalog(get_active_tools(use_external_research=use_external_research))
+    if not catalog:
+        return ""
+
+    lines = [
+        "## DOWNSTREAM ORCHESTRATOR TOOL CATALOG (NOT CALLABLE BY YOU)",
+        "",
+        "These tools are available only to the Orchestrator after it receives your rewritten query.",
+        "Do not call these tools from the Intent Agent; use this catalog only to preserve source, connector, and tool constraints in the rewritten query:",
+    ]
+    for item in catalog:
+        lines.append(
+            f"- `{item['tool_name']}` ({item['display_name']}): {item['description']}"
+        )
+    return "\n".join(lines)
+
+
+def format_intent_tool_context(active_intent_tools: List[Any]) -> str:
+    """Summarize tools actually bound to the Intent Agent."""
+    if not active_intent_tools:
+        return "\n".join(
+            [
+                "## INTENT AGENT TOOL CATALOG (CALLABLE BY YOU NOW)",
+                "",
+                "No intent-stage tools are active for this session.",
+            ]
+        )
+
+    catalog = get_tool_catalog(active_intent_tools)
+    lines = [
+        "## INTENT AGENT TOOL CATALOG (CALLABLE BY YOU NOW)",
+        "",
+        "Only the tools in this section are callable by you before submitting your route:",
+    ]
+    for item in catalog:
+        lines.append(
+            f"- `{item['tool_name']}` ({item['display_name']}): {item['description']} "
+            f"Guidance: {item['default_prompt']}"
+        )
+    return "\n".join(lines)
+
+
 # --- Intent Agent ---
 class IntentAgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -672,7 +572,16 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
     prefetch_text = _format_prefetch_for_prompt(bundle) if bundle else ""
 
     base_prompt = get_intent_agent_prompt()
-    system_prompt = base_prompt.replace("{PREFETCH_CONTEXT}", prefetch_text)
+    intent_tool_context = format_intent_tool_context(tools_to_bind)
+    orchestrator_tool_context = format_orchestrator_tool_context(
+        use_external_research=allow_intent_web_search
+    )
+    system_prompt = (
+        base_prompt
+        .replace("{INTENT_TOOL_CONTEXT}", intent_tool_context)
+        .replace("{ORCHESTRATOR_TOOL_CONTEXT}", orchestrator_tool_context)
+        .replace("{PREFETCH_CONTEXT}", prefetch_text)
+    )
     if not allow_intent_web_search:
         system_prompt += "\n\nWeb search is disabled for this session. Do NOT call any web search tools."
     prompt_template = build_chat_prompt()
@@ -764,7 +673,21 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
 
 class IntentToolNode(ToolNode):
     async def ainvoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
-        res = await super().ainvoke(input, config, **kwargs)
+        tool_calls = _log_tool_invocation_start("intent_tools", input, config)
+        start = time.perf_counter()
+        try:
+            res = await super().ainvoke(input, config, **kwargs)
+        except Exception:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.exception(
+                "Tool invocation failed | node=%s elapsed_ms=%.1f calls=%s",
+                "intent_tools",
+                elapsed_ms,
+                _truncate_for_log(tool_calls),
+            )
+            raise
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        _log_tool_invocation_end("intent_tools", tool_calls, res, elapsed_ms, config, input)
         return {
             "messages": res.get("messages", []),
             "intent_tools_used": True,
@@ -847,7 +770,7 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
         return f"Error reading thread shape: {e}"
 
 
-tools_list = [
+core_tools_list = [
     get_thread_shape,
     search_documents,
     search_document_by_id,
@@ -857,12 +780,141 @@ tools_list = [
     ask_for_clarification,
 ]
 
+external_research_tools = get_external_research_tools()
+
+tools_list = [
+    *core_tools_list,
+    *external_research_tools,
+]
+
+
+def get_active_tools(use_external_research: bool) -> List[Any]:
+    if use_external_research:
+        return tools_list
+    return core_tools_list
+
+
+def _truncate_for_log(value: Any, max_chars: int = 500) -> str:
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(value)
+    if len(text) > max_chars:
+        return text[:max_chars] + "...[truncated]"
+    return text
+
+
+def _extract_tool_calls_for_log(input_state: dict) -> List[Dict[str, Any]]:
+    messages = input_state.get("messages") or []
+    if not messages:
+        return []
+    last_message = messages[-1]
+    tool_calls = getattr(last_message, "tool_calls", None) or []
+    summary = []
+    for call in tool_calls:
+        if isinstance(call, dict):
+            summary.append(
+                {
+                    "id": call.get("id"),
+                    "name": call.get("name"),
+                    "args": call.get("args", call.get("parameters")),
+                }
+            )
+        else:
+            summary.append(
+                {
+                    "id": getattr(call, "id", None),
+                    "name": getattr(call, "name", None),
+                    "args": getattr(call, "args", None),
+                }
+            )
+    return summary
+
+
+def _log_tool_invocation_start(
+    node_name: str,
+    input_state: dict,
+    config: Optional[RunnableConfig],
+) -> List[Dict[str, Any]]:
+    tool_calls = _extract_tool_calls_for_log(input_state)
+    conf = config.get("configurable", {}) if config else {}
+    thread_id = conf.get("thread_id", input_state.get("thread_id"))
+    for call in tool_calls:
+        logger.info(
+            "Tool invocation start | node=%s thread_id=%s tool=%s call_id=%s args=%s",
+            node_name,
+            thread_id,
+            call.get("name"),
+            call.get("id"),
+            _truncate_for_log(call.get("args")),
+        )
+    return tool_calls
+
+
+def _log_tool_invocation_end(
+    node_name: str,
+    tool_calls: List[Dict[str, Any]],
+    result: dict,
+    elapsed_ms: float,
+    config: Optional[RunnableConfig],
+    input_state: dict,
+) -> None:
+    conf = config.get("configurable", {}) if config else {}
+    thread_id = conf.get("thread_id", input_state.get("thread_id"))
+    messages = result.get("messages", []) if isinstance(result, dict) else []
+    tool_result_index = 0
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        call = tool_calls[tool_result_index] if tool_result_index < len(tool_calls) else {}
+        tool_result_index += 1
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        logger.info(
+            "Tool invocation end | node=%s thread_id=%s tool=%s call_id=%s elapsed_ms=%.1f result_chars=%d result_preview=%s",
+            node_name,
+            thread_id,
+            call.get("name"),
+            getattr(msg, "tool_call_id", None) or call.get("id"),
+            elapsed_ms,
+            len(content),
+            _truncate_for_log(content, max_chars=300),
+        )
+
+
+def _format_recoverable_tool_error(error: Exception) -> str:
+    return (
+        f"Tool execution failed: {type(error).__name__}: {error}. "
+        "Treat this source as unavailable and continue with other available evidence. "
+        "If this source is required to answer, explain the limitation."
+    )
+
 
 
 class OrchestratorToolNode(ToolNode):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("handle_tool_errors", _format_recoverable_tool_error)
+        super().__init__(*args, **kwargs)
+
     async def ainvoke(self, input: dict, config: Optional[RunnableConfig] = None, **kwargs: Any) -> Any:
         # Intercept tool calls to extract special JSON state updates
-        res = await super().ainvoke(input, config, **kwargs)
+        tool_calls = _log_tool_invocation_start("orchestrator_tools", input, config)
+        start = time.perf_counter()
+        try:
+            res = await super().ainvoke(input, config, **kwargs)
+        except Exception:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.exception(
+                "Tool invocation failed | node=%s elapsed_ms=%.1f calls=%s",
+                "orchestrator_tools",
+                elapsed_ms,
+                _truncate_for_log(tool_calls),
+            )
+            raise
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        _log_tool_invocation_end("orchestrator_tools", tool_calls, res, elapsed_ms, config, input)
 
         document_sources = list(input.get("document_sources", []))
         web_sources = list(input.get("web_sources", []))
@@ -931,7 +983,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
                     "Pre-fetched context (recent turns, semantic history, document evidence, document list) is\n"
                     "already present in the PRE-FETCHED CONTEXT block below. Before calling any tool:\n"
                     "1. Assess whether the pre-fetched content answers the rewritten query with confidence.\n"
-                    "   If YES, skip document/history tool calls — but NEVER skip search_web when it is available.\n"
+                    "   If YES, skip document/history tool calls — but still follow the external retrieval\n"
+                    "   mandate below when active external retrieval tools are available.\n"
                     "2. If document evidence is present but the rewritten query is more specific than the raw question:\n"
                     "   call search_documents or search_document_by_id ONCE with the rewritten query.\n"
                     "3. If the question targets a specific document and its file_hash is in the document list:\n"
@@ -939,9 +992,10 @@ async def call_model(state: AgentState, config: RunnableConfig):
                     "4. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
                     "   conversation and semantic history are already in the pre-fetched block.\n"
                     + (
-                        "5. WEB SEARCH IS ENABLED AND MANDATORY: call search_web for this question IN PARALLEL\n"
-                        "   with any document search. Pre-fetched document evidence does NOT replace a web search.\n"
-                        "   Do not skip search_web regardless of how complete the pre-fetched content appears.\n"
+                        "5. EXTERNAL SEARCH IS ENABLED AND MANDATORY: call search_web for general web needs,\n"
+                        "   and preserve explicit source or tool constraints from the user when selecting\n"
+                        "   among the active external retrieval tools. Pre-fetched document evidence does\n"
+                        "   NOT replace external search. Batch external search with any document search.\n"
                         if use_web_search else ""
                     )
                 ) + bundle_text
@@ -958,7 +1012,8 @@ async def call_model(state: AgentState, config: RunnableConfig):
         messages=messages,
     )
 
-    llm_with_tools = llm.bind_tools(tools_list) if reasoning_mode else llm
+    active_tools = get_active_tools(use_external_research=use_web_search)
+    llm_with_tools = llm.bind_tools(active_tools) if reasoning_mode else llm
 
     # Log complete prompt for Orchestrator Agent in OpenAI-like format
     logger.debug(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
@@ -1160,31 +1215,73 @@ async def auto_tools(state: AgentState, config: RunnableConfig):
     prefetch = state.get("pre_fetch_bundle") or {}
     documents = prefetch.get("documents") or []
 
-    async def _run_tool(tool_name: str, result: str):
+    async def _record_auto_tool_result(tool_name: str, result: str, elapsed_ms: float):
         tool_messages.append(ToolMessage(content=result, tool_call_id=f"auto_{tool_name}"))
         collect_tool_sources(result, document_sources, web_sources, used_chat_ids)
+        logger.info(
+            "Tool invocation end | node=auto_tools thread_id=%s tool=%s call_id=auto_%s elapsed_ms=%.1f result_chars=%d result_preview=%s",
+            state.get("thread_id"),
+            tool_name,
+            tool_name,
+            elapsed_ms,
+            len(result or ""),
+            _truncate_for_log(result or "", max_chars=300),
+        )
+
+    async def _run_auto_tool(tool_name: str, args: Dict[str, Any], tool_func):
+        logger.info(
+            "Tool invocation start | node=auto_tools thread_id=%s tool=%s call_id=auto_%s args=%s",
+            state.get("thread_id"),
+            tool_name,
+            tool_name,
+            _truncate_for_log(args),
+        )
+        start = time.perf_counter()
+        try:
+            result = await tool_func()
+        except Exception:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.exception(
+                "Tool invocation failed | node=auto_tools thread_id=%s tool=%s call_id=auto_%s elapsed_ms=%.1f args=%s",
+                state.get("thread_id"),
+                tool_name,
+                tool_name,
+                elapsed_ms,
+                _truncate_for_log(args),
+            )
+            raise
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        await _record_auto_tool_result(tool_name, result, elapsed_ms)
 
     if use_web_search and not state.get("web_sources"):
-        logger.info("Auto-tools: running search_web.")
-        result = await search_web(working_query, config=config)
-        await _run_tool("search_web", result)
+        await _run_auto_tool(
+            "search_web",
+            {"query": working_query},
+            lambda: search_web(working_query, config=config),
+        )
 
     if documents and not state.get("document_sources"):
         if intent_ref == "ENTITY" and len(documents) == 1:
             file_hash = documents[0].get("file_hash")
             if file_hash:
-                logger.info("Auto-tools: running search_document_by_id.")
-                result = await search_document_by_id(working_query, file_hash, config=config)
-                await _run_tool("search_document_by_id", result)
+                await _run_auto_tool(
+                    "search_document_by_id",
+                    {"query": working_query, "file_hash": file_hash},
+                    lambda: search_document_by_id(working_query, file_hash, config=config),
+                )
         else:
-            logger.info("Auto-tools: running search_documents.")
-            result = await search_documents(working_query, config=config)
-            await _run_tool("search_documents", result)
+            await _run_auto_tool(
+                "search_documents",
+                {"query": working_query},
+                lambda: search_documents(working_query, config=config),
+            )
 
     if intent_ref == "SEMANTIC":
-        logger.info("Auto-tools: running search_conversation_history.")
-        result = await search_conversation_history(working_query, config=config)
-        await _run_tool("search_conversation_history", result)
+        await _run_auto_tool(
+            "search_conversation_history",
+            {"query": working_query},
+            lambda: search_conversation_history(working_query, config=config),
+        )
 
     return {
         "messages": tool_messages,
@@ -1252,9 +1349,9 @@ def sanitize_custom_instructions(raw: str, max_chars: int = 2000) -> str:
     return _sanitize_lines_with_blocklist(raw, blocked, max_chars)
 
 
-def get_tool_catalog() -> List[Dict[str, str]]:
+def get_tool_catalog(tool_items: Optional[List[Any]] = None) -> List[Dict[str, str]]:
     catalog: List[Dict[str, str]] = []
-    for tool_item in tools_list:
+    for tool_item in tool_items or tools_list:
         cfg = TOOL_FRIENDLY_CONFIG.get(tool_item.name, {})
         alias_id = str(cfg.get("id", tool_item.name))
         catalog.append(
@@ -1269,18 +1366,22 @@ def get_tool_catalog() -> List[Dict[str, str]]:
     return catalog
 
 
-def get_default_tool_instruction_map() -> Dict[str, str]:
-    return {item["id"]: item["default_prompt"] for item in get_tool_catalog()}
+def get_default_tool_instruction_map(tool_items: Optional[List[Any]] = None) -> Dict[str, str]:
+    return {item["id"]: item["default_prompt"] for item in get_tool_catalog(tool_items)}
 
 
-def normalize_tool_instructions(raw: Optional[Dict[str, str]], max_chars_per_tool: int = 500) -> Dict[str, str]:
+def normalize_tool_instructions(
+    raw: Optional[Dict[str, str]],
+    max_chars_per_tool: int = 500,
+    tool_items: Optional[List[Any]] = None,
+) -> Dict[str, str]:
     blocked = [
         "do not use tools",
         "disable tools",
         "never use tools",
         "ignore tool contract",
     ]
-    normalized = get_default_tool_instruction_map()
+    normalized = get_default_tool_instruction_map(tool_items)
     if not isinstance(raw, dict):
         return normalized
     for tool_id, value in raw.items():
@@ -1303,8 +1404,9 @@ def build_system_prompt(
 ) -> str:
     """Build the Orchestrator Agent system prompt."""
     role = system_role or DEFAULT_SYSTEM_ROLE
-    catalog = get_tool_catalog()
-    playbook = normalize_tool_instructions(tool_instructions or {})
+    active_tools = get_active_tools(use_external_research=use_web_search)
+    catalog = get_tool_catalog(active_tools)
+    playbook = normalize_tool_instructions(tool_instructions or {}, tool_items=active_tools)
     
     # Load base template
     template = get_orchestrator_prompt() if reasoning_mode else get_orchestrator_prompt_compact()

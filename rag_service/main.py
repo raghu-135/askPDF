@@ -12,17 +12,6 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-
-# Import modular components
-from app.api.threads import router as threads_router
-from app.api.files import router as files_router
-from app.api.messages import router as messages_router
-from app.api.models import router as models_router
-from app.db.connection_sqlmodel import init_db, close_db
-from app.db.vector import get_vector_db
 
 # Load environment variables
 load_dotenv()
@@ -35,8 +24,22 @@ log_level = _log_level_str.upper()
 logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    force=True,
 )
+logging.getLogger("app").setLevel(getattr(logging, log_level, logging.INFO))
 logger = logging.getLogger(__name__)
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+# Import modular components after logging is configured so app.* loggers emit in Docker.
+from app.api.threads import router as threads_router
+from app.api.files import router as files_router
+from app.api.messages import router as messages_router
+from app.api.models import router as models_router
+from app.db.connection_sqlmodel import init_db, close_db
+from app.db.vector import get_vector_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
