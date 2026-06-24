@@ -56,12 +56,18 @@ If the user asked multiple sub-questions, keep them together as a single compoun
 
 If CLARIFY:
 - clarification_options must contain 2–4 complete, self-contained questions.
-- Options must be parallel (same scope, only the ambiguous element differs).
+- When producing clarification options, infer the most likely distinct meanings of the user's message.
+- Each option must be a plausible interpretation of the user's intended request.
+- Each option must be written as the exact standalone question that could be sent to the Orchestrator next.
+- Each option must be written as if the user is speaking directly in first person.
+- Use first-person wording for the user's need, confusion, goal, or requested comparison.
+- Each option must directly request the likely answer.
+- Each option must resolve one ambiguity while preserving the user's original scope.
+- Options must be parallel: same task shape, same level of detail, only the ambiguous meaning changes.
 - The options are shown directly to the user as clickable choices. The selected option
   will be sent back as the next user message without additional context.
-- Therefore, each option MUST be a direct, standalone question. Do NOT ask meta
-  clarification questions like "Are you asking about...", "Did you mean...", or
-  "Do you mean...". Those will cause loops and are not valid options.
+- Therefore, each option must be a direct, self-contained question spoken by the user
+  that the system can answer immediately if selected.
 
 ## CONTEXT_COVERAGE (guides tool budget)
 

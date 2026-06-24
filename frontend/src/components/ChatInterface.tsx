@@ -28,6 +28,7 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import CheckIcon from '@mui/icons-material/Check';
+import CloseIcon from '@mui/icons-material/Close';
 import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
@@ -141,6 +142,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
     const lastClarificationIdsRef = useRef<{ userId: string | null; assistantId: string | null } | null>(null);
+
+    const cleanupClarificationTurn = (ids = lastClarificationIdsRef.current) => {
+        setMessages(prev => prev.filter(m => {
+            if (m.id.startsWith('clarify-')) return false;
+            if (ids && (m.id === ids.userId || m.id === ids.assistantId)) return false;
+            return true;
+        }));
+
+        if (ids && (ids.assistantId || ids.userId)) {
+            const deleteTargetId = ids.assistantId || ids.userId;
+            deleteMessage(deleteTargetId)
+                .then(() => {
+                    if (lastClarificationIdsRef.current === ids) {
+                        lastClarificationIdsRef.current = null;
+                    }
+                })
+                .catch(err => {
+                    lastClarificationIdsRef.current = ids;
+                    console.warn('Failed to delete clarification message pair:', err);
+                });
+        } else {
+            lastClarificationIdsRef.current = null;
+        }
+    };
 
     // Load messages when thread changes
     useEffect(() => {
@@ -627,28 +652,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     ...response.clarification_options.map((text) => ({ text, isOriginal: false })),
                     { text: textToSend, isOriginal: true }
                 ]);
-                lastClarificationIdsRef.current = {
+                const clarificationIds = {
                     userId: response.user_message_id ?? null,
                     assistantId: response.assistant_message_id ?? null
                 };
+                lastClarificationIdsRef.current = clarificationIds;
 
-                // Add the clarification request to the message list so it's visible in history.
-                setMessages(prev => {
-                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
-                    return [
-                        ...updated,
-                        {
-                            ...tempUserMsg,
-                            id: response.user_message_id || ('clarify-user-' + Date.now())
-                        },
-                        {
-                            id: response.assistant_message_id || ('clarify-asst-' + Date.now()),
-                            role: 'assistant',
-                            content: "I need a bit more clarification.",
-                            created_at: new Date().toISOString()
-                        }
-                    ];
-                });
+                setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id));
+                cleanupClarificationTurn(clarificationIds);
             } else {
                 // Normal flow: update messages with real IDs and add assistant response
                 setMessages(prev => {
@@ -693,11 +704,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
 
             if (isClarificationSelection) {
-                if (priorClarificationIds && (priorClarificationIds.assistantId || priorClarificationIds.userId)) {
-                    const deleteTargetId = priorClarificationIds.assistantId || priorClarificationIds.userId;
-                    deleteMessage(deleteTargetId).catch(err => {
-                        console.warn('Failed to delete clarification message pair:', err);
-                    });
+                if (priorClarificationIds) {
+                    cleanupClarificationTurn(priorClarificationIds);
                 }
                 if (!response.clarification_options) {
                     lastClarificationIdsRef.current = null;
@@ -885,15 +893,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     Set context window size for the LLM.
                                 </Typography>
                                 <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
-                                    Search for your model here and plug in numbers only from column "Context Len" e.g. 8000 for 8k, 128000 for 128k: <br />
-                                    <a
-                                        href="https://llm-explorer.com/list/"
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        style={{ color: '#90caf9', marginLeft: '4px', textDecoration: 'underline' }}
-                                    >
-                                        llm-explorer.com
-                                    </a>
+                                    Search for your model here - <a
+                                    href="https://llm-explorer.com/list/"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ color: '#90caf9', marginLeft: '4px', textDecoration: 'underline' }}
+                                >
+                                    llm-explorer.com
+                                </a>
+                                    <br /> and plug in numbers only from column "Context Len" e.g. 8000 for 8k, 128000 for 128k: <br />
+                                    <br /> the larger the context window, the more context the LLM can consider, but it may also increase latency and cost. Adjust according to your needs.
                                 </Typography>
                             </Box>
                         }
@@ -1227,9 +1236,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
                 {clarificationOptions && (
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
-                        <Typography variant="caption" sx={{ width: '100%', textAlign: 'center', color: 'text.secondary', fontWeight: 'bold' }}>
-                            I need a bit more clarification. Did you mean one of these?
-                        </Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                            <Typography variant="caption" sx={{ flex: 1, textAlign: 'center', color: 'text.secondary', fontWeight: 'bold' }}>
+                                I need a bit more clarification. Did you mean one of these?
+                            </Typography>
+                            <Tooltip title="Close clarification options">
+                                <IconButton
+                                    size="small"
+                                    onClick={() => {
+                                        setClarificationOptions(null);
+                                        cleanupClarificationTurn();
+                                    }}
+                                    sx={{ flex: '0 0 auto' }}
+                                >
+                                    <CloseIcon fontSize="small" />
+                                </IconButton>
+                            </Tooltip>
+                        </Box>
                         {clarificationOptions.map((choice, i) => (
                             <Box
                                 key={i}

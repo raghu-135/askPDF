@@ -35,20 +35,24 @@ def parse_intent_response(raw: str, logger: logging.Logger) -> Optional[Dict[str
         options = re.findall(r"<option>(.*?)</option>", clarify_block, re.IGNORECASE | re.DOTALL)
         if options:
             cleaned = [opt.strip() for opt in options if opt.strip()]
-            meta_prefixes = (
-                "are you asking about",
-                "are you asking for",
-                "are you referring to",
-                "did you mean",
-                "do you mean",
-                "is your question about",
-                "is this about",
-                "are you looking for",
-                "would you like",
-                "do you want",
+            outside_observer_framing = re.compile(
+                r"^(?:am|are|can|could|did|do|does|is|might|should|would)\s+"
+                r"(?:(?:the\s+)?user|they|the\s+requester)\b",
+                re.IGNORECASE,
             )
-            if any(opt.lower().startswith(meta_prefixes) for opt in cleaned):
-                logger.warning("Intent Agent clarification options looked like meta-questions; rejecting to force retry.")
+            invalid_option_indexes = [
+                index
+                for index, opt in enumerate(cleaned)
+                if outside_observer_framing.match(opt)
+            ]
+            if invalid_option_indexes:
+                logger.warning(
+                    "intent_clarification_options_rejected_outside_observer_framing "
+                    "invalid_count=%d total_options=%d invalid_indexes=%s",
+                    len(invalid_option_indexes),
+                    len(cleaned),
+                    invalid_option_indexes,
+                )
                 clarification_options = None
             else:
                 clarification_options = cleaned

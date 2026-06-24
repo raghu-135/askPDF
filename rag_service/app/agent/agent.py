@@ -637,8 +637,7 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
             content=(
                 "Your previous output was invalid or missing required XML tags. Output the required XML tags: "
                 "<route>, <rewritten_query>, <reference_type>, <context_coverage>. If route is CLARIFY, include "
-                "2–4 <option> questions that are direct standalone questions (not meta-questions like "
-                "\"Did you mean...\" or \"Are you asking about...\")."
+                "2–4 <option> questions written as direct, standalone, first-person questions spoken by the user."
             )
         )
         retry_messages = input_messages + [retry_msg]
