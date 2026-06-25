@@ -163,6 +163,25 @@ class ThreadFileRepository:
                 for assoc in associations
             ]
 
+    async def get_association(self, thread_id: str, file_hash: str) -> Optional[Dict[str, Any]]:
+        """Get one thread-file association row."""
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(ThreadFile).where(
+                    ThreadFile.thread_id == thread_id,
+                    ThreadFile.file_hash == file_hash,
+                )
+            )
+            assoc = result.scalar_one_or_none()
+            if not assoc:
+                return None
+            return {
+                "thread_id": assoc.thread_id,
+                "file_hash": assoc.file_hash,
+                "added_at": assoc.added_at,
+            }
+
     async def count_threads_with_file(self, file_hash: str) -> int:
         """Count how many threads currently reference a file."""
         session = await self._get_session()

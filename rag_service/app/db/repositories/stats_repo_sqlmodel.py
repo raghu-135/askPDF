@@ -7,6 +7,7 @@ documents_meta handling.
 """
 
 import json
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +17,26 @@ from sqlalchemy import func
 from app.db.models_sqlmodel import ThreadStats, Thread, Message, File, ThreadFile
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
+
+
+def _iso_utc(value: Any) -> Any:
+    if not value:
+        return value
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            raw = str(value)
+            if raw.endswith("Z"):
+                return raw
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            return value
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 class StatsRepository:
@@ -257,12 +278,12 @@ class StatsRepository:
             stats_row = result.scalar_one_or_none()
 
             files_result = await session.execute(
-                select(File)
+                select(File, ThreadFile.added_at)
                 .join(ThreadFile, File.file_hash == ThreadFile.file_hash)
                 .where(ThreadFile.thread_id == thread_id)
                 .order_by(ThreadFile.added_at.asc())
             )
-            attached_files = list(files_result.scalars().all())
+            attached_files = list(files_result.all())
 
         if stats_row:
             documents_cache = self._load_documents_meta(stats_row.documents_meta)
@@ -278,14 +299,16 @@ class StatsRepository:
             last_qa_at = None
 
         documents: Dict[str, Any] = {}
-        for file in attached_files:
+        for file, added_at in attached_files:
             cached = documents_cache.get(file.file_hash, {})
             cached = cached if isinstance(cached, dict) else {}
             documents[file.file_hash] = {
                 **cached,
                 "file_name": file.file_name,
+                "file_hash": file.file_hash,
                 "source_type": file.source_type,
                 "file_path": file.file_path,
+                "document_available_in_thread_at": _iso_utc(added_at),
             }
 
         return {

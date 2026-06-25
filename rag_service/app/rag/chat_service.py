@@ -32,7 +32,12 @@ from app.db import (
     increment_qa_stats,
 )
 from app.agent.reasoning import normalize_ai_response
-from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
+from app.rag.retrieval import (
+    fetch_semantic_history,
+    get_document_metadata_lookup,
+    group_document_chunks,
+    rerank_document_chunks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +110,13 @@ async def prefetch_context(
         }
         # Build indexed document list (exclude pending/failed if no chunks yet)
         documents = [
-            {"index": i + 1, "file_name": meta["file_name"], "file_hash": fh}
+            {
+                "index": i + 1,
+                "file_name": meta["file_name"],
+                "file_hash": fh,
+                "source_type": meta.get("source_type"),
+                "document_available_in_thread_at": meta.get("document_available_in_thread_at"),
+            }
             for i, (fh, meta) in enumerate(shape["documents"].items())
         ]
         return {"stats": stats, "documents": documents}
@@ -151,12 +162,12 @@ async def prefetch_context(
                     embed_model_name,
                 )
                 return "", []
-            hash_to_name = await get_document_name_lookup(thread_id)
+            document_lookup = await get_document_metadata_lookup(thread_id)
             if use_reranker:
                 raw_chunks = await rerank_document_chunks(raw_question, raw_chunks)
             return group_document_chunks(
                 raw_chunks,
-                hash_to_name,
+                document_lookup,
                 char_budget=budget["document_context_chars"],
             )
         except Exception as exc:
@@ -471,7 +482,8 @@ async def handle_thread_chat(
                 answer=answer,
                 embedding_model_name=embed_model,
                 llm_name=llm_model,
-                context_window=context_window
+                context_window=context_window,
+                message_created_at=assistant_message.created_at,
             )
             compact_text = indexing_result.get("memory_compact_text") if isinstance(indexing_result, dict) else None
             if compact_text:

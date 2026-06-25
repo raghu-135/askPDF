@@ -79,7 +79,7 @@ Never fabricate citations. Apply these rules:
 
 ### Documents (PDFs + web pages)
 - Cite using the exact source labels returned by tools, for example:
-  - '[Source: PDF: filename]'
+  - '[Source: PDF: filename, pages 3-4]'
   - '[Source: Webpage: Title | URL]'
 - When multiple documents corroborate, cite each label inline.
 - Never invent names or URLs — use only labels returned by tools.

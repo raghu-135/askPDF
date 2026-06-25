@@ -10,6 +10,7 @@ import importlib
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from langchain_community.tools import DuckDuckGoSearchResults
@@ -21,6 +22,10 @@ from app.rag.retrieval import rerank_document_chunks
 logger = logging.getLogger(__name__)
 
 search_tool = DuckDuckGoSearchResults(output_format="list", num_results=6)
+
+
+def _iso_utc() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _import_attr(module_path: str, attr_name: str) -> Any:
@@ -70,6 +75,7 @@ def _format_web_context(
     urls: List[str],
     titles: List[str],
     scores: Optional[List[float]] = None,
+    web_search_performed_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     web_groups: Dict[str, Dict[str, Any]] = {}
     web_sources: List[Dict[str, Any]] = []
@@ -84,12 +90,20 @@ def _format_web_context(
         }
         if scores and idx < len(scores):
             entry["score"] = scores[idx]
+        if web_search_performed_at:
+            entry["web_search_performed_at"] = web_search_performed_at
+            entry["timeline_event_at"] = web_search_performed_at
+            entry["timeline_event_type"] = "web_search_performed"
         web_sources.append(entry)
 
     context_parts = []
     for url, group in web_groups.items():
         combined_text = "\n".join(group["texts"])
-        context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
+        prefix = (
+            f"Web result from search performed at {web_search_performed_at}:\n"
+            if web_search_performed_at else ""
+        )
+        context_parts.append(f'{prefix}[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
 
     return {
         "content": "\n\n".join(context_parts),
@@ -119,6 +133,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         result = await _run_web_search(query, max_results=6)
         if not result:
             return "Web search returned no usable text."
+        web_search_performed_at = _iso_utc()
 
         texts = result["texts"]
         urls = result["urls"]
@@ -144,12 +159,21 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
                         urls=urls,
                         titles=titles,
                         embedding_model_name=embedding_model,
+                        web_search_performed_at=web_search_performed_at,
                     )
                 )
             except Exception as idx_err:
                 logger.warning(f"Web search indexing skipped: {idx_err}")
 
-        return json.dumps(_format_web_context(texts, urls, titles, scores=scores))
+        return json.dumps(
+            _format_web_context(
+                texts,
+                urls,
+                titles,
+                scores=scores,
+                web_search_performed_at=web_search_performed_at,
+            )
+        )
     except Exception as e:
         logger.error(f"Web search failed: {e}", exc_info=True)
         return f"Web search failed: {str(e)}"

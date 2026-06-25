@@ -232,6 +232,11 @@ async def count_threads_with_file(file_hash: str):
     return await get_thread_file_repo().count_threads_with_file(file_hash)
 
 
+async def get_thread_file_association(thread_id: str, file_hash: str):
+    """Get the thread-file association row for a single document."""
+    return await get_thread_file_repo().get_association(thread_id, file_hash)
+
+
 async def get_thread_file_annotations(thread_id: str, file_hash: str):
     """Get the persisted annotation payload for a thread/file pair."""
     return await get_thread_file_repo().get_annotations(thread_id, file_hash)
@@ -370,6 +375,7 @@ __all__ = [
     "is_file_in_thread",
     "count_threads_with_file_for_model",
     "count_threads_with_file",
+    "get_thread_file_association",
     "get_thread_file_annotations",
     "upsert_thread_file_annotations",
     "delete_thread_file_annotations",

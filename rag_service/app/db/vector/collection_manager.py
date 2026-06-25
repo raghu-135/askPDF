@@ -57,6 +57,8 @@ class ModelAwareCollectionManager:
                 
                 logger.info(f"Creating collection '{collection_name}' for model '{model_name}' ({dimensions} dimensions)")
                 await self._create_model_collection(collection_name, base_name, dimensions)
+            else:
+                self._ensure_collection_properties(collection_name, self._get_collection_properties(base_name))
             
             # Cache the actual collection object
             collection = self.client.collections.use(collection_name)
@@ -97,6 +99,9 @@ class ModelAwareCollectionManager:
                 wvc.config.Property(name="text", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="url", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="title", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="page_start", data_type=wvc.config.DataType.INT),
+                wvc.config.Property(name="page_end", data_type=wvc.config.DataType.INT),
+                wvc.config.Property(name="pages", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="metadata_json", data_type=wvc.config.DataType.TEXT),
             ]
         elif base_name == CollectionNames.CHAT_MEMORY:
@@ -109,6 +114,7 @@ class ModelAwareCollectionManager:
                 wvc.config.Property(name="question", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="answer", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="text", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="message_created_at", data_type=wvc.config.DataType.TEXT),
             ]
         elif base_name == CollectionNames.WEB_SEARCH:
             return [
@@ -119,9 +125,29 @@ class ModelAwareCollectionManager:
                 wvc.config.Property(name="text", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="url", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="title", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="web_search_performed_at", data_type=wvc.config.DataType.TEXT),
             ]
         else:
             raise ValueError(f"Unknown base collection type: {base_name}")
+
+    def _ensure_collection_properties(self, collection_name: str, properties: list) -> None:
+        """Add missing scalar properties to an existing model-aware collection."""
+        try:
+            collection = self.client.collections.use(collection_name)
+            config = collection.config.get()
+            existing_props = getattr(config, "properties", []) or []
+            existing_names = {
+                getattr(prop, "name", None) or (prop.get("name") if isinstance(prop, dict) else None)
+                for prop in existing_props
+            }
+            for prop in properties:
+                prop_name = getattr(prop, "name", None)
+                if prop_name in existing_names:
+                    continue
+                collection.config.add_property(prop)
+                logger.info("Added missing property '%s' to model-aware collection '%s'", prop_name, collection_name)
+        except Exception as exc:
+            logger.warning("Could not verify/update properties for collection '%s': %s", collection_name, exc)
     
     async def validate_vectors_for_model(self, vectors: list, model_name: str) -> bool:
         """Validate that vectors match expected dimensions for model."""

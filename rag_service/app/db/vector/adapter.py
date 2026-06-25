@@ -40,6 +40,11 @@ from app.db.vector.collection_manager import ModelAwareCollectionManager
 logger = logging.getLogger(__name__)
 
 _singleton_instance: Optional["WeaviateAdapter"] = None
+_DOCUMENT_THREAD_TEMPORAL_FIELDS = {
+    "document_available_in_thread_at",
+    "timeline_event_at",
+    "timeline_event_type",
+}
 
 
 class WeaviateAdapter:
@@ -143,6 +148,9 @@ class WeaviateAdapter:
                 ("text", wvc.config.DataType.TEXT),
                 ("url", wvc.config.DataType.TEXT),
                 ("title", wvc.config.DataType.TEXT),
+                ("page_start", wvc.config.DataType.INT),
+                ("page_end", wvc.config.DataType.INT),
+                ("pages", wvc.config.DataType.TEXT),
                 ("metadata_json", wvc.config.DataType.TEXT),
             ],
         )
@@ -156,6 +164,7 @@ class WeaviateAdapter:
                 ("question", wvc.config.DataType.TEXT),
                 ("answer", wvc.config.DataType.TEXT),
                 ("text", wvc.config.DataType.TEXT),
+                ("message_created_at", wvc.config.DataType.TEXT),
             ],
         )
         self._ensure_collection(
@@ -168,6 +177,7 @@ class WeaviateAdapter:
                 ("text", wvc.config.DataType.TEXT),
                 ("url", wvc.config.DataType.TEXT),
                 ("title", wvc.config.DataType.TEXT),
+                ("web_search_performed_at", wvc.config.DataType.TEXT),
             ],
         )
         logger.info("All Weaviate collections ensured")
@@ -181,6 +191,7 @@ class WeaviateAdapter:
         """
         if self.client.collections.exists(name):
             logger.debug(f"Collection '{name}' already exists")
+            self._ensure_collection_properties(name, properties)
             return
         
         logger.warning(f"Collection '{name}' is missing, creating it now...")
@@ -198,6 +209,24 @@ class WeaviateAdapter:
         except WeaviateBaseError as e:
             logger.error(f"Failed to create collection '{name}': {e}")
             raise VectorDBError(f"Could not create collection '{name}'") from e
+
+    def _ensure_collection_properties(self, name: str, properties: List[tuple[str, Any]]) -> None:
+        """Add missing scalar properties to an existing collection when supported."""
+        try:
+            col = self.client.collections.use(name)
+            config = col.config.get()
+            existing_props = getattr(config, "properties", []) or []
+            existing_names = {
+                getattr(prop, "name", None) or (prop.get("name") if isinstance(prop, dict) else None)
+                for prop in existing_props
+            }
+            for prop_name, prop_dtype in properties:
+                if prop_name in existing_names:
+                    continue
+                col.config.add_property(wvc.config.Property(name=prop_name, data_type=prop_dtype))
+                logger.info("Added missing property '%s' to collection '%s'", prop_name, name)
+        except Exception as exc:
+            logger.warning("Could not verify/update properties for collection '%s': %s", name, exc)
 
     async def _insert_many_model_aware(self, collection, points: List[Dict[str, Any]]) -> int:
         """Insert vector points into a model-aware collection and return inserted count.
@@ -349,24 +378,35 @@ class WeaviateAdapter:
         points: List[Dict[str, Any]] = []
         for i, (text, vector) in enumerate(zip(texts, embeddings)):
             md = metadatas[i] if metadatas and i < len(metadatas) else {}
+            md_for_storage = {
+                k: v
+                for k, v in md.items()
+                if k not in _DOCUMENT_THREAD_TEMPORAL_FIELDS and k != "document_indexed_at"
+            }
             source_kind = md.get("source_kind", "pdf")
             url = md.get("url") or md.get("original_url") or ""
             title = md.get("title") or ""
+            properties = {
+                "thread_id": thread_id,
+                "type": "knowledge_source",
+                "embed_model": embedding_model_name,
+                "source_kind": source_kind,
+                "file_hash": file_hash,
+                "chunk_id": i,
+                "text": text,
+                "url": url,
+                "title": title,
+                "pages": md.get("pages") or "",
+                "metadata_json": _metadata_json(md_for_storage),
+            }
+            if md.get("page_start") is not None:
+                properties["page_start"] = md.get("page_start")
+            if md.get("page_end") is not None:
+                properties["page_end"] = md.get("page_end")
             points.append(
                 {
                     "vector": vector,
-                    "properties": {
-                        "thread_id": thread_id,
-                        "type": "knowledge_source",
-                        "embed_model": embedding_model_name,
-                        "source_kind": source_kind,
-                        "file_hash": file_hash,
-                        "chunk_id": i,
-                        "text": text,
-                        "url": url,
-                        "title": title,
-                        "metadata_json": _metadata_json(md),
-                    },
+                    "properties": properties,
                 }
             )
         # Use model-aware collection manager
@@ -382,6 +422,7 @@ class WeaviateAdapter:
         texts: List[str],
         embeddings: List[List[float]],
         embedding_model_name: str,
+        message_created_at: Optional[str] = None,
     ) -> int:
         """Index compact chat-memory chunks into ChatMemoryChunk.
         
@@ -424,6 +465,7 @@ class WeaviateAdapter:
                         "question": question,
                         "answer": answer,
                         "text": text,
+                        "message_created_at": message_created_at or "",
                     },
                 }
             )
@@ -440,6 +482,7 @@ class WeaviateAdapter:
         embedding_model_name: str,
         urls: Optional[List[str]] = None,
         titles: Optional[List[str]] = None,
+        web_search_performed_at: Optional[str] = None,
     ) -> int:
         """Index transient web-search snippets into WebSearchChunk.
         
@@ -479,6 +522,7 @@ class WeaviateAdapter:
                         "text": text,
                         "url": urls[i] if urls and i < len(urls) else "",
                         "title": titles[i] if titles and i < len(titles) else "",
+                        "web_search_performed_at": web_search_performed_at or "",
                     },
                 }
             )
@@ -566,19 +610,29 @@ class WeaviateAdapter:
         results: List[Dict[str, Any]] = []
         for obj in response.objects:
             p = obj.properties
-            results.append(
-                {
-                    "text": p.get("text", ""),
-                    "file_hash": p.get("file_hash"),
-                    "chunk_id": p.get("chunk_id"),
-                    "type": p.get("type", "knowledge_source"),
-                    "source_kind": p.get("source_kind", "pdf"),
-                    "url": p.get("url"),
-                    "title": p.get("title"),
-                    "score": _score(obj),
-                    "metadata": _parse_metadata(p.get("metadata_json")),
-                }
-            )
+            metadata = _parse_metadata(p.get("metadata_json"))
+            result = {
+                "text": p.get("text", ""),
+                "file_hash": p.get("file_hash"),
+                "chunk_id": p.get("chunk_id"),
+                "type": p.get("type", "knowledge_source"),
+                "source_kind": p.get("source_kind", "pdf"),
+                "url": p.get("url"),
+                "title": p.get("title"),
+                "score": _score(obj),
+                "metadata": metadata,
+            }
+            for field in (
+                "page_start",
+                "page_end",
+                "pages",
+            ):
+                value = p.get(field)
+                if value in (None, ""):
+                    value = metadata.get(field)
+                if value not in (None, ""):
+                    result[field] = value
+            results.append(result)
         
         logger.debug(f"Found {len(results)} knowledge source results")
         return results
@@ -634,18 +688,28 @@ class WeaviateAdapter:
         out: List[Dict[str, Any]] = []
         for obj in response.objects:
             p = obj.properties
-            out.append(
-                {
-                    "text": p.get("text", ""),
-                    "file_hash": p.get("file_hash"),
-                    "chunk_id": p.get("chunk_id"),
-                    "type": p.get("type", "knowledge_source"),
-                    "source_kind": p.get("source_kind", "pdf"),
-                    "url": p.get("url"),
-                    "title": p.get("title"),
-                    "metadata": _parse_metadata(p.get("metadata_json")),
-                }
-            )
+            metadata = _parse_metadata(p.get("metadata_json"))
+            result = {
+                "text": p.get("text", ""),
+                "file_hash": p.get("file_hash"),
+                "chunk_id": p.get("chunk_id"),
+                "type": p.get("type", "knowledge_source"),
+                "source_kind": p.get("source_kind", "pdf"),
+                "url": p.get("url"),
+                "title": p.get("title"),
+                "metadata": metadata,
+            }
+            for field in (
+                "page_start",
+                "page_end",
+                "pages",
+            ):
+                value = p.get(field)
+                if value in (None, ""):
+                    value = metadata.get(field)
+                if value not in (None, ""):
+                    result[field] = value
+            out.append(result)
 
         out.sort(key=lambda x: x.get("chunk_id", 0))
         logger.debug(f"Retrieved {len(out)} chunks")
@@ -706,16 +770,20 @@ class WeaviateAdapter:
         out: List[Dict[str, Any]] = []
         for obj in response.objects:
             p = obj.properties
-            out.append(
-                {
-                    "text": p.get("text", ""),
-                    "message_id": p.get("message_id"),
-                    "question": p.get("question"),
-                    "answer": p.get("answer"),
-                    "type": p.get("type", "chat_memory"),
-                    "score": _score(obj),
-                }
-            )
+            result = {
+                "text": p.get("text", ""),
+                "message_id": p.get("message_id"),
+                "question": p.get("question"),
+                "answer": p.get("answer"),
+                "type": p.get("type", "chat_memory"),
+                "score": _score(obj),
+            }
+            message_created_at = p.get("message_created_at")
+            if message_created_at not in (None, ""):
+                result["message_created_at"] = message_created_at
+                result["timeline_event_at"] = message_created_at
+                result["timeline_event_type"] = "message_created"
+            out.append(result)
         
         logger.debug(f"Found {len(out)} chat memory results")
         return out
@@ -785,16 +853,20 @@ class WeaviateAdapter:
         out: List[Dict[str, Any]] = []
         for obj in response.objects:
             p = obj.properties
-            out.append(
-                {
-                    "text": p.get("text", ""),
-                    "url": p.get("url", ""),
-                    "title": p.get("title", ""),
-                    "search_query": p.get("search_query", ""),
-                    "type": p.get("type", "web_search"),
-                    "score": _score(obj),
-                }
-            )
+            result = {
+                "text": p.get("text", ""),
+                "url": p.get("url", ""),
+                "title": p.get("title", ""),
+                "search_query": p.get("search_query", ""),
+                "type": p.get("type", "web_search"),
+                "score": _score(obj),
+            }
+            web_search_performed_at = p.get("web_search_performed_at")
+            if web_search_performed_at not in (None, ""):
+                result["web_search_performed_at"] = web_search_performed_at
+                result["timeline_event_at"] = web_search_performed_at
+                result["timeline_event_type"] = "web_search_performed"
+            out.append(result)
         
         logger.debug(f"Found {len(out)} web chunk results")
         return out

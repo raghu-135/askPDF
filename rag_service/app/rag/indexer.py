@@ -11,13 +11,15 @@ import os
 import json
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from app.db import (
     ProcessStatus,
     get_file,
     get_file_status,
+    get_message,
     get_scoped_indexing_status,
+    get_thread_file_association,
     upsert_document_in_stats,
     update_file_parsed_sentences,
     update_parsing_status,
@@ -42,6 +44,113 @@ os.makedirs(TEMP_PDF_DIR, exist_ok=True)
 _document_index_locks: Dict[str, asyncio.Lock] = {}
 
 
+def _iso_utc(value: Optional[Any] = None) -> str:
+    """Return an ISO-8601 UTC timestamp with a trailing Z."""
+    if value is None:
+        dt = datetime.now(timezone.utc)
+    elif isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value)
+        if raw.endswith("Z"):
+            return raw
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _int_page(value: Any) -> Optional[int]:
+    try:
+        page = int(value)
+        return page if page > 0 else None
+    except Exception:
+        return None
+
+
+def _compact_page_ranges(pages: List[int]) -> str:
+    unique_pages = sorted(set(p for p in pages if p > 0))
+    if not unique_pages:
+        return ""
+
+    ranges: List[str] = []
+    start = prev = unique_pages[0]
+    for page in unique_pages[1:]:
+        if page == prev + 1:
+            prev = page
+            continue
+        ranges.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = page
+    ranges.append(str(start) if start == prev else f"{start}-{prev}")
+    return ",".join(ranges)
+
+
+def _metadata_dict(element: Any) -> Dict[str, Any]:
+    metadata = getattr(element, "metadata", None)
+    if metadata is None:
+        return {}
+    if isinstance(metadata, dict):
+        return metadata
+    to_dict = getattr(metadata, "to_dict", None)
+    if callable(to_dict):
+        try:
+            data = to_dict()
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _collect_element_pages(element: Any) -> List[int]:
+    pages: List[int] = []
+    metadata = getattr(element, "metadata", None)
+
+    for candidate in (
+        getattr(metadata, "page_number", None),
+        _metadata_dict(element).get("page_number"),
+    ):
+        page = _int_page(candidate)
+        if page:
+            pages.append(page)
+
+    metadata_data = _metadata_dict(element)
+    for key in ("page_numbers", "pages"):
+        value = metadata_data.get(key)
+        if isinstance(value, list):
+            for item in value:
+                page = _int_page(item)
+                if page:
+                    pages.append(page)
+
+    orig_elements = getattr(metadata, "orig_elements", None) or metadata_data.get("orig_elements") or []
+    if isinstance(orig_elements, list):
+        for child in orig_elements:
+            pages.extend(_collect_element_pages(child))
+
+    return pages
+
+
+def _chunk_page_metadata(element: Any) -> Dict[str, Any]:
+    pages = _collect_element_pages(element)
+    page_range = _compact_page_ranges(pages)
+    if not page_range:
+        return {}
+    unique_pages = sorted(set(pages))
+    return {
+        "page_start": unique_pages[0],
+        "page_end": unique_pages[-1],
+        "pages": page_range,
+    }
+
+
+def _chunk_texts(chunks: List[Dict[str, Any]]) -> List[str]:
+    return [str(chunk.get("text", "")) for chunk in chunks]
+
+
 def _document_index_lock(file_hash: str, embedding_model_name: str) -> asyncio.Lock:
     """Return the shared lock for a file/model indexing run."""
     key = f"{file_hash}:{embedding_model_name}"
@@ -60,12 +169,13 @@ async def _upsert_document_stats(
 ) -> None:
     """Persist thread-local document inventory metadata used by retrieval and agents."""
     file = await get_file(file_hash)
-    source_type = "pdf"
+    source_type = metadata.get("source_type") or metadata.get("source_kind") or (file.source_type if file else "pdf")
     title = metadata.get("title") or (file.file_name if file else file_hash)
     content_hash = metadata.get("content_hash")
 
     doc_meta: Dict[str, Any] = {
         "file_name": file.file_name if file else file_hash,
+        "file_hash": file_hash,
         "source_type": source_type,
         "chunk_count": chunk_count,
         "total_chars": total_chars,
@@ -76,6 +186,8 @@ async def _upsert_document_stats(
         doc_meta["title"] = title
     if content_hash:
         doc_meta["content_hash"] = content_hash
+    if metadata.get("document_available_in_thread_at"):
+        doc_meta["document_available_in_thread_at"] = metadata["document_available_in_thread_at"]
 
     await upsert_document_in_stats(thread_id, file_hash, doc_meta)
 
@@ -156,12 +268,69 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str = "") -> Optio
         return None
 
 
+async def download_and_parse_pdf_chunks(file_hash: str, backend_url: str = "") -> Optional[List[Dict[str, Any]]]:
+    """
+    Read a PDF and parse it into text chunks while preserving page provenance.
+    """
+    pdf_path = f"/static/{file_hash}.pdf"
+    local_path = os.path.join(TEMP_PDF_DIR, f"{file_hash}.pdf")
+    try:
+        if not os.path.exists(pdf_path):
+            logger.error(f"PDF not found at {pdf_path}")
+            return None
+
+        with open(pdf_path, "rb") as f:
+            pdf_data = f.read()
+
+        with open(local_path, "wb") as f:
+            f.write(pdf_data)
+
+        elements = await asyncio.to_thread(partition_pdf, filename=local_path)
+
+        from unstructured.chunking.title import chunk_by_title
+        chunked_elements = chunk_by_title(
+            elements,
+            multipage_sections=True,
+            combine_text_under_n_chars=200,
+            max_characters=500,
+            new_after_n_chars=400,
+            overlap=0
+        )
+        chunks = [
+            {
+                "text": str(element),
+                "metadata": _chunk_page_metadata(element),
+            }
+            for element in chunked_elements
+        ]
+        try:
+            os.remove(local_path)
+        except Exception:
+            pass
+        return chunks
+    except Exception as e:
+        logger.error(f"Error reading/parsing PDF: {e}")
+        return None
+
+
 async def get_chunks(file_hash: str) -> List[str]:
     """
     Read a PDF from local filesystem using file_hash and parse it into text chunks using unstructured.
     Returns a list of chunked strings.
     """
     chunks = await download_and_parse_pdf(file_hash)
+    if chunks:
+        return chunks
+
+    logger.error(f"PDF read/parse failed for {file_hash}")
+    return []
+
+
+async def get_chunks_with_metadata(file_hash: str) -> List[Dict[str, Any]]:
+    """
+    Read a PDF and return chunk text with parser metadata such as page ranges.
+    """
+    chunks = await download_and_parse_pdf_chunks(file_hash)
     if chunks:
         return chunks
 
@@ -320,6 +489,19 @@ async def index_document_for_thread(
     metadata = metadata or {}
     started_at = datetime.utcnow().isoformat()
     total_chars = 0
+    document_available_in_thread_at: Optional[str] = None
+    try:
+        association = await get_thread_file_association(thread_id, file_hash)
+        if association and association.get("added_at"):
+            document_available_in_thread_at = _iso_utc(association["added_at"])
+            metadata["document_available_in_thread_at"] = document_available_in_thread_at
+    except Exception as assoc_err:
+        logger.warning(
+            "Could not load thread-file availability for thread %s file %s: %s",
+            thread_id,
+            file_hash,
+            assoc_err,
+        )
 
     try:
         await update_indexing_status(
@@ -368,7 +550,11 @@ async def index_document_for_thread(
             # 1. Get chunks - use markdown for web sources, PDF for uploaded files
             if markdown_content:
                 logger.info(f"Using markdown content for web source indexing: {file_hash}")
-                chunks = parse_markdown_to_chunks(markdown_content)
+                parsed_chunks = [
+                    {"text": chunk, "metadata": {}}
+                    for chunk in parse_markdown_to_chunks(markdown_content)
+                ]
+                chunks = _chunk_texts(parsed_chunks)
                 # Save markdown chunks as parsed sentences for TTS enablement
                 sentences = [{"id": i, "text": chunk, "page": 1} for i, chunk in enumerate(chunks)]
                 parsed_data = {"version": "1.0", "sentences": sentences}
@@ -377,7 +563,8 @@ async def index_document_for_thread(
                 await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
                 logger.info(f"Saved {len(sentences)} sentences and marked parsing complete for web source: {file_hash}")
             else:
-                chunks = await get_chunks(file_hash)
+                parsed_chunks = await get_chunks_with_metadata(file_hash)
+                chunks = _chunk_texts(parsed_chunks)
             if not chunks:
                 logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
                 await update_indexing_status(
@@ -400,8 +587,15 @@ async def index_document_for_thread(
             chunk_metadatas = []
             source_kind = metadata.get("source_kind", "pdf")
             for i, _chunk in enumerate(chunks):
+                page_metadata = parsed_chunks[i].get("metadata", {}) if i < len(parsed_chunks) else {}
+                chunk_base_metadata = {
+                    key: value
+                    for key, value in metadata.items()
+                    if key != "document_available_in_thread_at"
+                }
                 chunk_metadata = {
-                    **metadata,
+                    **chunk_base_metadata,
+                    **page_metadata,
                     "source_kind": source_kind,
                     "file_hash": file_hash,
                     "chunk_index": i,
@@ -477,7 +671,8 @@ async def index_chat_memory_for_thread(
     answer: str,
     embedding_model_name: str,
     llm_name: Optional[str] = None,
-    context_window: int = DEFAULT_TOKEN_BUDGET
+    context_window: int = DEFAULT_TOKEN_BUDGET,
+    message_created_at: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Process, chunk, and index a chat message as semantic memory.
@@ -486,6 +681,11 @@ async def index_chat_memory_for_thread(
     db_client = get_vector_db()
     
     try:
+        if message_created_at is None:
+            message = await get_message(message_id)
+            message_created_at = getattr(message, "created_at", None) if message else None
+        message_created_at_iso = _iso_utc(message_created_at)
+
         # 1. Build compact memory text and chunk for indexing.
         compact_text, was_summarized = await build_compact_chat_memory_text(
             question=question,
@@ -510,7 +710,8 @@ async def index_chat_memory_for_thread(
             answer=answer,
             texts=chunks,
             embeddings=vectors,
-            embedding_model_name=embedding_model_name
+            embedding_model_name=embedding_model_name,
+            message_created_at=message_created_at_iso,
         )
         
         return {
@@ -542,6 +743,7 @@ async def index_chat_memory_from_compact_for_thread(
     compact_text: str,
     answer: str,
     embedding_model_name: str,
+    message_created_at: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Re-index chat memory using the exact persisted compact text so summarized
@@ -549,6 +751,10 @@ async def index_chat_memory_from_compact_for_thread(
     """
     db_client = get_vector_db()
     try:
+        if message_created_at is None:
+            message = await get_message(message_id)
+            message_created_at = getattr(message, "created_at", None) if message else None
+        message_created_at_iso = _iso_utc(message_created_at)
         chunks = split_chat_memory_text(compact_text)
         vectors = await generate_embeddings(chunks, embedding_model_name)
         indexed_count = await db_client.index_chat_memory(
@@ -558,7 +764,8 @@ async def index_chat_memory_from_compact_for_thread(
             answer=answer,
             texts=chunks,
             embeddings=vectors,
-            embedding_model_name=embedding_model_name
+            embedding_model_name=embedding_model_name,
+            message_created_at=message_created_at_iso,
         )
         return {"status": "success", "chunks_count": indexed_count}
     except Exception as e:
@@ -579,6 +786,7 @@ async def index_web_search_for_thread(
     urls: Optional[List[str]],
     titles: Optional[List[str]],
     embedding_model_name: str,
+    web_search_performed_at: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Embed and store web search result snippets into the thread's vector collection
@@ -597,6 +805,7 @@ async def index_web_search_for_thread(
     """
     db_client = get_vector_db()
     try:
+        web_search_performed_at_iso = _iso_utc(web_search_performed_at)
         vectors = await generate_embeddings(texts, embedding_model_name)
         
         # Validate vectors before indexing
@@ -611,6 +820,7 @@ async def index_web_search_for_thread(
             embedding_model_name=embedding_model_name,
             urls=urls,
             titles=titles,
+            web_search_performed_at=web_search_performed_at_iso,
         )
         return {"status": "success", "chunks_count": indexed_count}
     except Exception as e:
@@ -699,6 +909,7 @@ async def trigger_reembed_for_missing_sources(
                     compact_text=compact_text,
                     answer=msg.content,
                     embedding_model_name=embedding_model_name,
+                    message_created_at=msg.created_at,
                 )
                 if chat_result.get("status") == "success":
                     reindexed_chat_messages.append(msg.id)

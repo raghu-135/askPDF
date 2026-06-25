@@ -37,7 +37,12 @@ from app.agent.external_research_tools import (
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
 from app.db import is_file_in_thread
 from app.db.vector import get_vector_db
-from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
+from app.rag.retrieval import (
+    fetch_semantic_history,
+    get_document_metadata_lookup,
+    group_document_chunks,
+    rerank_document_chunks,
+)
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
 logger = logging.getLogger(__name__)
@@ -131,8 +136,8 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         db = get_vector_db()
 
         # ── Build a file_hash → file_name lookup from thread_stats (no DB join) ──
-        hash_to_name = await get_document_name_lookup(thread_id)
-        thread_file_hashes = list(hash_to_name.keys())
+        document_lookup = await get_document_metadata_lookup(thread_id)
+        thread_file_hashes = list(document_lookup.keys())
         if not thread_file_hashes:
             return "No documents are linked to this thread yet."
 
@@ -200,7 +205,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         context_parts = []
 
         # Group document chunks by file to reduce context window bloat
-        document_context, document_sources = group_document_chunks(expanded_doc_chunks, hash_to_name)
+        document_context, document_sources = group_document_chunks(expanded_doc_chunks, document_lookup)
         if document_context:
             context_parts.append(document_context)
 
@@ -208,21 +213,33 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         web_groups = {}
         for wchunk in web_chunks:
             url = wchunk.get("url", "")
+            performed_at = wchunk.get("web_search_performed_at")
             if url not in web_groups:
-                web_groups[url] = {"title": wchunk.get("title", url), "texts": []}
+                web_groups[url] = {
+                    "title": wchunk.get("title", url),
+                    "texts": [],
+                    "web_search_performed_at": performed_at,
+                }
             web_groups[url]["texts"].append(wchunk.get("text", ""))
 
             score = wchunk.get("rerank_score", wchunk.get("score", 0.0))
-            web_sources.append({
+            web_source: Dict[str, Any] = {
                 "text": wchunk.get("text", "")[:200] + "...",
                 "url": url,
                 "title": wchunk.get("title", url),
                 "score": score,
-            })
+            }
+            for field in ("web_search_performed_at", "timeline_event_at", "timeline_event_type"):
+                value = wchunk.get(field)
+                if value not in (None, ""):
+                    web_source[field] = value
+            web_sources.append(web_source)
 
         for url, group in web_groups.items():
             combined_text = "\n".join(group["texts"])
-            context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
+            performed_at = group.get("web_search_performed_at")
+            prefix = f"Cached web result from search performed at {performed_at}:\n" if performed_at else ""
+            context_parts.append(f'{prefix}[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
 
         result: Dict[str, Any] = {"content": "\n\n".join(context_parts)}
         if document_sources:
@@ -265,6 +282,7 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
             query_text=query,
             limit=max_results,
             use_reranker=use_reranker,
+            embedding_model_name=embedding_model,
         )
 
         if not history:
@@ -358,10 +376,13 @@ async def search_document_by_id(
         expanded_chunks.sort(key=lambda x: x.get("chunk_id", 0))
 
         # Resolve file name for source attribution from thread_stats (no DB join)
-        hash_to_name = await get_document_name_lookup(thread_id)
-        fname = hash_to_name.get(file_hash, file_hash)
+        document_lookup = await get_document_metadata_lookup(thread_id)
+        fname = document_lookup.get(file_hash, {}).get("file_name", file_hash)
 
-        document_context, sources = group_document_chunks(expanded_chunks, {file_hash: fname})
+        document_context, sources = group_document_chunks(
+            expanded_chunks,
+            {file_hash: document_lookup.get(file_hash, {"file_name": fname})},
+        )
         if not document_context:
             document_context = ""
 
@@ -772,9 +793,14 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
                 chars = meta.get("total_chars", 0)
                 name = meta.get("file_name", fh)
                 stype = meta.get("source_type", "pdf")
-                tag = f"[{stype}]" if stype != "pdf" else ""
+                available_at = meta.get("document_available_in_thread_at")
+                availability = (
+                    f" | document_available_in_thread_at={available_at}"
+                    if available_at else ""
+                )
                 lines.append(
-                    f"  {i}. {name} {tag}  →  {chunks} chunks | {chars:,} chars | {status}"
+                    f"  {i}. file_name={name} | file_hash={fh} | source_type={stype} | "
+                    f"{chunks} chunks | {chars:,} chars | {status}{availability}"
                 )
         else:
             lines.append("Documents   : none uploaded yet")
