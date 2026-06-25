@@ -8,6 +8,7 @@ import time
 from typing import Dict, Tuple, List, Optional
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from openai import BaseModel as OpenAIBaseModel
 
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
 
@@ -18,6 +19,47 @@ except Exception:
     CrossEncoder = None
 
 logger = logging.getLogger(__name__)
+
+_REASONING_RESPONSE_FIELDS = (
+    "reasoning",
+    "reasoning_content",
+    "reasoning_details",
+    "reasoning_summary",
+    "reasoning_text",
+    "thinking",
+    "thoughts",
+)
+
+
+class ReasoningChatOpenAI(ChatOpenAI):
+    """ChatOpenAI variant that preserves OpenAI-compatible reasoning extensions."""
+
+    def _create_chat_result(self, response, generation_info=None):
+        result = super()._create_chat_result(response, generation_info)
+        response_dict = (
+            response
+            if isinstance(response, dict)
+            else response.model_dump(
+                exclude={"choices": {"__all__": {"message": {"parsed"}}}}
+            )
+            if isinstance(response, OpenAIBaseModel)
+            else {}
+        )
+
+        choices = response_dict.get("choices", []) if isinstance(response_dict, dict) else []
+        for generation, choice in zip(result.generations, choices):
+            message_dict = choice.get("message", {}) if isinstance(choice, dict) else {}
+            if not isinstance(message_dict, dict):
+                continue
+            preserved = {
+                key: value
+                for key, value in message_dict.items()
+                if key in _REASONING_RESPONSE_FIELDS and value
+            }
+            if preserved:
+                generation.message.additional_kwargs.update(preserved)
+
+        return result
 
 # Cache for model readiness checks
 _model_ready_cache: Dict[str, Tuple[bool, float]] = {}
@@ -267,7 +309,7 @@ def get_llm(model_name: str, temperature: float = 0.0):
     """
     Return a configured ChatOpenAI client for the given model.
     """
-    return ChatOpenAI(
+    return ReasoningChatOpenAI(
         model=model_name,
         temperature=temperature,
         base_url=_get_base_url(),
