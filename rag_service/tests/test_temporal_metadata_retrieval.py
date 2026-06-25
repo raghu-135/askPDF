@@ -1,10 +1,13 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime, timezone
+import json
 
 import pytest
 
 from app.agent import external_research_tools
+from app.agent import agent as agent_module
+from app.agent.agent_helpers import collect_tool_sources
 from app.db.vector.adapter import WeaviateAdapter
 from app.rag import indexer
 from app.rag.retrieval import fetch_semantic_history, group_document_chunks
@@ -289,3 +292,125 @@ def test_web_context_exposes_search_performed_time():
     assert payload["__web_sources__"][0]["web_search_performed_at"] == "2026-06-25T19:15:00Z"
     assert payload["__web_sources__"][0]["timeline_event_at"] == "2026-06-25T19:15:00Z"
     assert payload["__web_sources__"][0]["timeline_event_type"] == "web_search_performed"
+
+
+def test_thread_timeline_tool_replaces_topic_anchor():
+    tool_names = {tool.name for tool in agent_module.core_tools_list}
+    assert "search_thread_timeline" in tool_names
+    assert "find_topic_anchor_in_history" not in tool_names
+
+    schema = agent_module.search_thread_timeline.args_schema.model_json_schema()
+    assert schema["properties"]["sources"]["enum"] == ["all", "conversation", "documents", "web_cache"]
+    assert schema["properties"]["order"]["enum"] == ["relevance", "oldest", "newest"]
+
+
+def test_collect_tool_sources_preserves_timeline_events():
+    document_sources = []
+    web_sources = []
+    used_chat_ids = []
+
+    collect_tool_sources(
+        json.dumps(
+            {
+                "__timeline_events__": [
+                    {
+                        "source_type": "conversation",
+                        "message_id": "msg-1",
+                        "timeline_event_at": "2026-06-25T19:10:00Z",
+                        "timeline_event_type": "message_created",
+                    },
+                    {
+                        "source_type": "document",
+                        "file_hash": "file-1",
+                        "file_name": "benefits.pdf",
+                        "document_source_type": "pdf",
+                        "document_available_in_thread_at": "2026-06-25T19:00:00Z",
+                        "timeline_event_at": "2026-06-25T19:00:00Z",
+                        "timeline_event_type": "document_available_in_thread",
+                    },
+                    {
+                        "source_type": "web_cache",
+                        "url": "https://example.com",
+                        "title": "Example",
+                        "web_search_performed_at": "2026-06-25T19:15:00Z",
+                        "timeline_event_at": "2026-06-25T19:15:00Z",
+                        "timeline_event_type": "web_search_performed",
+                    },
+                ]
+            }
+        ),
+        document_sources,
+        web_sources,
+        used_chat_ids,
+    )
+
+    assert used_chat_ids == ["msg-1"]
+    assert document_sources[0]["file_hash"] == "file-1"
+    assert document_sources[0]["timeline_event_type"] == "document_available_in_thread"
+    assert web_sources[0]["url"] == "https://example.com"
+    assert web_sources[0]["timeline_event_type"] == "web_search_performed"
+
+
+@pytest.mark.asyncio
+async def test_search_thread_timeline_returns_sorted_mixed_source_events(monkeypatch):
+    fake_db = SimpleNamespace(
+        search_chat_memory=AsyncMock(
+            return_value=[
+                {
+                    "text": "Q: older\nA: memory",
+                    "message_id": "msg-old",
+                    "message_created_at": "2026-06-25T19:10:00Z",
+                    "score": 0.7,
+                }
+            ]
+        ),
+        search_web_chunks=AsyncMock(
+            return_value=[
+                {
+                    "text": "web snippet",
+                    "url": "https://example.com",
+                    "title": "Example",
+                    "web_search_performed_at": "2026-06-25T19:15:00Z",
+                    "score": 0.8,
+                }
+            ]
+        ),
+    )
+
+    class FakeEmbeddingModel:
+        async def aembed_query(self, query):
+            return [0.1, 0.2]
+
+    monkeypatch.setattr(agent_module, "get_vector_db", lambda: fake_db)
+    monkeypatch.setattr(agent_module, "get_embedding_model", lambda _name: FakeEmbeddingModel())
+    monkeypatch.setattr(
+        agent_module,
+        "get_document_metadata_lookup",
+        AsyncMock(
+            return_value={
+                "file-1": {
+                    "file_name": "benefits.pdf",
+                    "source_type": "pdf",
+                    "document_available_in_thread_at": "2026-06-25T19:00:00Z",
+                }
+            }
+        ),
+    )
+    monkeypatch.setattr(agent_module, "rerank_document_chunks", AsyncMock(side_effect=lambda _q, chunks: chunks))
+
+    raw = await agent_module.search_thread_timeline.ainvoke(
+        {"query": "benefits timeline", "sources": "all", "order": "oldest", "max_results": 10},
+        config={"configurable": {"thread_id": "thread-1", "embedding_model": "embed-1"}},
+    )
+    payload = json.loads(raw)
+    events = payload["__timeline_events__"]
+
+    assert [event["timeline_event_type"] for event in events] == [
+        "document_available_in_thread",
+        "message_created",
+        "web_search_performed",
+    ]
+    assert events[0]["document_available_in_thread_at"] == "2026-06-25T19:00:00Z"
+    assert events[1]["message_created_at"] == "2026-06-25T19:10:00Z"
+    assert events[2]["web_search_performed_at"] == "2026-06-25T19:15:00Z"
+    assert "THREAD TIMELINE EVENTS" in payload["content"]

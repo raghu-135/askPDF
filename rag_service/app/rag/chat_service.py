@@ -90,7 +90,8 @@ async def prefetch_context(
             text = (msg.context_compact or msg.content or "").strip()
             if not text:
                 continue
-            entry = f"{role}: {text}"
+            message_created_at = msg.created_at.isoformat() if hasattr(msg.created_at, "isoformat") else msg.created_at
+            entry = f"{role} at {message_created_at}: {text}" if message_created_at else f"{role}: {text}"
             if used_chars + len(entry) > budget_chars:
                 break
             lines.append(entry)

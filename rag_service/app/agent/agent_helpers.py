@@ -204,3 +204,29 @@ def collect_tool_sources(
         web_sources.extend(data["__web_sources__"])
     if "__used_chat_ids__" in data:
         used_chat_ids.extend(data["__used_chat_ids__"])
+    for event in data.get("__timeline_events__", []) or []:
+        if not isinstance(event, dict):
+            continue
+        source_type = event.get("source_type")
+        if source_type == "conversation" and event.get("message_id"):
+            used_chat_ids.append(event["message_id"])
+        elif source_type == "document":
+            document_sources.append({
+                "text": event.get("excerpt", ""),
+                "file_hash": event.get("file_hash"),
+                "file_name": event.get("file_name"),
+                "source_type": event.get("document_source_type", "pdf"),
+                "document_available_in_thread_at": event.get("document_available_in_thread_at"),
+                "timeline_event_at": event.get("timeline_event_at"),
+                "timeline_event_type": event.get("timeline_event_type"),
+            })
+        elif source_type == "web_cache":
+            web_sources.append({
+                "text": event.get("excerpt", ""),
+                "url": event.get("url"),
+                "title": event.get("title"),
+                "web_search_performed_at": event.get("web_search_performed_at"),
+                "timeline_event_at": event.get("timeline_event_at"),
+                "timeline_event_type": event.get("timeline_event_type"),
+                "score": event.get("score"),
+            })

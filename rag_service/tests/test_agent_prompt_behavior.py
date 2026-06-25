@@ -34,6 +34,8 @@ def test_reasoning_prompt_keeps_tool_registry():
 
     assert "TOOL REGISTRY" in prompt
     assert "tool name: `get_thread_shape`" in prompt
+    assert "tool name: `search_thread_timeline`" in prompt
+    assert "find_topic_anchor_in_history" not in prompt
 
 
 def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
@@ -62,3 +64,14 @@ def test_system_prompt_includes_runtime_datetime_context():
 
     assert "RUNTIME DATE/TIME CONTEXT" in prompt
     assert "User timezone: America/Chicago" in prompt
+
+
+def test_system_prompt_includes_temporal_metadata_contract():
+    prompt = build_system_prompt(context_window=8192, reasoning_mode=True)
+
+    assert "TEMPORAL METADATA CONTRACT" in prompt
+    assert "message_created_at" in prompt
+    assert "document_available_in_thread_at" in prompt
+    assert "web_search_performed_at" in prompt
+    assert "timeline_event_at" in prompt
+    assert "search_thread_timeline" in prompt

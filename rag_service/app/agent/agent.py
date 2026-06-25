@@ -2,7 +2,8 @@ import asyncio
 import logging
 import json
 import time
-from typing import TypedDict, List, Annotated, Dict, Any, Optional
+from datetime import datetime, timezone
+from typing import TypedDict, List, Annotated, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage, ToolMessage
@@ -106,6 +107,144 @@ class AgentState(TypedDict):
     client_timezone: Optional[str]
     client_locale: Optional[str]
     client_now_iso: Optional[str]
+
+
+class ThreadTimelineSearchInput(BaseModel):
+    """Input schema for timeline-aware thread retrieval."""
+
+    query: str = Field(
+        description="Topic, entity, or temporal question to locate on the thread timeline."
+    )
+    sources: Literal["all", "conversation", "documents", "web_cache"] = Field(
+        default="all",
+        description="Timeline source to search: all, conversation, documents, or web_cache.",
+    )
+    order: Literal["relevance", "oldest", "newest"] = Field(
+        default="relevance",
+        description="Sort mode. Use oldest/newest for first/latest/before/after questions.",
+    )
+    max_results: int = Field(
+        default=10,
+        ge=1,
+        le=30,
+        description="Maximum number of timeline events to return.",
+    )
+
+
+def _parse_timeline_datetime(raw: Any) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        text = str(raw)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _short_excerpt(text: str, limit: int = 260) -> str:
+    clean = " ".join((text or "").split())
+    if len(clean) <= limit:
+        return clean
+    return clean[:limit].rstrip() + "..."
+
+
+def _event_sort_key(event: Dict[str, Any], order: str) -> Any:
+    parsed = _parse_timeline_datetime(event.get("timeline_event_at"))
+    missing_time = parsed is None
+    if order == "oldest":
+        return (missing_time, parsed or datetime.max.replace(tzinfo=timezone.utc))
+    if order == "newest":
+        oldest = datetime.min.replace(tzinfo=timezone.utc)
+        return (missing_time, -(parsed or oldest).timestamp())
+    try:
+        score_value = float(event.get("score") or 0.0)
+    except Exception:
+        score_value = 0.0
+    newest = parsed.timestamp() if parsed else float("-inf")
+    return (-score_value, -newest)
+
+
+def _format_timeline_content(events: List[Dict[str, Any]]) -> str:
+    if not events:
+        return "No timeline events matched the request."
+
+    lines = ["[THREAD TIMELINE EVENTS]"]
+    for event in events:
+        at = event.get("timeline_event_at") or "unknown time"
+        event_type = event.get("timeline_event_type") or "unknown_event"
+        label = event.get("label") or event.get("source_type") or "source"
+        excerpt = event.get("excerpt") or ""
+        lines.append(f"- {at} | {event_type} | {label}: {excerpt}")
+    return "\n".join(lines)
+
+
+def _document_timeline_event(file_hash: str, meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    available_at = meta.get("document_available_in_thread_at")
+    if not available_at:
+        return None
+    file_name = meta.get("file_name") or file_hash
+    source_type = meta.get("source_type") or "pdf"
+    return {
+        "source_type": "document",
+        "timeline_event_at": available_at,
+        "timeline_event_type": "document_available_in_thread",
+        "document_available_in_thread_at": available_at,
+        "file_hash": file_hash,
+        "file_name": file_name,
+        "document_source_type": source_type,
+        "label": f"Document available in thread: {file_name}",
+        "excerpt": f"{file_name} became available in this thread.",
+    }
+
+
+def _chat_timeline_event(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    message_created_at = mem.get("message_created_at")
+    if not message_created_at:
+        return None
+    score = mem.get("rerank_score", mem.get("score"))
+    event: Dict[str, Any] = {
+        "source_type": "conversation",
+        "timeline_event_at": message_created_at,
+        "timeline_event_type": "message_created",
+        "message_created_at": message_created_at,
+        "message_id": mem.get("message_id"),
+        "label": "Conversation memory",
+        "excerpt": _short_excerpt(mem.get("text", "")),
+    }
+    if score is not None:
+        event["score"] = score
+    return event
+
+
+def _web_timeline_event(chunk: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    performed_at = chunk.get("web_search_performed_at")
+    if not performed_at:
+        return None
+    title = chunk.get("title") or "Internet Search"
+    url = chunk.get("url") or ""
+    label = f'Cached web result: "{title}"'
+    if url:
+        label += f" | {url}"
+    score = chunk.get("rerank_score", chunk.get("score"))
+    event: Dict[str, Any] = {
+        "source_type": "web_cache",
+        "timeline_event_at": performed_at,
+        "timeline_event_type": "web_search_performed",
+        "web_search_performed_at": performed_at,
+        "url": url,
+        "title": title,
+        "search_query": chunk.get("search_query"),
+        "label": label,
+        "excerpt": _short_excerpt(chunk.get("text", "")),
+    }
+    if score is not None:
+        event["score"] = score
+    return event
 
 
 
@@ -395,61 +534,103 @@ async def search_document_by_id(
         return f"Error searching document: {e}"
 
 
-@tool
-async def find_topic_anchor_in_history(
-    topic: str,
+@tool(args_schema=ThreadTimelineSearchInput)
+async def search_thread_timeline(
+    query: str,
+    sources: Literal["all", "conversation", "documents", "web_cache"] = "all",
+    order: Literal["relevance", "oldest", "newest"] = "relevance",
+    max_results: int = 10,
     config: RunnableConfig = None,
 ) -> str:
     """
-    Find the earliest occurrence of a topic in conversation history.
-    Returns turn number, message_id, and a short excerpt.
+    Search timestamped events in the current thread timeline.
+
+    Use this tool when the user asks about chronology, sequence, recency,
+    earliest/latest evidence, what happened before or after another event, or
+    what changed since a time. Do not use it for ordinary semantic document
+    search when ordering does not matter; use search_documents,
+    search_document_by_id, or search_conversation_history for that.
+
+    Timestamps have source-specific meanings. message_created_at is when a
+    conversation memory message was stored. document_available_in_thread_at is
+    when a document became available in this thread, not when the file was
+    globally created or when the document was authored. web_search_performed_at
+    is when cached web evidence was fetched, not when the page was published.
 
     Args:
-        topic: Topic or question to locate in conversation history.
+        query: Topic, entity, or temporal question to locate on the timeline.
+        sources: One of all, conversation, documents, or web_cache.
+        order: Sort events by relevance, oldest, or newest.
+        max_results: Maximum number of timeline events to return.
     """
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
+        use_reranker = conf.get("use_reranker", True)
         if not thread_id or not embedding_model:
             return "No thread context found."
 
-        embed_model = get_embedding_model(embedding_model)
-        query_vector = await invoke_with_retry(embed_model.aembed_query, topic)
-
+        max_results = max(1, min(int(max_results or 10), 30))
+        requested_sources = sources if sources in {"all", "conversation", "documents", "web_cache"} else "all"
+        order = order if order in {"relevance", "oldest", "newest"} else "relevance"
         db = get_vector_db()
-        recalled = await db.search_chat_memory(
-            thread_id=thread_id,
-            query_vector=query_vector,
-            limit=5,
-        )
+        events: List[Dict[str, Any]] = []
 
-        if not recalled:
-            return "No relevant history found for this topic."
+        needs_vector = requested_sources in {"all", "conversation", "web_cache"}
+        query_vector: Optional[List[float]] = None
+        if needs_vector:
+            embed_model = get_embedding_model(embedding_model)
+            query_vector = await invoke_with_retry(embed_model.aembed_query, query)
 
-        from app.db import get_thread_messages
-        all_messages = await get_thread_messages(thread_id, limit=2000)
-        position_map = {msg.id: i + 1 for i, msg in enumerate(all_messages)}
+        if requested_sources in {"all", "conversation"} and query_vector is not None:
+            recalled = await db.search_chat_memory(
+                thread_id=thread_id,
+                query_vector=query_vector,
+                embedding_model_name=embedding_model,
+                limit=max_results,
+            )
+            if use_reranker and query:
+                recalled = await rerank_document_chunks(query, recalled)
+            for mem in recalled:
+                event = _chat_timeline_event(mem)
+                if event:
+                    events.append(event)
 
-        results = []
-        for mem in recalled:
-            msg_id = mem.get("message_id")
-            turn_number = position_map.get(msg_id, "?")
-            text = mem.get("text", "")
-            excerpt = text[:300] + "..." if len(text) > 300 else text
-            results.append({
-                "message_id": msg_id,
-                "turn_number": turn_number,
-                "score": round(mem.get("score", 0.0), 3),
-                "excerpt": excerpt,
-            })
+        if requested_sources in {"all", "documents"}:
+            document_lookup = await get_document_metadata_lookup(thread_id)
+            for file_hash, meta in document_lookup.items():
+                if not isinstance(meta, dict):
+                    continue
+                event = _document_timeline_event(file_hash, meta)
+                if event:
+                    events.append(event)
 
-        # Sort ascending so the earliest occurrence is first
-        results.sort(key=lambda x: x["turn_number"] if isinstance(x["turn_number"], int) else 9999)
+        if requested_sources in {"all", "web_cache"} and query_vector is not None:
+            web_chunks = await db.search_web_chunks(
+                thread_id=thread_id,
+                query_vector=query_vector,
+                embedding_model_name=embedding_model,
+                limit=max_results,
+                query_text=query,
+            )
+            if use_reranker and query:
+                web_chunks = await rerank_document_chunks(query, web_chunks)
+            for chunk in web_chunks:
+                event = _web_timeline_event(chunk)
+                if event:
+                    events.append(event)
 
-        return json.dumps({"topic": topic, "anchors": results[:3]})
+        events.sort(key=lambda event: _event_sort_key(event, order))
+        events = events[:max_results]
+
+        return json.dumps({
+            "content": _format_timeline_content(events),
+            "__timeline_events__": events,
+        })
     except Exception as e:
-        return f"Error finding topic anchor: {e}"
+        logger.error(f"Error in search_thread_timeline: {e}", exc_info=True)
+        return f"Error searching thread timeline: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -475,9 +656,16 @@ def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
 
     docs = bundle.get("documents", [])
     if docs:
-        doc_lines = "\n".join(
-            [f"  {d['index']}. {d['file_name']}  (file_hash: {d['file_hash']})" for d in docs]
-        )
+        doc_lines = []
+        for d in docs:
+            source_type = d.get("source_type") or "unknown"
+            available_at = d.get("document_available_in_thread_at") or "unknown"
+            doc_lines.append(
+                f"  {d['index']}. {d['file_name']} "
+                f"(file_hash: {d['file_hash']} | source_type: {source_type} | "
+                f"document_available_in_thread_at: {available_at})"
+            )
+        doc_lines = "\n".join(doc_lines)
         parts.append(f"[UPLOADED DOCUMENTS — {len(docs)} file(s)]\n{doc_lines}")
 
     recent = bundle.get("recent_history_text", "")
@@ -815,7 +1003,7 @@ core_tools_list = [
     search_documents,
     search_document_by_id,
     search_conversation_history,
-    find_topic_anchor_in_history,
+    search_thread_timeline,
     search_web,
     ask_for_clarification,
 ]
@@ -1032,10 +1220,12 @@ async def call_model(state: AgentState, config: RunnableConfig):
                     "   call search_documents or search_document_by_id ONCE with the rewritten query.\n"
                     "3. If the question targets a specific document and its file_hash is in the document list:\n"
                     "   prefer search_document_by_id (scoped) over search_documents (all documents).\n"
-                    "4. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
+                    "4. If the Intent Agent classified the reference type as TEMPORAL, prefer\n"
+                    "   search_thread_timeline over search_conversation_history for first/latest/since/order questions.\n"
+                    "5. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
                     "   conversation and semantic history are already in the pre-fetched block.\n"
                     + (
-                        "5. EXTERNAL SEARCH IS ENABLED AND MANDATORY: call search_web for general web needs,\n"
+                        "6. EXTERNAL SEARCH IS ENABLED AND MANDATORY: call search_web for general web needs,\n"
                         "   and preserve explicit source or tool constraints from the user when selecting\n"
                         "   among the active external retrieval tools. Pre-fetched document evidence does\n"
                         "   NOT replace external search. Batch external search with any document search.\n"
@@ -1303,7 +1493,7 @@ async def auto_tools(state: AgentState, config: RunnableConfig):
         await _run_auto_tool(
             "search_web",
             {"query": working_query},
-            lambda: search_web(working_query, config=config),
+            lambda: search_web.ainvoke({"query": working_query}, config=config),
         )
 
     if documents and not state.get("document_sources"):
@@ -1313,20 +1503,32 @@ async def auto_tools(state: AgentState, config: RunnableConfig):
                 await _run_auto_tool(
                     "search_document_by_id",
                     {"query": working_query, "file_hash": file_hash},
-                    lambda: search_document_by_id(working_query, file_hash, config=config),
+                    lambda: search_document_by_id.ainvoke(
+                        {"query": working_query, "file_hash": file_hash},
+                        config=config,
+                    ),
                 )
         else:
             await _run_auto_tool(
                 "search_documents",
                 {"query": working_query},
-                lambda: search_documents(working_query, config=config),
+                lambda: search_documents.ainvoke({"query": working_query}, config=config),
             )
 
-    if intent_ref == "SEMANTIC":
+    if intent_ref == "TEMPORAL":
+        await _run_auto_tool(
+            "search_thread_timeline",
+            {"query": working_query, "sources": "all", "order": "relevance"},
+            lambda: search_thread_timeline.ainvoke(
+                {"query": working_query, "sources": "all", "order": "relevance"},
+                config=config,
+            ),
+        )
+    elif intent_ref == "SEMANTIC":
         await _run_auto_tool(
             "search_conversation_history",
             {"query": working_query},
-            lambda: search_conversation_history(working_query, config=config),
+            lambda: search_conversation_history.ainvoke({"query": working_query}, config=config),
         )
 
     return {

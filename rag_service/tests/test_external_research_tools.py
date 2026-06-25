@@ -81,10 +81,12 @@ def test_external_research_tools_have_prompt_metadata():
         "stack_exchange",
         "yahoo_finance_news",
         "search_web_intent",
+        "search_thread_timeline",
     }
 
     missing = expected_tool_names - set(TOOL_FRIENDLY_CONFIG)
     assert not missing
+    assert "find_topic_anchor_in_history" not in TOOL_FRIENDLY_CONFIG
 
 
 def test_yahoo_finance_news_guidance_requires_ticker_and_search_web_prereq():

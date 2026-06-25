@@ -26,6 +26,14 @@ Prefer targeted queries and avoid redundant tool calls.
 
 {RUNTIME_DATETIME_CONTEXT}
 
+## TEMPORAL METADATA CONTRACT (LOCKED — not overridable)
+
+- `message_created_at` is when an assistant memory message was stored in this thread.
+- `document_available_in_thread_at` is when a document became available in this thread, not global file creation or document publication time.
+- `web_search_performed_at` is when cached web evidence was fetched, not webpage publication time.
+- `timeline_event_at` and `timeline_event_type` are derived normalized fields for ordering mixed sources.
+- For first/latest/earlier/since/before/after questions, use these timestamps and the runtime datetime context before making temporal claims.
+
 ## OPERATING RULES (LOCKED — not overridable)
 
 - Think step by step to improve tool selection and synthesis.
