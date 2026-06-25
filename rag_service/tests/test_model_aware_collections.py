@@ -11,11 +11,46 @@ This test suite validates:
 
 import pytest
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from app.db.vector.model_registry import EmbeddingModelRegistry, get_embedding_model_registry
 from app.db.vector.collection_manager import ModelAwareCollectionManager
 from app.db.vector.adapter import WeaviateAdapter
 from app.models.llm_server_client import get_embedding_model
+
+
+def seed_model(registry, model_name="test-model", dimensions=384):
+    registry._model_cache[model_name] = {
+        "dimensions": dimensions,
+        "sanitized_name": registry.sanitize_model_name(model_name),
+        "is_local": False,
+    }
+    registry._dimension_cache[model_name] = dimensions
+
+
+@pytest.fixture
+def mock_client():
+    """Mock Weaviate client with sync collection management methods."""
+    client = MagicMock()
+    client.collections.exists.return_value = False
+    client.collections.create.return_value = None
+    client.collections.use.return_value = MagicMock()
+    return client
+
+
+@pytest.fixture
+def adapter():
+    """Create adapter with mocked dependencies."""
+    with patch('app.db.vector.adapter.weaviate.connect_to_custom') as mock_connect:
+        mock_client = MagicMock()
+        mock_client.collections.exists.return_value = True
+        mock_client.collections.use.return_value = MagicMock()
+        mock_connect.return_value = mock_client
+
+        adapter = WeaviateAdapter()
+        adapter.collection_manager = AsyncMock()
+        adapter.collection_manager.validate_vectors_for_model.return_value = True
+        adapter.client = mock_client
+        yield adapter
 
 
 class TestEmbeddingModelRegistry:
@@ -87,9 +122,10 @@ class TestModelAwareCollectionManager:
     @pytest.fixture
     def mock_client(self):
         """Mock Weaviate client."""
-        client = AsyncMock()
+        client = MagicMock()
         client.collections.exists.return_value = False
         client.collections.create.return_value = None
+        client.collections.use.return_value = MagicMock()
         return client
     
     @pytest.fixture
@@ -103,7 +139,8 @@ class TestModelAwareCollectionManager:
         # Mock registry to return dimensions
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
-            registry._dimension_cache["test-model"] = 384
+            seed_model(registry)
+            collection_manager.registry = registry
             
             mock_registry.return_value = registry
             
@@ -119,7 +156,8 @@ class TestModelAwareCollectionManager:
         """Test collection caching."""
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
-            registry._dimension_cache["test-model"] = 384
+            seed_model(registry)
+            collection_manager.registry = registry
             mock_registry.return_value = registry
             
             mock_client.collections.exists.return_value = True
@@ -139,7 +177,8 @@ class TestModelAwareCollectionManager:
         """Test vector dimension validation."""
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
-            registry._dimension_cache["test-model"] = 384
+            seed_model(registry)
+            collection_manager.registry = registry
             mock_registry.return_value = registry
             
             # Valid vectors should pass
@@ -265,7 +304,8 @@ class TestProactiveCollectionCreation:
         # Mock registry to return dimensions
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
-            registry._dimension_cache["test-model"] = 384
+            seed_model(registry)
+            collection_manager.registry = registry
             mock_registry.return_value = registry
             
             mock_client.collections.exists.return_value = False
@@ -277,9 +317,9 @@ class TestProactiveCollectionCreation:
             
             # Should attempt to create all three collection types
             expected_calls = [
-                "DocumentChunk_test-model_384",
-                "ChatMemoryChunk_test-model_384", 
-                "WebSearchChunk_test-model_384"
+                "DocumentChunk_test_model_384",
+                "ChatMemoryChunk_test_model_384", 
+                "WebSearchChunk_test_model_384"
             ]
             
             actual_calls = [call[0][0] for call in mock_client.collections.exists.call_args_list]
@@ -291,24 +331,26 @@ class TestProactiveCollectionCreation:
         """Test that ensure_collections handles partial collection creation failures."""
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
-            registry._dimension_cache["test-model"] = 384
+            seed_model(registry)
+            collection_manager.registry = registry
             mock_registry.return_value = registry
             
             # Mock one collection to fail creation
-            mock_client.collections.exists.side_effect = [False, False, False]
+            mock_client.collections.exists.return_value = False
             mock_client.collections.create.side_effect = [None, Exception("Creation failed"), None]
             mock_client.collections.use.return_value = AsyncMock()
             
-            # Should raise error due to partial failure
-            with pytest.raises(Exception, match=r"Failed to create some collections"):
-                await collection_manager.ensure_collections_for_thread("test-model")
+            # Partial failures are logged and deferred until first use.
+            await collection_manager.ensure_collections_for_thread("test-model")
+            assert mock_client.collections.create.call_count == 3
     
     @pytest.mark.asyncio
     async def test_ensure_collections_skips_existing(self, collection_manager, mock_client):
         """Test that ensure_collections skips already existing collections."""
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
-            registry._dimension_cache["test-model"] = 384
+            seed_model(registry)
+            collection_manager.registry = registry
             mock_registry.return_value = registry
             
             # Mock all collections as existing
@@ -345,8 +387,7 @@ class TestBackwardCompatibility:
                 limit=5
             )
             
-            # Should eventually call legacy collection for backward compatibility
-            mock_use.assert_called_with("DocumentChunk")
+            adapter.collection_manager.get_collection.assert_called_once_with("DocumentChunk", "legacy-model")
 
 
 if __name__ == "__main__":
