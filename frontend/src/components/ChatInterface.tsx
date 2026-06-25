@@ -740,6 +740,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         // persisted to the backend, so we remove them directly from local state.
         const isTempId = messageId.startsWith('error-') ||
             messageId.startsWith('temp-user-') ||
+            messageId.startsWith('final-user-') ||
+            messageId.startsWith('assistant-') ||
             messageId.startsWith('clarify-user-') ||
             messageId.startsWith('clarify-asst-');
         if (isTempId) {
@@ -747,17 +749,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 const idx = prev.findIndex(m => m.id === messageId);
                 if (idx === -1) return prev;
                 const msg = prev[idx];
-                // Deleting an error assistant message → also remove the preceding temp user message
+                const isLocalUser = (id: string) =>
+                    id.startsWith('temp-user-') ||
+                    id.startsWith('final-user-') ||
+                    id.startsWith('clarify-user-');
+                const isLocalAssistant = (id: string) =>
+                    id.startsWith('error-') ||
+                    id.startsWith('assistant-') ||
+                    id.startsWith('clarify-asst-');
+
+                // Deleting a local assistant message also removes its preceding local user message.
                 if (msg.role === 'assistant' && idx > 0) {
                     const prevMsg = prev[idx - 1];
-                    if (prevMsg.id.startsWith('temp-user-')) {
+                    if (isLocalUser(prevMsg.id)) {
                         return prev.filter((_, i) => i !== idx && i !== idx - 1);
                     }
                 }
-                // Deleting a temp user message → also remove the following error assistant message
+                // Deleting a local user message also removes its following local assistant message.
                 if (msg.role === 'user' && idx < prev.length - 1) {
                     const nextMsg = prev[idx + 1];
-                    if (nextMsg.id.startsWith('error-')) {
+                    if (isLocalAssistant(nextMsg.id)) {
                         return prev.filter((_, i) => i !== idx && i !== idx + 1);
                     }
                 }
