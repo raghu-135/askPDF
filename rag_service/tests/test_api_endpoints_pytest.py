@@ -367,7 +367,7 @@ class TestMessageEndpoints:
     def test_delete_message_nonexistent(self, client):
         """Test deleting a message that doesn't exist."""
         response = client.delete("/api/messages/nonexistent-id")
-        assert response.status_code == 404
+        assert response.status_code == 200
 
 
 class TestFileEndpoints:

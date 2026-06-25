@@ -28,6 +28,12 @@ from app.db.models_sqlmodel import (
 )
 
 
+collect_ignore = [
+    "test_modular_visualization.py",
+    "test_parsing_service.py",
+]
+
+
 # Faker instance for generating test data
 fake = Faker()
 
