@@ -218,6 +218,9 @@ async def handle_thread_chat(
     use_intent_agent = getattr(req, 'use_intent_agent', True)
     intent_agent_skip_clarify = bool(getattr(req, 'intent_agent_skip_clarify', False))
     reasoning_mode = getattr(req, 'reasoning_mode', True)
+    client_timezone = getattr(req, 'client_timezone', None)
+    client_locale = getattr(req, 'client_locale', None)
+    client_now_iso = getattr(req, 'client_now_iso', None)
     if use_intent_agent is None:
         use_intent_agent = True
     # NOTE: intent_agent_max_iterations is passed to the LangGraph Intent Agent State. 
@@ -266,6 +269,9 @@ async def handle_thread_chat(
                 "reasoning_mode": reasoning_mode,
                 "intent_tools_used": False,
                 "use_web_search": use_web_search,
+                "client_timezone": client_timezone,
+                "client_locale": client_locale,
+                "client_now_iso": client_now_iso,
             }
             
             logger.info(f"Invoking Intent Agent for thread {thread_id}")
@@ -383,6 +389,9 @@ async def handle_thread_chat(
             "reasoning_mode": reasoning_mode,
             "working_query": question,
             "intent_reference_type": reference_type,
+            "client_timezone": client_timezone,
+            "client_locale": client_locale,
+            "client_now_iso": client_now_iso,
         }
         
         config = {

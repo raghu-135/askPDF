@@ -3,6 +3,7 @@ import {
   serializeAnnotationItems,
   type AnnotationTransferItem,
 } from "./annotation-utils";
+import { getBrowserRuntimeContext } from "./date-utils";
 
 // Unified API base - RAG service handles all endpoints
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -248,7 +249,10 @@ export async function getPromptPreview(payload: {
   const res = await fetch(`${API_BASE}/api/threads/prompt-preview`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify({
+      ...payload,
+      ...getBrowserRuntimeContext(),
+    })
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -450,7 +454,8 @@ export async function threadChat(
     llm_model: llmModel,
     use_web_search: useWebSearch,
     use_reranker: useReranker,
-    context_window: contextWindowSize
+    context_window: contextWindowSize,
+    ...getBrowserRuntimeContext()
   };
   if (typeof maxIterations === "number") {
     payload.max_iterations = maxIterations;

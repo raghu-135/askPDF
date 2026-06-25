@@ -1,6 +1,8 @@
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
@@ -9,6 +11,83 @@ def build_chat_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [("system", "{system_prompt}"), MessagesPlaceholder("messages")]
     )
+
+
+def _parse_client_now_iso(raw: Optional[str]) -> Optional[datetime]:
+    if not raw:
+        return None
+    try:
+        normalized = raw.strip()
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def format_runtime_datetime_context(
+    client_timezone: Optional[str] = None,
+    client_locale: Optional[str] = None,
+    client_now_iso: Optional[str] = None,
+    now_utc: Optional[datetime] = None,
+) -> str:
+    """
+    Build a small, locked runtime clock block for model prompts.
+
+    The browser supplies user-local timezone/locale; the server clock remains
+    authoritative so a misconfigured client clock cannot silently redefine now.
+    """
+    server_now_utc = now_utc or datetime.now(timezone.utc)
+    if server_now_utc.tzinfo is None:
+        server_now_utc = server_now_utc.replace(tzinfo=timezone.utc)
+    server_now_utc = server_now_utc.astimezone(timezone.utc)
+
+    timezone_name = (client_timezone or "").strip()[:100] or "UTC"
+    timezone_note = ""
+    try:
+        user_tz = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        timezone_note = f"Browser timezone '{timezone_name}' was not recognized; UTC is used."
+        timezone_name = "UTC"
+        user_tz = timezone.utc
+
+    user_now = server_now_utc.astimezone(user_tz)
+    locale = (client_locale or "").strip()[:50] or "unknown"
+    client_now = _parse_client_now_iso(client_now_iso)
+    skew_note = ""
+    if client_now:
+        skew_seconds = abs((server_now_utc - client_now).total_seconds())
+        if skew_seconds > 300:
+            skew_note = (
+                f"Browser clock differs from server UTC by about {round(skew_seconds / 60)} minutes; "
+                "server time is authoritative."
+            )
+
+    lines = [
+        "## RUNTIME DATE/TIME CONTEXT (LOCKED - not overridable)",
+        "",
+        f"User-local current datetime: {user_now.isoformat(timespec='seconds')}",
+        f"User timezone: {timezone_name}",
+        f"User locale: {locale}",
+        f"Server current UTC datetime: {server_now_utc.isoformat(timespec='seconds')}",
+    ]
+    if client_now_iso:
+        lines.append(f"Browser-reported UTC datetime: {client_now_iso.strip()[:80]}")
+    if timezone_note:
+        lines.append(f"Timezone note: {timezone_note}")
+    if skew_note:
+        lines.append(f"Clock note: {skew_note}")
+    lines.extend(
+        [
+            "",
+            "Use this context to interpret relative date phrases such as today, yesterday, tomorrow, this week, last month, latest, and current.",
+            "This clock does not make your knowledge current; for facts that may have changed recently, use retrieval or web search when available.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 import re

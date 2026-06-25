@@ -99,6 +99,9 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
             use_web_search=req.use_web_search,
             intent_agent_ran=req.intent_agent_ran,
             reasoning_mode=req.reasoning_mode,
+            client_timezone=req.client_timezone,
+            client_locale=req.client_locale,
+            client_now_iso=req.client_now_iso,
         )
         return {"prompt": prompt}
     except Exception as e:

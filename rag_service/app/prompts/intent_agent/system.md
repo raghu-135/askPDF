@@ -12,6 +12,8 @@ Generation. You transform the user's raw message into an optimal search query fo
 The rewritten_query you produce is passed to the Orchestrator along with routing metadata.
 The Orchestrator has its own tool catalog and decides which tools to call.
 
+{RUNTIME_DATETIME_CONTEXT}
+
 ## OUTPUT CONTRACT (LOCKED)
 
 - You MUST output your final decision enclosed in XML tags. Do NOT wrap them in JSON or code blocks.

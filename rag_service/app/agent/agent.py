@@ -27,6 +27,7 @@ from app.agent.agent_helpers import (
     parse_intent_response,
     evidence_insufficient,
     collect_tool_sources,
+    format_runtime_datetime_context,
 )
 from app.agent.external_research_tools import (
     get_external_research_tools,
@@ -97,6 +98,9 @@ class AgentState(TypedDict):
     reasoning_mode: bool
     working_query: str
     intent_reference_type: str
+    client_timezone: Optional[str]
+    client_locale: Optional[str]
+    client_now_iso: Optional[str]
 
 
 
@@ -545,6 +549,9 @@ class IntentAgentState(TypedDict):
     reasoning_mode: bool
     intent_tools_used: bool
     use_web_search: bool
+    client_timezone: Optional[str]
+    client_locale: Optional[str]
+    client_now_iso: Optional[str]
 
 
 
@@ -580,6 +587,14 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         base_prompt
         .replace("{INTENT_TOOL_CONTEXT}", intent_tool_context)
         .replace("{ORCHESTRATOR_TOOL_CONTEXT}", orchestrator_tool_context)
+        .replace(
+            "{RUNTIME_DATETIME_CONTEXT}",
+            format_runtime_datetime_context(
+                client_timezone=state.get("client_timezone"),
+                client_locale=state.get("client_locale"),
+                client_now_iso=state.get("client_now_iso"),
+            ),
+        )
         .replace("{PREFETCH_CONTEXT}", prefetch_text)
     )
     if not allow_intent_web_search:
@@ -969,6 +984,9 @@ async def call_model(state: AgentState, config: RunnableConfig):
         use_web_search=use_web_search,
         intent_agent_ran=intent_agent_ran,
         reasoning_mode=reasoning_mode,
+        client_timezone=state.get("client_timezone"),
+        client_locale=state.get("client_locale"),
+        client_now_iso=state.get("client_now_iso"),
     )
 
     # Inject pre-fetched context bundle + pre-fetch-first retrieval policy
@@ -1109,6 +1127,9 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
         use_web_search=use_web_search,
         intent_agent_ran=intent_agent_ran,
         reasoning_mode=reasoning_mode,
+        client_timezone=state.get("client_timezone"),
+        client_locale=state.get("client_locale"),
+        client_now_iso=state.get("client_now_iso"),
     )
 
     parts = []
@@ -1400,6 +1421,9 @@ def build_system_prompt(
     use_web_search: bool = False,
     intent_agent_ran: bool = True,
     reasoning_mode: bool = True,
+    client_timezone: Optional[str] = None,
+    client_locale: Optional[str] = None,
+    client_now_iso: Optional[str] = None,
 ) -> str:
     """Build the Orchestrator Agent system prompt."""
     role = system_role or DEFAULT_SYSTEM_ROLE
@@ -1488,6 +1512,11 @@ def build_system_prompt(
         ORIENT_EXTRA=orient_extra,
         PLAN_QUERY_NOTE=plan_query_note,
         MAX_PARALLEL_TOOLS=max_parallel_tools,
+        RUNTIME_DATETIME_CONTEXT=format_runtime_datetime_context(
+            client_timezone=client_timezone,
+            client_locale=client_locale,
+            client_now_iso=client_now_iso,
+        ),
         TOOL_REGISTRY_SECTION=tool_registry_section,
         TOOL_PLAYBOOK_SECTION=tool_playbook_section,
         WEB_SEARCH_MANDATE_SECTION=web_search_mandate_section,
