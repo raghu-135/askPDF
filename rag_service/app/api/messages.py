@@ -82,7 +82,7 @@ async def delete_message_endpoint(message_id: str):
         # Get message to find thread_id and role
         message = await get_message(message_id)
         if not message:
-            raise HTTPException(status_code=404, detail="Message not found")
+            return {"status": "not_found", "deleted_ids": []}
 
         # Identify both sides of the QA pair
         all_msgs = await get_thread_messages(message.thread_id, limit=10000)
