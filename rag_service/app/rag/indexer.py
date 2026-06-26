@@ -69,6 +69,25 @@ def _compact_page_ranges(pages: List[int]) -> str:
     return ",".join(ranges)
 
 
+def _contiguous_page_groups(pages: List[int]) -> List[List[int]]:
+    unique_pages = sorted(set(p for p in pages if p > 0))
+    if not unique_pages:
+        return []
+
+    groups: List[List[int]] = [[unique_pages[0]]]
+    for page in unique_pages[1:]:
+        if page == groups[-1][-1] + 1:
+            groups[-1].append(page)
+        else:
+            groups.append([page])
+    return groups
+
+
+def _pages_are_contiguous(pages: List[int]) -> bool:
+    groups = _contiguous_page_groups(pages)
+    return len(groups) <= 1
+
+
 def _metadata_dict(element: Any) -> Dict[str, Any]:
     metadata = getattr(element, "metadata", None)
     if metadata is None:
@@ -84,6 +103,12 @@ def _metadata_dict(element: Any) -> Dict[str, Any]:
         except Exception:
             pass
     return {}
+
+
+def _orig_elements(element: Any) -> List[Any]:
+    metadata = getattr(element, "metadata", None)
+    orig_elements = getattr(metadata, "orig_elements", None) or _metadata_dict(element).get("orig_elements") or []
+    return orig_elements if isinstance(orig_elements, list) else []
 
 
 def _collect_element_pages(element: Any) -> List[int]:
@@ -107,10 +132,8 @@ def _collect_element_pages(element: Any) -> List[int]:
                 if page:
                     pages.append(page)
 
-    orig_elements = getattr(metadata, "orig_elements", None) or metadata_data.get("orig_elements") or []
-    if isinstance(orig_elements, list):
-        for child in orig_elements:
-            pages.extend(_collect_element_pages(child))
+    for child in _orig_elements(element):
+        pages.extend(_collect_element_pages(child))
 
     return pages
 
@@ -126,6 +149,73 @@ def _chunk_page_metadata(element: Any) -> Dict[str, Any]:
         "page_end": unique_pages[-1],
         "pages": page_range,
     }
+
+
+def _metadata_for_pages(pages: List[int]) -> Dict[str, Any]:
+    unique_pages = sorted(set(p for p in pages if p > 0))
+    page_range = _compact_page_ranges(unique_pages)
+    if not page_range:
+        return {}
+    return {
+        "page_start": unique_pages[0],
+        "page_end": unique_pages[-1],
+        "pages": page_range,
+    }
+
+
+def _chunk_dict(element: Any, pages: Optional[List[int]] = None) -> Dict[str, Any]:
+    metadata = _metadata_for_pages(pages) if pages is not None else _chunk_page_metadata(element)
+    return {
+        "text": str(element),
+        "metadata": metadata,
+    }
+
+
+def _split_non_contiguous_page_chunk(element: Any) -> List[Dict[str, Any]]:
+    pages = sorted(set(_collect_element_pages(element)))
+    if not pages or _pages_are_contiguous(pages):
+        return [_chunk_dict(element, pages if pages else None)]
+
+    children = _orig_elements(element)
+    if not children:
+        return [_chunk_dict(element, pages)]
+
+    page_groups = _contiguous_page_groups(pages)
+    grouped_children: List[List[Any]] = [[] for _group in page_groups]
+
+    for child in children:
+        child_pages = sorted(set(_collect_element_pages(child)))
+        if not child_pages:
+            return [_chunk_dict(element, pages)]
+
+        matching_group_indexes = [
+            idx
+            for idx, group in enumerate(page_groups)
+            if set(child_pages).issubset(set(group))
+        ]
+        if len(matching_group_indexes) != 1:
+            return [_chunk_dict(element, pages)]
+
+        grouped_children[matching_group_indexes[0]].append(child)
+
+    split_chunks: List[Dict[str, Any]] = []
+    for group, group_children in zip(page_groups, grouped_children):
+        texts = [str(child).strip() for child in group_children if str(child).strip()]
+        if not texts:
+            continue
+        split_chunks.append({
+            "text": "\n\n".join(texts),
+            "metadata": _metadata_for_pages(group),
+        })
+
+    return split_chunks or [_chunk_dict(element, pages)]
+
+
+def _chunks_with_page_metadata(chunked_elements: List[Any]) -> List[Dict[str, Any]]:
+    chunks: List[Dict[str, Any]] = []
+    for element in chunked_elements:
+        chunks.extend(_split_non_contiguous_page_chunk(element))
+    return chunks
 
 
 def _chunk_texts(chunks: List[Dict[str, Any]]) -> List[str]:
@@ -272,18 +362,13 @@ async def download_and_parse_pdf_chunks(file_hash: str, backend_url: str = "") -
         chunked_elements = chunk_by_title(
             elements,
             multipage_sections=True,
+            include_orig_elements=True,
             combine_text_under_n_chars=200,
             max_characters=500,
             new_after_n_chars=400,
             overlap=0
         )
-        chunks = [
-            {
-                "text": str(element),
-                "metadata": _chunk_page_metadata(element),
-            }
-            for element in chunked_elements
-        ]
+        chunks = _chunks_with_page_metadata(chunked_elements)
         try:
             os.remove(local_path)
         except Exception:

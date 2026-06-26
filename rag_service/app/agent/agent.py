@@ -2,6 +2,7 @@ import asyncio
 import logging
 import json
 import time
+import re
 from datetime import datetime, timezone
 from typing import TypedDict, List, Annotated, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
@@ -49,6 +50,30 @@ from app.time_utils import parse_datetime_utc
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_http_status_code(err_str: str) -> Optional[int]:
+    patterns = (
+        r"status(?:_code)?[=:]\s*(\d{3})",
+        r"error code:\s*(\d{3})",
+        r"\b(\d{3})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, err_str)
+        if match:
+            try:
+                return int(match.group(1))
+            except Exception:
+                return None
+    return None
+
+
+def _is_retryable_model_error(err_str: str) -> tuple[bool, str]:
+    status_code = _extract_http_status_code(err_str)
+    if status_code in {408, 409, 429} or (status_code is not None and status_code >= 500):
+        return True, f"Retryable OpenAI-compatible API error ({status_code})"
+    return False, ""
+
+
 async def invoke_with_retry(func, *args, **kwargs):
     max_retries = 10
     base_delay = 2
@@ -57,26 +82,8 @@ async def invoke_with_retry(func, *args, **kwargs):
             return await func(*args, **kwargs)
         except Exception as e:
             err_str = str(e).lower()
-            # 503 – model still loading / service unavailable
-            is_503_loading = "503" in err_str and ("loading" in err_str or "unavailable" in err_str)
-            # 400 – LM Studio unloaded the model between requests
-            is_model_unloaded = "400" in err_str and "model unloaded" in err_str
-            # 404 - Model not found / not currently loaded in memory
-            is_model_not_found = "404" in err_str and ("not found" in err_str or "model" in err_str)
-            # 500 - Generic load errors or out of memory briefly on LLM server
-            is_500_loading = "500" in err_str and ("load" in err_str or "memory" in err_str)
-            # 429 – rate limit / too many requests
-            is_rate_limit = "429" in err_str or "rate limit" in err_str or "too many requests" in err_str
-
-            if is_503_loading or is_model_unloaded or is_rate_limit or is_model_not_found or is_500_loading:
-                reason = (
-                    "Model is loading (503)" if is_503_loading
-                    else "Model was unloaded (400)" if is_model_unloaded
-                    else "Model not loaded/found (404)" if is_model_not_found
-                    else "Temporary model failure/OOM (500)" if is_500_loading
-                    else "Rate limited (429)"
-                )
-                
+            is_retryable, reason = _is_retryable_model_error(err_str)
+            if is_retryable:
                 delay = base_delay * (2 ** min(i, 4)) # Exponential backoff up to 32s max delay
                 logger.warning(f"{reason}. Retrying in {delay}s... (Attempt {i+1}/{max_retries})")
                 await asyncio.sleep(delay)

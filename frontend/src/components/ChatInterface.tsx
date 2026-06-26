@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useTheme } from '@mui/material/styles';
 import {
     Box,
@@ -447,6 +447,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             });
     }, []);
 
+    const validateLlmModel = useCallback(async (model: string) => {
+        if (!model) return;
+        try {
+            const result = await checkLlmModelReady(model);
+            setIsLlmModelValid(result.ready);
+            setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
+        } catch (err) {
+            setIsLlmModelValid(false);
+            setIsLlmToolsSupported(null);
+        }
+    }, []);
+
     // Validate LLM model when changed using chat-utils
     const handleLlmModelChange = async (model: string) => {
         setLlmModel(model);
@@ -461,15 +473,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
         if (!model) return;
-        try {
-            const result = await checkLlmModelReady(model);
-            setIsLlmModelValid(result.ready);
-            setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
-        } catch (err) {
-            setIsLlmModelValid(false);
-            setIsLlmToolsSupported(null);
+        if (indexingStatus === 'ready') {
+            await validateLlmModel(model);
         }
     };
+
+    useEffect(() => {
+        if (indexingStatus === 'ready' && llmModel && isLlmModelValid === null) {
+            validateLlmModel(llmModel);
+        }
+    }, [indexingStatus, isLlmModelValid, llmModel, validateLlmModel]);
 
     const handleContextWindowChange = (val: number) => {
         setContextWindow(val);
@@ -571,10 +584,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setLlmModel(savedLlm);
             setIsLlmModelValid(null);
             setIsLlmToolsSupported(null);
-            checkLlmModelReady(savedLlm).then((result) => {
-                setIsLlmModelValid(result.ready);
-                setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
-            });
+            if (indexingStatus === 'ready') {
+                validateLlmModel(savedLlm);
+            }
         }
 
         const savedCtx = localStorage.getItem('last_context_window');
@@ -589,7 +601,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (savedWebSearch === '1' || savedWebSearch === '0') {
             setUseWebSearch(savedWebSearch === '1');
         }
-    }, []);
+    }, [indexingStatus, llmModel, validateLlmModel]);
 
 
     const handleSend = async (

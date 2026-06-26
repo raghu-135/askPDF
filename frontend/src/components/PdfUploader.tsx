@@ -28,6 +28,8 @@ const PdfUploader = React.memo(function PdfUploader({
     fileHash: string;
     status: FileStatus;
   } | null>(null);
+  const indexingNotifiedRef = React.useRef<string | null>(null);
+  const parsingNotifiedRef = React.useRef<string | null>(null);
 
   const isDisabled = disabled || isUploading;
 
@@ -40,11 +42,16 @@ const PdfUploader = React.memo(function PdfUploader({
     // Check if it's a full FileStatus object
     if ('parsing' in fileStatus.status && 'indexing' in fileStatus.status) {
       const { parsing, indexing } = fileStatus.status;
+      if (
+        ProcessStatusHelper.isCompleted(indexing.status) &&
+        indexingNotifiedRef.current !== fileStatus.fileHash
+      ) {
+        indexingNotifiedRef.current = fileStatus.fileHash;
+        onIndexingComplete?.(fileStatus.fileHash);
+      }
+
       // Stop polling if both parsing and indexing are completed or failed
       if (ProcessStatusHelper.isTerminal(parsing.status) && ProcessStatusHelper.isTerminal(indexing.status)) {
-        if (ProcessStatusHelper.isCompleted(parsing.status) && ProcessStatusHelper.isCompleted(indexing.status)) {
-          onIndexingComplete?.(fileStatus.fileHash);
-        }
         return;
       }
     }
@@ -73,14 +80,27 @@ const PdfUploader = React.memo(function PdfUploader({
           status: fullStatus
         });
 
+        if (
+          ProcessStatusHelper.isCompleted(fullStatus.indexing.status) &&
+          indexingNotifiedRef.current !== fileStatus.fileHash
+        ) {
+          indexingNotifiedRef.current = fileStatus.fileHash;
+          onIndexingComplete?.(fileStatus.fileHash);
+        }
+
         // Check if parsing just completed
-        if (ProcessStatusHelper.isCompleted(fullStatus.parsing.status) && onParsingComplete) {
+        if (
+          ProcessStatusHelper.isCompleted(fullStatus.parsing.status) &&
+          parsingNotifiedRef.current !== fileStatus.fileHash &&
+          onParsingComplete
+        ) {
           try {
             if (!threadId) {
               console.error("Thread ID is required for fetching parsed sentences");
               return;
             }
             const parsedData = await getParsedSentences(fileStatus.fileHash, threadId);
+            parsingNotifiedRef.current = fileStatus.fileHash;
             onParsingComplete(fileStatus.fileHash, parsedData.sentences);
           } catch (error) {
             console.error("Failed to fetch parsed sentences", error);
@@ -100,7 +120,6 @@ const PdfUploader = React.memo(function PdfUploader({
         // Check if both parsing and indexing are completed
         if (ProcessStatusHelper.isCompleted(fullStatus.parsing.status) && ProcessStatusHelper.isCompleted(fullStatus.indexing.status)) {
           clearInterval(pollInterval);
-          onIndexingComplete?.(fileStatus.fileHash);
         } else if (ProcessStatusHelper.isFailed(fullStatus.parsing.status) || ProcessStatusHelper.isFailed(fullStatus.indexing.status)) {
           clearInterval(pollInterval);
         }
@@ -128,6 +147,8 @@ const PdfUploader = React.memo(function PdfUploader({
 
     setIsUploading(true);
     setFileStatus(null);
+    indexingNotifiedRef.current = null;
+    parsingNotifiedRef.current = null;
 
     try {
       if (!threadId) {

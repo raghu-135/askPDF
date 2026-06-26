@@ -176,6 +176,112 @@ def test_document_grouping_uses_thread_availability_and_page_labels():
     assert sources[0]["pages"] == "3-4"
 
 
+class FakeElement:
+    def __init__(self, text, page_number=None, orig_elements=None):
+        self.text = text
+        self.metadata = SimpleNamespace(page_number=page_number)
+        if orig_elements is not None:
+            self.metadata.orig_elements = orig_elements
+
+    def __str__(self):
+        return self.text
+
+
+def test_page_range_helpers_handle_contiguous_non_contiguous_and_invalid_pages():
+    assert indexer._compact_page_ranges([3, 1, 2, 2, 0, -1]) == "1-3"
+    assert indexer._compact_page_ranges([1, 3]) == "1,3"
+    assert indexer._compact_page_ranges([1, 2, 4, 5]) == "1-2,4-5"
+    assert indexer._compact_page_ranges([0, -2]) == ""
+
+
+def test_non_contiguous_chunk_is_split_by_original_element_pages():
+    chunk = FakeElement(
+        "page one\n\npage three",
+        orig_elements=[
+            FakeElement("page one", page_number=1),
+            FakeElement("page three", page_number=3),
+        ],
+    )
+
+    chunks = indexer._chunks_with_page_metadata([chunk])
+
+    assert [chunk["text"] for chunk in chunks] == ["page one", "page three"]
+    assert [chunk["metadata"]["pages"] for chunk in chunks] == ["1", "3"]
+    assert [chunk["metadata"]["page_start"] for chunk in chunks] == [1, 3]
+    assert [chunk["metadata"]["page_end"] for chunk in chunks] == [1, 3]
+
+
+def test_contiguous_chunk_remains_single_chunk_with_compact_page_range():
+    chunk = FakeElement(
+        "page one\n\npage two",
+        orig_elements=[
+            FakeElement("page one", page_number=1),
+            FakeElement("page two", page_number=2),
+        ],
+    )
+
+    chunks = indexer._chunks_with_page_metadata([chunk])
+
+    assert len(chunks) == 1
+    assert chunks[0]["text"] == "page one\n\npage two"
+    assert chunks[0]["metadata"] == {
+        "page_start": 1,
+        "page_end": 2,
+        "pages": "1-2",
+    }
+
+
+def test_non_contiguous_chunk_with_unpaged_child_falls_back_to_original_chunk():
+    chunk = FakeElement(
+        "page one\n\nunknown\n\npage three",
+        orig_elements=[
+            FakeElement("page one", page_number=1),
+            FakeElement("unknown"),
+            FakeElement("page three", page_number=3),
+        ],
+    )
+
+    chunks = indexer._chunks_with_page_metadata([chunk])
+
+    assert len(chunks) == 1
+    assert chunks[0]["text"] == "page one\n\nunknown\n\npage three"
+    assert chunks[0]["metadata"]["pages"] == "1,3"
+    assert chunks[0]["metadata"]["page_start"] == 1
+    assert chunks[0]["metadata"]["page_end"] == 3
+
+
+def test_blank_page_pdf_does_not_leave_single_non_contiguous_chunk(tmp_path):
+    fitz = pytest.importorskip("fitz")
+    from unstructured.chunking.title import chunk_by_title
+
+    pdf_path = tmp_path / "blank-page-provenance.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "First page title\nFirst page body text about apples and oranges.")
+    doc.new_page()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Third page title\nThird page body text about bananas and pears.")
+    doc.save(pdf_path)
+    doc.close()
+
+    elements = indexer.partition_pdf(filename=str(pdf_path))
+    chunked_elements = chunk_by_title(
+        elements,
+        multipage_sections=True,
+        combine_text_under_n_chars=200,
+        max_characters=500,
+        new_after_n_chars=400,
+        overlap=0,
+    )
+
+    chunks = indexer._chunks_with_page_metadata(chunked_elements)
+    page_labels = [chunk["metadata"].get("pages") for chunk in chunks if chunk.get("metadata")]
+
+    assert "1" in page_labels
+    assert "3" in page_labels
+    assert "1,3" not in page_labels
+
+
 @pytest.mark.asyncio
 async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_metadata(monkeypatch):
     fake_db = SimpleNamespace(
