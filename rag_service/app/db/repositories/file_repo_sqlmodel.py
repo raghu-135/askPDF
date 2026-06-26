@@ -155,7 +155,7 @@ class FileRepository:
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(File).where(File.file_hash == file_hash)
+                select(File).where(File.file_hash == file_hash).with_for_update()
             )
             file = result.scalar_one_or_none()
             if not file:
@@ -302,7 +302,7 @@ class FileRepository:
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(File).where(File.file_hash == file_hash)
+                select(File).where(File.file_hash == file_hash).with_for_update()
             )
             file = result.scalar_one_or_none()
             if not file:
@@ -340,7 +340,7 @@ class FileRepository:
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(File).where(File.file_hash == file_hash)
+                select(File).where(File.file_hash == file_hash).with_for_update()
             )
             file = result.scalar_one_or_none()
             if not file:
