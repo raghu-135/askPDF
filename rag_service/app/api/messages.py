@@ -23,6 +23,7 @@ from app.db import (
     recompute_qa_stats,
 )
 from app.db.vector import get_vector_db
+from app.time_utils import iso_utc_z
 from app.models.llm_server_client import (
     INTENT_AGENT_MAX_ITERATIONS,
     merge_thread_settings,
@@ -56,7 +57,7 @@ async def get_thread_messages_endpoint(
                     "reasoning_available": m.reasoning_available,
                     "reasoning_format": m.reasoning_format,
                     "web_sources": m.web_sources,
-                    "created_at": m.created_at.isoformat(),
+                    "created_at": iso_utc_z(m.created_at),
                 }
                 for m in messages
             ],

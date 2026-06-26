@@ -7,7 +7,6 @@ and annotations using SQLModel with PostgreSQL.
 
 import json
 import logging
-from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +15,7 @@ from sqlalchemy import func
 
 from app.db.models_sqlmodel import File, Thread, ThreadFile, ThreadFileAnnotation
 from app.db.connection_sqlmodel import async_session_maker
+from app.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class ThreadFileRepository:
             association = ThreadFile(
                 thread_id=thread_id,
                 file_hash=file_hash,
-                added_at=datetime.utcnow()
+                added_at=utc_now()
             )
             session.add(association)
             await session.flush()
@@ -163,6 +163,25 @@ class ThreadFileRepository:
                 for assoc in associations
             ]
 
+    async def get_association(self, thread_id: str, file_hash: str) -> Optional[Dict[str, Any]]:
+        """Get one thread-file association row."""
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(ThreadFile).where(
+                    ThreadFile.thread_id == thread_id,
+                    ThreadFile.file_hash == file_hash,
+                )
+            )
+            assoc = result.scalar_one_or_none()
+            if not assoc:
+                return None
+            return {
+                "thread_id": assoc.thread_id,
+                "file_hash": assoc.file_hash,
+                "added_at": assoc.added_at,
+            }
+
     async def count_threads_with_file(self, file_hash: str) -> int:
         """Count how many threads currently reference a file."""
         session = await self._get_session()
@@ -249,7 +268,7 @@ class ThreadFileRepository:
     ) -> Dict[str, Any]:
         """Insert or replace the full annotation snapshot for a thread/file pair."""
         annotations_json = json.dumps(annotations or [])
-        now = datetime.utcnow()
+        now = utc_now()
 
         session = await self._get_session()
         async with session.begin():

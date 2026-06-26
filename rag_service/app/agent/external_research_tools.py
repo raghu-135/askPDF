@@ -17,6 +17,7 @@ from langchain_core.tools import BaseTool, tool
 from langchain_core.runnables import RunnableConfig
 
 from app.rag.retrieval import rerank_document_chunks
+from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def _format_web_context(
     urls: List[str],
     titles: List[str],
     scores: Optional[List[float]] = None,
+    web_search_performed_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     web_groups: Dict[str, Dict[str, Any]] = {}
     web_sources: List[Dict[str, Any]] = []
@@ -84,12 +86,20 @@ def _format_web_context(
         }
         if scores and idx < len(scores):
             entry["score"] = scores[idx]
+        if web_search_performed_at:
+            entry["web_search_performed_at"] = web_search_performed_at
+            entry["timeline_event_at"] = web_search_performed_at
+            entry["timeline_event_type"] = "web_search_performed"
         web_sources.append(entry)
 
     context_parts = []
     for url, group in web_groups.items():
         combined_text = "\n".join(group["texts"])
-        context_parts.append(f'[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
+        prefix = (
+            f"Web result from search performed at {web_search_performed_at}:\n"
+            if web_search_performed_at else ""
+        )
+        context_parts.append(f'{prefix}[Source: Internet Search — "{group["title"]}" | {url}]\n{combined_text}')
 
     return {
         "content": "\n\n".join(context_parts),
@@ -119,6 +129,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         result = await _run_web_search(query, max_results=6)
         if not result:
             return "Web search returned no usable text."
+        web_search_performed_at = iso_utc_z()
 
         texts = result["texts"]
         urls = result["urls"]
@@ -144,12 +155,21 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
                         urls=urls,
                         titles=titles,
                         embedding_model_name=embedding_model,
+                        web_search_performed_at=web_search_performed_at,
                     )
                 )
             except Exception as idx_err:
                 logger.warning(f"Web search indexing skipped: {idx_err}")
 
-        return json.dumps(_format_web_context(texts, urls, titles, scores=scores))
+        return json.dumps(
+            _format_web_context(
+                texts,
+                urls,
+                titles,
+                scores=scores,
+                web_search_performed_at=web_search_performed_at,
+            )
+        )
     except Exception as e:
         logger.error(f"Web search failed: {e}", exc_info=True)
         return f"Web search failed: {str(e)}"

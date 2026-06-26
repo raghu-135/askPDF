@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useTheme } from '@mui/material/styles';
 import {
     Box,
@@ -447,6 +447,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             });
     }, []);
 
+    const validateLlmModel = useCallback(async (model: string) => {
+        if (!model) return;
+        try {
+            const result = await checkLlmModelReady(model);
+            setIsLlmModelValid(result.ready);
+            setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
+        } catch (err) {
+            setIsLlmModelValid(false);
+            setIsLlmToolsSupported(null);
+        }
+    }, []);
+
     // Validate LLM model when changed using chat-utils
     const handleLlmModelChange = async (model: string) => {
         setLlmModel(model);
@@ -461,15 +473,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
         if (!model) return;
-        try {
-            const result = await checkLlmModelReady(model);
-            setIsLlmModelValid(result.ready);
-            setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
-        } catch (err) {
-            setIsLlmModelValid(false);
-            setIsLlmToolsSupported(null);
+        if (indexingStatus === 'ready') {
+            await validateLlmModel(model);
         }
     };
+
+    useEffect(() => {
+        if (indexingStatus === 'ready' && llmModel && isLlmModelValid === null) {
+            validateLlmModel(llmModel);
+        }
+    }, [indexingStatus, isLlmModelValid, llmModel, validateLlmModel]);
 
     const handleContextWindowChange = (val: number) => {
         setContextWindow(val);
@@ -571,10 +584,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setLlmModel(savedLlm);
             setIsLlmModelValid(null);
             setIsLlmToolsSupported(null);
-            checkLlmModelReady(savedLlm).then((result) => {
-                setIsLlmModelValid(result.ready);
-                setIsLlmToolsSupported(result.ready ? result.supportsTools : null);
-            });
+            if (indexingStatus === 'ready') {
+                validateLlmModel(savedLlm);
+            }
         }
 
         const savedCtx = localStorage.getItem('last_context_window');
@@ -589,7 +601,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (savedWebSearch === '1' || savedWebSearch === '0') {
             setUseWebSearch(savedWebSearch === '1');
         }
-    }, []);
+    }, [indexingStatus, llmModel, validateLlmModel]);
 
 
     const handleSend = async (
@@ -740,6 +752,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         // persisted to the backend, so we remove them directly from local state.
         const isTempId = messageId.startsWith('error-') ||
             messageId.startsWith('temp-user-') ||
+            messageId.startsWith('final-user-') ||
+            messageId.startsWith('assistant-') ||
             messageId.startsWith('clarify-user-') ||
             messageId.startsWith('clarify-asst-');
         if (isTempId) {
@@ -747,17 +761,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 const idx = prev.findIndex(m => m.id === messageId);
                 if (idx === -1) return prev;
                 const msg = prev[idx];
-                // Deleting an error assistant message → also remove the preceding temp user message
+                const isLocalUser = (id: string) =>
+                    id.startsWith('temp-user-') ||
+                    id.startsWith('final-user-') ||
+                    id.startsWith('clarify-user-');
+                const isLocalAssistant = (id: string) =>
+                    id.startsWith('error-') ||
+                    id.startsWith('assistant-') ||
+                    id.startsWith('clarify-asst-');
+
+                // Deleting a local assistant message also removes its preceding local user message.
                 if (msg.role === 'assistant' && idx > 0) {
                     const prevMsg = prev[idx - 1];
-                    if (prevMsg.id.startsWith('temp-user-')) {
+                    if (isLocalUser(prevMsg.id)) {
                         return prev.filter((_, i) => i !== idx && i !== idx - 1);
                     }
                 }
-                // Deleting a temp user message → also remove the following error assistant message
+                // Deleting a local user message also removes its following local assistant message.
                 if (msg.role === 'user' && idx < prev.length - 1) {
                     const nextMsg = prev[idx + 1];
-                    if (nextMsg.id.startsWith('error-')) {
+                    if (isLocalAssistant(nextMsg.id)) {
                         return prev.filter((_, i) => i !== idx && i !== idx + 1);
                     }
                 }

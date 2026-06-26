@@ -6,7 +6,6 @@ using SQLModel with PostgreSQL, including JSONB settings handling.
 """
 
 import uuid
-from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +15,7 @@ from sqlalchemy import func
 from app.db.models_sqlmodel import Thread, Message, ThreadFile
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
+from app.time_utils import utc_now
 
 
 class ThreadRepository:
@@ -34,7 +34,7 @@ class ThreadRepository:
     async def create(self, name: str, embed_model: str) -> Thread:
         """Create a new thread with default settings."""
         thread_id = str(uuid.uuid4())
-        created_at = datetime.utcnow()
+        created_at = utc_now()
 
         thread = Thread(
             id=thread_id,

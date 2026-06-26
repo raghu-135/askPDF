@@ -185,6 +185,17 @@ export default function Home() {
     }));
   };
 
+  const handleIndexingComplete = async (_fileHash: string) => {
+    if (!activeThread) return;
+    try {
+      const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
+      setActiveThread(updatedThread);
+      setSidebarVersion(v => v + 1);
+    } catch (error) {
+      console.error('Failed to refresh thread after indexing completed:', error);
+    }
+  };
+
   // Poll for parsing status when active tab is pending
   useEffect(() => {
     if (!activeTab || activeTab.parsingStatus !== 'pending' || !activeThread) {
@@ -391,6 +402,7 @@ export default function Home() {
                 threadId={activeThread?.id ?? null}
                 embeddingModel={activeThread?.embed_model ?? null}
                 onUploaded={handlePdfUploaded}
+                onIndexingComplete={handleIndexingComplete}
                 onParsingComplete={handleParsingComplete}
                 disabled={!activeThread}
                 tooltipText={!activeThread ? "Select or create a thread first" : undefined}

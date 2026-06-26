@@ -6,10 +6,10 @@ including parsing and indexing status across multiple embedding models and threa
 """
 
 import json
-from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 from app.db.models_sqlmodel import ProcessStatus
+from app.time_utils import iso_utc_z
 
 
 def _parse_settings(raw: Optional[str]) -> Dict[str, Any]:
@@ -156,7 +156,7 @@ def _normalize_file_status(status: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             "summary": summary,
             "models": models,
         },
-        "updated_at": raw.get("updated_at") or datetime.utcnow().isoformat(),
+        "updated_at": raw.get("updated_at") or iso_utc_z(),
     }
 
 

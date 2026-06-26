@@ -28,6 +28,16 @@ Manage it actively:
   - Avoid redundant tool calls; rephrase meaningfully when retrying.
   - If iteration budget is low, skip optional confirmatory searches and synthesize.
 
+{RUNTIME_DATETIME_CONTEXT}
+
+## TEMPORAL METADATA CONTRACT (LOCKED — not overridable)
+
+- `message_created_at` is when an assistant memory message was stored in this thread.
+- `document_available_in_thread_at` is when a document was added to this thread. It is not the global file creation time and not the document's publication or authorship date. In user-facing answers, describe this as "added to thread".
+- `web_search_performed_at` is when cached web evidence was fetched. It is not the webpage publication date.
+- `timeline_event_at` and `timeline_event_type` are derived normalized fields for ordering mixed sources across conversation, documents, and cached web evidence.
+- For first/latest/earlier/since/before/after questions, use these timestamps and the runtime datetime context before making temporal claims.
+
 ## OPERATING RULES (LOCKED — not overridable)
 
 - Think step by step to improve tool selection and synthesis.
@@ -55,7 +65,8 @@ Manage it actively:
 3) RETRIEVE (tool calls)
    - Parallelize independent calls in one turn.
    - Prefer scoped document search when a specific file is named.
-   - Use semantic history when the question references earlier discussion.
+   - Use `search_thread_timeline` when the question depends on time, order, first/latest, before/after, or since.
+   - Use semantic history when the question references earlier discussion but does not depend on ordering.
    - Only call ask_for_clarification when multiple distinct interpretations remain.
 
 4) ASSESS (internal)
@@ -77,7 +88,7 @@ Never fabricate citations. Apply these rules:
 
 ### Documents (PDFs + web pages)
 - Cite using the exact source labels returned by tools, for example:
-  - '[Source: PDF: filename]'
+  - '[Source: PDF: filename, pages 3-4]'
   - '[Source: Webpage: Title | URL]'
 - When multiple documents corroborate, cite each label inline.
 - Never invent names or URLs — use only labels returned by tools.

@@ -32,7 +32,13 @@ from app.db import (
     increment_qa_stats,
 )
 from app.agent.reasoning import normalize_ai_response
-from app.rag.retrieval import fetch_semantic_history, get_document_name_lookup, group_document_chunks, rerank_document_chunks
+from app.rag.retrieval import (
+    fetch_semantic_history,
+    get_document_metadata_lookup,
+    group_document_chunks,
+    rerank_document_chunks,
+)
+from app.time_utils import maybe_iso_utc_z
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +91,8 @@ async def prefetch_context(
             text = (msg.context_compact or msg.content or "").strip()
             if not text:
                 continue
-            entry = f"{role}: {text}"
+            message_created_at = maybe_iso_utc_z(msg.created_at)
+            entry = f"{role} at {message_created_at}: {text}" if message_created_at else f"{role}: {text}"
             if used_chars + len(entry) > budget_chars:
                 break
             lines.append(entry)
@@ -105,7 +112,20 @@ async def prefetch_context(
         }
         # Build indexed document list (exclude pending/failed if no chunks yet)
         documents = [
-            {"index": i + 1, "file_name": meta["file_name"], "file_hash": fh}
+            {
+                "index": i + 1,
+                "file_name": meta["file_name"],
+                "file_hash": fh,
+                "source_type": meta.get("source_type"),
+                "document_available_in_thread_at": meta.get("document_available_in_thread_at"),
+                "chunk_count": meta.get("chunk_count"),
+                "total_chars": meta.get("total_chars"),
+                "word_count": meta.get("word_count"),
+                "page_count": meta.get("page_count"),
+                "sentence_count": meta.get("sentence_count"),
+                "languages": meta.get("languages"),
+                "filetype": meta.get("filetype"),
+            }
             for i, (fh, meta) in enumerate(shape["documents"].items())
         ]
         return {"stats": stats, "documents": documents}
@@ -151,12 +171,12 @@ async def prefetch_context(
                     embed_model_name,
                 )
                 return "", []
-            hash_to_name = await get_document_name_lookup(thread_id)
+            document_lookup = await get_document_metadata_lookup(thread_id)
             if use_reranker:
                 raw_chunks = await rerank_document_chunks(raw_question, raw_chunks)
             return group_document_chunks(
                 raw_chunks,
-                hash_to_name,
+                document_lookup,
                 char_budget=budget["document_context_chars"],
             )
         except Exception as exc:
@@ -218,6 +238,9 @@ async def handle_thread_chat(
     use_intent_agent = getattr(req, 'use_intent_agent', True)
     intent_agent_skip_clarify = bool(getattr(req, 'intent_agent_skip_clarify', False))
     reasoning_mode = getattr(req, 'reasoning_mode', True)
+    client_timezone = getattr(req, 'client_timezone', None)
+    client_locale = getattr(req, 'client_locale', None)
+    client_now_iso = getattr(req, 'client_now_iso', None)
     if use_intent_agent is None:
         use_intent_agent = True
     # NOTE: intent_agent_max_iterations is passed to the LangGraph Intent Agent State. 
@@ -266,6 +289,9 @@ async def handle_thread_chat(
                 "reasoning_mode": reasoning_mode,
                 "intent_tools_used": False,
                 "use_web_search": use_web_search,
+                "client_timezone": client_timezone,
+                "client_locale": client_locale,
+                "client_now_iso": client_now_iso,
             }
             
             logger.info(f"Invoking Intent Agent for thread {thread_id}")
@@ -383,6 +409,9 @@ async def handle_thread_chat(
             "reasoning_mode": reasoning_mode,
             "working_query": question,
             "intent_reference_type": reference_type,
+            "client_timezone": client_timezone,
+            "client_locale": client_locale,
+            "client_now_iso": client_now_iso,
         }
         
         config = {
@@ -462,7 +491,8 @@ async def handle_thread_chat(
                 answer=answer,
                 embedding_model_name=embed_model,
                 llm_name=llm_model,
-                context_window=context_window
+                context_window=context_window,
+                message_created_at=assistant_message.created_at,
             )
             compact_text = indexing_result.get("memory_compact_text") if isinstance(indexing_result, dict) else None
             if compact_text:

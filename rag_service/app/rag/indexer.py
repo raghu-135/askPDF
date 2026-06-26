@@ -11,13 +11,16 @@ import os
 import json
 import logging
 import asyncio
-from datetime import datetime
-from typing import Dict, Any, List, Optional
+from collections import Counter
+from typing import Dict, Any, List, Optional, Tuple
 from app.db import (
     ProcessStatus,
     get_file,
+    get_file_parsed_sentences,
     get_file_status,
+    get_message,
     get_scoped_indexing_status,
+    get_thread_file_association,
     upsert_document_in_stats,
     update_file_parsed_sentences,
     update_parsing_status,
@@ -34,12 +37,299 @@ from app.models.llm_server_client import (
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
 )
 from app.db.vector import get_vector_db
+from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
 
 TEMP_PDF_DIR = "/tmp/pdfs"
 os.makedirs(TEMP_PDF_DIR, exist_ok=True)
 _document_index_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _int_page(value: Any) -> Optional[int]:
+    try:
+        page = int(value)
+        return page if page > 0 else None
+    except Exception:
+        return None
+
+
+def _compact_page_ranges(pages: List[int]) -> str:
+    unique_pages = sorted(set(p for p in pages if p > 0))
+    if not unique_pages:
+        return ""
+
+    ranges: List[str] = []
+    start = prev = unique_pages[0]
+    for page in unique_pages[1:]:
+        if page == prev + 1:
+            prev = page
+            continue
+        ranges.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = page
+    ranges.append(str(start) if start == prev else f"{start}-{prev}")
+    return ",".join(ranges)
+
+
+def _contiguous_page_groups(pages: List[int]) -> List[List[int]]:
+    unique_pages = sorted(set(p for p in pages if p > 0))
+    if not unique_pages:
+        return []
+
+    groups: List[List[int]] = [[unique_pages[0]]]
+    for page in unique_pages[1:]:
+        if page == groups[-1][-1] + 1:
+            groups[-1].append(page)
+        else:
+            groups.append([page])
+    return groups
+
+
+def _pages_are_contiguous(pages: List[int]) -> bool:
+    groups = _contiguous_page_groups(pages)
+    return len(groups) <= 1
+
+
+def _metadata_dict(element: Any) -> Dict[str, Any]:
+    metadata = getattr(element, "metadata", None)
+    if metadata is None:
+        return {}
+    if isinstance(metadata, dict):
+        return metadata
+    to_dict = getattr(metadata, "to_dict", None)
+    if callable(to_dict):
+        try:
+            data = to_dict()
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _orig_elements(element: Any) -> List[Any]:
+    metadata = getattr(element, "metadata", None)
+    orig_elements = getattr(metadata, "orig_elements", None) or _metadata_dict(element).get("orig_elements") or []
+    return orig_elements if isinstance(orig_elements, list) else []
+
+
+def _collect_element_pages(element: Any) -> List[int]:
+    pages: List[int] = []
+    metadata = getattr(element, "metadata", None)
+
+    for candidate in (
+        getattr(metadata, "page_number", None),
+        _metadata_dict(element).get("page_number"),
+    ):
+        page = _int_page(candidate)
+        if page:
+            pages.append(page)
+
+    metadata_data = _metadata_dict(element)
+    for key in ("page_numbers", "pages"):
+        value = metadata_data.get(key)
+        if isinstance(value, list):
+            for item in value:
+                page = _int_page(item)
+                if page:
+                    pages.append(page)
+
+    for child in _orig_elements(element):
+        pages.extend(_collect_element_pages(child))
+
+    return pages
+
+
+def _chunk_page_metadata(element: Any) -> Dict[str, Any]:
+    pages = _collect_element_pages(element)
+    page_range = _compact_page_ranges(pages)
+    if not page_range:
+        return {}
+    unique_pages = sorted(set(pages))
+    return {
+        "page_start": unique_pages[0],
+        "page_end": unique_pages[-1],
+        "pages": page_range,
+    }
+
+
+def _metadata_for_pages(pages: List[int]) -> Dict[str, Any]:
+    unique_pages = sorted(set(p for p in pages if p > 0))
+    page_range = _compact_page_ranges(unique_pages)
+    if not page_range:
+        return {}
+    return {
+        "page_start": unique_pages[0],
+        "page_end": unique_pages[-1],
+        "pages": page_range,
+    }
+
+
+def _chunk_dict(element: Any, pages: Optional[List[int]] = None) -> Dict[str, Any]:
+    metadata = _metadata_for_pages(pages) if pages is not None else _chunk_page_metadata(element)
+    return {
+        "text": str(element),
+        "metadata": metadata,
+    }
+
+
+def _split_non_contiguous_page_chunk(element: Any) -> List[Dict[str, Any]]:
+    pages = sorted(set(_collect_element_pages(element)))
+    if not pages or _pages_are_contiguous(pages):
+        return [_chunk_dict(element, pages if pages else None)]
+
+    children = _orig_elements(element)
+    if not children:
+        return [_chunk_dict(element, pages)]
+
+    page_groups = _contiguous_page_groups(pages)
+    grouped_children: List[List[Any]] = [[] for _group in page_groups]
+
+    for child in children:
+        child_pages = sorted(set(_collect_element_pages(child)))
+        if not child_pages:
+            return [_chunk_dict(element, pages)]
+
+        matching_group_indexes = [
+            idx
+            for idx, group in enumerate(page_groups)
+            if set(child_pages).issubset(set(group))
+        ]
+        if len(matching_group_indexes) != 1:
+            return [_chunk_dict(element, pages)]
+
+        grouped_children[matching_group_indexes[0]].append(child)
+
+    split_chunks: List[Dict[str, Any]] = []
+    for group, group_children in zip(page_groups, grouped_children):
+        texts = [str(child).strip() for child in group_children if str(child).strip()]
+        if not texts:
+            continue
+        split_chunks.append({
+            "text": "\n\n".join(texts),
+            "metadata": _metadata_for_pages(group),
+        })
+
+    return split_chunks or [_chunk_dict(element, pages)]
+
+
+def _chunks_with_page_metadata(chunked_elements: List[Any]) -> List[Dict[str, Any]]:
+    chunks: List[Dict[str, Any]] = []
+    for element in chunked_elements:
+        chunks.extend(_split_non_contiguous_page_chunk(element))
+    return chunks
+
+
+def _chunk_texts(chunks: List[Dict[str, Any]]) -> List[str]:
+    return [str(chunk.get("text", "")) for chunk in chunks]
+
+
+def _safe_scalar_or_list(value: Any) -> Any:
+    if value in (None, ""):
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple, set)):
+        safe_items = [
+            item
+            for item in value
+            if isinstance(item, (str, int, float, bool)) and item not in (None, "")
+        ]
+        return safe_items or None
+    return None
+
+
+def _collect_metadata_values(elements: List[Any], key: str) -> List[Any]:
+    values: List[Any] = []
+    for element in elements:
+        metadata = _metadata_dict(element)
+        safe_value = _safe_scalar_or_list(metadata.get(key))
+        if isinstance(safe_value, list):
+            values.extend(safe_value)
+        elif safe_value is not None:
+            values.append(safe_value)
+        values.extend(_collect_metadata_values(_orig_elements(element), key))
+    return values
+
+
+def _collect_element_type_counts(elements: List[Any]) -> Counter:
+    counts: Counter = Counter()
+    for element in elements:
+        counts[type(element).__name__] += 1
+        counts.update(_collect_element_type_counts(_orig_elements(element)))
+    return counts
+
+
+def _page_count_from_chunks(chunks: List[Dict[str, Any]]) -> Optional[int]:
+    pages: List[int] = []
+    for chunk in chunks:
+        metadata = chunk.get("metadata") or {}
+        raw_pages = metadata.get("pages")
+        if raw_pages:
+            for part in str(raw_pages).split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if "-" in part:
+                    start_raw, end_raw = part.split("-", 1)
+                    try:
+                        start = int(start_raw)
+                        end = int(end_raw)
+                    except Exception:
+                        continue
+                    if start <= end:
+                        pages.extend(range(start, end + 1))
+                    continue
+                page = _int_page(part)
+                if page:
+                    pages.append(page)
+            continue
+
+        for key in ("page_start", "page_end"):
+            page = _int_page(metadata.get(key))
+            if page:
+                pages.append(page)
+    return len(set(pages)) if pages else None
+
+
+def _document_metadata_from_unstructured_elements(elements: List[Any]) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {}
+
+    page_values: List[int] = []
+    for element in elements:
+        page_values.extend(_collect_element_pages(element))
+    pages = sorted(set(page_values))
+    if pages:
+        metadata["page_count"] = len(pages)
+
+    languages = sorted({str(value) for value in _collect_metadata_values(elements, "languages") if value not in (None, "")})
+    if languages:
+        metadata["languages"] = languages
+
+    filetypes = [str(value) for value in _collect_metadata_values(elements, "filetype") if value not in (None, "")]
+    if filetypes:
+        metadata["filetype"] = filetypes[0]
+
+    element_types = dict(sorted(_collect_element_type_counts(elements).items()))
+    if element_types:
+        metadata["element_types"] = element_types
+
+    return metadata
+
+
+def _word_count(chunks: List[str]) -> int:
+    return sum(len(chunk.split()) for chunk in chunks)
+
+
+async def _get_existing_sentence_count(file_hash: str) -> Optional[int]:
+    try:
+        parsed_data = await get_file_parsed_sentences(file_hash)
+        sentences = parsed_data.get("sentences") if isinstance(parsed_data, dict) else None
+        if isinstance(sentences, list):
+            return len(sentences)
+    except Exception as exc:
+        logger.debug("Could not read parsed sentence count for %s: %s", file_hash, exc)
+    return None
 
 
 def _document_index_lock(file_hash: str, embedding_model_name: str) -> asyncio.Lock:
@@ -55,27 +345,35 @@ async def _upsert_document_stats(
     file_hash: str,
     metadata: Dict[str, Any],
     chunk_count: int,
-    total_chars: int,
+    total_chars: Optional[int],
     indexed_at: str,
 ) -> None:
     """Persist thread-local document inventory metadata used by retrieval and agents."""
     file = await get_file(file_hash)
-    source_type = "pdf"
+    source_type = metadata.get("source_type") or metadata.get("source_kind") or (file.source_type if file else "pdf")
     title = metadata.get("title") or (file.file_name if file else file_hash)
     content_hash = metadata.get("content_hash")
 
     doc_meta: Dict[str, Any] = {
         "file_name": file.file_name if file else file_hash,
+        "file_hash": file_hash,
         "source_type": source_type,
         "chunk_count": chunk_count,
-        "total_chars": total_chars,
         "indexing_status": ProcessStatus.COMPLETED.value,
         "indexed_at": indexed_at,
     }
+    if total_chars is not None:
+        doc_meta["total_chars"] = total_chars
     if title:
         doc_meta["title"] = title
     if content_hash:
         doc_meta["content_hash"] = content_hash
+    for field in ("word_count", "page_count", "sentence_count", "languages", "filetype", "element_types"):
+        value = metadata.get(field)
+        if value not in (None, "", [], {}):
+            doc_meta[field] = value
+    if metadata.get("document_available_in_thread_at"):
+        doc_meta["document_available_in_thread_at"] = metadata["document_available_in_thread_at"]
 
     await upsert_document_in_stats(thread_id, file_hash, doc_meta)
 
@@ -156,6 +454,65 @@ async def download_and_parse_pdf(file_hash: str, backend_url: str = "") -> Optio
         return None
 
 
+async def download_and_parse_pdf_chunks_with_summary(
+    file_hash: str,
+    backend_url: str = "",
+) -> Optional[Tuple[List[Dict[str, Any]], Dict[str, Any]]]:
+    """
+    Read a PDF and parse it into text chunks plus document-level parser metadata.
+    """
+    pdf_path = f"/static/{file_hash}.pdf"
+    local_path = os.path.join(TEMP_PDF_DIR, f"{file_hash}.pdf")
+    try:
+        if not os.path.exists(pdf_path):
+            logger.error(f"PDF not found at {pdf_path}")
+            return None
+
+        with open(pdf_path, "rb") as f:
+            pdf_data = f.read()
+
+        with open(local_path, "wb") as f:
+            f.write(pdf_data)
+
+        elements = await asyncio.to_thread(partition_pdf, filename=local_path)
+        document_metadata = _document_metadata_from_unstructured_elements(elements)
+
+        from unstructured.chunking.title import chunk_by_title
+        chunked_elements = chunk_by_title(
+            elements,
+            multipage_sections=True,
+            include_orig_elements=True,
+            combine_text_under_n_chars=200,
+            max_characters=500,
+            new_after_n_chars=400,
+            overlap=0
+        )
+        chunks = _chunks_with_page_metadata(chunked_elements)
+        if "page_count" not in document_metadata:
+            page_count = _page_count_from_chunks(chunks)
+            if page_count is not None:
+                document_metadata["page_count"] = page_count
+        try:
+            os.remove(local_path)
+        except Exception:
+            pass
+        return chunks, document_metadata
+    except Exception as e:
+        logger.error(f"Error reading/parsing PDF: {e}")
+        return None
+
+
+async def download_and_parse_pdf_chunks(file_hash: str, backend_url: str = "") -> Optional[List[Dict[str, Any]]]:
+    """
+    Read a PDF and parse it into text chunks while preserving page provenance.
+    """
+    result = await download_and_parse_pdf_chunks_with_summary(file_hash, backend_url)
+    if result is None:
+        return None
+    chunks, _document_metadata = result
+    return chunks
+
+
 async def get_chunks(file_hash: str) -> List[str]:
     """
     Read a PDF from local filesystem using file_hash and parse it into text chunks using unstructured.
@@ -167,6 +524,33 @@ async def get_chunks(file_hash: str) -> List[str]:
 
     logger.error(f"PDF read/parse failed for {file_hash}")
     return []
+
+
+async def get_chunks_with_metadata(file_hash: str) -> List[Dict[str, Any]]:
+    """
+    Read a PDF and return chunk text with parser metadata such as page ranges.
+    """
+    chunks = await download_and_parse_pdf_chunks(file_hash)
+    if chunks:
+        return chunks
+
+    logger.error(f"PDF read/parse failed for {file_hash}")
+    return []
+
+
+async def get_chunks_with_document_metadata(
+    file_hash: str,
+    backend_url: str = "",
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Read a PDF and return chunk metadata plus document-level parser metadata.
+    """
+    result = await download_and_parse_pdf_chunks_with_summary(file_hash, backend_url)
+    if result:
+        return result
+
+    logger.error(f"PDF read/parse failed for {file_hash}")
+    return [], {}
 
 
 def parse_markdown_to_chunks(markdown_content: str) -> List[str]:
@@ -318,8 +702,21 @@ async def index_document_for_thread(
     
     db_client = get_vector_db()
     metadata = metadata or {}
-    started_at = datetime.utcnow().isoformat()
+    started_at = iso_utc_z()
     total_chars = 0
+    document_available_in_thread_at: Optional[str] = None
+    try:
+        association = await get_thread_file_association(thread_id, file_hash)
+        if association and association.get("added_at"):
+            document_available_in_thread_at = iso_utc_z(association["added_at"])
+            metadata["document_available_in_thread_at"] = document_available_in_thread_at
+    except Exception as assoc_err:
+        logger.warning(
+            "Could not load thread-file availability for thread %s file %s: %s",
+            thread_id,
+            file_hash,
+            assoc_err,
+        )
 
     try:
         await update_indexing_status(
@@ -337,7 +734,7 @@ async def index_document_for_thread(
                 model_status = get_scoped_indexing_status(file_status, embedding_model=embedding_model_name)
                 shared_chunks = await db_client.get_file_chunk_count(file_hash, embedding_model_name)
                 total_chars = int(model_status.get("total_chars", 0) or 0)
-                finished_at = datetime.utcnow().isoformat()
+                finished_at = iso_utc_z()
                 await update_indexing_status(
                     file_hash=file_hash,
                     status=ProcessStatus.COMPLETED.value,
@@ -354,7 +751,7 @@ async def index_document_for_thread(
                     file_hash=file_hash,
                     metadata=metadata,
                     chunk_count=shared_chunks,
-                    total_chars=total_chars,
+                    total_chars=total_chars if total_chars > 0 else None,
                     indexed_at=finished_at,
                 )
                 return {
@@ -368,16 +765,25 @@ async def index_document_for_thread(
             # 1. Get chunks - use markdown for web sources, PDF for uploaded files
             if markdown_content:
                 logger.info(f"Using markdown content for web source indexing: {file_hash}")
-                chunks = parse_markdown_to_chunks(markdown_content)
+                parsed_chunks = [
+                    {"text": chunk, "metadata": {}}
+                    for chunk in parse_markdown_to_chunks(markdown_content)
+                ]
+                document_metadata: Dict[str, Any] = {}
+                chunks = _chunk_texts(parsed_chunks)
                 # Save markdown chunks as parsed sentences for TTS enablement
                 sentences = [{"id": i, "text": chunk, "page": 1} for i, chunk in enumerate(chunks)]
                 parsed_data = {"version": "1.0", "sentences": sentences}
                 await update_file_parsed_sentences(file_hash, json.dumps(parsed_data))
+                document_metadata["sentence_count"] = len(sentences)
+                if chunks:
+                    document_metadata["page_count"] = 1
                 # Mark parsing as completed for web sources
                 await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
                 logger.info(f"Saved {len(sentences)} sentences and marked parsing complete for web source: {file_hash}")
             else:
-                chunks = await get_chunks(file_hash)
+                parsed_chunks, document_metadata = await get_chunks_with_document_metadata(file_hash)
+                chunks = _chunk_texts(parsed_chunks)
             if not chunks:
                 logger.warning(f"No chunks extracted for thread {thread_id}, file {file_hash}")
                 await update_indexing_status(
@@ -386,7 +792,7 @@ async def index_document_for_thread(
                     embedding_model=embedding_model_name,
                     thread_id=thread_id,
                     started_at=started_at,
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=iso_utc_z(),
                     error="No text extracted from document",
                 )
                 return {"status": "error", "message": "No text extracted from document"}
@@ -400,8 +806,15 @@ async def index_document_for_thread(
             chunk_metadatas = []
             source_kind = metadata.get("source_kind", "pdf")
             for i, _chunk in enumerate(chunks):
+                page_metadata = parsed_chunks[i].get("metadata", {}) if i < len(parsed_chunks) else {}
+                chunk_base_metadata = {
+                    key: value
+                    for key, value in metadata.items()
+                    if key != "document_available_in_thread_at"
+                }
                 chunk_metadata = {
-                    **metadata,
+                    **chunk_base_metadata,
+                    **page_metadata,
                     "source_kind": source_kind,
                     "file_hash": file_hash,
                     "chunk_index": i,
@@ -423,7 +836,18 @@ async def index_document_for_thread(
             )
 
             total_chars = sum(len(c) for c in chunks)
-            finished_at = datetime.utcnow().isoformat()
+            metadata.update(document_metadata)
+            metadata["word_count"] = _word_count(chunks)
+            sentence_count = metadata.get("sentence_count")
+            if sentence_count in (None, ""):
+                sentence_count = await _get_existing_sentence_count(file_hash)
+                if sentence_count is not None:
+                    metadata["sentence_count"] = sentence_count
+            if metadata.get("page_count") in (None, ""):
+                page_count = _page_count_from_chunks(parsed_chunks)
+                if page_count is not None:
+                    metadata["page_count"] = page_count
+            finished_at = iso_utc_z()
             logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
 
             await update_indexing_status(
@@ -462,7 +886,7 @@ async def index_document_for_thread(
                 embedding_model=embedding_model_name,
                 thread_id=thread_id,
                 started_at=started_at,
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=iso_utc_z(),
                 error=str(e),
             )
         except Exception:
@@ -477,7 +901,8 @@ async def index_chat_memory_for_thread(
     answer: str,
     embedding_model_name: str,
     llm_name: Optional[str] = None,
-    context_window: int = DEFAULT_TOKEN_BUDGET
+    context_window: int = DEFAULT_TOKEN_BUDGET,
+    message_created_at: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Process, chunk, and index a chat message as semantic memory.
@@ -486,6 +911,11 @@ async def index_chat_memory_for_thread(
     db_client = get_vector_db()
     
     try:
+        if message_created_at is None:
+            message = await get_message(message_id)
+            message_created_at = getattr(message, "created_at", None) if message else None
+        message_created_at_iso = iso_utc_z(message_created_at)
+
         # 1. Build compact memory text and chunk for indexing.
         compact_text, was_summarized = await build_compact_chat_memory_text(
             question=question,
@@ -510,7 +940,8 @@ async def index_chat_memory_for_thread(
             answer=answer,
             texts=chunks,
             embeddings=vectors,
-            embedding_model_name=embedding_model_name
+            embedding_model_name=embedding_model_name,
+            message_created_at=message_created_at_iso,
         )
         
         return {
@@ -542,6 +973,7 @@ async def index_chat_memory_from_compact_for_thread(
     compact_text: str,
     answer: str,
     embedding_model_name: str,
+    message_created_at: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Re-index chat memory using the exact persisted compact text so summarized
@@ -549,6 +981,10 @@ async def index_chat_memory_from_compact_for_thread(
     """
     db_client = get_vector_db()
     try:
+        if message_created_at is None:
+            message = await get_message(message_id)
+            message_created_at = getattr(message, "created_at", None) if message else None
+        message_created_at_iso = iso_utc_z(message_created_at)
         chunks = split_chat_memory_text(compact_text)
         vectors = await generate_embeddings(chunks, embedding_model_name)
         indexed_count = await db_client.index_chat_memory(
@@ -558,7 +994,8 @@ async def index_chat_memory_from_compact_for_thread(
             answer=answer,
             texts=chunks,
             embeddings=vectors,
-            embedding_model_name=embedding_model_name
+            embedding_model_name=embedding_model_name,
+            message_created_at=message_created_at_iso,
         )
         return {"status": "success", "chunks_count": indexed_count}
     except Exception as e:
@@ -579,6 +1016,7 @@ async def index_web_search_for_thread(
     urls: Optional[List[str]],
     titles: Optional[List[str]],
     embedding_model_name: str,
+    web_search_performed_at: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Embed and store web search result snippets into the thread's vector collection
@@ -597,6 +1035,7 @@ async def index_web_search_for_thread(
     """
     db_client = get_vector_db()
     try:
+        web_search_performed_at_iso = iso_utc_z(web_search_performed_at)
         vectors = await generate_embeddings(texts, embedding_model_name)
         
         # Validate vectors before indexing
@@ -611,6 +1050,7 @@ async def index_web_search_for_thread(
             embedding_model_name=embedding_model_name,
             urls=urls,
             titles=titles,
+            web_search_performed_at=web_search_performed_at_iso,
         )
         return {"status": "success", "chunks_count": indexed_count}
     except Exception as e:
@@ -699,6 +1139,7 @@ async def trigger_reembed_for_missing_sources(
                     compact_text=compact_text,
                     answer=msg.content,
                     embedding_model_name=embedding_model_name,
+                    message_created_at=msg.created_at,
                 )
                 if chat_result.get("status") == "success":
                     reindexed_chat_messages.append(msg.id)
