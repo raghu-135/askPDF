@@ -346,6 +346,12 @@ Environment variables are now managed using a `.env` file for better security an
 
 The Compose setup builds the frontend with `npm ci` inside Docker and runs the production Next.js standalone server, so users do not need Node or npm installed locally.
 
+For frontend development with hot reload, add the dev override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
 ### Model Requirements
 
 You need a **chat model with tool calling support** and an **embedding model**:

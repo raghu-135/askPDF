@@ -890,15 +890,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Tooltip>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
-                    <Tooltip title="AI prompt settings for this thread" placement="top">
-                        <IconButton
-                            size="small"
-                            onClick={() => setSettingsDialogOpen(true)}
-                            sx={{ p: 0.5 }}
-                        >
-                            <SettingsIcon />
-                        </IconButton>
-                    </Tooltip>
                     <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
                         <IconButton
                             size="small"
@@ -1019,6 +1010,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         ? theme.palette.getContrastText(theme.palette.primary.main)
                                         : theme.palette.text.primary,
                                     maxWidth: '90%',
+                                    minWidth: 0,
+                                    overflowWrap: 'anywhere',
+                                    wordBreak: 'break-word',
                                     boxShadow: activeMessageIndex === idx
                                         ? '0 0 10px rgba(255, 255, 0, 0.4)'
                                         : isRecollected
@@ -1121,13 +1115,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 <Typography variant="body2" component="div" sx={{
                                     cursor: 'text',
                                     pr: 2, // Add some padding to avoid immediate overlap with icons if possible
-                                    '& p': { m: 0, mb: 1 },
+                                    minWidth: 0,
+                                    maxWidth: '100%',
+                                    overflowWrap: 'anywhere',
+                                    wordBreak: 'break-word',
+                                    '& p': { m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
                                     '& p:last-child': { mb: 0 },
-                                    '& ul, & ol': { pl: 2, m: 0, mb: 1 },
-                                    '& li': { mb: 0.5 },
-                                    '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1 },
-                                    '& code': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace' },
-                                    '& pre': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 }
+                                    '& ul, & ol': { pl: 2, m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& li': { mb: 0.5, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& blockquote': { m: 0, pl: 1.5, borderLeft: '3px solid', borderColor: 'divider', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& a': { overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& code': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& pre': { maxWidth: '100%', bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 },
+                                    '& pre code': { overflowWrap: 'normal', wordBreak: 'normal' },
+                                    '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', mb: 1 },
+                                    '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.5 }
                                 }}>
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                         {typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')}
@@ -1153,7 +1156,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     opacity: 0.9,
                                                     p: 1,
                                                     borderRadius: 1,
-                                                    bgcolor: 'rgba(255,255,255,0.1)'
+                                                    bgcolor: 'rgba(255,255,255,0.1)',
+                                                    minWidth: 0,
+                                                    maxWidth: '100%',
+                                                    overflowWrap: 'anywhere',
+                                                    wordBreak: 'break-word'
                                                 }}
                                             >
                                                 {msg.rewritten_query}
@@ -1318,11 +1325,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Box>
                 )}
 
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch' }}>
                     <TextField
                         fullWidth
                         variant="outlined"
                         multiline
+                        minRows={2}
                         maxRows={10}
                         placeholder={
                             (indexingStatus === 'blocked' || isEmbedModelValid === false)
@@ -1345,6 +1353,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         }}
                         disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                         sx={{
+                            '& .MuiInputBase-root': {
+                                minHeight: 88,
+                                alignItems: 'flex-start',
+                            },
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: theme.palette.background.paper,
                                 color: theme.palette.text.primary,
@@ -1358,13 +1370,47 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             },
                         }}
                     />
-                    <IconButton
-                        color="primary"
-                        onClick={handleSend}
-                        disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                    <Box
+                        sx={{
+                            width: 44,
+                            flex: '0 0 44px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            minHeight: 88,
+                        }}
                     >
-                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false) || indexingStatus === 'error') ? <CircularProgress size={24} /> : <SendIcon />}
-                    </IconButton>
+                        <Tooltip title="AI prompt settings for this thread" placement="top">
+                            <IconButton
+                                onClick={() => setSettingsDialogOpen(true)}
+                                sx={{
+                                    width: 40,
+                                    height: 40,
+                                    p: 0,
+                                    color: 'text.secondary',
+                                    '&:hover': {
+                                        bgcolor: 'action.hover',
+                                        color: 'text.primary',
+                                    },
+                                }}
+                            >
+                                <SettingsIcon fontSize="small" />
+                            </IconButton>
+                        </Tooltip>
+                        <IconButton
+                            color="primary"
+                            onClick={handleSend}
+                            disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                            sx={{
+                                width: 40,
+                                height: 40,
+                                p: 0,
+                            }}
+                        >
+                            {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false) || indexingStatus === 'error') ? <CircularProgress size={20} /> : <SendIcon fontSize="small" />}
+                        </IconButton>
+                    </Box>
                 </Box>
             </Box>
 
