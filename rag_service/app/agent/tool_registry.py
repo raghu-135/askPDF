@@ -19,7 +19,7 @@ TOOL_FRIENDLY_CONFIG = {
         "id": "focused_document_evidence",
         "display_name": "Focused Document Evidence",
         "description": "Semantic search within one uploaded document identified by file_hash. Use this when the user names or clearly points to a specific document and thread shape provides the file_hash. Do not use it for cross-document comparison or timeline ordering unless paired with search_thread_timeline.",
-        "default_prompt": "Use when a specific document is known and its file_hash is available. Keep the query focused on the requested fact. Use search_thread_timeline instead for document availability time or chronology questions.",
+        "default_prompt": "Use when a specific document is known and its file_hash is available. Keep the query focused on the requested fact. Use search_thread_timeline instead for document added-to-thread time or chronology questions.",
     },
     "search_conversation_history": {
         "id": "deep_memory",
@@ -30,7 +30,7 @@ TOOL_FRIENDLY_CONFIG = {
     "search_thread_timeline": {
         "id": "thread_timeline",
         "display_name": "Thread Timeline",
-        "description": "Search timestamped timeline events across conversation memory, document availability, and cached web evidence. Use this for earliest/latest/first/earlier/since/before/after questions or when mixed-source ordering matters. It returns source-specific timestamps plus derived timeline_event_at and timeline_event_type; document timestamps mean availability in this thread, not document publication time.",
+        "description": "Search timestamped timeline events across conversation memory, document added-to-thread time, and cached web evidence. Use this for earliest/latest/first/earlier/since/before/after questions or when mixed-source ordering matters. It returns source-specific timestamps plus derived timeline_event_at and timeline_event_type; document timestamps mean added to this thread, not document publication time.",
         "default_prompt": "Use when the answer depends on chronology, recency, sequence, or comparing event times across conversation, documents, and cached web. Set order=oldest for first/earliest, order=newest for latest/recent, and sources to narrow the search when the user names a source class. Do not use it for ordinary semantic evidence lookup where time is irrelevant.",
     },
     "search_web": {

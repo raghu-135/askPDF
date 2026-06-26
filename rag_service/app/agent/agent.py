@@ -185,13 +185,13 @@ def _document_timeline_event(file_hash: str, meta: Dict[str, Any]) -> Optional[D
     return {
         "source_type": "document",
         "timeline_event_at": available_at,
-        "timeline_event_type": "document_available_in_thread",
+        "timeline_event_type": "document_added_to_thread",
         "document_available_in_thread_at": available_at,
         "file_hash": file_hash,
         "file_name": file_name,
         "document_source_type": source_type,
-        "label": f"Document available in thread: {file_name}",
-        "excerpt": f"{file_name} became available in this thread.",
+        "label": f"Document added to thread: {file_name}",
+        "excerpt": f"{file_name} was added to this thread.",
     }
 
 
@@ -546,7 +546,7 @@ async def search_thread_timeline(
 
     Timestamps have source-specific meanings. message_created_at is when a
     conversation memory message was stored. document_available_in_thread_at is
-    when a document became available in this thread, not when the file was
+    when a document was added to this thread, not when the file was
     globally created or when the document was authored. web_search_performed_at
     is when cached web evidence was fetched, not when the page was published.
 
@@ -656,7 +656,7 @@ def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
             doc_lines.append(
                 f"  {d['index']}. {d['file_name']} "
                 f"(file_hash: {d['file_hash']} | source_type: {source_type} | "
-                f"document_available_in_thread_at: {available_at})"
+                f"added_to_thread_at: {available_at})"
             )
         doc_lines = "\n".join(doc_lines)
         parts.append(f"[UPLOADED DOCUMENTS — {len(docs)} file(s)]\n{doc_lines}")
@@ -976,7 +976,7 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
                 stype = meta.get("source_type", "pdf")
                 available_at = meta.get("document_available_in_thread_at")
                 availability = (
-                    f" | document_available_in_thread_at={available_at}"
+                    f" | added_to_thread_at={available_at}"
                     if available_at else ""
                 )
                 lines.append(

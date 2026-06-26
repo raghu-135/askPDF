@@ -63,7 +63,7 @@ def _merge_metadata(chunk: Dict[str, Any], thread_doc_meta: Dict[str, Any]) -> D
     if thread_doc_meta.get("document_available_in_thread_at"):
         merged["document_available_in_thread_at"] = thread_doc_meta["document_available_in_thread_at"]
         merged["timeline_event_at"] = thread_doc_meta["document_available_in_thread_at"]
-        merged["timeline_event_type"] = "document_available_in_thread"
+        merged["timeline_event_type"] = "document_added_to_thread"
     return merged
 
 

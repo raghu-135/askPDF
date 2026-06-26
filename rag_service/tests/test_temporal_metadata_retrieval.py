@@ -43,7 +43,7 @@ async def test_document_vector_properties_include_page_metadata_not_thread_tempo
                 "page_end": 4,
                 "pages": "3-4",
                 "timeline_event_at": "2026-06-25T19:00:00Z",
-                "timeline_event_type": "document_available_in_thread",
+                "timeline_event_type": "document_added_to_thread",
             }
         ],
     )
@@ -170,7 +170,7 @@ def test_document_grouping_uses_thread_availability_and_page_labels():
     assert "[Source: PDF: benefits.pdf, pages 3-4]" in context
     assert sources[0]["document_available_in_thread_at"] == "2026-06-25T19:00:00Z"
     assert sources[0]["timeline_event_at"] == "2026-06-25T19:00:00Z"
-    assert sources[0]["timeline_event_type"] == "document_available_in_thread"
+    assert sources[0]["timeline_event_type"] == "document_added_to_thread"
     assert sources[0]["page_start"] == 3
     assert sources[0]["page_end"] == 4
     assert sources[0]["pages"] == "3-4"
@@ -341,7 +341,7 @@ def test_document_grouping_ignores_stale_vector_temporal_metadata():
                 "metadata": {
                     "document_available_in_thread_at": "2026-01-01T00:00:00Z",
                     "timeline_event_at": "2026-01-01T00:00:00Z",
-                    "timeline_event_type": "document_available_in_thread",
+                    "timeline_event_type": "document_added_to_thread",
                     "pages": "5",
                 },
             }
@@ -432,7 +432,7 @@ def test_collect_tool_sources_preserves_timeline_events():
                         "document_source_type": "pdf",
                         "document_available_in_thread_at": "2026-06-25T19:00:00Z",
                         "timeline_event_at": "2026-06-25T19:00:00Z",
-                        "timeline_event_type": "document_available_in_thread",
+                        "timeline_event_type": "document_added_to_thread",
                     },
                     {
                         "source_type": "web_cache",
@@ -452,7 +452,7 @@ def test_collect_tool_sources_preserves_timeline_events():
 
     assert used_chat_ids == ["msg-1"]
     assert document_sources[0]["file_hash"] == "file-1"
-    assert document_sources[0]["timeline_event_type"] == "document_available_in_thread"
+    assert document_sources[0]["timeline_event_type"] == "document_added_to_thread"
     assert web_sources[0]["url"] == "https://example.com"
     assert web_sources[0]["timeline_event_type"] == "web_search_performed"
 
@@ -512,7 +512,7 @@ async def test_search_thread_timeline_returns_sorted_mixed_source_events(monkeyp
     events = payload["__timeline_events__"]
 
     assert [event["timeline_event_type"] for event in events] == [
-        "document_available_in_thread",
+        "document_added_to_thread",
         "message_created",
         "web_search_performed",
     ]
