@@ -58,7 +58,7 @@ A **private, local PDF research assistant** that reads your documents aloud and 
 
 ### 3. Start the App
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 ### 4. Use It!
@@ -131,7 +131,7 @@ docker-compose up --build
 ├─────────────────┬─────────────────┬─────────────────┬─────────────────┬─────────────────────┤
 │    Frontend     │   RAG Service   │  Browser Capture│   PostgreSQL    │      Weaviate       │
 │   (Next.js)     │    (FastAPI)    │   (Selenium)    │   (Primary DB)  │   (Vector DB)       │
-│   Port: 3000    │   Port: 8000    │   Port: 7800    │   Port: 5432    │   Port: 8080        │
+│   Port: 3000    │   Port: 8000    │   Port: 8090    │   Port: 5432    │   Port: 8080        │
 └─────────────────┴─────────────────┴─────────────────┴─────────────────┴─────────────────────┘
                                                    │
                                                    ▼
@@ -148,7 +148,7 @@ docker-compose up --build
 |---------|------|-------------|
 | **Frontend** | 3000 | Next.js React app with PDF viewer, chat UI, thread management, and TTS |
 | **RAG Service** | 8000 | FastAPI server for PDF processing, document indexing, AI chat, thread/message/file management |
-| **Browser Capture** | 7800 | Selenium-based service for interactive webpage capture and PDF conversion |
+| **Browser Capture** | 8090 | Selenium-based service for interactive webpage capture and PDF conversion |
 | **PostgreSQL** | 5432 | Primary database for threads, messages, files, settings, and annotations |
 | **Weaviate** | 8080 | Vector database for semantic and memory search |
 | **DMR/Ollama/LMStudio** | 12434 | Local LLM server (external, user-provided) |
@@ -338,9 +338,13 @@ Environment variables are now managed using a `.env` file for better security an
 
 2. **Apply Changes**: After modifying environment variables, restart the services:
    ```bash
-   docker-compose down
-   docker-compose up --build
+   docker compose down
+   docker compose up --build
    ```
+
+### Docker Portability
+
+The Compose setup builds the frontend with `npm ci` inside Docker and runs the production Next.js standalone server, so users do not need Node or npm installed locally.
 
 ### Model Requirements
 

@@ -1,11 +1,11 @@
-version: '3.8'
-
 services:
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      target: dev
+      target: runtime
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
     ports:
       - "3000:3000"
     environment:
@@ -15,10 +15,6 @@ services:
     depends_on:
       rag-service:
         condition: service_healthy
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - frontend_next:/app/.next
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
       interval: 30s
@@ -134,7 +130,6 @@ services:
       start_period: 60s
 
 volumes:
-  frontend_next:
   weaviate_data:
   pdf_data:
   postgres_data:
