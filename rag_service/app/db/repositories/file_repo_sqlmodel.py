@@ -7,7 +7,6 @@ parsed sentences management.
 """
 
 import json
-from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +21,7 @@ from app.db.status import (
     _collapse_process_sections,
     get_scoped_indexing_status,
 )
+from app.time_utils import iso_utc_z
 
 # Default values for file columns
 DEFAULT_SENTENCES_JSON = {"version": "1.0", "sentences": None}
@@ -164,7 +164,7 @@ class FileRepository:
             # Get existing status and merge
             existing = _normalize_file_status(file.file_status or {})
             merged = {**existing, **status_data}
-            merged["updated_at"] = datetime.utcnow().isoformat()
+            merged["updated_at"] = iso_utc_z()
             normalized = _normalize_file_status(merged)
 
             # Use replace_jsonb_field for complete replacement
@@ -321,7 +321,7 @@ class FileRepository:
             section_payload.pop("error", None)
 
             merged = {**current, section: section_payload, f"{section}_status": section_payload}
-            merged["updated_at"] = datetime.utcnow().isoformat()
+            merged["updated_at"] = iso_utc_z()
             normalized = _normalize_file_status(merged)
 
             replace_jsonb_field(file, "file_status", normalized)
@@ -387,7 +387,7 @@ class FileRepository:
                     "models": models,
                 },
             }
-            merged["updated_at"] = datetime.utcnow().isoformat()
+            merged["updated_at"] = iso_utc_z()
             normalized = _normalize_file_status(merged)
 
             replace_jsonb_field(file, "file_status", normalized)
@@ -482,7 +482,7 @@ class FileRepository:
 
             # Merge into status and use replace_jsonb_field for atomic update
             merged = {**current_status, "parsing": parsing, "parsing_status": parsing}
-            merged["updated_at"] = datetime.utcnow().isoformat()
+            merged["updated_at"] = iso_utc_z()
             normalized = _normalize_file_status(merged)
 
             replace_jsonb_field(file, "file_status", normalized)
@@ -518,7 +518,7 @@ class FileRepository:
             parsing["error"] = error
 
             merged = {**current_status, "parsing": parsing, "parsing_status": parsing}
-            merged["updated_at"] = datetime.utcnow().isoformat()
+            merged["updated_at"] = iso_utc_z()
             normalized = _normalize_file_status(merged)
 
             replace_jsonb_field(file, "file_status", normalized)

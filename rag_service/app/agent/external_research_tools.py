@@ -10,7 +10,6 @@ import importlib
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from langchain_community.tools import DuckDuckGoSearchResults
@@ -18,14 +17,11 @@ from langchain_core.tools import BaseTool, tool
 from langchain_core.runnables import RunnableConfig
 
 from app.rag.retrieval import rerank_document_chunks
+from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
 
 search_tool = DuckDuckGoSearchResults(output_format="list", num_results=6)
-
-
-def _iso_utc() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _import_attr(module_path: str, attr_name: str) -> Any:
@@ -133,7 +129,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         result = await _run_web_search(query, max_results=6)
         if not result:
             return "Web search returned no usable text."
-        web_search_performed_at = _iso_utc()
+        web_search_performed_at = iso_utc_z()
 
         texts = result["texts"]
         urls = result["urls"]

@@ -5,6 +5,7 @@ weaviate-client
 langchain-text-splitters
 httpx
 pydantic
+python-dateutil>=2.9.0
 unstructured[pdf]
 langchain-openai
 

@@ -13,6 +13,7 @@ from enum import Enum
 
 from sqlalchemy import Column, DateTime, func, Index, String, Integer, Float, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
+from app.time_utils import iso_utc_z, utc_now
 from sqlmodel import SQLModel, Field, Relationship
 
 
@@ -61,7 +62,7 @@ class ThreadFile(SQLModel, table=True):
         sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), primary_key=True)
     )
     added_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
 
@@ -82,7 +83,7 @@ class Thread(SQLModel, table=True):
         sa_column=Column(JSONB, default=dict)
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     updated_at: Optional[datetime] = Field(
@@ -128,7 +129,7 @@ class File(SQLModel, table=True):
     )
     parsed_sentences_json: Optional[str] = None
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     
@@ -151,7 +152,7 @@ class File(SQLModel, table=True):
         # Create new dict to ensure SQLAlchemy detects change
         new_status = dict(self.file_status)
         new_status[key] = value
-        new_status["updated_at"] = datetime.utcnow().isoformat()
+        new_status["updated_at"] = iso_utc_z()
         self.file_status = new_status
     
     __table_args__ = (
@@ -178,7 +179,7 @@ class Message(SQLModel, table=True):
         sa_column=Column(JSONB)
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     
@@ -202,7 +203,7 @@ class ThreadFileAnnotation(SQLModel, table=True):
     )
     annotations_json: str = Field(default="[]")
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     updated_at: Optional[datetime] = Field(
@@ -234,7 +235,7 @@ class ThreadStats(SQLModel, table=True):
         sa_column=Column(JSONB, default=dict)
     )
     last_updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     )
     

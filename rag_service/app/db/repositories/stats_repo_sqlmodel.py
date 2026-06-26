@@ -7,7 +7,6 @@ documents_meta handling.
 """
 
 import json
-from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,26 +16,7 @@ from sqlalchemy import func
 from app.db.models_sqlmodel import ThreadStats, Thread, Message, File, ThreadFile
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
-
-
-def _iso_utc(value: Any) -> Any:
-    if not value:
-        return value
-    if isinstance(value, datetime):
-        dt = value
-    else:
-        try:
-            raw = str(value)
-            if raw.endswith("Z"):
-                return raw
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        except Exception:
-            return value
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt.isoformat().replace("+00:00", "Z")
+from app.time_utils import maybe_iso_utc_z
 
 
 class StatsRepository:
@@ -308,7 +288,7 @@ class StatsRepository:
                 "file_hash": file.file_hash,
                 "source_type": file.source_type,
                 "file_path": file.file_path,
-                "document_available_in_thread_at": _iso_utc(added_at),
+                "document_available_in_thread_at": maybe_iso_utc_z(added_at),
             }
 
         return {

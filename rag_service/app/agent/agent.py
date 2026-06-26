@@ -45,6 +45,7 @@ from app.rag.retrieval import (
     rerank_document_chunks,
 )
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
+from app.time_utils import parse_datetime_utc
 
 logger = logging.getLogger(__name__)
 
@@ -131,21 +132,6 @@ class ThreadTimelineSearchInput(BaseModel):
     )
 
 
-def _parse_timeline_datetime(raw: Any) -> Optional[datetime]:
-    if not raw:
-        return None
-    try:
-        text = str(raw)
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        parsed = datetime.fromisoformat(text)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-    except Exception:
-        return None
-
-
 def _short_excerpt(text: str, limit: int = 260) -> str:
     clean = " ".join((text or "").split())
     if len(clean) <= limit:
@@ -154,7 +140,7 @@ def _short_excerpt(text: str, limit: int = 260) -> str:
 
 
 def _event_sort_key(event: Dict[str, Any], order: str) -> Any:
-    parsed = _parse_timeline_datetime(event.get("timeline_event_at"))
+    parsed = parse_datetime_utc(event.get("timeline_event_at"))
     missing_time = parsed is None
     if order == "oldest":
         return (missing_time, parsed or datetime.max.replace(tzinfo=timezone.utc))

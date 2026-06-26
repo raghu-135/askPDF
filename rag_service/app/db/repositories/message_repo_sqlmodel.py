@@ -7,7 +7,6 @@ using SQLModel with PostgreSQL, including web_sources JSONB handling.
 
 import uuid
 import json
-from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +15,7 @@ from sqlalchemy.future import select
 from app.db.models_sqlmodel import Message, MessageRole, Thread
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
+from app.time_utils import utc_now
 
 
 class MessageRepository:
@@ -44,7 +44,7 @@ class MessageRepository:
     ) -> Message:
         """Create a new message in a thread."""
         message_id = str(uuid.uuid4())
-        created_at = datetime.utcnow()
+        created_at = utc_now()
 
         message = Message(
             id=message_id,

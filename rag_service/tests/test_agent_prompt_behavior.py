@@ -51,7 +51,7 @@ def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
     assert "User timezone: America/Chicago" in context
     assert "User locale: en-US" in context
     assert "User-local current datetime: 2026-06-25T14:00:00-05:00" in context
-    assert "Server current UTC datetime: 2026-06-25T19:00:00+00:00" in context
+    assert "Server current UTC datetime: 2026-06-25T19:00:00Z" in context
 
 
 def test_system_prompt_includes_runtime_datetime_context():

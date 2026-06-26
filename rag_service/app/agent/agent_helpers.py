@@ -5,27 +5,13 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from app.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
 
 def build_chat_prompt() -> ChatPromptTemplate:
     return ChatPromptTemplate.from_messages(
         [("system", "{system_prompt}"), MessagesPlaceholder("messages")]
     )
-
-
-def _parse_client_now_iso(raw: Optional[str]) -> Optional[datetime]:
-    if not raw:
-        return None
-    try:
-        normalized = raw.strip()
-        if normalized.endswith("Z"):
-            normalized = normalized[:-1] + "+00:00"
-        parsed = datetime.fromisoformat(normalized)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-    except ValueError:
-        return None
 
 
 def format_runtime_datetime_context(
@@ -40,10 +26,7 @@ def format_runtime_datetime_context(
     The browser supplies user-local timezone/locale; the server clock remains
     authoritative so a misconfigured client clock cannot silently redefine now.
     """
-    server_now_utc = now_utc or datetime.now(timezone.utc)
-    if server_now_utc.tzinfo is None:
-        server_now_utc = server_now_utc.replace(tzinfo=timezone.utc)
-    server_now_utc = server_now_utc.astimezone(timezone.utc)
+    server_now_utc = parse_datetime_utc(now_utc) or utc_now()
 
     timezone_name = (client_timezone or "").strip()[:100] or "UTC"
     timezone_note = ""
@@ -56,7 +39,7 @@ def format_runtime_datetime_context(
 
     user_now = server_now_utc.astimezone(user_tz)
     locale = (client_locale or "").strip()[:50] or "unknown"
-    client_now = _parse_client_now_iso(client_now_iso)
+    client_now = parse_datetime_utc(client_now_iso)
     skew_note = ""
     if client_now:
         skew_seconds = abs((server_now_utc - client_now).total_seconds())
@@ -72,7 +55,7 @@ def format_runtime_datetime_context(
         f"User-local current datetime: {user_now.isoformat(timespec='seconds')}",
         f"User timezone: {timezone_name}",
         f"User locale: {locale}",
-        f"Server current UTC datetime: {server_now_utc.isoformat(timespec='seconds')}",
+        f"Server current UTC datetime: {iso_utc_z(server_now_utc).split('.')[0]}Z",
     ]
     if client_now_iso:
         lines.append(f"Browser-reported UTC datetime: {client_now_iso.strip()[:80]}")

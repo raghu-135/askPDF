@@ -38,6 +38,7 @@ from app.rag.retrieval import (
     group_document_chunks,
     rerank_document_chunks,
 )
+from app.time_utils import maybe_iso_utc_z
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ async def prefetch_context(
             text = (msg.context_compact or msg.content or "").strip()
             if not text:
                 continue
-            message_created_at = msg.created_at.isoformat() if hasattr(msg.created_at, "isoformat") else msg.created_at
+            message_created_at = maybe_iso_utc_z(msg.created_at)
             entry = f"{role} at {message_created_at}: {text}" if message_created_at else f"{role}: {text}"
             if used_chars + len(entry) > budget_chars:
                 break

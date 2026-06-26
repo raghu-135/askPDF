@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import traceback
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import BackgroundTasks
@@ -33,6 +32,7 @@ from app.db import (
 )
 from app.rag.indexer import index_document_for_thread
 from app.services.parsing_service import extract_text_with_coordinates
+from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
         if parsed and parsed.get("sentences"):
             return
 
-    started_at = datetime.utcnow().isoformat()
+    started_at = iso_utc_z()
     try:
         # Claim the parsing job using legacy function (this is already atomic via claim mechanism)
         claimed = await update_parsing_status(
@@ -168,7 +168,7 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
         }
 
         # ATOMIC: Store sentences AND update status to completed in ONE transaction
-        finished_at = datetime.utcnow().isoformat()
+        finished_at = iso_utc_z()
         success = await file_repo.complete_parsing_atomically(
             file_hash=file_hash,
             parsed_data_json=json.dumps(parsed_data),
@@ -182,7 +182,7 @@ async def _background_parse(file_hash: str, filename: str, backend_url: str = ""
 
     except Exception as e:
         traceback.print_exc()
-        finished_at = datetime.utcnow().isoformat()
+        finished_at = iso_utc_z()
         try:
             # ATOMIC: Update status to failed with error message
             await file_repo.fail_parsing_atomically(
@@ -207,7 +207,7 @@ async def _background_index(
     """
     Background task to index a document for a thread after parsing completes.
     """
-    started_at = datetime.utcnow().isoformat()
+    started_at = iso_utc_z()
     try:
         claimed = await update_indexing_status(
             file_hash=file_hash,
@@ -235,7 +235,7 @@ async def _background_index(
         await _background_parse(file_hash, file_name, backend_url)
     except Exception as e:
         traceback.print_exc()
-        finished_at = datetime.utcnow().isoformat()
+        finished_at = iso_utc_z()
         try:
             await update_indexing_status(
                 file_hash=file_hash,

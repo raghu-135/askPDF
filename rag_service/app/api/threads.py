@@ -25,6 +25,7 @@ from app.agent.agent import (
     get_tool_catalog,
     normalize_tool_instructions,
 )
+from app.time_utils import iso_utc_z
 from app.db import (
     ProcessStatus,
     delete_thread,
@@ -128,7 +129,7 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
             "name": thread.name,
             "embed_model": thread.embed_model,
             "settings": thread.settings,
-            "created_at": thread.created_at.isoformat(),
+            "created_at": iso_utc_z(thread.created_at),
         }
     except Exception as e:
         traceback.print_exc()
@@ -187,7 +188,7 @@ async def get_thread_endpoint(thread_id: str):
             "name": thread.name,
             "embed_model": thread.embed_model,
             "settings": thread.settings,
-            "created_at": thread.created_at.isoformat(),
+            "created_at": iso_utc_z(thread.created_at),
             "files": [
                 {
                     "file_hash": f.file_hash,
@@ -224,7 +225,7 @@ async def update_thread_endpoint(thread_id: str, req: ThreadUpdateRequest):
             "name": thread.name,
             "embed_model": thread.embed_model,
             "settings": thread.settings,
-            "created_at": thread.created_at.isoformat(),
+            "created_at": iso_utc_z(thread.created_at),
         }
     except HTTPException:
         raise

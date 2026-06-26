@@ -11,7 +11,6 @@ import os
 import json
 import logging
 import asyncio
-from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from app.db import (
     ProcessStatus,
@@ -36,31 +35,13 @@ from app.models.llm_server_client import (
     RATIO_MEMORY_HARD_LIMIT, CHARS_PER_TOKEN
 )
 from app.db.vector import get_vector_db
+from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
 
 TEMP_PDF_DIR = "/tmp/pdfs"
 os.makedirs(TEMP_PDF_DIR, exist_ok=True)
 _document_index_locks: Dict[str, asyncio.Lock] = {}
-
-
-def _iso_utc(value: Optional[Any] = None) -> str:
-    """Return an ISO-8601 UTC timestamp with a trailing Z."""
-    if value is None:
-        dt = datetime.now(timezone.utc)
-    elif isinstance(value, datetime):
-        dt = value
-    else:
-        raw = str(value)
-        if raw.endswith("Z"):
-            return raw
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt.isoformat().replace("+00:00", "Z")
 
 
 def _int_page(value: Any) -> Optional[int]:
@@ -487,13 +468,13 @@ async def index_document_for_thread(
     
     db_client = get_vector_db()
     metadata = metadata or {}
-    started_at = datetime.utcnow().isoformat()
+    started_at = iso_utc_z()
     total_chars = 0
     document_available_in_thread_at: Optional[str] = None
     try:
         association = await get_thread_file_association(thread_id, file_hash)
         if association and association.get("added_at"):
-            document_available_in_thread_at = _iso_utc(association["added_at"])
+            document_available_in_thread_at = iso_utc_z(association["added_at"])
             metadata["document_available_in_thread_at"] = document_available_in_thread_at
     except Exception as assoc_err:
         logger.warning(
@@ -519,7 +500,7 @@ async def index_document_for_thread(
                 model_status = get_scoped_indexing_status(file_status, embedding_model=embedding_model_name)
                 shared_chunks = await db_client.get_file_chunk_count(file_hash, embedding_model_name)
                 total_chars = int(model_status.get("total_chars", 0) or 0)
-                finished_at = datetime.utcnow().isoformat()
+                finished_at = iso_utc_z()
                 await update_indexing_status(
                     file_hash=file_hash,
                     status=ProcessStatus.COMPLETED.value,
@@ -573,7 +554,7 @@ async def index_document_for_thread(
                     embedding_model=embedding_model_name,
                     thread_id=thread_id,
                     started_at=started_at,
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=iso_utc_z(),
                     error="No text extracted from document",
                 )
                 return {"status": "error", "message": "No text extracted from document"}
@@ -617,7 +598,7 @@ async def index_document_for_thread(
             )
 
             total_chars = sum(len(c) for c in chunks)
-            finished_at = datetime.utcnow().isoformat()
+            finished_at = iso_utc_z()
             logger.info(f"Successfully indexed {indexed_count} chunks for thread {thread_id}")
 
             await update_indexing_status(
@@ -656,7 +637,7 @@ async def index_document_for_thread(
                 embedding_model=embedding_model_name,
                 thread_id=thread_id,
                 started_at=started_at,
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=iso_utc_z(),
                 error=str(e),
             )
         except Exception:
@@ -684,7 +665,7 @@ async def index_chat_memory_for_thread(
         if message_created_at is None:
             message = await get_message(message_id)
             message_created_at = getattr(message, "created_at", None) if message else None
-        message_created_at_iso = _iso_utc(message_created_at)
+        message_created_at_iso = iso_utc_z(message_created_at)
 
         # 1. Build compact memory text and chunk for indexing.
         compact_text, was_summarized = await build_compact_chat_memory_text(
@@ -754,7 +735,7 @@ async def index_chat_memory_from_compact_for_thread(
         if message_created_at is None:
             message = await get_message(message_id)
             message_created_at = getattr(message, "created_at", None) if message else None
-        message_created_at_iso = _iso_utc(message_created_at)
+        message_created_at_iso = iso_utc_z(message_created_at)
         chunks = split_chat_memory_text(compact_text)
         vectors = await generate_embeddings(chunks, embedding_model_name)
         indexed_count = await db_client.index_chat_memory(
@@ -805,7 +786,7 @@ async def index_web_search_for_thread(
     """
     db_client = get_vector_db()
     try:
-        web_search_performed_at_iso = _iso_utc(web_search_performed_at)
+        web_search_performed_at_iso = iso_utc_z(web_search_performed_at)
         vectors = await generate_embeddings(texts, embedding_model_name)
         
         # Validate vectors before indexing

@@ -49,6 +49,7 @@ from app.services.file_processing_service import (
     queue_file_processing,
 )
 from app.services.file_cleanup_service import cleanup_detached_file
+from app.time_utils import maybe_iso_utc_z
 
 router = APIRouter(tags=["files"])
 
@@ -389,8 +390,8 @@ async def get_thread_file_annotations_endpoint(thread_id: str, file_hash: str):
             thread_id=thread_id,
             file_hash=file_hash,
             annotations=row["annotations"],
-            created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
-            updated_at=row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else row["updated_at"],
+            created_at=maybe_iso_utc_z(row["created_at"]),
+            updated_at=maybe_iso_utc_z(row["updated_at"]),
         ).model_dump()
     except HTTPException:
         raise
@@ -419,8 +420,8 @@ async def update_thread_file_annotations_endpoint(
             thread_id=thread_id,
             file_hash=file_hash,
             annotations=row["annotations"],
-            created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else row["created_at"],
-            updated_at=row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else row["updated_at"],
+            created_at=maybe_iso_utc_z(row["created_at"]),
+            updated_at=maybe_iso_utc_z(row["updated_at"]),
         ).model_dump()
     except HTTPException:
         raise
