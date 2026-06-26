@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.agent.agent import build_system_prompt
+from app.agent.agent import build_system_prompt, _format_prefetch_for_prompt
 from app.agent.agent_helpers import format_runtime_datetime_context
 
 
@@ -75,3 +75,28 @@ def test_system_prompt_includes_temporal_metadata_contract():
     assert "web_search_performed_at" in prompt
     assert "timeline_event_at" in prompt
     assert "search_thread_timeline" in prompt
+
+
+def test_prefetch_document_inventory_includes_document_level_counts():
+    prompt = _format_prefetch_for_prompt(
+        {
+            "documents": [
+                {
+                    "index": 1,
+                    "file_name": "report.pdf",
+                    "file_hash": "file-1",
+                    "source_type": "pdf",
+                    "document_available_in_thread_at": "2026-06-26T00:00:00Z",
+                    "page_count": 4,
+                    "word_count": 123,
+                    "sentence_count": 12,
+                    "chunk_count": 5,
+                }
+            ]
+        }
+    )
+
+    assert "pages: 4" in prompt
+    assert "words: 123" in prompt
+    assert "sentences: 12" in prompt
+    assert "chunks: 5" in prompt

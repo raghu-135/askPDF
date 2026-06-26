@@ -182,6 +182,16 @@ def _document_timeline_event(file_hash: str, meta: Dict[str, Any]) -> Optional[D
         return None
     file_name = meta.get("file_name") or file_hash
     source_type = meta.get("source_type") or "pdf"
+    details = []
+    for label, field in (
+        ("pages", "page_count"),
+        ("words", "word_count"),
+        ("sentences", "sentence_count"),
+    ):
+        value = meta.get(field)
+        if value not in (None, ""):
+            details.append(f"{value} {label}")
+    detail_text = f" ({', '.join(details)})" if details else ""
     return {
         "source_type": "document",
         "timeline_event_at": available_at,
@@ -191,7 +201,13 @@ def _document_timeline_event(file_hash: str, meta: Dict[str, Any]) -> Optional[D
         "file_name": file_name,
         "document_source_type": source_type,
         "label": f"Document added to thread: {file_name}",
-        "excerpt": f"{file_name} was added to this thread.",
+        "excerpt": f"{file_name} was added to this thread{detail_text}.",
+        "page_count": meta.get("page_count"),
+        "word_count": meta.get("word_count"),
+        "sentence_count": meta.get("sentence_count"),
+        "languages": meta.get("languages"),
+        "filetype": meta.get("filetype"),
+        "element_types": meta.get("element_types"),
     }
 
 
@@ -653,10 +669,20 @@ def _format_prefetch_for_prompt(bundle: Optional[Dict[str, Any]]) -> str:
         for d in docs:
             source_type = d.get("source_type") or "unknown"
             available_at = d.get("document_available_in_thread_at") or "unknown"
+            counts = []
+            if d.get("page_count") not in (None, ""):
+                counts.append(f"pages: {d['page_count']}")
+            if d.get("word_count") not in (None, ""):
+                counts.append(f"words: {d['word_count']}")
+            if d.get("sentence_count") not in (None, ""):
+                counts.append(f"sentences: {d['sentence_count']}")
+            if d.get("chunk_count") not in (None, ""):
+                counts.append(f"chunks: {d['chunk_count']}")
+            counts_text = f" | {' | '.join(counts)}" if counts else ""
             doc_lines.append(
                 f"  {d['index']}. {d['file_name']} "
                 f"(file_hash: {d['file_hash']} | source_type: {source_type} | "
-                f"added_to_thread_at: {available_at})"
+                f"added_to_thread_at: {available_at}{counts_text})"
             )
         doc_lines = "\n".join(doc_lines)
         parts.append(f"[UPLOADED DOCUMENTS — {len(docs)} file(s)]\n{doc_lines}")
@@ -972,16 +998,27 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
                 status = meta.get("indexing_status", "unknown")
                 chunks = meta.get("chunk_count", 0)
                 chars = meta.get("total_chars", 0)
+                words = meta.get("word_count")
+                pages = meta.get("page_count")
+                sentences = meta.get("sentence_count")
                 name = meta.get("file_name", fh)
                 stype = meta.get("source_type", "pdf")
                 available_at = meta.get("document_available_in_thread_at")
+                doc_counts = []
+                if pages not in (None, ""):
+                    doc_counts.append(f"{pages} pages")
+                if words not in (None, ""):
+                    doc_counts.append(f"{words:,} words")
+                if sentences not in (None, ""):
+                    doc_counts.append(f"{sentences:,} sentences")
+                counts_text = f" | {', '.join(doc_counts)}" if doc_counts else ""
                 availability = (
                     f" | added_to_thread_at={available_at}"
                     if available_at else ""
                 )
                 lines.append(
                     f"  {i}. file_name={name} | file_hash={fh} | source_type={stype} | "
-                    f"{chunks} chunks | {chars:,} chars | {status}{availability}"
+                    f"{chunks} chunks | {chars:,} chars{counts_text} | {status}{availability}"
                 )
         else:
             lines.append("Documents   : none uploaded yet")

@@ -118,6 +118,13 @@ async def prefetch_context(
                 "file_hash": fh,
                 "source_type": meta.get("source_type"),
                 "document_available_in_thread_at": meta.get("document_available_in_thread_at"),
+                "chunk_count": meta.get("chunk_count"),
+                "total_chars": meta.get("total_chars"),
+                "word_count": meta.get("word_count"),
+                "page_count": meta.get("page_count"),
+                "sentence_count": meta.get("sentence_count"),
+                "languages": meta.get("languages"),
+                "filetype": meta.get("filetype"),
             }
             for i, (fh, meta) in enumerate(shape["documents"].items())
         ]

@@ -202,6 +202,12 @@ def collect_tool_sources(
                 "document_available_in_thread_at": event.get("document_available_in_thread_at"),
                 "timeline_event_at": event.get("timeline_event_at"),
                 "timeline_event_type": event.get("timeline_event_type"),
+                "page_count": event.get("page_count"),
+                "word_count": event.get("word_count"),
+                "sentence_count": event.get("sentence_count"),
+                "languages": event.get("languages"),
+                "filetype": event.get("filetype"),
+                "element_types": event.get("element_types"),
             })
         elif source_type == "web_cache":
             web_sources.append({

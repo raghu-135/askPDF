@@ -177,14 +177,24 @@ def test_document_grouping_uses_thread_availability_and_page_labels():
 
 
 class FakeElement:
-    def __init__(self, text, page_number=None, orig_elements=None):
+    def __init__(self, text, page_number=None, orig_elements=None, metadata=None):
         self.text = text
-        self.metadata = SimpleNamespace(page_number=page_number)
+        self.metadata = metadata or SimpleNamespace(page_number=page_number)
         if orig_elements is not None:
             self.metadata.orig_elements = orig_elements
 
     def __str__(self):
         return self.text
+
+
+class FakeMetadata:
+    def __init__(self, **values):
+        self.values = values
+        for key, value in values.items():
+            setattr(self, key, value)
+
+    def to_dict(self):
+        return dict(self.values)
 
 
 def test_page_range_helpers_handle_contiguous_non_contiguous_and_invalid_pages():
@@ -250,6 +260,71 @@ def test_non_contiguous_chunk_with_unpaged_child_falls_back_to_original_chunk():
     assert chunks[0]["metadata"]["page_end"] == 3
 
 
+def test_document_metadata_summary_uses_unstructured_element_metadata():
+    elements = [
+        FakeElement(
+            "Title",
+            metadata=FakeMetadata(page_number=1, languages=["eng"], filetype="application/pdf"),
+        ),
+        FakeElement(
+            "Body",
+            metadata=FakeMetadata(page_number=2, languages=["eng", "spa"], filetype="application/pdf"),
+        ),
+    ]
+
+    summary = indexer._document_metadata_from_unstructured_elements(elements)
+
+    assert summary["page_count"] == 2
+    assert summary["languages"] == ["eng", "spa"]
+    assert summary["filetype"] == "application/pdf"
+    assert summary["element_types"] == {"FakeElement": 2}
+
+
+def test_document_aggregate_helpers_count_pages_and_words_from_chunks():
+    chunks = [
+        {"text": "one two", "metadata": {"pages": "1-2"}},
+        {"text": "three", "metadata": {"pages": "4"}},
+    ]
+
+    assert indexer._page_count_from_chunks(chunks) == 3
+    assert indexer._word_count(indexer._chunk_texts(chunks)) == 3
+
+
+@pytest.mark.asyncio
+async def test_upsert_document_stats_persists_document_level_metadata(monkeypatch):
+    upsert = AsyncMock()
+    monkeypatch.setattr(
+        indexer,
+        "get_file",
+        AsyncMock(return_value=SimpleNamespace(file_name="report.pdf", source_type="pdf")),
+    )
+    monkeypatch.setattr(indexer, "upsert_document_in_stats", upsert)
+
+    await indexer._upsert_document_stats(
+        thread_id="thread-1",
+        file_hash="file-1",
+        metadata={
+            "word_count": 123,
+            "page_count": 4,
+            "sentence_count": 12,
+            "languages": ["eng"],
+            "filetype": "application/pdf",
+            "element_types": {"Title": 1, "NarrativeText": 3},
+        },
+        chunk_count=5,
+        total_chars=900,
+        indexed_at="2026-06-26T00:00:00Z",
+    )
+
+    stored = upsert.call_args.args[2]
+    assert stored["word_count"] == 123
+    assert stored["page_count"] == 4
+    assert stored["sentence_count"] == 12
+    assert stored["languages"] == ["eng"]
+    assert stored["filetype"] == "application/pdf"
+    assert stored["element_types"] == {"Title": 1, "NarrativeText": 3}
+
+
 def test_blank_page_pdf_does_not_leave_single_non_contiguous_chunk(tmp_path):
     fitz = pytest.importorskip("fitz")
     from unstructured.chunking.title import chunk_by_title
@@ -313,9 +388,15 @@ async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_m
     monkeypatch.setattr(indexer, "upsert_document_in_stats", AsyncMock())
     monkeypatch.setattr(
         indexer,
-        "get_chunks_with_metadata",
-        AsyncMock(return_value=[{"text": "Chunk text", "metadata": {"pages": "3", "page_start": 3, "page_end": 3}}]),
+        "get_chunks_with_document_metadata",
+        AsyncMock(
+            return_value=(
+                [{"text": "Chunk text", "metadata": {"pages": "3", "page_start": 3, "page_end": 3}}],
+                {"page_count": 1, "languages": ["eng"], "filetype": "application/pdf"},
+            )
+        ),
     )
+    monkeypatch.setattr(indexer, "get_file_parsed_sentences", AsyncMock(return_value={"sentences": [{"text": "Chunk text"}]}))
     monkeypatch.setattr(indexer, "generate_embeddings", AsyncMock(return_value=[[0.1, 0.2]]))
 
     result = await indexer.index_document_for_thread(
@@ -330,6 +411,46 @@ async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_m
     assert "timeline_event_at" not in metadata
     assert "timeline_event_type" not in metadata
     assert metadata["pages"] == "3"
+
+    stats_meta = indexer.upsert_document_in_stats.call_args.args[2]
+    assert stats_meta["page_count"] == 1
+    assert stats_meta["word_count"] == 2
+    assert stats_meta["sentence_count"] == 1
+    assert stats_meta["languages"] == ["eng"]
+    assert stats_meta["filetype"] == "application/pdf"
+
+
+@pytest.mark.asyncio
+async def test_reused_embedding_stats_update_does_not_write_zero_total_chars(monkeypatch):
+    fake_db = SimpleNamespace(
+        has_file_indexed=AsyncMock(return_value=True),
+        get_file_chunk_count=AsyncMock(return_value=7),
+    )
+    upsert = AsyncMock()
+
+    monkeypatch.setattr(indexer, "get_vector_db", lambda: fake_db)
+    monkeypatch.setattr(indexer, "get_thread_file_association", AsyncMock(return_value=None))
+    monkeypatch.setattr(indexer, "get_file_status", AsyncMock(return_value={"indexing": {"status": "completed"}}))
+    monkeypatch.setattr(
+        indexer,
+        "get_file",
+        AsyncMock(return_value=SimpleNamespace(file_name="cached.pdf", source_type="pdf")),
+    )
+    monkeypatch.setattr("app.db.update_indexing_status", AsyncMock())
+    monkeypatch.setattr(indexer, "upsert_document_in_stats", upsert)
+
+    result = await indexer.index_document_for_thread(
+        thread_id="thread-1",
+        file_hash="file-1",
+        embedding_model_name="embed-1",
+    )
+
+    assert result["status"] == "success"
+    stored = upsert.call_args.args[2]
+    assert stored["chunk_count"] == 7
+    assert "total_chars" not in stored
+    assert "word_count" not in stored
+    assert "page_count" not in stored
 
 
 def test_document_grouping_ignores_stale_vector_temporal_metadata():
@@ -433,6 +554,9 @@ def test_collect_tool_sources_preserves_timeline_events():
                         "document_available_in_thread_at": "2026-06-25T19:00:00Z",
                         "timeline_event_at": "2026-06-25T19:00:00Z",
                         "timeline_event_type": "document_added_to_thread",
+                        "page_count": 4,
+                        "word_count": 123,
+                        "sentence_count": 12,
                     },
                     {
                         "source_type": "web_cache",
@@ -453,8 +577,49 @@ def test_collect_tool_sources_preserves_timeline_events():
     assert used_chat_ids == ["msg-1"]
     assert document_sources[0]["file_hash"] == "file-1"
     assert document_sources[0]["timeline_event_type"] == "document_added_to_thread"
+    assert document_sources[0]["page_count"] == 4
+    assert document_sources[0]["word_count"] == 123
+    assert document_sources[0]["sentence_count"] == 12
     assert web_sources[0]["url"] == "https://example.com"
     assert web_sources[0]["timeline_event_type"] == "web_search_performed"
+
+
+@pytest.mark.asyncio
+async def test_get_thread_shape_surfaces_document_level_counts(monkeypatch):
+    import app.db as db_module
+
+    monkeypatch.setattr(
+        db_module,
+        "get_thread_shape",
+        AsyncMock(
+            return_value={
+                "total_qa_pairs": 0,
+                "avg_qa_chars": 0,
+                "total_qa_chars": 0,
+                "documents": {
+                    "file-1": {
+                        "file_name": "report.pdf",
+                        "source_type": "pdf",
+                        "chunk_count": 5,
+                        "total_chars": 900,
+                        "word_count": 123,
+                        "page_count": 4,
+                        "sentence_count": 12,
+                        "indexing_status": "completed",
+                    }
+                },
+            }
+        ),
+    )
+
+    output = await agent_module.get_thread_shape.ainvoke(
+        {},
+        config={"configurable": {"thread_id": "thread-1"}},
+    )
+
+    assert "4 pages" in output
+    assert "123 words" in output
+    assert "12 sentences" in output
 
 
 @pytest.mark.asyncio
