@@ -35,6 +35,7 @@ CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 
 BROWSER_DEBUG_URL = os.environ.get("BROWSER_DEBUG_URL", "localhost:9222")
 FILE_HASH_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+CAPTURE_READY_TIMEOUT_MS = int(os.environ.get("CAPTURE_READY_TIMEOUT_MS", "8000"))
 
 # HTTP session with connection pooling for CDP requests
 _cdp_session = requests.Session()
@@ -54,6 +55,21 @@ class CaptureResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+async def _send_cdp_command(websocket, msg_id, method, params=None):
+    """Send a CDP command and skip async event messages until its response arrives."""
+    payload = {"id": msg_id, "method": method}
+    if params is not None:
+        payload["params"] = params
+
+    await websocket.send(json.dumps(payload))
+
+    while True:
+        response = await websocket.recv()
+        result = json.loads(response)
+        if result.get("id") == msg_id:
+            return result
 
 
 async def get_active_tab_via_cdp():
@@ -123,21 +139,14 @@ async def _wait_for_content_ready(websocket, max_wait_ms=5000, poll_interval_ms=
     
     while (time.time() * 1000 - start_time) < max_wait_ms:
         # Check document ready state and content length
-        await websocket.send(json.dumps({
-            "id": msg_id,
-            "method": "Runtime.evaluate",
-            "params": {
+        result = await _send_cdp_command(
+            websocket,
+            msg_id,
+            "Runtime.evaluate",
+            {
                 "expression": "JSON.stringify({readyState: document.readyState, bodyLength: document.body ? document.body.innerHTML.length : 0, hasContent: document.querySelector('article, main, .content, [class*=reader], [class*=article]') !== null})"
             }
-        }))
-        
-        response = await websocket.recv()
-        result = json.loads(response)
-        
-        # Handle console messages
-        while 'method' in result:
-            response = await websocket.recv()
-            result = json.loads(response)
+        )
         
         if 'result' in result and 'result' in result['result'] and 'value' in result['result']['result']:
             try:
@@ -335,6 +344,95 @@ def strip_pdf_link_annotations(pdf_data):
         return pdf_data
 
 
+async def prepare_page_for_pdf(websocket, max_wait_ms=CAPTURE_READY_TIMEOUT_MS):
+    """Best-effort page settling before printToPDF, bounded by max_wait_ms."""
+    script = f"""
+    (async () => {{
+      const deadline = Date.now() + {max_wait_ms};
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const remaining = () => Math.max(0, deadline - Date.now());
+      const timed = (promise, ms) => Promise.race([promise, sleep(Math.max(0, ms))]);
+
+      const state = {{
+        readyState: document.readyState,
+        bodyLength: document.body ? document.body.innerHTML.length : 0,
+        imageCount: document.images ? document.images.length : 0,
+        pendingImages: 0,
+        scrolled: false,
+        timedOut: false,
+      }};
+
+      while (document.readyState !== "complete" && remaining() > 0) {{
+        await sleep(100);
+      }}
+
+      try {{
+        if (document.fonts && document.fonts.ready && remaining() > 0) {{
+          await timed(document.fonts.ready, Math.min(1500, remaining()));
+        }}
+      }} catch (_err) {{}}
+
+      const originalX = window.scrollX || 0;
+      const originalY = window.scrollY || 0;
+      const doc = document.documentElement;
+      const body = document.body;
+      const scrollHeight = Math.max(
+        body ? body.scrollHeight : 0,
+        doc ? doc.scrollHeight : 0
+      );
+      const viewportHeight = window.innerHeight || 800;
+      const steps = Math.min(10, Math.max(1, Math.ceil(scrollHeight / viewportHeight)));
+
+      if (scrollHeight > viewportHeight * 1.25) {{
+        for (let i = 0; i < steps && remaining() > 250; i += 1) {{
+          const y = Math.round((scrollHeight - viewportHeight) * (i / Math.max(1, steps - 1)));
+          window.scrollTo(0, y);
+          await sleep(150);
+        }}
+        window.scrollTo(originalX, originalY);
+        await sleep(Math.min(250, remaining()));
+        state.scrolled = true;
+      }}
+
+      while (remaining() > 0) {{
+        const images = Array.from(document.images || []);
+        const pending = images.filter((img) => !img.complete).length;
+        state.pendingImages = pending;
+        if (pending === 0) break;
+        await sleep(200);
+      }}
+
+      state.readyState = document.readyState;
+      state.bodyLength = document.body ? document.body.innerHTML.length : 0;
+      state.pendingImages = Array.from(document.images || []).filter((img) => !img.complete).length;
+      state.timedOut = remaining() <= 0;
+      return JSON.stringify(state);
+    }})()
+    """
+
+    try:
+        result = await _send_cdp_command(
+            websocket,
+            50,
+            "Runtime.evaluate",
+            {
+                "expression": script,
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+        )
+        value = result.get("result", {}).get("result", {}).get("value")
+        state = json.loads(value) if value else {}
+        if state.get("timedOut"):
+            logger.warning(f"Page readiness cutoff hit after {max_wait_ms}ms: {state}")
+        else:
+            logger.info(f"Page prepared for PDF: {state}")
+        return state
+    except Exception as e:
+        logger.warning(f"Page readiness preparation failed; continuing to PDF: {e}")
+        return {}
+
+
 async def generate_pdf_via_cdp(websocket_url, pdf_options):
     """Generate PDF using direct CDP WebSocket connection"""
     logger.info(f"Connecting to WebSocket: {websocket_url}")
@@ -342,21 +440,12 @@ async def generate_pdf_via_cdp(websocket_url, pdf_options):
         # Increase max_size to 100MB to handle large PDFs
         async with websockets.connect(websocket_url, max_size=100*1024*1024) as websocket:
             # Enable Page domain
-            await websocket.send(json.dumps({
-                "id": 1,
-                "method": "Page.enable"
-            }))
-            await websocket.recv()  # Acknowledgment
+            await _send_cdp_command(websocket, 1, "Page.enable")
+
+            await prepare_page_for_pdf(websocket)
             
             # Generate PDF
-            await websocket.send(json.dumps({
-                "id": 2,
-                "method": "Page.printToPDF",
-                "params": pdf_options
-            }))
-            
-            response = await websocket.recv()
-            result = json.loads(response)
+            result = await _send_cdp_command(websocket, 2, "Page.printToPDF", pdf_options)
 
             if 'result' in result and 'data' in result['result']:
                 pdf_data = base64.b64decode(result['result']['data'])
