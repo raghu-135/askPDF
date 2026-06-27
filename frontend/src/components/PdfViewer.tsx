@@ -51,24 +51,16 @@ import {
   AnnotationLayer,
   AnnotationPluginPackage,
   useAnnotation,
-  useAnnotationCapability,
-  LockModeType,
   type AnnotationSelectionMenuProps,
 } from "@embedpdf/plugin-annotation/react";
 import { HistoryPluginPackage } from "@embedpdf/plugin-history";
 import { ThumbnailPluginPackage } from "@embedpdf/plugin-thumbnail/react";
-import {
-  useInteractionManager,
-  useInteractionManagerCapability,
-} from "@embedpdf/plugin-interaction-manager/react";
 import { useSelectionCapability } from "@embedpdf/plugin-selection/react";
 import {
   Box,
   IconButton,
-  Stack,
   Tooltip,
   Typography,
-  Divider,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
 import { useHistoryCapability } from "@embedpdf/plugin-history/react";
@@ -77,9 +69,12 @@ import { usePersistAnnotations } from "../hooks/usePersistAnnotations";
 import { AnnotationToolbar } from "./annotation/AnnotationToolbar";
 import { AnnotationSelectionMenu } from "./annotation/AnnotationSelectionMenu";
 import { STANDARD_COLORS } from "./annotation/constants";
-import AddCommentIcon from "@mui/icons-material/AddComment";
-import DeleteIcon from "@mui/icons-material/Delete";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import VolumeUpIcon from "@mui/icons-material/VolumeUp";
+import {
+  findSentenceForSelection,
+  type SentenceWithPageBBoxes,
+} from "../lib/pdf-utils";
 
 
 type BBox = {
@@ -115,6 +110,9 @@ type Sentence = {
   bboxes: BBox[];
   words?: Word[];
 };
+
+type PageSentence = Sentence & SentenceWithPageBBoxes<BBox>;
+type SentencesByPage = { [key: number]: PageSentence[] };
 
 type Props = {
   pdfUrl: string;
@@ -221,8 +219,8 @@ function buildPlugins(pdfUrl: string) {
   ];
 }
 
-function sentencesByPageMap(sentences: Sentence[] | null) {
-  const map: { [key: number]: (Sentence & { pageBBoxes: BBox[] })[] } = {};
+function sentencesByPageMap(sentences: Sentence[] | null): SentencesByPage {
+  const map: SentencesByPage = {};
   if (!sentences) return map;
   sentences.forEach((s) => {
     if (!s.bboxes) return;
@@ -239,12 +237,13 @@ function sentencesByPageMap(sentences: Sentence[] | null) {
   return map;
 }
 
-function SelectionCopyMenu({
+function SelectionActionMenu({
   selected,
   menuWrapperProps,
   rect,
   documentId,
-}: SelectionSelectionMenuProps & { documentId: string }) {
+  onReadAloud,
+}: SelectionSelectionMenuProps & { documentId: string; onReadAloud: () => void }) {
   const { provides: selectionCapability } = useSelectionCapability();
 
   if (!selected) return null;
@@ -262,6 +261,19 @@ function SelectionCopyMenu({
           gap: 0.5,
         }}
       >
+        <Tooltip title="Read aloud">
+          <IconButton
+            size="small"
+            onClick={onReadAloud}
+            sx={{
+              bgcolor: "background.paper",
+              boxShadow: 1,
+              "&:hover": { bgcolor: "background.default" },
+            }}
+          >
+            <VolumeUpIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <Tooltip title="Copy selected text">
           <IconButton
             size="small"
@@ -330,14 +342,8 @@ function EmbedPdfDocumentBody({
   const { provides: zoomScope } = useZoom(documentId);
   const zoomRef = useRef(zoomScope);
   zoomRef.current = zoomScope;
-  const isResizingRef = useRef(isResizing);
-  isResizingRef.current = isResizing;
 
-  const byPage = useMemo(() => {
-    const map = sentencesByPageMap(sentences);
-    console.log('[PdfViewer] Sentences by page:', Object.keys(map).map(k => ({ page: k, count: map[k].length })));
-    return map;
-  }, [sentences]);
+  const byPage = useMemo(() => sentencesByPageMap(sentences), [sentences]);
 
   const { provides: annotationApi } = useAnnotation(documentId);
   const { provides: selectionCapability } = useSelectionCapability();
@@ -570,39 +576,18 @@ function EmbedPdfDocumentBody({
     };
   }, [documentId]);
 
+  const handleReadSelectedTextAloud = useCallback(
+    () => {
+      const selections = selectionCapability?.getFormattedSelection(documentId) || [];
+      const sentence = findSentenceForSelection(selections, byPage);
 
-
-  const handlePageDoubleClickCapture = useCallback(
-    (e: React.MouseEvent, pageNumber: number) => {
-      if (e.detail !== 2) return;
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const x = (e.clientX - rect.left) / rect.width;
-      const y = (e.clientY - rect.top) / rect.height;
-
-      const pageData = byPage[pageNumber] || [];
-      for (const sentence of pageData) {
-        for (const bbox of sentence.pageBBoxes) {
-          const bLeft = bbox.x / bbox.page_width;
-          const bTop = bbox.y / bbox.page_height;  // Already top-left origin
-          const bWidth = bbox.width / bbox.page_width;
-          const bHeight = bbox.height / bbox.page_height;
-
-          if (
-            x >= bLeft &&
-            x <= bLeft + bWidth &&
-            y >= bTop &&
-            y <= bTop + bHeight
-          ) {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('[PdfViewer] Double-click jumped to sentence:', sentence.id, sentence.text?.substring(0, 50));
-            onJump(sentence.id);
-            return;
-          }
-        }
+      if (sentence) {
+        onJump(sentence.id);
       }
+
+      selectionCapability?.clear(documentId);
     },
-    [byPage, onJump],
+    [byPage, documentId, onJump, selectionCapability],
   );
 
   const handlePageClick = useCallback(
@@ -654,9 +639,6 @@ function EmbedPdfDocumentBody({
               height,
               marginBottom: 0,
             }}
-            onDoubleClickCapture={(e) =>
-              handlePageDoubleClickCapture(e, pageNumber)
-            }
             onContextMenuCapture={handlePageContextMenuCapture}
             onClick={handlePageClick}
           >
@@ -675,7 +657,11 @@ function EmbedPdfDocumentBody({
                 pageIndex={pageIndex}
                 scale={scale}
                 selectionMenu={(props) => (
-                  <SelectionCopyMenu {...props} documentId={documentId} />
+                  <SelectionActionMenu
+                    {...props}
+                    documentId={documentId}
+                    onReadAloud={handleReadSelectedTextAloud}
+                  />
                 )}
               />
               <AnnotationLayer
@@ -697,13 +683,6 @@ function EmbedPdfDocumentBody({
 
       const pageData = byPage[pageNumber] || [];
       const activeSentence = pageData.find((s) => s.id === currentId);
-      if (activeSentence) {
-        console.log('[PdfViewer] Rendering active sentence on page', pageNumber, ':', {
-          id: activeSentence.id,
-          text: activeSentence.text?.substring(0, 50),
-          pageBBoxes: activeSentence.pageBBoxes,
-        });
-      }
 
       return (
         <div
@@ -713,9 +692,6 @@ function EmbedPdfDocumentBody({
             height,
             marginBottom: 0,
           }}
-          onDoubleClickCapture={(e) =>
-            handlePageDoubleClickCapture(e, pageNumber)
-          }
           onContextMenuCapture={handlePageContextMenuCapture}
           onClick={handlePageClick}
         >
@@ -734,7 +710,11 @@ function EmbedPdfDocumentBody({
               pageIndex={pageIndex}
               scale={scale}
               selectionMenu={(props) => (
-                <SelectionCopyMenu {...props} documentId={documentId} />
+                <SelectionActionMenu
+                  {...props}
+                  documentId={documentId}
+                  onReadAloud={handleReadSelectedTextAloud}
+                />
               )}
             />
             <AnnotationLayer
@@ -795,8 +775,8 @@ function EmbedPdfDocumentBody({
       currentId,
       highlightEnabled,
       handlePageContextMenuCapture,
-      handlePageDoubleClickCapture,
       handlePageClick,
+      handleReadSelectedTextAloud,
       openCommentsPane,
     ],
   );

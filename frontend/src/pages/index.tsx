@@ -546,7 +546,7 @@ export default function Home() {
                     <li>Click <b>Upload PDF</b> to add PDF documents to your thread.</li>
                     <li>Switch to the <b>Chat</b> tab to ask questions about your sources using AI.</li>
                     <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
-                    <li>Double-click any text to start audio playback from that point.</li>
+                    <li>Select text and click the read-aloud icon to start audio playback from that point.</li>
                   </ul>
                   <Typography sx={{ mt: 2, mb: 1, color: pdfDarkMode ? '#ccc' : 'textSecondary' }}>
                     Settings tips:
