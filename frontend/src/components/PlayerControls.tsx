@@ -50,8 +50,9 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
   // Popover anchor
   const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
 
-  // Disable controls when sentences are null (parsing in progress)
-  const isDisabled = sentences === null;
+  // Disable controls while sentences are still being parsed or no playable text exists.
+  const isDisabled = !sentences || sentences.length === 0;
+  const disabledTooltip = isDisabled ? "Sentences are still processing" : "";
 
   const handleOpenSettings = (event: React.MouseEvent<HTMLButtonElement>) => {
     setAnchorEl(event.currentTarget);
@@ -147,7 +148,7 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
    */
   async function playSentence(id: number, resumeFrom?: number) {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || isDisabled) return;
     const requestToken = playRequestTokenRef.current + 1;
     playRequestTokenRef.current = requestToken;
 
@@ -156,7 +157,7 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
     audio.currentTime = 0;
     audio.onended = null;
 
-    const s = sentences[id];
+    const s = sentences?.[id];
     if (!s) {
       return;
     }
@@ -235,7 +236,7 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
 
   return (
     <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
-      <Tooltip title={isDisabled ? "Parsing in progress" : ""}>
+      <Tooltip title={disabledTooltip}>
         <Stack direction="row" spacing={0.5} alignItems="center">
           <IconButton
             color="primary"
@@ -283,7 +284,7 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
         </Stack>
       </Tooltip>
 
-      <Tooltip title={isDisabled ? "Parsing in progress" : ""}>
+      <Tooltip title={disabledTooltip}>
         <IconButton
           aria-describedby={id_popover}
           size="small"

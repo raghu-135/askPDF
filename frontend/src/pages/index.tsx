@@ -426,7 +426,7 @@ export default function Home() {
               />
 
               {/* Player Controls */}
-              {(((pdfSentences.length > 0 && pdfUrl) || chatSentences.length > 0) && activeThread && rightPanelTab === 1) && (
+              {activeThread && rightPanelTab === 1 && (
                 <PlayerControls
                   sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
                   currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}

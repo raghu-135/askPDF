@@ -360,7 +360,6 @@ function EmbedPdfDocumentBody({
   const [sidebarWidthRatio, setSidebarWidthRatio] = useState(PANEL_RATIOS.pdfSidebar.default);
   const [commentComposerRequest, setCommentComposerRequest] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  const sentenceRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
 
   const { provides: zoomScope } = useZoom(documentId);
   const zoomRef = useRef(zoomScope);
@@ -382,7 +381,6 @@ function EmbedPdfDocumentBody({
   const { provides: scrollApi } = useScroll(documentId);
   const scrollRef = useRef(scrollApi);
   scrollRef.current = scrollApi;
-  const pendingScrollIdRef = useRef<number | null>(null);
   const { provides: historyApi } = useHistoryCapability();
   const historyRef = useRef({ provides: historyApi });
   historyRef.current = { provides: historyApi };
@@ -444,23 +442,20 @@ function EmbedPdfDocumentBody({
     // Priority: Don't let TTS scroll fight with a manual history undo/redo
     if (isHistoryProcessingRef.current) return;
 
-    if (!autoScroll || currentId === null || !sentences) {
-      pendingScrollIdRef.current = null;
-      return;
-    }
+    if (!autoScroll || currentId === null || !sentences) return;
     const s = sentences[currentId];
-    if (!s?.bboxes?.length) return;
+    const bbox = s?.bboxes?.[0];
+    if (!bbox) return;
 
-    const el = sentenceRefs.current[currentId];
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-    } else {
-      scrollRef.current?.scrollToPage({
-        pageNumber: s.bboxes[0].page,
-        behavior: "smooth",
-      });
-      pendingScrollIdRef.current = currentId;
-    }
+    scrollRef.current?.scrollToPage({
+      pageNumber: bbox.page,
+      pageCoordinates: {
+        x: bbox.x,
+        y: bbox.y,
+      },
+      alignY: 35,
+      behavior: "smooth",
+    });
   }, [currentId, autoScroll, sentences, isHistoryProcessingRef]);
 
   const scrollToAnnotation = useCallback(
@@ -799,18 +794,6 @@ function EmbedPdfDocumentBody({
                 {activeSentence.pageBBoxes.map((bbox, idx) => (
                   <div
                     key={idx}
-                    ref={(el) => {
-                      if (idx === 0) {
-                        sentenceRefs.current[activeSentence.id] = el;
-                        
-                        if (el && pendingScrollIdRef.current === activeSentence.id) {
-                          pendingScrollIdRef.current = null;
-                          requestAnimationFrame(() => {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                          });
-                        }
-                      }
-                    }}
                     style={{
                       position: "absolute",
                       left: `${(bbox.x / bbox.page_width) * 100}%`,
