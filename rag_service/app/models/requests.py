@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.llm_server_client import (
     LOCAL_EMBEDDING_MODEL,
@@ -27,6 +27,34 @@ class ThreadUpdateRequest(BaseModel):
     """Request body for updating a thread."""
 
     name: str
+
+
+class ThreadBulkDeleteRequest(BaseModel):
+    """Request body for deleting multiple threads."""
+
+    thread_ids: List[str] = Field(default_factory=list)
+
+    @field_validator("thread_ids")
+    @classmethod
+    def validate_thread_ids(cls, value: List[str]) -> List[str]:
+        if not value:
+            raise ValueError("thread_ids must contain at least one thread ID")
+        return value
+
+
+class ThreadBulkDeleteFailure(BaseModel):
+    """Failure information for a thread that could not be deleted."""
+
+    thread_id: str
+    error: str
+
+
+class ThreadBulkDeleteResponse(BaseModel):
+    """Response body for deleting multiple threads."""
+
+    deleted_thread_ids: List[str] = Field(default_factory=list)
+    not_found_thread_ids: List[str] = Field(default_factory=list)
+    failed_thread_ids: List[ThreadBulkDeleteFailure] = Field(default_factory=list)
 
 
 class ThreadFileRequest(BaseModel):
