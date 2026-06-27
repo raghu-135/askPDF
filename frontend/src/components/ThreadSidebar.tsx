@@ -42,13 +42,17 @@ import LockIcon from '@mui/icons-material/Lock';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningIcon from '@mui/icons-material/Warning';
 import ErrorIcon from '@mui/icons-material/Error';
+import CloudDoneIcon from '@mui/icons-material/CloudDone';
+import CloudOffIcon from '@mui/icons-material/CloudOff';
 
 import {
   Thread,
   createThread,
+  getSupabaseRolloutHealth,
   listThreads,
   deleteThread,
   updateThread,
+  type SupabaseRolloutHealth,
 } from '../lib/api';
 import { fetchAvailableEmbedModels, checkEmbedModelReady } from '../lib/models-api';
 import { formatDate } from '../lib/date-utils';
@@ -87,6 +91,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [expanded, setExpanded] = useState(true);
   const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
   const [isCheckingEmbedModel, setIsCheckingEmbedModel] = useState(false);
+  const [supabaseHealth, setSupabaseHealth] = useState<SupabaseRolloutHealth | null>(null);
 
 
   // Helper function to get icon and color for model type
@@ -123,6 +128,22 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       console.error('Failed to load threads:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadSupabaseHealth = async () => {
+    try {
+      setSupabaseHealth(await getSupabaseRolloutHealth());
+    } catch (error) {
+      console.error('Failed to load Supabase health:', error);
+      setSupabaseHealth({
+        status: 'degraded',
+        healthy: false,
+        enabled: true,
+        db: { configured: false, reachable: false, thread_count: null },
+        storage: { enabled: false, bucket: 'pdfs', bucket_exists: null, object_count: null },
+        flags: {},
+      });
     }
   };
 
@@ -213,10 +234,36 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     validateEmbedModel();
   }, [newThreadEmbedModel]);
 
+  useEffect(() => {
+    loadSupabaseHealth();
+  }, []);
+
   const handleOpenCreateDialog = () => {
     const now = new Date();
     setNewThreadName(`Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`);
     setCreateDialogOpen(true);
+  };
+
+  const supabaseStatusIcon = () => {
+    if (!supabaseHealth || supabaseHealth.status === 'disabled') {
+      return <CloudOffIcon fontSize="small" color="disabled" />;
+    }
+    if (supabaseHealth.healthy) {
+      return <CloudDoneIcon fontSize="small" color="success" />;
+    }
+    return <WarningIcon fontSize="small" color="warning" />;
+  };
+
+  const supabaseStatusTitle = () => {
+    if (!supabaseHealth) return 'Supabase status loading';
+    if (supabaseHealth.status === 'disabled') return 'Supabase rollout disabled';
+    const dbText = supabaseHealth.db.reachable ? `DB ok (${supabaseHealth.db.thread_count ?? 0} threads)` : 'DB degraded';
+    const storageText = supabaseHealth.storage.enabled
+      ? supabaseHealth.storage.bucket_exists
+        ? `Storage ok (${supabaseHealth.storage.object_count ?? 0} objects)`
+        : 'Storage degraded'
+      : 'Storage disabled';
+    return `Supabase ${supabaseHealth.status}: ${dbText}; ${storageText}`;
   };
 
   return (
@@ -248,6 +295,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             Threads
           </Typography>
           <Chip label={threads.length} size="small" />
+          <Tooltip title={supabaseStatusTitle()}>
+            <IconButton size="small" onClick={loadSupabaseHealth} aria-label="Supabase status">
+              {supabaseStatusIcon()}
+            </IconButton>
+          </Tooltip>
         </Box>
         <Tooltip title="Create new thread">
           <IconButton

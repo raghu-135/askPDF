@@ -4,6 +4,25 @@ import {
   type AnnotationTransferItem,
 } from "./annotation-utils";
 import { getBrowserRuntimeContext } from "./date-utils";
+import {
+  useSupabaseFiles,
+  useSupabaseMessages,
+  useSupabaseStorage,
+  useSupabaseThreads,
+} from "./supabase/client";
+import {
+  getSupabaseThread,
+  listSupabaseThreads,
+} from "./supabase/threads";
+import { getSupabaseThreadMessages } from "./supabase/messages";
+import {
+  getSupabaseFileForThread,
+  getSupabaseFileStatus,
+  getSupabaseParsedSentences,
+  getSupabaseThreadFileAnnotations,
+  getSupabaseThreadFiles,
+} from "./supabase/files";
+import { getSupabasePdfUrl } from "./supabase/storage";
 
 // Unified API base - RAG service handles all endpoints
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -44,6 +63,26 @@ export interface FileStatus {
   updated_at: string;
 }
 
+export interface SupabaseRolloutHealth {
+  status: 'healthy' | 'degraded' | 'disabled';
+  healthy: boolean;
+  enabled: boolean;
+  db: {
+    configured: boolean;
+    reachable: boolean;
+    thread_count: number | null;
+    error?: string | null;
+  };
+  storage: {
+    enabled: boolean;
+    bucket: string;
+    bucket_exists: boolean | null;
+    object_count: number | null;
+    error?: string | null;
+  };
+  flags: Record<string, boolean>;
+}
+
 // Helper functions for status checks
 export const ProcessStatusHelper = {
   isCompleted: (status: ProcessStatus) => status === 'completed',
@@ -52,6 +91,12 @@ export const ProcessStatusHelper = {
   isPending: (status: ProcessStatus) => status === 'pending',
   isTerminal: (status: ProcessStatus) => status === 'completed' || status === 'failed',
 };
+
+export async function getSupabaseRolloutHealth(): Promise<SupabaseRolloutHealth> {
+  const res = await fetch(`${API_BASE}/api/health/supabase`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
 
 export interface UploadResponse {
   sentences: any[];
@@ -76,6 +121,10 @@ export async function getFileStatus(
     embeddingModel?: string;
   }
 ): Promise<FileStatus | { parsing: ProcessSection } | { indexing: IndexingSection }> {
+  if (useSupabaseFiles() && !options?.section && !options?.embeddingModel) {
+    const status = await getSupabaseFileStatus(fileHash);
+    if (status) return status as FileStatus;
+  }
   const params = new URLSearchParams();
   if (options?.section) params.set("section", options.section);
   if (options?.embeddingModel) params.set("embedding_model", options.embeddingModel);
@@ -93,12 +142,29 @@ export interface PdfData {
 }
 
 export async function getPdfByHash(fileHash: string, threadId: string): Promise<PdfData> {
+  if (useSupabaseFiles()) {
+    const file = await getSupabaseFileForThread(threadId, fileHash);
+    if (file) {
+      const parsed = await getSupabaseParsedSentences(fileHash);
+      const storageUrl = useSupabaseStorage()
+        ? await getSupabasePdfUrl(file.storage_bucket, file.storage_path)
+        : null;
+      return {
+        sentences: parsed.sentences,
+        pdfUrl: storageUrl || `/threads/${threadId}/files/${fileHash}/download`,
+        fileHash,
+      };
+    }
+  }
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/${fileHash}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getParsedSentences(fileHash: string, threadId: string): Promise<{ version: string; sentences: any[] }> {
+  if (useSupabaseFiles()) {
+    return getSupabaseParsedSentences(fileHash);
+  }
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/${fileHash}/sentences`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -186,6 +252,9 @@ export async function createThread(name: string, embedModel: string): Promise<Th
 }
 
 export async function listThreads(): Promise<{ threads: Thread[] }> {
+  if (useSupabaseThreads()) {
+    return listSupabaseThreads() as Promise<{ threads: Thread[] }>;
+  }
   const res = await fetch(`${API_BASE}/api/threads`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -197,6 +266,22 @@ export async function getThread(threadId: string): Promise<Thread & {
   embed_model_ready?: boolean;
   stats_unavailable_reason?: string | null;
 }> {
+  if (useSupabaseThreads()) {
+    const thread = await getSupabaseThread(threadId);
+    if (!thread) throw new Error("Thread not found");
+    const files = useSupabaseFiles() ? await getSupabaseThreadFiles(threadId) : { files: [] };
+    return {
+      ...(thread as Thread),
+      files: files.files as ThreadFile[],
+      stats: {
+        total_qa_pairs: (thread as any).total_qa_pairs || 0,
+        total_qa_chars: (thread as any).total_qa_chars || 0,
+        avg_qa_chars: (thread as any).avg_qa_chars || 0,
+        documents: (thread as any).documents_meta || {},
+      },
+      file_count: (thread as any).file_count ?? files.files.length,
+    };
+  }
   const res = await fetch(`${API_BASE}/api/threads/${threadId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -285,6 +370,9 @@ export async function addFileToThread(
 }
 
 export async function getThreadFiles(threadId: string): Promise<{ files: ThreadFile[] }> {
+  if (useSupabaseFiles()) {
+    return getSupabaseThreadFiles(threadId) as Promise<{ files: ThreadFile[] }>;
+  }
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/files`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -302,6 +390,17 @@ export async function getThreadFileAnnotations(
   threadId: string,
   fileHash: string
 ): Promise<ThreadFileAnnotationsResponse> {
+  if (useSupabaseFiles()) {
+    const row = await getSupabaseThreadFileAnnotations(threadId, fileHash);
+    const annotations = row?.annotations_json ? JSON.parse(row.annotations_json) : [];
+    return {
+      thread_id: threadId,
+      file_hash: fileHash,
+      annotations: deserializeAnnotationItems(annotations as AnnotationTransferItem[]),
+      created_at: row?.created_at,
+      updated_at: row?.updated_at,
+    };
+  }
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/${fileHash}/annotations`);
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
@@ -407,6 +506,9 @@ export async function getThreadMessages(
   limit: number = 100,
   offset: number = 0
 ): Promise<{ messages: Message[] }> {
+  if (useSupabaseMessages()) {
+    return getSupabaseThreadMessages(threadId, limit, offset) as Promise<{ messages: Message[] }>;
+  }
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/messages?limit=${limit}&offset=${offset}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();

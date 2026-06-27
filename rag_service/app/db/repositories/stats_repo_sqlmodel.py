@@ -239,7 +239,28 @@ class StatsRepository:
                 "total_qa_chars": stats.total_qa_chars,
                 "avg_qa_chars": round(stats.avg_qa_chars, 1),
                 "last_qa_at": stats.last_qa_at,
+                "last_updated_at": stats.last_updated_at,
                 "documents": self._load_documents_meta(stats.documents_meta),
+            }
+
+    async def get_raw_stats(self, thread_id: str) -> Optional[Dict[str, Any]]:
+        """Get thread stats in the exact table shape used for parity mirroring."""
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(ThreadStats).where(ThreadStats.thread_id == thread_id)
+            )
+            stats = result.scalar_one_or_none()
+            if not stats:
+                return None
+            return {
+                "thread_id": stats.thread_id,
+                "total_qa_pairs": stats.total_qa_pairs,
+                "total_qa_chars": stats.total_qa_chars,
+                "avg_qa_chars": stats.avg_qa_chars,
+                "last_qa_at": stats.last_qa_at,
+                "documents_meta": self._load_documents_meta(stats.documents_meta),
+                "last_updated_at": stats.last_updated_at,
             }
 
     async def get_thread_shape(self, thread_id: str) -> Dict[str, Any]:

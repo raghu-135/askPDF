@@ -105,7 +105,12 @@ class ThreadRepository:
                 .outerjoin(Message, Thread.id == Message.thread_id)
                 .outerjoin(ThreadFile, Thread.id == ThreadFile.thread_id)
                 .group_by(Thread.id)
-                .order_by(func.coalesce(func.max(Message.created_at), Thread.created_at).desc())
+                .order_by(
+                    func.greatest(
+                        func.coalesce(func.max(Message.created_at), Thread.created_at),
+                        func.coalesce(Thread.updated_at, Thread.created_at)
+                    ).desc()
+                )
             )
 
             threads = []

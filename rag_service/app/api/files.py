@@ -51,6 +51,7 @@ from app.services.file_processing_service import (
     queue_file_processing,
 )
 from app.services.file_cleanup_service import cleanup_detached_file
+from app.services.supabase_storage_service import mirror_pdf_to_storage
 from app.time_utils import iso_utc_z, maybe_iso_utc_z
 
 router = APIRouter(tags=["files"])
@@ -93,6 +94,7 @@ async def upload_pdf_endpoint(
         file_name=file.filename,
         backend_url="",  # Not needed - we serve files directly now
     )
+    background_tasks.add_task(mirror_pdf_to_storage, file_hash, pdf_path)
 
     # Return immediately with sentences: null to indicate parsing not yet done
     return {

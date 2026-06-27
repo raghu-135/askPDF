@@ -17,6 +17,7 @@ from app.models.llm_server_client import (
     check_model_supports_tools,
     fetch_available_models,
 )
+from app.services.supabase_health_service import get_supabase_health
 
 router = APIRouter(tags=["models"])
 
@@ -54,6 +55,16 @@ async def is_embed_model_ready_endpoint(model: str):
     try:
         ready = await check_embed_model_ready(model)
         return {"model": model, "embed_model_ready": ready}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/health/supabase")
+async def supabase_health_endpoint():
+    """Check the parallel Supabase rollout state without exposing credentials."""
+    try:
+        return await get_supabase_health()
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

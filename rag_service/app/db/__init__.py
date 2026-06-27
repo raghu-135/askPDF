@@ -95,7 +95,10 @@ def get_stats_repo():
 # Thread operations
 async def create_thread(name: str, embed_model: str):
     """Create a new thread."""
-    return await get_thread_repo().create(name, embed_model)
+    thread = await get_thread_repo().create(name, embed_model)
+    from app.db import dual_write
+    await dual_write.mirror_thread(thread)
+    return thread
 
 
 async def get_thread(thread_id: str):
@@ -110,7 +113,11 @@ async def get_thread_settings(thread_id: str):
 
 async def update_thread_settings(thread_id: str, settings: dict):
     """Replace persisted settings for a thread."""
-    return await get_thread_repo().update_settings(thread_id, settings)
+    result = await get_thread_repo().update_settings(thread_id, settings)
+    if result is not None:
+        from app.db import dual_write
+        await dual_write.mirror_thread_settings(thread_id, result)
+    return result
 
 
 async def list_threads():
@@ -120,18 +127,29 @@ async def list_threads():
 
 async def update_thread(thread_id: str, name: str):
     """Update a thread's name."""
-    return await get_thread_repo().update(thread_id, name)
+    thread = await get_thread_repo().update(thread_id, name)
+    if thread:
+        from app.db import dual_write
+        await dual_write.mirror_thread(thread)
+    return thread
 
 
 async def delete_thread(thread_id: str):
     """Delete a thread and all associated data."""
-    return await get_thread_repo().delete(thread_id)
+    deleted = await get_thread_repo().delete(thread_id)
+    if deleted:
+        from app.db import dual_write
+        await dual_write.delete_thread(thread_id)
+    return deleted
 
 
 # File operations
 async def create_or_get_file(file_hash: str, file_name: str, file_path: str = None, source_type: str = "pdf"):
     """Create a new file record or return existing one."""
-    return await get_file_repo().create_or_get(file_hash, file_name, file_path, source_type)
+    file = await get_file_repo().create_or_get(file_hash, file_name, file_path, source_type)
+    from app.db import dual_write
+    await dual_write.mirror_file(file)
+    return file
 
 
 async def get_file(file_hash: str):
@@ -141,7 +159,11 @@ async def get_file(file_hash: str):
 
 async def update_file_parsed_sentences(file_hash: str, parsed_data_json: str):
     """Store parsed sentences JSON in the files table."""
-    return await get_file_repo().update_parsed_sentences(file_hash, parsed_data_json)
+    updated = await get_file_repo().update_parsed_sentences(file_hash, parsed_data_json)
+    if updated:
+        from app.db import dual_write
+        await dual_write.update_file_parsed_sentences(file_hash, parsed_data_json)
+    return updated
 
 
 async def get_file_parsed_sentences(file_hash: str):
@@ -156,7 +178,12 @@ async def get_file_status(file_hash: str):
 
 async def update_file_status(file_hash: str, status_data: dict):
     """Update file_status JSON for a file, merging with existing status."""
-    return await get_file_repo().update_status(file_hash, status_data)
+    updated = await get_file_repo().update_status(file_hash, status_data)
+    if updated:
+        status = await get_file_repo().get_status(file_hash)
+        from app.db import dual_write
+        await dual_write.update_file_status(file_hash, status or {})
+    return updated
 
 
 async def update_parsing_status(
@@ -168,7 +195,12 @@ async def update_parsing_status(
     claim: bool = False,
 ):
     """Update parsing section of file_status."""
-    return await get_file_repo().update_parsing_status(file_hash, status, started_at, finished_at, error, claim)
+    updated = await get_file_repo().update_parsing_status(file_hash, status, started_at, finished_at, error, claim)
+    if updated:
+        current = await get_file_repo().get_status(file_hash)
+        from app.db import dual_write
+        await dual_write.update_file_status(file_hash, current or {})
+    return updated
 
 
 async def update_indexing_status(
@@ -185,26 +217,45 @@ async def update_indexing_status(
     claim: bool = False,
 ):
     """Update indexing section of file_status."""
-    return await get_file_repo().update_indexing_status(
+    updated = await get_file_repo().update_indexing_status(
         file_hash, status, embedding_model, thread_id, started_at, finished_at,
         error, chunk_count, total_chars, reused_existing_embeddings, claim
     )
+    if updated:
+        current = await get_file_repo().get_status(file_hash)
+        from app.db import dual_write
+        await dual_write.update_file_status(file_hash, current or {})
+    return updated
 
 
 async def remove_thread_indexing_status(file_hash: str, embedding_model: str, thread_id: str):
     """Remove a thread-scoped indexing entry and recompute the remaining summaries."""
-    return await get_file_repo().remove_thread_indexing_status(file_hash, embedding_model, thread_id)
+    updated = await get_file_repo().remove_thread_indexing_status(file_hash, embedding_model, thread_id)
+    if updated:
+        current = await get_file_repo().get_status(file_hash)
+        from app.db import dual_write
+        await dual_write.update_file_status(file_hash, current or {})
+    return updated
 
 
 async def delete_file_record(file_hash: str):
     """Delete a file row once all thread associations have been removed."""
-    return await get_file_repo().delete(file_hash)
+    deleted = await get_file_repo().delete(file_hash)
+    if deleted:
+        from app.db import dual_write
+        await dual_write.delete_file(file_hash)
+    return deleted
 
 
 # Thread-file operations
 async def add_file_to_thread(thread_id: str, file_hash: str):
     """Associate a file with a thread."""
-    return await get_thread_file_repo().add(thread_id, file_hash)
+    added = await get_thread_file_repo().add(thread_id, file_hash)
+    if added:
+        assoc = await get_thread_file_repo().get_association(thread_id, file_hash)
+        from app.db import dual_write
+        await dual_write.add_thread_file(thread_id, file_hash, assoc.get("added_at") if assoc else None)
+    return added
 
 
 async def get_thread_files(thread_id: str):
@@ -214,7 +265,11 @@ async def get_thread_files(thread_id: str):
 
 async def remove_file_from_thread(thread_id: str, file_hash: str):
     """Remove a file association from a thread (does not delete the file record itself)."""
-    return await get_thread_file_repo().remove(thread_id, file_hash)
+    removed = await get_thread_file_repo().remove(thread_id, file_hash)
+    if removed:
+        from app.db import dual_write
+        await dual_write.remove_thread_file(thread_id, file_hash)
+    return removed
 
 
 async def is_file_in_thread(thread_id: str, file_hash: str):
@@ -244,12 +299,19 @@ async def get_thread_file_annotations(thread_id: str, file_hash: str):
 
 async def upsert_thread_file_annotations(thread_id: str, file_hash: str, annotations: list):
     """Insert or replace the full annotation snapshot for a thread/file pair."""
-    return await get_thread_file_repo().upsert_annotations(thread_id, file_hash, annotations)
+    payload = await get_thread_file_repo().upsert_annotations(thread_id, file_hash, annotations)
+    from app.db import dual_write
+    await dual_write.mirror_annotations(payload)
+    return payload
 
 
 async def delete_thread_file_annotations(thread_id: str, file_hash: str = None):
     """Delete persisted annotations for a thread or thread/file pair."""
-    return await get_thread_file_repo().delete_annotations(thread_id, file_hash)
+    deleted = await get_thread_file_repo().delete_annotations(thread_id, file_hash)
+    if deleted:
+        from app.db import dual_write
+        await dual_write.delete_annotations(thread_id, file_hash)
+    return deleted
 
 
 # Message operations
@@ -264,10 +326,14 @@ async def create_message(
     web_sources: list = None,
 ):
     """Create a new message in a thread."""
-    return await get_message_repo().create(
+    message = await get_message_repo().create(
         thread_id, role, content, context_compact, reasoning,
         reasoning_available, reasoning_format, web_sources
     )
+    canonical = await get_message_repo().get(message.id)
+    from app.db import dual_write
+    await dual_write.mirror_message(canonical or message)
+    return message
 
 
 async def get_message(message_id: str):
@@ -287,17 +353,29 @@ async def get_recent_messages(thread_id: str, limit: int = 10):
 
 async def update_message_context_compact(message_id: str, context_compact: str):
     """Update compact context text for a message."""
-    return await get_message_repo().update_context_compact(message_id, context_compact)
+    updated = await get_message_repo().update_context_compact(message_id, context_compact)
+    if updated:
+        from app.db import dual_write
+        await dual_write.update_message_context(message_id, context_compact)
+    return updated
 
 
 async def delete_message(message_id: str):
     """Delete a message by ID."""
-    return await get_message_repo().delete(message_id)
+    deleted = await get_message_repo().delete(message_id)
+    if deleted:
+        from app.db import dual_write
+        await dual_write.delete_message(message_id)
+    return deleted
 
 
 async def delete_message_pair(message_id: str):
     """Delete a message and its paired question/answer."""
-    return await get_message_repo().delete_pair(message_id)
+    deleted_ids = await get_message_repo().delete_pair(message_id)
+    if deleted_ids:
+        from app.db import dual_write
+        await dual_write.delete_message_pair(message_id)
+    return deleted_ids
 
 
 async def get_message_count(thread_id: str):
@@ -308,22 +386,37 @@ async def get_message_count(thread_id: str):
 # Stats operations
 async def remove_document_from_stats(thread_id: str, file_hash: str):
     """Remove a document entry from thread_stats.documents_meta."""
-    return await get_stats_repo().remove_document_from_stats(thread_id, file_hash)
+    result = await get_stats_repo().remove_document_from_stats(thread_id, file_hash)
+    stats = await get_stats_repo().get_stats(thread_id)
+    from app.db import dual_write
+    await dual_write.upsert_stats(thread_id, stats or {})
+    return result
 
 
 async def upsert_document_in_stats(thread_id: str, file_hash: str, meta: dict):
     """Insert or replace a document entry in thread_stats.documents_meta."""
-    return await get_stats_repo().upsert_document_in_stats(thread_id, file_hash, meta)
+    result = await get_stats_repo().upsert_document_in_stats(thread_id, file_hash, meta)
+    stats = await get_stats_repo().get_stats(thread_id)
+    from app.db import dual_write
+    await dual_write.upsert_stats(thread_id, stats or {})
+    return result
 
 
 async def increment_qa_stats(thread_id: str, qa_chars: int):
     """Increment QA aggregate counters after each answered turn."""
-    return await get_stats_repo().increment_qa_stats(thread_id, qa_chars)
+    result = await get_stats_repo().increment_qa_stats(thread_id, qa_chars)
+    stats = await get_stats_repo().get_raw_stats(thread_id)
+    from app.db import dual_write
+    await dual_write.upsert_stats(thread_id, stats or {})
+    return result
 
 
 async def recompute_qa_stats(thread_id: str):
     """Recompute QA stats from the messages table."""
-    return await get_stats_repo().recompute_qa_stats(thread_id)
+    result = await get_stats_repo().recompute_qa_stats(thread_id)
+    from app.db import dual_write
+    await dual_write.recompute_qa_stats(thread_id)
+    return result
 
 
 async def get_thread_shape(thread_id: str):

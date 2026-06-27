@@ -488,6 +488,9 @@ class FileRepository:
             replace_jsonb_field(file, "file_status", normalized)
             await session.flush()
             await session.refresh(file)
+        from app.db import dual_write
+        await dual_write.update_file_parsed_sentences(file_hash, parsed_data_json)
+        await dual_write.update_file_status(file_hash, normalized)
         return True
 
     async def fail_parsing_atomically(
@@ -523,6 +526,8 @@ class FileRepository:
 
             replace_jsonb_field(file, "file_status", normalized)
             await session.flush()
+        from app.db import dual_write
+        await dual_write.update_file_status(file_hash, normalized)
         return True
 
     async def is_processing_complete(self, file_hash: str) -> bool:

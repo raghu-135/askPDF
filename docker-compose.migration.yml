@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  supabase-db:
+    image: supabase/postgres:15.1.1.78
+    ports:
+      - "${SUPABASE_DB_PORT:-54322}:5432"
+    environment:
+      POSTGRES_PASSWORD: ${SUPABASE_POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${SUPABASE_POSTGRES_DB:-postgres}
+      JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters}
+      JWT_EXP: ${SUPABASE_JWT_EXP:-3600}
+    volumes:
+      - supabase_db_data:/var/lib/postgresql/data
+      - ./supabase/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${SUPABASE_POSTGRES_DB:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  db-migrate:
+    build:
+      context: .
+      dockerfile: migration/Dockerfile
+    env_file:
+      - .env
+    environment:
+      SOURCE_DATABASE_URL: ${MIGRATION_SOURCE_DATABASE_URL:-postgresql://postgres:postgres@postgresql:5432/askpdf}
+      TARGET_DATABASE_URL: ${MIGRATION_TARGET_DATABASE_URL:-postgresql://postgres:postgres@supabase-db:5432/postgres}
+      SUPABASE_STORAGE_URL: ${SUPABASE_STORAGE_URL:-http://supabase-kong:8000/storage/v1}
+      SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET:-pdfs}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      NEXT_PUBLIC_USE_SUPABASE_STORAGE: ${NEXT_PUBLIC_USE_SUPABASE_STORAGE:-false}
+      MIGRATION_STATIC_DIR: ${MIGRATION_STATIC_DIR:-/static}
+      MIGRATION_SCHEMA_DIR: ${MIGRATION_SCHEMA_DIR:-/supabase/migrations}
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      supabase-db:
+        condition: service_healthy
+    volumes:
+      - pdf_data:/static:ro
+      - ./supabase/migrations:/supabase/migrations:ro
+    entrypoint: ["python", "-m", "app.tools.db_migration_cli"]
+
+volumes:
+  supabase_db_data:

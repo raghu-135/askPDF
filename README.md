@@ -378,6 +378,98 @@ You need a **chat model with tool calling support** and an **embedding model**:
 </details>
 
 <details>
+<summary>🧭 Parallel Supabase Migration</summary>
+
+askPDF can run self-hosted Supabase in parallel with the existing SQLModel/Postgres database. The current Postgres service remains the source of truth while Supabase is populated, validated, and enabled behind feature flags.
+
+### Start Supabase Services
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml up -d
+```
+
+### Run the Docker Migrator
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml -f docker-compose.migration.yml run --rm --build db-migrate --dry-run
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml -f docker-compose.migration.yml run --rm --build db-migrate --migrate --allow-existing-target
+docker compose -f docker-compose.yml -f docker-compose.supabase.yml -f docker-compose.migration.yml run --rm --build db-migrate --validate-only
+```
+
+Useful migration options:
+
+- `--resume` continues into a populated target.
+- `--allow-existing-target` permits idempotent upserts into a non-empty target.
+- `--backup` records backup intent in the run metadata; create your database backup before running the container.
+- `--verbose` prints full diagnostics on failure.
+
+### Feature Flags
+
+Keep these disabled until migration validation passes. Once DB parity, live dual-write, and Storage parity have passed, the rollout-ready local settings are:
+
+```env
+RAG_SUPABASE_DUAL_WRITE=true
+RAG_SUPABASE_PARITY_CHECK=true
+NEXT_PUBLIC_USE_SUPABASE_THREADS=true
+NEXT_PUBLIC_USE_SUPABASE_MESSAGES=true
+NEXT_PUBLIC_USE_SUPABASE_FILES=true
+NEXT_PUBLIC_USE_SUPABASE_REALTIME=true
+NEXT_PUBLIC_USE_SUPABASE_STORAGE=true
+```
+
+FastAPI still owns chat, uploads, browser capture, parsing/indexing, model health, and Weaviate cleanup. Supabase-backed frontend reads and Storage URLs are enabled only through the flags above, with FastAPI download fallback retained.
+
+With Storage enabled, newly uploaded PDFs are mirrored to Supabase Storage in the background after the primary FastAPI upload succeeds. The migrator's `--validate-only` mode checks both table parity and Storage parity: local PDFs must have matching `files.storage_bucket/storage_path` metadata and corresponding `storage.objects` rows.
+
+Recommended live smoke test:
+
+1. Create a thread.
+2. Upload a PDF.
+3. Ask a question.
+4. Refresh the browser and open/download the PDF.
+5. Run the three-file `--validate-only` command above and confirm all table mismatches are `0` and Storage reports no missing metadata or objects.
+
+### Supabase Soak Mode
+
+Use soak mode after migration validation and the live smoke test have passed. Keep primary Postgres/FastAPI as the source of truth, leave Supabase reads enabled, and use the app normally for a short period before removing any legacy read paths.
+
+Soak flags:
+
+```env
+RAG_SUPABASE_DUAL_WRITE=true
+RAG_SUPABASE_PARITY_CHECK=true
+NEXT_PUBLIC_USE_SUPABASE_THREADS=true
+NEXT_PUBLIC_USE_SUPABASE_MESSAGES=true
+NEXT_PUBLIC_USE_SUPABASE_FILES=true
+NEXT_PUBLIC_USE_SUPABASE_REALTIME=true
+NEXT_PUBLIC_USE_SUPABASE_STORAGE=true
+```
+
+Daily soak checks:
+
+1. Create, rename, and delete a thread.
+2. Upload a PDF, ask a question, refresh, and reopen the PDF.
+3. Attach the same PDF to two threads, remove it from one, and confirm the other thread still opens it.
+4. Remove the last thread reference to a test PDF and confirm normal app behavior continues.
+5. Run `--validate-only` and confirm table mismatches are `0`, `missing_metadata_count` is `0`, and `missing_object_count` is `0`.
+
+The app also exposes `GET /api/health/supabase` for a non-secret rollout status summary. The thread sidebar shows this status as a small cloud icon; click it to refresh the health probe.
+
+Quick read rollback:
+
+```env
+NEXT_PUBLIC_USE_SUPABASE_THREADS=false
+NEXT_PUBLIC_USE_SUPABASE_MESSAGES=false
+NEXT_PUBLIC_USE_SUPABASE_FILES=false
+NEXT_PUBLIC_USE_SUPABASE_REALTIME=false
+NEXT_PUBLIC_USE_SUPABASE_STORAGE=false
+```
+
+Leave `RAG_SUPABASE_DUAL_WRITE=true` during rollback when possible so Supabase keeps receiving primary writes while frontend reads fall back to FastAPI. Disable `RAG_SUPABASE_DUAL_WRITE` only if the Supabase database or network path is causing noisy backend failures that need to be isolated.
+
+</details>
+
+<details>
 <summary>🧪 Testing</summary>
 
 ### Running Tests
