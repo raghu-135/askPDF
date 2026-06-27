@@ -26,16 +26,7 @@ import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, Proc
 import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
-
-const CHAT_PANEL_RATIO = {
-  default: 0.32,
-  min: 0.2,
-  max: 0.8,
-};
-
-const clampChatPanelRatio = (ratio: number) => (
-  Math.max(CHAT_PANEL_RATIO.min, Math.min(CHAT_PANEL_RATIO.max, ratio))
-);
+import { clampPanelRatio, PANEL_RATIOS } from "../lib/panel-ratio";
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -94,10 +85,10 @@ export default function Home() {
   const [isBrowserCapturing, setIsBrowserCapturing] = useState(false);
 
   // Resizable chat panel
-  const [chatWidthRatio, setChatWidthRatio] = useState(CHAT_PANEL_RATIO.default);
+  const [chatWidthRatio, setChatWidthRatio] = useState(PANEL_RATIOS.chat.default);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
   const [isResizing, setIsResizing] = useState(false);
-  const chatWidthRatioRef = useRef(CHAT_PANEL_RATIO.default);
+  const chatWidthRatioRef = useRef(PANEL_RATIOS.chat.default);
   const rafIdRef = useRef<number | null>(null);
 
 
@@ -348,7 +339,7 @@ export default function Home() {
 
     rafIdRef.current = requestAnimationFrame(() => {
       const nextRatio = (window.innerWidth - e.clientX) / window.innerWidth;
-      const constrainedRatio = clampChatPanelRatio(nextRatio);
+      const constrainedRatio = clampPanelRatio(nextRatio, PANEL_RATIOS.chat);
       chatWidthRatioRef.current = constrainedRatio;
       document.documentElement.style.setProperty('--chat-width-ratio', `${constrainedRatio}`);
     });

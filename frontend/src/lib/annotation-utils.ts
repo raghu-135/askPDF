@@ -1,4 +1,7 @@
-import type { AnnotationTransferItem } from "@embedpdf/plugin-annotation/react";
+import type {
+  AnnotationTransferItem,
+  SidebarAnnotationEntry,
+} from "@embedpdf/plugin-annotation/react";
 
 const ANNOTATION_SERIALIZED_TAG = "__askpdf_serialized_type";
 const ANNOTATION_SERIALIZED_VALUE = "value";
@@ -114,6 +117,19 @@ export function serializeAnnotationItems(items: AnnotationTransferItem[]): Annot
  */
 export function deserializeAnnotationItems(items: AnnotationTransferItem[]): AnnotationTransferItem[] {
   return decodeAnnotationValue(items) as AnnotationTransferItem[];
+}
+
+export function sortSidebarAnnotationEntriesByPosition(
+  entries: SidebarAnnotationEntry[]
+): SidebarAnnotationEntry[] {
+  return [...entries].sort((a, b) => {
+    const aRect = a.annotation.object.rect;
+    const bRect = b.annotation.object.rect;
+    const topDelta = aRect.origin.y - bRect.origin.y;
+    if (topDelta !== 0) return topDelta;
+
+    return aRect.origin.x - bRect.origin.x;
+  });
 }
 
 export type { AnnotationTransferItem };
