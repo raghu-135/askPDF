@@ -1009,7 +1009,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     color: isUser
                                         ? theme.palette.getContrastText(theme.palette.primary.main)
                                         : theme.palette.text.primary,
-                                    maxWidth: '90%',
+                                    maxWidth: isUser ? '90%' : `calc(100% - ${theme.spacing(6)})`,
                                     minWidth: 0,
                                     overflowWrap: 'anywhere',
                                     wordBreak: 'break-word',
@@ -1325,12 +1325,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Box>
                 )}
 
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch' }}>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch', px: 1 }}>
                     <TextField
                         fullWidth
                         variant="outlined"
                         multiline
-                        minRows={2}
+                        minRows={3}
                         maxRows={10}
                         placeholder={
                             (indexingStatus === 'blocked' || isEmbedModelValid === false)
@@ -1353,10 +1353,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         }}
                         disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
                         sx={{
-                            '& .MuiInputBase-root': {
-                                minHeight: 88,
-                                alignItems: 'flex-start',
-                            },
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: theme.palette.background.paper,
                                 color: theme.palette.text.primary,
@@ -1372,22 +1368,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     />
                     <Box
                         sx={{
-                            width: 44,
-                            flex: '0 0 44px',
+                            flex: '0 0 auto',
                             display: 'flex',
                             flexDirection: 'column',
                             justifyContent: 'space-between',
                             alignItems: 'center',
-                            minHeight: 88,
                         }}
                     >
+                        <IconButton
+                            size="medium"
+                            color="primary"
+                            onClick={handleSend}
+                            disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                        >
+                            {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false) || indexingStatus === 'error') ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
+                        </IconButton>
                         <Tooltip title="AI prompt settings for this thread" placement="top">
                             <IconButton
+                                size="medium"
                                 onClick={() => setSettingsDialogOpen(true)}
                                 sx={{
-                                    width: 40,
-                                    height: 40,
-                                    p: 0,
                                     color: 'text.secondary',
                                     '&:hover': {
                                         bgcolor: 'action.hover',
@@ -1395,21 +1395,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     },
                                 }}
                             >
-                                <SettingsIcon fontSize="small" />
+                                <SettingsIcon fontSize="medium" />
                             </IconButton>
                         </Tooltip>
-                        <IconButton
-                            color="primary"
-                            onClick={handleSend}
-                            disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
-                            sx={{
-                                width: 40,
-                                height: 40,
-                                p: 0,
-                            }}
-                        >
-                            {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false) || indexingStatus === 'error') ? <CircularProgress size={20} /> : <SendIcon fontSize="small" />}
-                        </IconButton>
                     </Box>
                 </Box>
             </Box>
