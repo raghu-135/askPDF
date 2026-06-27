@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import asyncio
+from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from fastapi import FastAPI, HTTPException
@@ -17,6 +18,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import requests
 import websockets
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import ArrayObject, NameObject
 from weasyprint import HTML, CSS
 
 logging.basicConfig(level=logging.INFO)
@@ -27,7 +30,7 @@ app = FastAPI(title="Browser Capture Service - Direct CDP")
 # Thread pool for CPU-bound operations (WeasyPrint)
 _thread_pool = ThreadPoolExecutor(max_workers=4)
 
-CAPTURES_DIR = Path("/captures")
+CAPTURES_DIR = Path(os.environ.get("CAPTURES_DIR", "/captures"))
 CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
 
 BROWSER_DEBUG_URL = os.environ.get("BROWSER_DEBUG_URL", "localhost:9222")
@@ -283,6 +286,55 @@ async def convert_html_to_pdf_weasyprint(html_content, pdf_options=None):
         raise
 
 
+def strip_pdf_link_annotations(pdf_data):
+    """Remove native PDF URL link annotations while preserving page content."""
+    def is_uri_link_annotation(annotation):
+        if annotation.get("/Subtype") != "/Link":
+            return False
+
+        action_ref = annotation.get("/A")
+        action = action_ref.get_object() if hasattr(action_ref, "get_object") else action_ref
+        if action and action.get("/S") == "/URI":
+            return True
+
+        return "/URI" in annotation
+
+    try:
+        reader = PdfReader(BytesIO(pdf_data))
+        writer = PdfWriter()
+        removed_count = 0
+
+        for page in reader.pages:
+            annotations = page.get("/Annots")
+            if annotations:
+                kept_annotations = ArrayObject()
+                for annotation_ref in annotations:
+                    annotation = annotation_ref.get_object()
+                    if is_uri_link_annotation(annotation):
+                        removed_count += 1
+                        continue
+                    kept_annotations.append(annotation_ref)
+
+                if kept_annotations:
+                    page[NameObject("/Annots")] = kept_annotations
+                else:
+                    page.pop(NameObject("/Annots"), None)
+
+            writer.add_page(page)
+
+        if removed_count == 0:
+            return pdf_data
+
+        output = BytesIO()
+        writer.write(output)
+        sanitized_pdf = output.getvalue()
+        logger.info(f"Removed {removed_count} native PDF URL link annotations from capture")
+        return sanitized_pdf
+    except Exception as e:
+        logger.warning(f"Failed to strip PDF link annotations; using original PDF: {e}")
+        return pdf_data
+
+
 async def generate_pdf_via_cdp(websocket_url, pdf_options):
     """Generate PDF using direct CDP WebSocket connection"""
     logger.info(f"Connecting to WebSocket: {websocket_url}")
@@ -400,7 +452,7 @@ async def capture_page():
                     html_content = await capture_page_html_via_cdp(websocket_url)
                     
                     # Convert HTML to PDF using WeasyPrint
-                    pdf_data = convert_html_to_pdf_weasyprint(html_content)
+                    pdf_data = await convert_html_to_pdf_weasyprint(html_content)
                     logger.info("WeasyPrint fallback successful")
                 except Exception as fallback_error:
                     logger.error(f"WeasyPrint fallback also failed: {fallback_error}")
@@ -412,6 +464,8 @@ async def capture_page():
                 # Re-raise the original CDP error if it's not the "Printing is not available" error
                 raise
         
+        pdf_data = strip_pdf_link_annotations(pdf_data)
+
         # Compute hash and save directly to final path (streaming, no temp file)
         file_hash = hashlib.md5(pdf_data).hexdigest()
         final_path = CAPTURES_DIR / f"{file_hash}.pdf"
