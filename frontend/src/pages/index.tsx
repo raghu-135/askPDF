@@ -84,14 +84,11 @@ export default function Home() {
   const [isBrowserCapturing, setIsBrowserCapturing] = useState(false);
 
   // Resizable chat panel
-  const [chatWidth, setChatWidth] = useState(450);
+  const [chatWidthRatio, setChatWidthRatio] = useState(0.32);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
   const [isResizing, setIsResizing] = useState(false);
-  const chatWidthRef = useRef(450);
+  const chatWidthRatioRef = useRef(0.32);
   const rafIdRef = useRef<number | null>(null);
-
-  // Thread sidebar width
-  const rightPanelMinWidth = 350;
 
 
   // Handle thread selection
@@ -331,8 +328,8 @@ export default function Home() {
   // Handle resize with optimized performance
   const handleMouseDown = useCallback(() => {
     setIsResizing(true);
-    chatWidthRef.current = chatWidth;
-  }, [chatWidth]);
+    chatWidthRatioRef.current = chatWidthRatio;
+  }, [chatWidthRatio]);
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (rafIdRef.current) {
@@ -340,18 +337,16 @@ export default function Home() {
     }
 
     rafIdRef.current = requestAnimationFrame(() => {
-      const newWidth = window.innerWidth - e.clientX;
-      const minWidth = window.innerWidth * 0.2;
-      const maxWidth = window.innerWidth * 0.8;
-      const constrainedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
-      chatWidthRef.current = constrainedWidth;
-      document.documentElement.style.setProperty('--chat-width', `${constrainedWidth}px`);
+      const nextRatio = (window.innerWidth - e.clientX) / window.innerWidth;
+      const constrainedRatio = Math.max(0.2, Math.min(0.8, nextRatio));
+      chatWidthRatioRef.current = constrainedRatio;
+      document.documentElement.style.setProperty('--chat-width-ratio', `${constrainedRatio}`);
     });
   }, []);
 
   const handleMouseUp = useCallback(() => {
     setIsResizing(false);
-    setChatWidth(chatWidthRef.current);
+    setChatWidthRatio(chatWidthRatioRef.current);
     if (rafIdRef.current) {
       cancelAnimationFrame(rafIdRef.current);
     }
@@ -376,7 +371,7 @@ export default function Home() {
 
   const canDisplayRightPanel = true; // Always show right panel for threads
   const rightPanelWidth = isRightPanelOpen
-    ? (isResizing ? 'var(--chat-width, 450px)' : chatWidth)
+    ? (isResizing ? `calc(100vw * var(--chat-width-ratio, ${chatWidthRatio}))` : `calc(100vw * ${chatWidthRatio})`)
     : 0;
 
 

@@ -122,6 +122,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [tooltipOpen, setTooltipOpen] = useState(false);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
+    const [clarificationPanelRatio, setClarificationPanelRatio] = useState(0.3);
+    const [isClarificationResizing, setIsClarificationResizing] = useState(false);
     const [useIntentAgent, setUseIntentAgent] = useState(true);
     const [intentAgentMaxIterations, setIntentAgentMaxIterations] = useState(1);
     const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
@@ -142,6 +144,36 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
     const lastClarificationIdsRef = useRef<{ userId: string | null; assistantId: string | null } | null>(null);
+    const chatRootRef = useRef<HTMLDivElement | null>(null);
+    const clarificationResizeRef = useRef({
+        startY: 0,
+        startRatio: 0.3,
+    });
+
+    const clampClarificationRatio = (ratio: number) => Math.max(0.16, Math.min(0.58, ratio));
+
+    const handleClarificationResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        clarificationResizeRef.current = {
+            startY: event.clientY,
+            startRatio: clarificationPanelRatio,
+        };
+        setIsClarificationResizing(true);
+        event.currentTarget.setPointerCapture(event.pointerId);
+    }, [clarificationPanelRatio]);
+
+    const handleClarificationResizeMove = useCallback((event: PointerEvent) => {
+        const chatHeight = chatRootRef.current?.getBoundingClientRect().height || window.innerHeight;
+        const deltaRatio = (clarificationResizeRef.current.startY - event.clientY) / chatHeight;
+        setClarificationPanelRatio(clampClarificationRatio(
+            clarificationResizeRef.current.startRatio + deltaRatio
+        ));
+    }, []);
+
+    const handleClarificationResizeEnd = useCallback(() => {
+        setIsClarificationResizing(false);
+    }, []);
 
     const cleanupClarificationTurn = (ids = lastClarificationIdsRef.current) => {
         setMessages(prev => prev.filter(m => {
@@ -166,6 +198,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             lastClarificationIdsRef.current = null;
         }
     };
+
+    useEffect(() => {
+        if (!isClarificationResizing) return;
+
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('pointermove', handleClarificationResizeMove);
+        document.addEventListener('pointerup', handleClarificationResizeEnd);
+        document.addEventListener('pointercancel', handleClarificationResizeEnd);
+
+        return () => {
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('pointermove', handleClarificationResizeMove);
+            document.removeEventListener('pointerup', handleClarificationResizeEnd);
+            document.removeEventListener('pointercancel', handleClarificationResizeEnd);
+        };
+    }, [handleClarificationResizeEnd, handleClarificationResizeMove, isClarificationResizing]);
 
     // Load messages when thread changes
     useEffect(() => {
@@ -865,9 +915,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     return (
-        <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
+        <Paper ref={chatRootRef} elevation={0} sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
             {/* Header */}
-            <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
+            <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                     <Tooltip title={
                         isEmbedModelValid === null ? "Checking embedding model status..." :
@@ -980,7 +1030,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </Box>
 
             {/* Messages List */}
-            <List sx={{ flexGrow: 1, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}>
+            <List sx={{ flexGrow: 1, minHeight: 0, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}>
                 {messages.map((msg, idx) => {
                     const isRecollected = recollectedIds.has(msg.id);
                     const isUser = msg.role === 'user';
@@ -1261,12 +1311,53 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </List>
 
             {/* Input Area */}
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
 
 
                 {clarificationOptions && (
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box
+                        sx={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            mb: 1,
+                            bgcolor: 'action.hover',
+                            borderRadius: 1,
+                            maxHeight: `calc(100dvh * ${clarificationPanelRatio})`,
+                            minHeight: 0,
+                            overflow: 'hidden',
+                            border: '1px solid',
+                            borderColor: isClarificationResizing ? 'primary.main' : 'divider',
+                        }}
+                    >
+                        <Box
+                            onPointerDown={handleClarificationResizeStart}
+                            role="separator"
+                            aria-orientation="horizontal"
+                            aria-label="Resize clarification options"
+                            sx={{
+                                flex: '0 0 auto',
+                                height: '1.5rem',
+                                cursor: 'ns-resize',
+                                touchAction: 'none',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'text.secondary',
+                                '&::before': {
+                                    content: '""',
+                                    width: '18%',
+                                    minWidth: '2rem',
+                                    maxWidth: '5rem',
+                                    height: '0.25rem',
+                                    borderRadius: 999,
+                                    bgcolor: isClarificationResizing ? 'primary.main' : 'divider',
+                                },
+                                '&:hover::before': {
+                                    bgcolor: 'primary.main',
+                                },
+                            }}
+                        />
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, pb: 1, flexShrink: 0 }}>
                             <Typography variant="caption" sx={{ flex: 1, textAlign: 'center', color: 'text.secondary', fontWeight: 'bold' }}>
                                 I need a bit more clarification. Did you mean one of these?
                             </Typography>
@@ -1283,45 +1374,47 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 </IconButton>
                             </Tooltip>
                         </Box>
-                        {clarificationOptions.map((choice, i) => (
-                            <Box
-                                key={i}
-                                sx={{
-                                    display: 'flex',
-                                    gap: 1,
-                                    alignItems: 'flex-start',
-                                    width: '100%'
-                                }}
-                            >
-                                <TextField
-                                    fullWidth
-                                    size="small"
-                                    multiline
-                                    maxRows={4}
-                                    label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
-                                    value={choice.text}
-                                    onChange={(event) => {
-                                        const nextText = event.target.value;
-                                        setClarificationOptions(prev => prev?.map((item, index) => (
-                                            index === i ? { ...item, text: nextText } : item
-                                        )) ?? null);
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 1, pb: 1, overflowY: 'auto', minHeight: 0 }}>
+                            {clarificationOptions.map((choice, i) => (
+                                <Box
+                                    key={i}
+                                    sx={{
+                                        display: 'flex',
+                                        gap: 1,
+                                        alignItems: 'flex-start',
+                                        width: '100%',
+                                        minWidth: 0,
                                     }}
-                                />
-                                <Tooltip title="Send this question">
-                                    <span>
-                                        <IconButton
-                                            color="primary"
-                                            size="small"
-                                            disabled={!choice.text.trim() || loading}
-                                            onClick={() => handleSend(choice.text.trim(), { isClarificationSelection: true })}
-                                            sx={{ mt: 0.5 }}
-                                        >
-                                            <SendIcon fontSize="small" />
-                                        </IconButton>
-                                    </span>
-                                </Tooltip>
-                            </Box>
-                        ))}
+                                >
+                                    <TextField
+                                        fullWidth
+                                        size="small"
+                                        multiline
+                                        label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
+                                        value={choice.text}
+                                        onChange={(event) => {
+                                            const nextText = event.target.value;
+                                            setClarificationOptions(prev => prev?.map((item, index) => (
+                                                index === i ? { ...item, text: nextText } : item
+                                            )) ?? null);
+                                        }}
+                                    />
+                                    <Tooltip title="Send this question">
+                                        <span>
+                                            <IconButton
+                                                color="primary"
+                                                size="small"
+                                                disabled={!choice.text.trim() || loading}
+                                                onClick={() => handleSend(choice.text.trim(), { isClarificationSelection: true })}
+                                                sx={{ mt: 0.5 }}
+                                            >
+                                                <SendIcon fontSize="small" />
+                                            </IconButton>
+                                        </span>
+                                    </Tooltip>
+                                </Box>
+                            ))}
+                        </Box>
                     </Box>
                 )}
 
