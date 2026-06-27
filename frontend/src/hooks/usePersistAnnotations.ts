@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { PdfAnnotationSubtype } from "@embedpdf/models";
 import { getThreadFileAnnotations, updateThreadFileAnnotations } from "../lib/api";
 import { serializeAnnotationItems } from "../lib/annotation-utils";
 
@@ -21,6 +22,25 @@ type SnapshotData = {
   threadId: string;
   fileHash: string;
 };
+
+function getAnnotationPayload(item: any) {
+  return item?.annotation || item;
+}
+
+function getAnnotationSelection(item: any): { pageIndex: number; id: string } | null {
+  const annotation = getAnnotationPayload(item);
+  if (typeof annotation?.pageIndex !== "number" || typeof annotation?.id !== "string") {
+    return null;
+  }
+  return { pageIndex: annotation.pageIndex, id: annotation.id };
+}
+
+function filterPersistableAnnotations(items: any[]): any[] {
+  return items.filter((item) => {
+    const annotation = getAnnotationPayload(item);
+    return annotation?.type !== PdfAnnotationSubtype.LINK;
+  });
+}
 
 /**
  * Hydrate, debounce-save, and flush EmbedPDF annotations for a single thread/file pair.
@@ -85,21 +105,24 @@ export function usePersistAnnotations({
 
         // Clear existing annotations first to prevent duplicate React keys
         const existing = await annotationApi.exportAnnotations().toPromise();
-        if ((existing as any[]).length > 0) {
-          annotationApi.deleteAnnotations(
-            (existing as any[]).map((a: any) => ({ pageIndex: a.pageIndex, id: a.id }))
-          );
+        const existingSelections = (existing as any[])
+          .map(getAnnotationSelection)
+          .filter((selection): selection is { pageIndex: number; id: string } => Boolean(selection));
+        if (existingSelections.length > 0) {
+          annotationApi.deleteAnnotations(existingSelections);
         }
 
-        if (annotations.length === 0) {
+        const persistedAnnotations = filterPersistableAnnotations(annotations);
+
+        if (persistedAnnotations.length === 0) {
           return;
         }
 
         // Note: We skip deduplication by ID since EmbedPDF annotations may not have unique IDs
-        const serializedSnapshot = JSON.stringify(serializeAnnotationItems(annotations));
+        const serializedSnapshot = JSON.stringify(serializeAnnotationItems(persistedAnnotations));
         lastPersistedSnapshotRef.current = serializedSnapshot;
         hydrateAnnotationsRef.current = true;
-        annotationApi.importAnnotations(annotations);
+        annotationApi.importAnnotations(persistedAnnotations);
       } catch (error: any) {
         const message = String(error?.message || error || "");
         if (!message.includes("404")) {
@@ -123,9 +146,10 @@ export function usePersistAnnotations({
 
     try {
       const exported = await annotationApi.exportAnnotations().toPromise();
-      const serialized = JSON.stringify(serializeAnnotationItems(exported as any[]));
+      const persistable = filterPersistableAnnotations(exported as any[]);
+      const serialized = JSON.stringify(serializeAnnotationItems(persistable));
       // Store context in snapshot so unmount cleanup knows which file this belongs to
-      latestSnapshotRef.current = { annotations: exported as any[], serialized, threadId, fileHash };
+      latestSnapshotRef.current = { annotations: persistable, serialized, threadId, fileHash };
     } catch (error: any) {
       // "Document not found" is expected during cleanup - silently ignore
       const message = String(error?.message || error || "");
@@ -145,7 +169,7 @@ export function usePersistAnnotations({
     try {
       const exported = await annotationApi.exportAnnotations().toPromise();
       // Note: We don't deduplicate by ID because EmbedPDF may not assign unique IDs
-      const uniqueExported = exported as any[];
+      const uniqueExported = filterPersistableAnnotations(exported as any[]);
       const snapshot = JSON.stringify(serializeAnnotationItems(uniqueExported));
       if (snapshot === lastPersistedSnapshotRef.current) {
         return;
