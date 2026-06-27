@@ -122,6 +122,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [tooltipOpen, setTooltipOpen] = useState(false);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
+    const [clarificationPanelRatio, setClarificationPanelRatio] = useState(0.3);
+    const [isClarificationResizing, setIsClarificationResizing] = useState(false);
     const [useIntentAgent, setUseIntentAgent] = useState(true);
     const [intentAgentMaxIterations, setIntentAgentMaxIterations] = useState(1);
     const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
@@ -142,6 +144,36 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
     const lastClarificationIdsRef = useRef<{ userId: string | null; assistantId: string | null } | null>(null);
+    const chatRootRef = useRef<HTMLDivElement | null>(null);
+    const clarificationResizeRef = useRef({
+        startY: 0,
+        startRatio: 0.3,
+    });
+
+    const clampClarificationRatio = (ratio: number) => Math.max(0.16, Math.min(0.58, ratio));
+
+    const handleClarificationResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        clarificationResizeRef.current = {
+            startY: event.clientY,
+            startRatio: clarificationPanelRatio,
+        };
+        setIsClarificationResizing(true);
+        event.currentTarget.setPointerCapture(event.pointerId);
+    }, [clarificationPanelRatio]);
+
+    const handleClarificationResizeMove = useCallback((event: PointerEvent) => {
+        const chatHeight = chatRootRef.current?.getBoundingClientRect().height || window.innerHeight;
+        const deltaRatio = (clarificationResizeRef.current.startY - event.clientY) / chatHeight;
+        setClarificationPanelRatio(clampClarificationRatio(
+            clarificationResizeRef.current.startRatio + deltaRatio
+        ));
+    }, []);
+
+    const handleClarificationResizeEnd = useCallback(() => {
+        setIsClarificationResizing(false);
+    }, []);
 
     const cleanupClarificationTurn = (ids = lastClarificationIdsRef.current) => {
         setMessages(prev => prev.filter(m => {
@@ -166,6 +198,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             lastClarificationIdsRef.current = null;
         }
     };
+
+    useEffect(() => {
+        if (!isClarificationResizing) return;
+
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        document.addEventListener('pointermove', handleClarificationResizeMove);
+        document.addEventListener('pointerup', handleClarificationResizeEnd);
+        document.addEventListener('pointercancel', handleClarificationResizeEnd);
+
+        return () => {
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('pointermove', handleClarificationResizeMove);
+            document.removeEventListener('pointerup', handleClarificationResizeEnd);
+            document.removeEventListener('pointercancel', handleClarificationResizeEnd);
+        };
+    }, [handleClarificationResizeEnd, handleClarificationResizeMove, isClarificationResizing]);
 
     // Load messages when thread changes
     useEffect(() => {
@@ -865,9 +915,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     return (
-        <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
+        <Paper ref={chatRootRef} elevation={0} sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
             {/* Header */}
-            <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
+            <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                     <Tooltip title={
                         isEmbedModelValid === null ? "Checking embedding model status..." :
@@ -890,15 +940,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Tooltip>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
-                    <Tooltip title="AI prompt settings for this thread" placement="top">
-                        <IconButton
-                            size="small"
-                            onClick={() => setSettingsDialogOpen(true)}
-                            sx={{ p: 0.5 }}
-                        >
-                            <SettingsIcon />
-                        </IconButton>
-                    </Tooltip>
                     <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
                         <IconButton
                             size="small"
@@ -989,7 +1030,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </Box>
 
             {/* Messages List */}
-            <List sx={{ flexGrow: 1, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}>
+            <List sx={{ flexGrow: 1, minHeight: 0, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}>
                 {messages.map((msg, idx) => {
                     const isRecollected = recollectedIds.has(msg.id);
                     const isUser = msg.role === 'user';
@@ -1018,7 +1059,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     color: isUser
                                         ? theme.palette.getContrastText(theme.palette.primary.main)
                                         : theme.palette.text.primary,
-                                    maxWidth: '90%',
+                                    maxWidth: isUser ? '90%' : `calc(100% - ${theme.spacing(6)})`,
+                                    minWidth: 0,
+                                    overflowWrap: 'anywhere',
+                                    wordBreak: 'break-word',
                                     boxShadow: activeMessageIndex === idx
                                         ? '0 0 10px rgba(255, 255, 0, 0.4)'
                                         : isRecollected
@@ -1121,13 +1165,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 <Typography variant="body2" component="div" sx={{
                                     cursor: 'text',
                                     pr: 2, // Add some padding to avoid immediate overlap with icons if possible
-                                    '& p': { m: 0, mb: 1 },
+                                    minWidth: 0,
+                                    maxWidth: '100%',
+                                    overflowWrap: 'anywhere',
+                                    wordBreak: 'break-word',
+                                    '& p': { m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
                                     '& p:last-child': { mb: 0 },
-                                    '& ul, & ol': { pl: 2, m: 0, mb: 1 },
-                                    '& li': { mb: 0.5 },
-                                    '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1 },
-                                    '& code': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace' },
-                                    '& pre': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 }
+                                    '& ul, & ol': { pl: 2, m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& li': { mb: 0.5, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& blockquote': { m: 0, pl: 1.5, borderLeft: '3px solid', borderColor: 'divider', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& a': { overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& code': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& pre': { maxWidth: '100%', bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 },
+                                    '& pre code': { overflowWrap: 'normal', wordBreak: 'normal' },
+                                    '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', mb: 1 },
+                                    '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.5 }
                                 }}>
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                                         {typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')}
@@ -1153,7 +1206,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     opacity: 0.9,
                                                     p: 1,
                                                     borderRadius: 1,
-                                                    bgcolor: 'rgba(255,255,255,0.1)'
+                                                    bgcolor: 'rgba(255,255,255,0.1)',
+                                                    minWidth: 0,
+                                                    maxWidth: '100%',
+                                                    overflowWrap: 'anywhere',
+                                                    wordBreak: 'break-word'
                                                 }}
                                             >
                                                 {msg.rewritten_query}
@@ -1254,12 +1311,53 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </List>
 
             {/* Input Area */}
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
 
 
                 {clarificationOptions && (
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mb: 1, p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box
+                        sx={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            mb: 1,
+                            bgcolor: 'background.default',
+                            borderRadius: 1,
+                            maxHeight: `calc(100dvh * ${clarificationPanelRatio})`,
+                            minHeight: 0,
+                            overflow: 'hidden',
+                            borderTop: '1px solid',
+                            borderColor: 'divider',
+                        }}
+                    >
+                        <Box
+                            onPointerDown={handleClarificationResizeStart}
+                            role="separator"
+                            aria-orientation="horizontal"
+                            aria-label="Resize clarification options"
+                            sx={{
+                                flex: '0 0 auto',
+                                height: '1.5rem',
+                                cursor: 'ns-resize',
+                                touchAction: 'none',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                color: 'text.secondary',
+                                '&::before': {
+                                    content: '""',
+                                    width: '18%',
+                                    minWidth: '2rem',
+                                    maxWidth: '5rem',
+                                    height: '0.25rem',
+                                    borderRadius: 999,
+                                    bgcolor: isClarificationResizing ? 'primary.main' : 'divider',
+                                },
+                                '&:hover::before': {
+                                    bgcolor: 'primary.main',
+                                },
+                            }}
+                        />
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, pb: 1, flexShrink: 0 }}>
                             <Typography variant="caption" sx={{ flex: 1, textAlign: 'center', color: 'text.secondary', fontWeight: 'bold' }}>
                                 I need a bit more clarification. Did you mean one of these?
                             </Typography>
@@ -1276,53 +1374,70 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 </IconButton>
                             </Tooltip>
                         </Box>
-                        {clarificationOptions.map((choice, i) => (
-                            <Box
-                                key={i}
-                                sx={{
-                                    display: 'flex',
-                                    gap: 1,
-                                    alignItems: 'flex-start',
-                                    width: '100%'
-                                }}
-                            >
-                                <TextField
-                                    fullWidth
-                                    size="small"
-                                    multiline
-                                    maxRows={4}
-                                    label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
-                                    value={choice.text}
-                                    onChange={(event) => {
-                                        const nextText = event.target.value;
-                                        setClarificationOptions(prev => prev?.map((item, index) => (
-                                            index === i ? { ...item, text: nextText } : item
-                                        )) ?? null);
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 1, pb: 1, overflowY: 'auto', minHeight: 0 }}>
+                            {clarificationOptions.map((choice, i) => (
+                                <Box
+                                    key={i}
+                                    sx={{
+                                        display: 'grid',
+                                        gridTemplateColumns: 'minmax(0, 1fr) 2.5rem',
+                                        gap: 1,
+                                        alignItems: 'flex-start',
+                                        width: '100%',
+                                        minWidth: 0,
                                     }}
-                                />
-                                <Tooltip title="Send this question">
-                                    <span>
-                                        <IconButton
-                                            color="primary"
-                                            size="small"
-                                            disabled={!choice.text.trim() || loading}
-                                            onClick={() => handleSend(choice.text.trim(), { isClarificationSelection: true })}
-                                            sx={{ mt: 0.5 }}
+                                >
+                                    <TextField
+                                        fullWidth
+                                        size="small"
+                                        multiline
+                                        label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
+                                        value={choice.text}
+                                        sx={{
+                                            '& .MuiOutlinedInput-root': {
+                                                bgcolor: 'action.hover',
+                                            },
+                                        }}
+                                        onChange={(event) => {
+                                            const nextText = event.target.value;
+                                            setClarificationOptions(prev => prev?.map((item, index) => (
+                                                index === i ? { ...item, text: nextText } : item
+                                            )) ?? null);
+                                        }}
+                                    />
+                                    <Tooltip title="Send this question">
+                                        <Box
+                                            component="span"
+                                            sx={{
+                                                width: '2.5rem',
+                                                display: 'flex',
+                                                justifyContent: 'center',
+                                                flex: '0 0 auto',
+                                            }}
                                         >
-                                            <SendIcon fontSize="small" />
-                                        </IconButton>
-                                    </span>
-                                </Tooltip>
-                            </Box>
-                        ))}
+                                            <IconButton
+                                                color="primary"
+                                                size="medium"
+                                                disabled={!choice.text.trim() || loading}
+                                                onClick={() => handleSend(choice.text.trim(), { isClarificationSelection: true })}
+                                                sx={{ mt: 0.25 }}
+                                            >
+                                                <SendIcon fontSize="medium" />
+                                            </IconButton>
+                                        </Box>
+                                    </Tooltip>
+                                </Box>
+                            ))}
+                        </Box>
                     </Box>
                 )}
 
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch', px: 1 }}>
                     <TextField
                         fullWidth
                         variant="outlined"
                         multiline
+                        minRows={3}
                         maxRows={10}
                         placeholder={
                             (indexingStatus === 'blocked' || isEmbedModelValid === false)
@@ -1358,13 +1473,40 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             },
                         }}
                     />
-                    <IconButton
-                        color="primary"
-                        onClick={handleSend}
-                        disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                    <Box
+                        sx={{
+                            flex: '0 0 auto',
+                            width: '2.5rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                        }}
                     >
-                        {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false) || indexingStatus === 'error') ? <CircularProgress size={24} /> : <SendIcon />}
-                    </IconButton>
+                        <IconButton
+                            size="medium"
+                            color="primary"
+                            onClick={handleSend}
+                            disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                        >
+                            {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false) || indexingStatus === 'error') ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
+                        </IconButton>
+                        <Tooltip title="AI prompt settings for this thread" placement="top">
+                            <IconButton
+                                size="medium"
+                                onClick={() => setSettingsDialogOpen(true)}
+                                sx={{
+                                    color: 'text.secondary',
+                                    '&:hover': {
+                                        bgcolor: 'action.hover',
+                                        color: 'text.primary',
+                                    },
+                                }}
+                            >
+                                <SettingsIcon fontSize="medium" />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
                 </Box>
             </Box>
 

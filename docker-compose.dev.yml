@@ -1,0 +1,11 @@
+services:
+  frontend:
+    build:
+      target: dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - frontend_next:/app/.next
+
+volumes:
+  frontend_next:
