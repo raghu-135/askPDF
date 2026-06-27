@@ -1,4 +1,5 @@
 import type { FormattedSelection } from "@embedpdf/plugin-selection/react";
+import type { SearchResult } from "@embedpdf/models";
 import type { PdfTab } from "../components/PdfTabs";
 
 export type PdfSelectionBBox = {
@@ -11,6 +12,13 @@ export type PdfSelectionBBox = {
 export type SentenceWithPageBBoxes<TBBox extends PdfSelectionBBox = PdfSelectionBBox> = {
   pageBBoxes: TBBox[];
 };
+
+export type SearchResultByPage = {
+  result: SearchResult;
+  index: number;
+};
+
+export type SearchResultsByPage = { [key: number]: SearchResultByPage[] };
 
 /**
  * Truncates a file name for display, preserving the extension if possible.
@@ -121,6 +129,30 @@ export function getActiveTabData(activeTab: PdfTab | null): {
     fileHash: activeTab?.fileHash || null,
     fileName: activeTab?.fileName || null,
   };
+}
+
+export function getAdjacentCyclicIndex(
+  activeIndex: number,
+  itemCount: number,
+  direction: "next" | "previous",
+): number {
+  if (itemCount <= 0) return -1;
+  if (activeIndex < 0 || activeIndex >= itemCount) {
+    return direction === "next" ? 0 : itemCount - 1;
+  }
+  return direction === "next"
+    ? (activeIndex + 1) % itemCount
+    : (activeIndex - 1 + itemCount) % itemCount;
+}
+
+export function mapSearchResultsByPage(results: SearchResult[]): SearchResultsByPage {
+  const map: SearchResultsByPage = {};
+  results.forEach((result, index) => {
+    const pageNumber = result.pageIndex + 1;
+    if (!map[pageNumber]) map[pageNumber] = [];
+    map[pageNumber].push({ result, index });
+  });
+  return map;
 }
 
 function rectOverlapArea(

@@ -7,7 +7,10 @@ import React, {
 } from "react";
 import { createPluginRegistration } from "@embedpdf/core";
 import { EmbedPDF, type PDFContextState } from "@embedpdf/core/react";
-import { PdfAnnotationObject } from "@embedpdf/models";
+import {
+  PdfAnnotationObject,
+  type PdfEngine,
+} from "@embedpdf/models";
 import { usePdfiumEngine } from "@embedpdf/engines/react";
 
 type AnnotationEvent = {
@@ -68,11 +71,14 @@ import { PdfSidebar, type SidebarTab } from "./PdfSidebar";
 import { usePersistAnnotations } from "../hooks/usePersistAnnotations";
 import { AnnotationToolbar } from "./annotation/AnnotationToolbar";
 import { AnnotationSelectionMenu } from "./annotation/AnnotationSelectionMenu";
+import { PdfSearchHighlightLayer } from "./PdfSearchHighlightLayer";
+import { PdfSearchControls, usePdfSearch } from "./PdfSearchControls";
 import { STANDARD_COLORS } from "./annotation/constants";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import {
   findSentenceForSelection,
+  mapSearchResultsByPage,
   type SentenceWithPageBBoxes,
 } from "../lib/pdf-utils";
 
@@ -312,6 +318,7 @@ function DocumentLoadedSync({
 
 function EmbedPdfDocumentBody({
   documentId,
+  pdfEngine,
   pdfUrl: _pdfUrl,
   sentences,
   currentId,
@@ -327,6 +334,7 @@ function EmbedPdfDocumentBody({
   isHistoryProcessingRef,
 }: Props & {
   documentId: string;
+  pdfEngine: PdfEngine<Blob>;
   pdfLoaded: boolean;
   setPdfLoaded: (v: boolean) => void;
   isHistoryProcessingRef: React.MutableRefObject<boolean>;
@@ -344,6 +352,15 @@ function EmbedPdfDocumentBody({
   zoomRef.current = zoomScope;
 
   const byPage = useMemo(() => sentencesByPageMap(sentences), [sentences]);
+  const pdfSearch = usePdfSearch({
+    documentId,
+    engine: pdfEngine,
+    resetKey: fileHash,
+  });
+  const searchByPage = useMemo(
+    () => mapSearchResultsByPage(pdfSearch.results),
+    [pdfSearch.results],
+  );
 
   const { provides: annotationApi } = useAnnotation(documentId);
   const { provides: selectionCapability } = useSelectionCapability();
@@ -364,7 +381,23 @@ function EmbedPdfDocumentBody({
     pdfLoaded,
   });
 
-  
+  useEffect(() => {
+    const activeResult = pdfSearch.activeResult;
+    const firstRect = activeResult?.rects[0];
+    if (!activeResult || !firstRect) return;
+
+    scrollRef.current?.scrollToPage({
+      pageNumber: activeResult.pageIndex + 1,
+      pageCoordinates: {
+        x: firstRect.origin.x,
+        y: firstRect.origin.y,
+      },
+      alignY: 35,
+      behavior: "smooth",
+    });
+  }, [pdfSearch.activeResult]);
+
+
   useEffect(() => {
     const savedWidth = window.localStorage.getItem("askpdf.pdfSidebarWidth");
     const parsedWidth = savedWidth ? Number(savedWidth) : NaN;
@@ -629,6 +662,14 @@ function EmbedPdfDocumentBody({
       const zoomState = zoomRef.current?.getState();
       const scale = zoomState?.currentZoomLevel || 1;
       const pageNumber = pageIndex + 1;
+      const pageSearchResults = searchByPage[pageNumber] || [];
+      const searchHighlightLayer = (
+        <PdfSearchHighlightLayer
+          results={pageSearchResults}
+          activeIndex={pdfSearch.activeIndex}
+          scale={scale}
+        />
+      );
 
       if (!highlightEnabled) {
         return (
@@ -676,6 +717,7 @@ function EmbedPdfDocumentBody({
                   />
                 )}
               />
+              {searchHighlightLayer}
             </PagePointerProvider>
           </div>
         );
@@ -729,6 +771,7 @@ function EmbedPdfDocumentBody({
                 />
               )}
             />
+            {searchHighlightLayer}
             {activeSentence ? (
               <div
                 style={{
@@ -774,6 +817,8 @@ function EmbedPdfDocumentBody({
       byPage,
       currentId,
       highlightEnabled,
+      searchByPage,
+      pdfSearch.activeIndex,
       handlePageContextMenuCapture,
       handlePageClick,
       handleReadSelectedTextAloud,
@@ -809,6 +854,7 @@ function EmbedPdfDocumentBody({
               showSidebar={showSidebar}
               onToggleSidebar={() => setShowSidebar((value) => !value)}
               isHistoryProcessingRef={isHistoryProcessingRef}
+              searchControls={<PdfSearchControls search={pdfSearch} />}
             />
 
             <Box
@@ -971,6 +1017,7 @@ const PdfViewer = React.memo(function PdfViewer({
           ctx.activeDocumentId ? (
             <EmbedPdfDocumentBody
               documentId={ctx.activeDocumentId}
+              pdfEngine={engine}
               pdfUrl={pdfUrl}
               sentences={sentences}
               currentId={currentId}

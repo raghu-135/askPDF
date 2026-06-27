@@ -20,6 +20,8 @@ import CropSquareIcon from "@mui/icons-material/CropSquare";
 import DrawIcon from "@mui/icons-material/Draw";
 import FormatUnderlinedIcon from "@mui/icons-material/FormatUnderlined";
 import GestureIcon from "@mui/icons-material/Gesture";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import StrikethroughSIcon from "@mui/icons-material/StrikethroughS";
 import {
@@ -39,6 +41,7 @@ import {
   type PdfTextAnnoObject,
   type Rect,
 } from "@embedpdf/models";
+import { getAdjacentCyclicIndex } from "../lib/pdf-utils";
 
 type PdfCommentsPaneProps = {
   documentId: string;
@@ -555,6 +558,14 @@ export function PdfCommentsPane({
     );
   }, [grouped]);
 
+  const selectedThreadIndex = useMemo(() => {
+    if (!selectedAnnotationId) return -1;
+    return threads.findIndex((thread) => {
+      if (thread.entry.annotation.object.id === selectedAnnotationId) return true;
+      return thread.entry.replies.some((reply) => reply.object.id === selectedAnnotationId);
+    });
+  }, [selectedAnnotationId, threads]);
+
   const groupedThreads = useMemo(() => {
     const pageNumbers = Object.keys(grouped)
       .map((page) => Number(page))
@@ -610,6 +621,16 @@ export function PdfCommentsPane({
       });
     },
     [annotationApi, scrollApi]
+  );
+
+  const selectAdjacentThread = useCallback(
+    (direction: "next" | "previous") => {
+      const nextIndex = getAdjacentCyclicIndex(selectedThreadIndex, threads.length, direction);
+      const thread = nextIndex >= 0 ? threads[nextIndex] : null;
+      if (!thread) return;
+      selectAndScroll(thread.entry.annotation.object);
+    },
+    [selectAndScroll, selectedThreadIndex, threads]
   );
 
   const createTextComment = useCallback(
@@ -688,11 +709,37 @@ export function PdfCommentsPane({
     >
       <Box sx={{ px: 1, py: 1.25, borderBottom: 1, borderColor: "divider" }}>
         <Stack spacing={1}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <CommentIcon fontSize="small" color="primary" />
-            <Typography variant="subtitle2" fontWeight={700}>
-              New comment
-            </Typography>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
+              <CommentIcon fontSize="small" color="primary" />
+              <Typography variant="subtitle2" fontWeight={700}>
+                New comment
+              </Typography>
+            </Stack>
+            <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+              <Tooltip title="Previous comment">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => selectAdjacentThread("previous")}
+                    disabled={threads.length === 0}
+                  >
+                    <KeyboardArrowUpIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Next comment">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => selectAdjacentThread("next")}
+                    disabled={threads.length === 0}
+                  >
+                    <KeyboardArrowDownIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Stack>
           </Stack>
 
           {selectedAnnotation ? (

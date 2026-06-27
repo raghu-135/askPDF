@@ -30,6 +30,7 @@ export interface AnnotationToolbarProps {
   showSidebar: boolean;
   onToggleSidebar: () => void;
   isHistoryProcessingRef: React.MutableRefObject<boolean>;
+  searchControls?: React.ReactNode;
 }
 
 /**
@@ -41,6 +42,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
   showSidebar,
   onToggleSidebar,
   isHistoryProcessingRef,
+  searchControls,
 }) {
   // EmbedPDF hooks
   const { provides: annotationApi, state } = useAnnotation(documentId);
@@ -170,8 +172,9 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
           {toolButton("circle", icons.circle, "Ellipse")}
         </Stack>
 
-        {/* Right section - History controls */}
+        {/* Right section - Search and history controls */}
         <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+          {searchControls}
           <Tooltip title="Undo">
             <span>
               <IconButton
