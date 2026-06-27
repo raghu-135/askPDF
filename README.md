@@ -64,7 +64,7 @@ docker compose up --build
 ### 4. Use It!
 - **Open**: http://localhost:3000
 - **Upload PDFs** or add webpages
-- **Click Play** to hear documents read aloud
+- **Click Play** or select PDF text and use the read-aloud icon to hear documents aloud
 - **Ask questions** about your content
 
 ---
@@ -100,7 +100,7 @@ docker compose up --build
 4. **Ask Questions** - Type questions in the chat
 
 ### Reading & Audio
-- **Play Controls**: Click Play or double-click any sentence to start
+- **Play Controls**: Click Play, or select PDF text and click the read-aloud icon in the selection menu
 - **Voice Settings**: Choose different voices and adjust speed (0.5x-2.0x)
 - **Auto-Scroll**: Document follows along automatically
 

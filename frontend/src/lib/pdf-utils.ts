@@ -1,4 +1,24 @@
-import { PdfTab } from "../components/PdfTabs";
+import type { FormattedSelection } from "@embedpdf/plugin-selection/react";
+import type { SearchResult } from "@embedpdf/models";
+import type { PdfTab } from "../components/PdfTabs";
+
+export type PdfSelectionBBox = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type SentenceWithPageBBoxes<TBBox extends PdfSelectionBBox = PdfSelectionBBox> = {
+  pageBBoxes: TBBox[];
+};
+
+export type SearchResultByPage = {
+  result: SearchResult;
+  index: number;
+};
+
+export type SearchResultsByPage = { [key: number]: SearchResultByPage[] };
 
 /**
  * Truncates a file name for display, preserving the extension if possible.
@@ -109,4 +129,98 @@ export function getActiveTabData(activeTab: PdfTab | null): {
     fileHash: activeTab?.fileHash || null,
     fileName: activeTab?.fileName || null,
   };
+}
+
+export function getAdjacentCyclicIndex(
+  activeIndex: number,
+  itemCount: number,
+  direction: "next" | "previous",
+): number {
+  if (itemCount <= 0) return -1;
+  if (activeIndex < 0 || activeIndex >= itemCount) {
+    return direction === "next" ? 0 : itemCount - 1;
+  }
+  return direction === "next"
+    ? (activeIndex + 1) % itemCount
+    : (activeIndex - 1 + itemCount) % itemCount;
+}
+
+export function mapSearchResultsByPage(results: SearchResult[]): SearchResultsByPage {
+  const map: SearchResultsByPage = {};
+  results.forEach((result, index) => {
+    const pageNumber = result.pageIndex + 1;
+    if (!map[pageNumber]) map[pageNumber] = [];
+    map[pageNumber].push({ result, index });
+  });
+  return map;
+}
+
+function rectOverlapArea(
+  a: { left: number; top: number; right: number; bottom: number },
+  b: { left: number; top: number; right: number; bottom: number },
+) {
+  const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+  const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+  return width * height;
+}
+
+function bboxToRect(bbox: PdfSelectionBBox) {
+  return {
+    left: bbox.x,
+    top: bbox.y,
+    right: bbox.x + bbox.width,
+    bottom: bbox.y + bbox.height,
+  };
+}
+
+export function findSentenceForSelection<TSentence extends SentenceWithPageBBoxes>(
+  selections: FormattedSelection[],
+  byPage: { [key: number]: TSentence[] },
+): TSentence | null {
+  let best: { sentence: TSentence; score: number } | null = null;
+
+  for (const selection of selections) {
+    const pageData = byPage[selection.pageIndex + 1] || [];
+    const selectionRect = {
+      left: selection.rect.origin.x,
+      top: selection.rect.origin.y,
+      right: selection.rect.origin.x + selection.rect.size.width,
+      bottom: selection.rect.origin.y + selection.rect.size.height,
+    };
+
+    for (const sentence of pageData) {
+      for (const bbox of sentence.pageBBoxes) {
+        const score = rectOverlapArea(selectionRect, bboxToRect(bbox));
+        if (!best || score > best.score) {
+          best = { sentence, score };
+        }
+      }
+    }
+  }
+
+  if (best && best.score > 0) return best.sentence;
+
+  for (const selection of selections) {
+    const pageData = byPage[selection.pageIndex + 1] || [];
+    const center = {
+      x: selection.rect.origin.x + selection.rect.size.width / 2,
+      y: selection.rect.origin.y + selection.rect.size.height / 2,
+    };
+
+    for (const sentence of pageData) {
+      for (const bbox of sentence.pageBBoxes) {
+        const rect = bboxToRect(bbox);
+        if (
+          center.x >= rect.left &&
+          center.x <= rect.right &&
+          center.y >= rect.top &&
+          center.y <= rect.bottom
+        ) {
+          return sentence;
+        }
+      }
+    }
+  }
+
+  return null;
 }

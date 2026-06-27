@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Stack, Select, MenuItem, Slider, Typography, FormControl, InputLabel, IconButton, Popover, Box, Tooltip } from "@mui/material";
+import { Stack, Select, MenuItem, Slider, Typography, FormControl, InputLabel, IconButton, Popover, Box, Tooltip, CircularProgress } from "@mui/material";
 import { PlayArrow, Pause, SkipPrevious, SkipNext } from '@mui/icons-material';
 import RecordVoiceOverIcon from '@mui/icons-material/RecordVoiceOver';
 import AutoStoriesIcon from '@mui/icons-material/AutoStories';
@@ -35,8 +35,10 @@ type Props = {
 const PlayerControls = React.memo(function PlayerControls({ sentences, currentId, onCurrentChange, playRequestId, autoScroll, onAutoScrollChange, highlightEnabled, onHighlightEnabledChange }: Props) {
   // Ref to the audio element for playback control
   const audioRef = useRef<HTMLAudioElement>(null);
+  const playRequestTokenRef = useRef(0);
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isPreparingAudio, setIsPreparingAudio] = useState(false);
   // Available TTS voices
   const [voices, setVoices] = useState<string[]>([]);
   // Currently selected TTS voice
@@ -95,6 +97,7 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
   // Cleanup on unmount: stop audio
   useEffect(() => {
     return () => {
+      playRequestTokenRef.current += 1;
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = "";
@@ -103,7 +106,7 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
     };
   }, [clearCache]);
 
-  // Play a sentence when an external play request is received (e.g., double-click in PDF)
+  // Play a sentence when an external play request is received, such as the PDF selection menu.
   useEffect(() => {
     if (playRequestId == null) return;
     void playSentence(playRequestId);
@@ -128,6 +131,7 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
       audioRef.current.onended = null;
     }
     setIsPlaying(false);
+    setIsPreparingAudio(false);
     setPausedAt(null);
     clearCache();
   }, [sentences]);
@@ -144,6 +148,8 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
   async function playSentence(id: number, resumeFrom?: number) {
     const audio = audioRef.current;
     if (!audio) return;
+    const requestToken = playRequestTokenRef.current + 1;
+    playRequestTokenRef.current = requestToken;
 
     // Stop any current playback
     audio.pause();
@@ -155,13 +161,17 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
       return;
     }
     onCurrentChange(id);
+    setIsPlaying(false);
+    setIsPreparingAudio(true);
 
     try {
       const cached = getOrCreateSentenceAudio(id, effectiveVoice, speed);
       if (!cached) return;
       const { audioUrl } = await cached;
+      if (playRequestTokenRef.current !== requestToken) return;
       audio.src = audioUrl;
       await audio.play();
+      if (playRequestTokenRef.current !== requestToken) return;
       prefetchAhead(id, effectiveVoice, speed);
       if (resumeFrom) {
         audio.currentTime = resumeFrom;
@@ -186,6 +196,10 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
       }
       console.error("Playback failed", e);
       setIsPlaying(false);
+    } finally {
+      if (playRequestTokenRef.current === requestToken) {
+        setIsPreparingAudio(false);
+      }
     }
   }
 
@@ -195,6 +209,13 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
    */
   function handlePlayPause() {
     const audio = audioRef.current;
+    if (isPreparingAudio) {
+      playRequestTokenRef.current += 1;
+      setIsPreparingAudio(false);
+      audio?.pause();
+      return;
+    }
+
     if (!isPlaying) {
       if (pausedAt !== null && currentId !== null) {
         audio!.play();
@@ -216,8 +237,20 @@ const PlayerControls = React.memo(function PlayerControls({ sentences, currentId
     <Stack direction="row" spacing={1} alignItems="center" useFlexGap sx={{ flexWrap: "wrap" }}>
       <Tooltip title={isDisabled ? "Parsing in progress" : ""}>
         <Stack direction="row" spacing={0.5} alignItems="center">
-          <IconButton color="primary" onClick={handlePlayPause} size="small" disabled={isDisabled}>
-            {isPlaying ? <Pause fontSize="small" /> : <PlayArrow fontSize="small" />}
+          <IconButton
+            color="primary"
+            onClick={handlePlayPause}
+            size="small"
+            disabled={isDisabled}
+            aria-label={isPreparingAudio ? "Preparing audio" : isPlaying ? "Pause" : "Play"}
+          >
+            {isPlaying ? (
+              <Pause fontSize="small" />
+            ) : isPreparingAudio ? (
+              <CircularProgress size={18} thickness={5} />
+            ) : (
+              <PlayArrow fontSize="small" />
+            )}
           </IconButton>
           <IconButton onClick={() => currentId !== null && currentId > 0 && playSentence(currentId - 1)} disabled={isDisabled || currentId === null || currentId <= 0} size="small">
             <SkipPrevious fontSize="small" />

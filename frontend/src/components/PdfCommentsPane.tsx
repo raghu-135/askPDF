@@ -13,13 +13,15 @@ import { useTheme } from "@mui/material/styles";
 import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import BorderColorIcon from "@mui/icons-material/BorderColor";
-import AddCommentIcon from "@mui/icons-material/AddComment";
+import ArticleIcon from "@mui/icons-material/Article";
 import DeleteIcon from "@mui/icons-material/Delete";
 import CommentIcon from "@mui/icons-material/Comment";
 import CropSquareIcon from "@mui/icons-material/CropSquare";
 import DrawIcon from "@mui/icons-material/Draw";
 import FormatUnderlinedIcon from "@mui/icons-material/FormatUnderlined";
 import GestureIcon from "@mui/icons-material/Gesture";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import StrikethroughSIcon from "@mui/icons-material/StrikethroughS";
 import {
@@ -39,6 +41,7 @@ import {
   type PdfTextAnnoObject,
   type Rect,
 } from "@embedpdf/models";
+import { getAdjacentCyclicIndex } from "../lib/pdf-utils";
 
 type PdfCommentsPaneProps = {
   documentId: string;
@@ -53,7 +56,7 @@ type CommentThreadEntry = {
 type PageSection = {
   pageIndex: number;
   threads: CommentThreadEntry[];
-  commentCount: number;
+  annotationCount: number;
   replyCount: number;
 };
 
@@ -85,7 +88,7 @@ function AnnotationBadge({
   selected?: boolean;
   pageLabel?: boolean;
 }) {
-  const pageIcon = <AddCommentIcon sx={{ fontSize: 17 }} />;
+  const pageIcon = <ArticleIcon sx={{ fontSize: 17 }} />;
   const iconByType: Partial<Record<PdfAnnotationSubtype, React.ReactNode>> = {
     [PdfAnnotationSubtype.HIGHLIGHT]: <BorderColorIcon sx={{ fontSize: 17 }} />,
     [PdfAnnotationSubtype.UNDERLINE]: <FormatUnderlinedIcon sx={{ fontSize: 17 }} />,
@@ -353,7 +356,7 @@ function CommentRow({
   );
 }
 
-function CommentThreadCard({
+function AnnotationThreadCard({
   thread,
   selectedAnnotationId,
   onJump,
@@ -448,7 +451,19 @@ function CommentThreadCard({
                 {summarizeAnnotation(root.object)}
               </Typography>
             </CommentRow>
-          ) : null
+          ) : entry.replies.length === 0 ? (
+            <CommentRow>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ lineHeight: 1.45 }}
+              >
+                No comments yet
+              </Typography>
+            </CommentRow>
+          ) : (
+            null
+          )
         )}
       </Box>
 
@@ -550,10 +565,17 @@ export function PdfCommentsPane({
 
     return pageNumbers.flatMap((pageNumber) =>
       (grouped[pageNumber] || [])
-        .filter((entry) => isText(entry.annotation) || entry.replies.length > 0)
         .map((entry) => ({ pageIndex: pageNumber, entry }))
     );
   }, [grouped]);
+
+  const selectedThreadIndex = useMemo(() => {
+    if (!selectedAnnotationId) return -1;
+    return threads.findIndex((thread) => {
+      if (thread.entry.annotation.object.id === selectedAnnotationId) return true;
+      return thread.entry.replies.some((reply) => reply.object.id === selectedAnnotationId);
+    });
+  }, [selectedAnnotationId, threads]);
 
   const groupedThreads = useMemo(() => {
     const pageNumbers = Object.keys(grouped)
@@ -563,13 +585,12 @@ export function PdfCommentsPane({
     return pageNumbers
       .map((pageIndex) => {
         const threads = (grouped[pageIndex] || [])
-          .filter((entry) => isText(entry.annotation) || entry.replies.length > 0)
           .map((entry) => ({ pageIndex, entry }));
 
         return {
           pageIndex,
           threads,
-          commentCount: threads.length,
+          annotationCount: threads.length,
           replyCount: threads.reduce((count, thread) => count + thread.entry.replies.length, 0),
         };
       })
@@ -610,6 +631,16 @@ export function PdfCommentsPane({
       });
     },
     [annotationApi, scrollApi]
+  );
+
+  const selectAdjacentThread = useCallback(
+    (direction: "next" | "previous") => {
+      const nextIndex = getAdjacentCyclicIndex(selectedThreadIndex, threads.length, direction);
+      const thread = nextIndex >= 0 ? threads[nextIndex] : null;
+      if (!thread) return;
+      selectAndScroll(thread.entry.annotation.object);
+    },
+    [selectAndScroll, selectedThreadIndex, threads]
   );
 
   const createTextComment = useCallback(
@@ -688,11 +719,37 @@ export function PdfCommentsPane({
     >
       <Box sx={{ px: 1, py: 1.25, borderBottom: 1, borderColor: "divider" }}>
         <Stack spacing={1}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <CommentIcon fontSize="small" color="primary" />
-            <Typography variant="subtitle2" fontWeight={700}>
-              New comment
-            </Typography>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
+              <CommentIcon fontSize="small" color="primary" />
+              <Typography variant="subtitle2" fontWeight={700}>
+                New comment
+              </Typography>
+            </Stack>
+            <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+              <Tooltip title="Previous annotation">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => selectAdjacentThread("previous")}
+                    disabled={threads.length === 0}
+                  >
+                    <KeyboardArrowUpIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Next annotation">
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => selectAdjacentThread("next")}
+                    disabled={threads.length === 0}
+                  >
+                    <KeyboardArrowDownIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Stack>
           </Stack>
 
           {selectedAnnotation ? (
@@ -758,13 +815,13 @@ export function PdfCommentsPane({
         {threads.length === 0 ? (
           <Box sx={{ px: 1, py: 1.5, color: "text.secondary" }}>
             <Typography variant="body2">
-              No comments yet. Select an annotation and add a note to start a thread.
+              No annotations or comments yet. Add markup in the document to start a list.
             </Typography>
           </Box>
         ) : (
           <Stack spacing={1.25}>
             {groupedThreads.map((section: PageSection) => {
-              const commentLabel = section.commentCount === 1 ? "1 comment" : `${section.commentCount} comments`;
+              const annotationLabel = section.annotationCount === 1 ? "1 annotation" : `${section.annotationCount} annotations`;
               const replyLabel = section.replyCount === 1 ? "1 reply" : `${section.replyCount} replies`;
 
               return (
@@ -780,7 +837,7 @@ export function PdfCommentsPane({
                         Page {section.pageIndex + 1}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {commentLabel}
+                        {annotationLabel}
                         {section.replyCount > 0 ? ` · ${replyLabel}` : ""}
                       </Typography>
                     </Box>
@@ -791,7 +848,7 @@ export function PdfCommentsPane({
                   <Stack spacing={0}>
                     {Array.from(new Map(section.threads.map(t => [t.entry.annotation.object.id, t])).values()).map((thread, threadIndex) => (
                       <Box key={thread.entry.annotation.object.id} sx={{ px: 0 }}>
-                        <CommentThreadCard
+                        <AnnotationThreadCard
                           thread={thread}
                           selectedAnnotationId={selectedAnnotationId}
                           onJump={selectAndScroll}

@@ -27,6 +27,16 @@ import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
 
+const CHAT_PANEL_RATIO = {
+  default: 0.32,
+  min: 0.2,
+  max: 0.8,
+};
+
+const clampChatPanelRatio = (ratio: number) => (
+  Math.max(CHAT_PANEL_RATIO.min, Math.min(CHAT_PANEL_RATIO.max, ratio))
+);
+
 export default function Home() {
   // Multiple PDF tabs state
   const [pdfTabs, setPdfTabs] = useState<PdfTab[]>([]);
@@ -84,10 +94,10 @@ export default function Home() {
   const [isBrowserCapturing, setIsBrowserCapturing] = useState(false);
 
   // Resizable chat panel
-  const [chatWidthRatio, setChatWidthRatio] = useState(0.32);
+  const [chatWidthRatio, setChatWidthRatio] = useState(CHAT_PANEL_RATIO.default);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
   const [isResizing, setIsResizing] = useState(false);
-  const chatWidthRatioRef = useRef(0.32);
+  const chatWidthRatioRef = useRef(CHAT_PANEL_RATIO.default);
   const rafIdRef = useRef<number | null>(null);
 
 
@@ -338,7 +348,7 @@ export default function Home() {
 
     rafIdRef.current = requestAnimationFrame(() => {
       const nextRatio = (window.innerWidth - e.clientX) / window.innerWidth;
-      const constrainedRatio = Math.max(0.2, Math.min(0.8, nextRatio));
+      const constrainedRatio = clampChatPanelRatio(nextRatio);
       chatWidthRatioRef.current = constrainedRatio;
       document.documentElement.style.setProperty('--chat-width-ratio', `${constrainedRatio}`);
     });
@@ -387,11 +397,32 @@ export default function Home() {
       <Box sx={{ height: "100vh", display: "flex", flexDirection: "row", overflow: "hidden", bgcolor: 'background.default' }}>
 
         {/* Left Column: PDF Content & Controls */}
-        <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, borderRight: 1, borderColor: 'divider' }}>
+        <Box sx={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          minWidth: 0,
+          borderRight: 1,
+          borderColor: 'divider'
+        }}>
           {/* Top Controls Bar */}
-          <Box sx={{ px: 2, height: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{
+            px: 1.5,
+            py: 0.75,
+            minHeight: 49,
+            borderBottom: 1,
+            borderColor: 'divider',
+            bgcolor: pdfDarkMode ? '#222' : 'background.paper',
+            color: pdfDarkMode ? '#eee' : 'inherit',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+            flexWrap: 'wrap',
+            overflow: 'visible'
+          }}>
             {/* Left side controls */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
               {/* PDF Uploader */}
               <PdfUploader
                 threadId={activeThread?.id ?? null}
@@ -426,7 +457,7 @@ export default function Home() {
             </Box>
 
             {/* Right side icons */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: '0 0 auto', ml: 'auto' }}>
               {/* PDF Dark Mode Toggle */}
               <Tooltip title={pdfDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
                 <IconButton
@@ -515,7 +546,7 @@ export default function Home() {
                     <li>Click <b>Upload PDF</b> to add PDF documents to your thread.</li>
                     <li>Switch to the <b>Chat</b> tab to ask questions about your sources using AI.</li>
                     <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
-                    <li>Double-click any text to start audio playback from that point.</li>
+                    <li>Select text and click the read-aloud icon to start audio playback from that point.</li>
                   </ul>
                   <Typography sx={{ mt: 2, mb: 1, color: pdfDarkMode ? '#ccc' : 'textSecondary' }}>
                     Settings tips:
