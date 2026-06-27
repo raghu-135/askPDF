@@ -173,6 +173,11 @@ const ANNOTATION_TOOLS = [
   },
   {
     id: 'line',
+    clickBehavior: {
+      enabled: false,
+      defaultLength: 100,
+      defaultAngle: 0,
+    },
     defaults: {
       strokeColor: '#f44336',
       strokeWidth: 2,
@@ -181,6 +186,10 @@ const ANNOTATION_TOOLS = [
   },
   {
     id: 'square',
+    clickBehavior: {
+      enabled: false,
+      defaultSize: { width: 100, height: 100 },
+    },
     defaults: {
       strokeColor: '#f44336',
       strokeWidth: 2,
@@ -189,6 +198,10 @@ const ANNOTATION_TOOLS = [
   },
   {
     id: 'circle',
+    clickBehavior: {
+      enabled: false,
+      defaultSize: { width: 100, height: 100 },
+    },
     defaults: {
       strokeColor: '#f44336',
       strokeWidth: 2,

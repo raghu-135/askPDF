@@ -13,7 +13,7 @@ import { useTheme } from "@mui/material/styles";
 import CheckIcon from "@mui/icons-material/Check";
 import CloseIcon from "@mui/icons-material/Close";
 import BorderColorIcon from "@mui/icons-material/BorderColor";
-import AddCommentIcon from "@mui/icons-material/AddComment";
+import ArticleIcon from "@mui/icons-material/Article";
 import DeleteIcon from "@mui/icons-material/Delete";
 import CommentIcon from "@mui/icons-material/Comment";
 import CropSquareIcon from "@mui/icons-material/CropSquare";
@@ -56,7 +56,7 @@ type CommentThreadEntry = {
 type PageSection = {
   pageIndex: number;
   threads: CommentThreadEntry[];
-  commentCount: number;
+  annotationCount: number;
   replyCount: number;
 };
 
@@ -88,7 +88,7 @@ function AnnotationBadge({
   selected?: boolean;
   pageLabel?: boolean;
 }) {
-  const pageIcon = <AddCommentIcon sx={{ fontSize: 17 }} />;
+  const pageIcon = <ArticleIcon sx={{ fontSize: 17 }} />;
   const iconByType: Partial<Record<PdfAnnotationSubtype, React.ReactNode>> = {
     [PdfAnnotationSubtype.HIGHLIGHT]: <BorderColorIcon sx={{ fontSize: 17 }} />,
     [PdfAnnotationSubtype.UNDERLINE]: <FormatUnderlinedIcon sx={{ fontSize: 17 }} />,
@@ -356,7 +356,7 @@ function CommentRow({
   );
 }
 
-function CommentThreadCard({
+function AnnotationThreadCard({
   thread,
   selectedAnnotationId,
   onJump,
@@ -451,7 +451,19 @@ function CommentThreadCard({
                 {summarizeAnnotation(root.object)}
               </Typography>
             </CommentRow>
-          ) : null
+          ) : entry.replies.length === 0 ? (
+            <CommentRow>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ lineHeight: 1.45 }}
+              >
+                No comments yet
+              </Typography>
+            </CommentRow>
+          ) : (
+            null
+          )
         )}
       </Box>
 
@@ -553,7 +565,6 @@ export function PdfCommentsPane({
 
     return pageNumbers.flatMap((pageNumber) =>
       (grouped[pageNumber] || [])
-        .filter((entry) => isText(entry.annotation) || entry.replies.length > 0)
         .map((entry) => ({ pageIndex: pageNumber, entry }))
     );
   }, [grouped]);
@@ -574,13 +585,12 @@ export function PdfCommentsPane({
     return pageNumbers
       .map((pageIndex) => {
         const threads = (grouped[pageIndex] || [])
-          .filter((entry) => isText(entry.annotation) || entry.replies.length > 0)
           .map((entry) => ({ pageIndex, entry }));
 
         return {
           pageIndex,
           threads,
-          commentCount: threads.length,
+          annotationCount: threads.length,
           replyCount: threads.reduce((count, thread) => count + thread.entry.replies.length, 0),
         };
       })
@@ -717,7 +727,7 @@ export function PdfCommentsPane({
               </Typography>
             </Stack>
             <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
-              <Tooltip title="Previous comment">
+              <Tooltip title="Previous annotation">
                 <span>
                   <IconButton
                     size="small"
@@ -728,7 +738,7 @@ export function PdfCommentsPane({
                   </IconButton>
                 </span>
               </Tooltip>
-              <Tooltip title="Next comment">
+              <Tooltip title="Next annotation">
                 <span>
                   <IconButton
                     size="small"
@@ -805,13 +815,13 @@ export function PdfCommentsPane({
         {threads.length === 0 ? (
           <Box sx={{ px: 1, py: 1.5, color: "text.secondary" }}>
             <Typography variant="body2">
-              No comments yet. Select an annotation and add a note to start a thread.
+              No annotations or comments yet. Add markup in the document to start a list.
             </Typography>
           </Box>
         ) : (
           <Stack spacing={1.25}>
             {groupedThreads.map((section: PageSection) => {
-              const commentLabel = section.commentCount === 1 ? "1 comment" : `${section.commentCount} comments`;
+              const annotationLabel = section.annotationCount === 1 ? "1 annotation" : `${section.annotationCount} annotations`;
               const replyLabel = section.replyCount === 1 ? "1 reply" : `${section.replyCount} replies`;
 
               return (
@@ -827,7 +837,7 @@ export function PdfCommentsPane({
                         Page {section.pageIndex + 1}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {commentLabel}
+                        {annotationLabel}
                         {section.replyCount > 0 ? ` · ${replyLabel}` : ""}
                       </Typography>
                     </Box>
@@ -838,7 +848,7 @@ export function PdfCommentsPane({
                   <Stack spacing={0}>
                     {Array.from(new Map(section.threads.map(t => [t.entry.annotation.object.id, t])).values()).map((thread, threadIndex) => (
                       <Box key={thread.entry.annotation.object.id} sx={{ px: 0 }}>
-                        <CommentThreadCard
+                        <AnnotationThreadCard
                           thread={thread}
                           selectedAnnotationId={selectedAnnotationId}
                           onJump={selectAndScroll}

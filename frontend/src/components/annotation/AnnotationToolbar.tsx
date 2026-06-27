@@ -25,6 +25,18 @@ import RedoIcon from "@mui/icons-material/Redo";
 import NearMeIcon from "@mui/icons-material/NearMe";
 import NearMeDisabledIcon from "@mui/icons-material/NearMeDisabled";
 
+const activeButtonSx = {
+  bgcolor: "primary.main",
+  color: "primary.contrastText",
+  "&:hover": {
+    bgcolor: "primary.dark",
+  },
+  "&.Mui-disabled": {
+    bgcolor: "action.disabledBackground",
+    color: "action.disabled",
+  },
+};
+
 export interface AnnotationToolbarProps {
   documentId: string;
   showSidebar: boolean;
@@ -88,6 +100,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
           onClick={() => annotationApi?.setActiveTool(isActive ? null : id)}
           disabled={isViewOnly}
           color={isActive ? "primary" : "default"}
+          sx={isActive ? activeButtonSx : undefined}
         >
           {icon}
         </IconButton>
@@ -136,10 +149,13 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
         {/* Left section - Tools and controls */}
         <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
           <Tooltip title="Toggle Sidebar">
-            <IconButton onClick={onToggleSidebar} size="small" sx={{ mr: 0.5 }}>
+            <IconButton
+              onClick={onToggleSidebar}
+              size="small"
+              sx={{ mr: 0.5, ...(showSidebar ? activeButtonSx : {}) }}
+            >
               <ViewSidebarIcon
                 fontSize="small"
-                color={showSidebar ? "primary" : "inherit"}
                 sx={{ transform: "scaleX(-1)" }}
               />
             </IconButton>
@@ -151,6 +167,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
               size="small"
               onClick={toggleViewOnly}
               color={isViewOnly ? "primary" : "default"}
+              sx={isViewOnly ? activeButtonSx : undefined}
             >
               {isViewOnly ? <NearMeIcon fontSize="small" /> : <NearMeDisabledIcon fontSize="small" />}
             </IconButton>
