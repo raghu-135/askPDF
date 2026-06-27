@@ -1320,13 +1320,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             display: 'flex',
                             flexDirection: 'column',
                             mb: 1,
-                            bgcolor: 'action.hover',
+                            bgcolor: 'background.default',
                             borderRadius: 1,
                             maxHeight: `calc(100dvh * ${clarificationPanelRatio})`,
                             minHeight: 0,
                             overflow: 'hidden',
-                            border: '1px solid',
-                            borderColor: isClarificationResizing ? 'primary.main' : 'divider',
+                            borderTop: '1px solid',
+                            borderColor: 'divider',
                         }}
                     >
                         <Box
@@ -1379,7 +1379,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 <Box
                                     key={i}
                                     sx={{
-                                        display: 'flex',
+                                        display: 'grid',
+                                        gridTemplateColumns: 'minmax(0, 1fr) 2.5rem',
                                         gap: 1,
                                         alignItems: 'flex-start',
                                         width: '100%',
@@ -1392,6 +1393,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         multiline
                                         label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
                                         value={choice.text}
+                                        sx={{
+                                            '& .MuiOutlinedInput-root': {
+                                                bgcolor: 'action.hover',
+                                            },
+                                        }}
                                         onChange={(event) => {
                                             const nextText = event.target.value;
                                             setClarificationOptions(prev => prev?.map((item, index) => (
@@ -1400,17 +1406,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         }}
                                     />
                                     <Tooltip title="Send this question">
-                                        <span>
+                                        <Box
+                                            component="span"
+                                            sx={{
+                                                width: '2.5rem',
+                                                display: 'flex',
+                                                justifyContent: 'center',
+                                                flex: '0 0 auto',
+                                            }}
+                                        >
                                             <IconButton
                                                 color="primary"
-                                                size="small"
+                                                size="medium"
                                                 disabled={!choice.text.trim() || loading}
                                                 onClick={() => handleSend(choice.text.trim(), { isClarificationSelection: true })}
-                                                sx={{ mt: 0.5 }}
+                                                sx={{ mt: 0.25 }}
                                             >
-                                                <SendIcon fontSize="small" />
+                                                <SendIcon fontSize="medium" />
                                             </IconButton>
-                                        </span>
+                                        </Box>
                                     </Tooltip>
                                 </Box>
                             ))}
@@ -1462,6 +1476,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <Box
                         sx={{
                             flex: '0 0 auto',
+                            width: '2.5rem',
                             display: 'flex',
                             flexDirection: 'column',
                             justifyContent: 'space-between',
