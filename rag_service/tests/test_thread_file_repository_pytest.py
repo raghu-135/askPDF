@@ -5,16 +5,11 @@ These tests verify that the ThreadFileRepository works correctly with SQLModel
 and PostgreSQL, covering associations, annotations, and counting operations.
 """
 
-import os
-import sys
 import pytest
 import pytest_asyncio
 from datetime import datetime
 from typing import List
 import json
-
-# Add parent directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sqlmodel import select
 from sqlalchemy.exc import IntegrityError

@@ -2,14 +2,9 @@
 test_message_api_pytest.py - Message API endpoint contract tests.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app.api import messages as messages_api
 

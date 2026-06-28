@@ -6,7 +6,6 @@ including connection management, session handling, and test data.
 """
 
 import os
-import sys
 import asyncio
 import uuid
 from typing import AsyncGenerator, Generator
@@ -15,14 +14,12 @@ from datetime import datetime
 import pytest
 import pytest_asyncio
 from faker import Faker
-
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-# SQLModel imports - PostgreSQL
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
-from app.db.connection_sqlmodel import get_session, init_db
+from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
+
 from app.db.models_sqlmodel import (
     Thread, File, ThreadFile,
     ChatTurn, ProcessStatus, MessageRole
@@ -66,6 +63,101 @@ def test_database_url() -> str:
     return f"{base_url}/{random_db_name}"
 
 
+def _build_test_engine(test_database_url: str):
+    return create_async_engine(
+        test_database_url,
+        poolclass=NullPool,
+        echo=False,
+        future=True
+    )
+
+
+async def _create_test_schema(engine):
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+
+async def _drop_test_schema(engine):
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.drop_all)
+    await engine.dispose()
+
+
+def _build_session_maker(engine):
+    return async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False
+    )
+
+
+def _patch_app_session_makers(monkeypatch, session_maker):
+    from app.db import connection_sqlmodel
+    from app.db.repositories import (
+        file_repo_sqlmodel,
+        message_repo_sqlmodel,
+        stats_repo_sqlmodel,
+        thread_file_repo_sqlmodel,
+        thread_repo_sqlmodel,
+    )
+    from app.services import thread_management_service
+
+    for module in (
+        connection_sqlmodel,
+        file_repo_sqlmodel,
+        message_repo_sqlmodel,
+        stats_repo_sqlmodel,
+        thread_file_repo_sqlmodel,
+        thread_repo_sqlmodel,
+        thread_management_service,
+    ):
+        monkeypatch.setattr(module, "async_session_maker", session_maker)
+
+    # Rebuild repository singletons so endpoint tests cannot reuse app-DB sessions.
+    import app.db as db_api
+
+    for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo"):
+        monkeypatch.setattr(db_api, attr, None)
+
+
+@pytest.fixture(scope="function")
+def api_client(test_database_url, monkeypatch) -> Generator:
+    """Create a sync FastAPI test client wired to the isolated test database."""
+    engine = _build_test_engine(test_database_url)
+    session_maker = _build_session_maker(engine)
+    asyncio.run(_create_test_schema(engine))
+    _patch_app_session_makers(monkeypatch, session_maker)
+
+    from main import app
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
+        asyncio.run(_drop_test_schema(engine))
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_api_client(test_database_url, monkeypatch) -> AsyncGenerator[AsyncClient, None]:
+    """Create an async FastAPI test client wired to the isolated test database."""
+    engine = _build_test_engine(test_database_url)
+    session_maker = _build_session_maker(engine)
+    await _create_test_schema(engine)
+    _patch_app_session_makers(monkeypatch, session_maker)
+
+    from main import app
+
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+        await _drop_test_schema(engine)
+
+
 @pytest_asyncio.fixture(scope="function")
 async def engine(test_database_url: str):
     """
@@ -75,13 +167,7 @@ async def engine(test_database_url: str):
     Uses NullPool to avoid connection conflicts between concurrent tests.
     """
     
-    from sqlalchemy.pool import NullPool
-    engine = create_async_engine(
-        test_database_url,
-        poolclass=NullPool,
-        echo=False,
-        future=True
-    )
+    engine = _build_test_engine(test_database_url)
     
     # Create all tables
     async with engine.begin() as conn:

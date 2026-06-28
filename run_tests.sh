@@ -8,28 +8,34 @@
 #   --file <file>          Run specific test file
 #   --test <test>          Run specific test function
 #   --coverage             Run tests with coverage report
+#   --unit                 Run unit and mock-based tests
 #   --standalone           Run standalone test scripts instead of pytest
 #   --pdf <path>           Path to PDF file (for standalone tests)
+#   --db                   Run PostgreSQL database tests
 #   --db-tests             Run PostgreSQL database tests (requires PostgreSQL service)
 #   --db-only              Run only database tests, skip other tests
-#   --integration          Run DB-agnostic integration tests
+#   --integration          Run integration tests
 #   --api                  Run API endpoint tests
 #   --schema               Run schema validation tests
-#   --all-tests            Run all DB-agnostic tests (integration + api + schema)
+#   --all                  Run all pytest tests plus standalone checks
+#   --all-tests            Backward-compatible alias for --all
 #
 # Examples:
-#   ./run_tests.sh                          # Run all pytest tests
+#   ./run_tests.sh                          # Run all pytest tests plus standalone checks
 #   ./run_tests.sh --verbose                # Run with verbose output
 #   ./run_tests.sh --file test_parsing_pytest.py  # Run specific file
 #   ./run_tests.sh --test test_docling_parsing  # Run specific test
-#   ./run_tests.sh --standalone --pdf tests/01030000000000.pdf  # Run standalone script
+#   ./run_tests.sh --unit                        # Run unit and mock-based tests
+#   ./run_tests.sh --standalone                  # Run standalone proactive collection script
+#   ./run_tests.sh --standalone --pdf tests/01030000000000.pdf  # Run standalone parser script
 #   ./run_tests.sh --coverage               # Run with coverage
+#   ./run_tests.sh --db                     # Run PostgreSQL database tests
 #   ./run_tests.sh --db-tests               # Run PostgreSQL database tests
 #   ./run_tests.sh --db-only                # Run only database tests
-#   ./run_tests.sh --integration           # Run DB-agnostic integration tests
+#   ./run_tests.sh --integration           # Run integration tests
 #   ./run_tests.sh --api                    # Run API endpoint tests
 #   ./run_tests.sh --schema                 # Run schema validation tests
-#   ./run_tests.sh --all-tests              # Run all DB-agnostic tests
+#   ./run_tests.sh --all                    # Run all pytest tests plus standalone checks
 
 set -e
 
@@ -38,8 +44,10 @@ VERBOSE=""
 TEST_FILE=""
 TEST_FUNCTION=""
 COVERAGE=""
+UNIT_TESTS=""
 STANDALONE=""
 PDF_PATH=""
+DB_GROUP=""
 DB_TESTS=""
 DB_ONLY=""
 INTEGRATION_TESTS=""
@@ -59,28 +67,34 @@ while [[ $# -gt 0 ]]; do
             echo "  --file <file>          Run specific test file"
             echo "  --test <test>          Run specific test function"
             echo "  --coverage             Run tests with coverage report"
+            echo "  --unit                 Run unit and mock-based tests"
             echo "  --standalone           Run standalone test scripts instead of pytest"
             echo "  --pdf <path>           Path to PDF file (for standalone tests)"
+            echo "  --db                   Run PostgreSQL database tests"
             echo "  --db-tests             Run PostgreSQL database tests (requires PostgreSQL service)"
             echo "  --db-only              Run only database tests, skip other tests"
-            echo "  --integration          Run DB-agnostic integration tests"
+            echo "  --integration          Run integration tests"
             echo "  --api                  Run API endpoint tests"
             echo "  --schema               Run schema validation tests"
-            echo "  --all-tests            Run all DB-agnostic tests (integration + api + schema)"
+            echo "  --all                  Run all pytest tests plus standalone checks"
+            echo "  --all-tests            Backward-compatible alias for --all"
             echo ""
             echo "Examples:"
-            echo "  $0                                    # Run all pytest tests"
+            echo "  $0                                    # Run all pytest tests plus standalone checks"
             echo "  $0 --verbose                          # Run with verbose output"
             echo "  $0 --file test_parsing_pytest.py      # Run specific file"
             echo "  $0 --test test_docling_parsing        # Run specific test"
-            echo "  $0 --standalone --pdf tests/01030000000000.pdf  # Run standalone"
+            echo "  $0 --unit                             # Run unit and mock-based tests"
+            echo "  $0 --standalone                        # Run standalone proactive collection script"
+            echo "  $0 --standalone --pdf tests/01030000000000.pdf  # Run standalone parser script"
             echo "  $0 --coverage                         # Run with coverage"
+            echo "  $0 --db                               # Run PostgreSQL database tests"
             echo "  $0 --db-tests                         # Run PostgreSQL database tests"
             echo "  $0 --db-only                          # Run only database tests"
-            echo "  $0 --integration                      # Run DB-agnostic integration tests"
+            echo "  $0 --integration                      # Run integration tests"
             echo "  $0 --api                              # Run API endpoint tests"
             echo "  $0 --schema                           # Run schema validation tests"
-            echo "  $0 --all-tests                        # Run all DB-agnostic tests"
+            echo "  $0 --all                              # Run all pytest tests plus standalone checks"
             exit 0
             ;;
         --verbose)
@@ -99,6 +113,10 @@ while [[ $# -gt 0 ]]; do
             COVERAGE="--cov=app --cov-report=term-missing"
             shift
             ;;
+        --unit)
+            UNIT_TESTS="true"
+            shift
+            ;;
         --standalone)
             STANDALONE="true"
             shift
@@ -106,6 +124,10 @@ while [[ $# -gt 0 ]]; do
         --pdf)
             PDF_PATH="$2"
             shift 2
+            ;;
+        --db)
+            DB_GROUP="true"
+            shift
             ;;
         --db-tests)
             DB_TESTS="true"
@@ -128,6 +150,10 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --all-tests)
+            ALL_TESTS="true"
+            shift
+            ;;
+        --all)
             ALL_TESTS="true"
             shift
             ;;
@@ -218,11 +244,17 @@ cleanup() {
 # Set trap to cleanup on exit
 trap cleanup EXIT
 
+run_proactive_collection_script() {
+    echo "Running standalone proactive collection verification script..."
+    $DOCKER_COMPOSE cp test_proactive_collections.py rag-service:/tmp/test_proactive_collections.py
+    $DOCKER_COMPOSE exec -T -e PYTHONPATH=/app rag-service python /tmp/test_proactive_collections.py
+}
+
 # Run standalone tests
 if [ "$STANDALONE" = "true" ]; then
     if [ -z "$PDF_PATH" ]; then
-        echo "Error: --pdf path is required for standalone tests"
-        exit 1
+        run_proactive_collection_script
+        exit $?
     fi
 
     if [ ! -f "$PDF_PATH" ]; then
@@ -243,37 +275,42 @@ $DOCKER_COMPOSE exec rag-service python -c "import pytest" 2>/dev/null || {
     $DOCKER_COMPOSE exec rag-service pip install pytest
 }
 
+UNIT_TEST_FILES="/app/tests/test_agent_prompt_behavior.py /app/tests/test_agent_retry_behavior.py /app/tests/test_dimension_mismatch_scenarios.py /app/tests/test_external_research_tools.py /app/tests/test_intent_agent_helpers.py /app/tests/test_llm_server_client_pytest.py /app/tests/test_message_api_pytest.py /app/tests/test_model_aware_collections.py /app/tests/test_model_registry_edge_cases.py /app/tests/test_modular_visualization_pytest.py /app/tests/test_parsing_pytest.py /app/tests/test_production_edge_cases.py /app/tests/test_temporal_metadata_retrieval.py /app/tests/test_time_utils.py"
+DB_TEST_FILES="/app/tests/test_database_connection_pytest.py /app/tests/test_models_sqlmodel_pytest.py /app/tests/test_thread_repository_pytest.py /app/tests/test_file_repository_pytest.py /app/tests/test_message_repository_pytest.py /app/tests/test_thread_file_repository_pytest.py /app/tests/test_stats_repository_pytest.py /app/tests/test_repository_transactions_pytest.py /app/tests/test_jsonb_operations_pytest.py /app/tests/test_thread_fork_service_pytest.py"
+API_TEST_FILES="/app/tests/test_api_endpoints_pytest.py /app/tests/test_api_integration_pytest.py"
+INTEGRATION_TEST_FILES="/app/tests/test_api_integration_pytest.py /app/tests/test_model_aware_integration.py"
+SCHEMA_TEST_FILES="/app/tests/test_schema_guardrails.py"
+
 PYTEST_CMD="pytest /app/tests/ $VERBOSE"
 
-# Handle db-only flag - run only database tests
-if [ "$DB_ONLY" = "true" ]; then
-    PYTEST_CMD="pytest /app/tests/test_database_connection_pytest.py /app/tests/test_models_sqlmodel_pytest.py /app/tests/test_thread_repository_pytest.py /app/tests/test_file_repository_pytest.py /app/tests/test_message_repository_pytest.py /app/tests/test_thread_file_repository_pytest.py /app/tests/test_stats_repository_pytest.py /app/tests/test_repository_transactions_pytest.py /app/tests/test_jsonb_operations_pytest.py $VERBOSE"
+# Handle unit flag - run unit and mock-based tests
+if [ "$UNIT_TESTS" = "true" ]; then
+    PYTEST_CMD="pytest $UNIT_TEST_FILES $VERBOSE"
 fi
 
-# Handle db-tests flag - include database tests with regular tests
-if [ "$DB_TESTS" = "true" ]; then
-    PYTEST_CMD="pytest /app/tests/ $VERBOSE"
+# Handle db flags - run PostgreSQL database tests
+if [ "$DB_GROUP" = "true" ] || [ "$DB_ONLY" = "true" ] || [ "$DB_TESTS" = "true" ]; then
+    PYTEST_CMD="pytest $DB_TEST_FILES $VERBOSE"
 fi
 
-# Handle integration flag - run DB-agnostic integration tests
+# Handle integration flag - run integration tests
 if [ "$INTEGRATION_TESTS" = "true" ]; then
-    echo "WARNING: Integration tests removed. Use --api for API tests or --db-tests for database tests."
-    exit 1
+    PYTEST_CMD="pytest $INTEGRATION_TEST_FILES $VERBOSE"
 fi
 
 # Handle api flag - run API endpoint tests
 if [ "$API_TESTS" = "true" ]; then
-    PYTEST_CMD="pytest /app/tests/test_api_endpoints_pytest.py $VERBOSE"
+    PYTEST_CMD="pytest $API_TEST_FILES $VERBOSE"
 fi
 
 # Handle schema flag - run schema validation tests
 if [ "$SCHEMA_TESTS" = "true" ]; then
-    PYTEST_CMD="pytest /app/tests/test_schema_validation_pytest.py $VERBOSE"
+    PYTEST_CMD="pytest $SCHEMA_TEST_FILES $VERBOSE"
 fi
 
-# Handle all-tests flag - run all API and schema tests
+# Handle all flags - run all pytest tests, followed by standalone checks below
 if [ "$ALL_TESTS" = "true" ]; then
-    PYTEST_CMD="pytest /app/tests/test_schema_validation_pytest.py /app/tests/test_api_endpoints_pytest.py /app/tests/test_api_integration_pytest.py $VERBOSE"
+    PYTEST_CMD="pytest /app/tests/ $VERBOSE"
 fi
 
 if [ -n "$TEST_FILE" ]; then
@@ -315,3 +352,15 @@ if [ "$POSTGRES_AVAILABLE" = "true" ] && [ -n "$TEST_POSTGRES_DB" ]; then
 fi
 
 $DOCKER_COMPOSE exec $TEST_ENV_VARS rag-service $PYTEST_CMD
+
+if [ -z "$TEST_FILE" ] &&
+   [ -z "$TEST_FUNCTION" ] &&
+   { [ "$ALL_TESTS" = "true" ] || [ "$UNIT_TESTS" != "true" ]; } &&
+   [ "$DB_ONLY" != "true" ] &&
+   [ "$DB_GROUP" != "true" ] &&
+   [ "$DB_TESTS" != "true" ] &&
+   [ "$INTEGRATION_TESTS" != "true" ] &&
+   [ "$API_TESTS" != "true" ] &&
+   [ "$SCHEMA_TESTS" != "true" ]; then
+    run_proactive_collection_script
+fi

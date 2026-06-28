@@ -3,12 +3,10 @@ test_stats_repository_pytest.py - Tests for thread-column-backed stats.
 """
 
 import os
-import sys
 
 import pytest
 import pytest_asyncio
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 try:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

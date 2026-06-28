@@ -5,27 +5,17 @@ These tests verify that API endpoints work correctly with the PostgreSQL databas
 covering the main CRUD operations through the HTTP layer.
 """
 
-import os
-import sys
 import pytest
 import pytest_asyncio
-
-# Add parent directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-from httpx import AsyncClient, ASGITransport
 
 
 class TestAPIIntegration:
     """Test API endpoints with PostgreSQL database."""
 
     @pytest_asyncio.fixture
-    async def client(self):
-        """Create async HTTP client for testing."""
-        from main import app
-
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            yield ac
+    async def client(self, async_api_client):
+        """Keep existing test signature while using the shared async API client fixture."""
+        yield async_api_client
 
     @pytest.mark.asyncio
     async def test_create_thread_endpoint(self, client):

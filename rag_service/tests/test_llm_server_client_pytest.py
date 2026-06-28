@@ -1,9 +1,6 @@
 """Tests for LLM client response normalization shims."""
 
-import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.agent.reasoning import normalize_ai_response
 from app.models.llm_server_client import ReasoningChatOpenAI

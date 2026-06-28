@@ -1,12 +1,9 @@
-import os
-import sys
 from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.future import select
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app.db.models_sqlmodel import (
     ChatTurn,
