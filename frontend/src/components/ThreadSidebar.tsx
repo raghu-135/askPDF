@@ -44,12 +44,14 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningIcon from '@mui/icons-material/Warning';
 import ErrorIcon from '@mui/icons-material/Error';
 import ClearIcon from '@mui/icons-material/Clear';
+import CallSplitIcon from '@mui/icons-material/CallSplit';
 
 import {
   Thread,
   createThread,
   listThreads,
   bulkDeleteThreads,
+  forkThread,
   updateThread,
 } from '../lib/api';
 import { fetchAvailableEmbedModels, checkEmbedModelReady } from '../lib/models-api';
@@ -59,6 +61,7 @@ import { formatDate } from '../lib/date-utils';
 interface ThreadSidebarProps {
   activeThreadId: string | null;
   onThreadSelect: (thread: Thread | null) => void;
+  onThreadForked?: (thread: Thread) => void;
   onEmbedModelChange?: (model: string) => void;
   darkMode?: boolean;
 }
@@ -66,6 +69,7 @@ interface ThreadSidebarProps {
 const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   activeThreadId,
   onThreadSelect,
+  onThreadForked,
   onEmbedModelChange,
   darkMode = false,
 }) => {
@@ -92,6 +96,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
   const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [forkingThreadId, setForkingThreadId] = useState<string | null>(null);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
 
   const selectedCount = selectedThreadIds.size;
@@ -302,6 +307,24 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     setEditingName(thread.name);
   };
 
+  const handleForkThread = async (thread: Thread, event: React.MouseEvent) => {
+    event.stopPropagation();
+    try {
+      setForkingThreadId(thread.id);
+      const forked = await forkThread(thread.id);
+      setThreads(prev => [forked, ...prev]);
+      onThreadForked?.(forked);
+      if (!onThreadForked) {
+        onThreadSelect(forked);
+      }
+    } catch (error) {
+      console.error('Failed to fork thread:', error);
+      alert('Failed to fork thread.');
+    } finally {
+      setForkingThreadId(null);
+    }
+  };
+
   // Add validation check when embedding model changes
   useEffect(() => {
     if (!newThreadEmbedModel) {
@@ -472,7 +495,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 <ListItemButton
                   onClick={(e) => handleThreadRowClick(thread, e)}
                   selected={activeThreadId === thread.id}
-                  sx={{ py: 1, pr: isSelectionMode ? 1 : 10 }}
+                  sx={{ py: 1, pr: isSelectionMode ? 1 : 12 }}
                 >
                   {isSelectionMode && (
                     <Checkbox
@@ -544,6 +567,18 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
                 {!isSelectionMode && (
                   <ListItemSecondaryAction>
+                    <Tooltip title="Fork thread">
+                      <span>
+                        <IconButton
+                          size="small"
+                          onClick={(e) => handleForkThread(thread, e)}
+                          disabled={forkingThreadId === thread.id}
+                          sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
+                        >
+                          {forkingThreadId === thread.id ? <CircularProgress size={16} /> : <CallSplitIcon fontSize="small" />}
+                        </IconButton>
+                      </span>
+                    </Tooltip>
                     <IconButton
                       size="small"
                       onClick={(e) => startEditing(thread, e)}

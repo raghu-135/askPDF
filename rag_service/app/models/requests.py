@@ -57,6 +57,13 @@ class ThreadBulkDeleteResponse(BaseModel):
     failed_thread_ids: List[ThreadBulkDeleteFailure] = Field(default_factory=list)
 
 
+class ThreadForkRequest(BaseModel):
+    """Request body for forking a thread."""
+
+    message_id: Optional[str] = None
+    name: Optional[str] = None
+
+
 class ThreadFileRequest(BaseModel):
     """Request body for adding a file to a thread."""
 

@@ -29,6 +29,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
+import CallSplitIcon from '@mui/icons-material/CallSplit';
 import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
@@ -41,6 +42,8 @@ import {
     threadChat,
     getThreadMessages,
     deleteMessage,
+    forkThread,
+    getThread,
     getThreadIndexStatus,
     getThreadSettings,
     updateThreadSettings,
@@ -76,6 +79,8 @@ interface ChatInterfaceProps {
     onJump: (id: number) => void;
     onResetChatId?: () => void;
     onThreadUpdate?: () => void;
+    onThreadForked?: (thread: Thread) => void;
+    onOpenThread?: (thread: Thread) => void;
     darkMode?: boolean;
     autoScroll?: boolean;
 }
@@ -89,6 +94,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     activeSource,
     onJump,
     onThreadUpdate,
+    onThreadForked,
+    onOpenThread,
     onResetChatId,
     darkMode = false,
     autoScroll = true
@@ -140,6 +147,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [isLlmToolsSupported, setIsLlmToolsSupported] = useState<boolean | null>(null);
     const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
+    const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
+    const [resolvedParentThread, setResolvedParentThread] = useState<Thread | null>(null);
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -247,6 +256,31 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             lastClarificationIdsRef.current = null;
         }
     }, [activeThread?.id]);
+
+    useEffect(() => {
+        const parentThreadId = activeThread?.thread_metadata?.fork?.parent_thread_id;
+        if (!parentThreadId) {
+            setResolvedParentThread(null);
+            return;
+        }
+
+        let cancelled = false;
+        getThread(parentThreadId)
+            .then(parent => {
+                if (!cancelled) {
+                    setResolvedParentThread(parent);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setResolvedParentThread(null);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [activeThread?.id, activeThread?.thread_metadata?.fork?.parent_thread_id]);
 
     useEffect(() => {
         const loadTools = async () => {
@@ -899,6 +933,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (firstSentence) onJump(firstSentence.id);
     };
 
+    const handleForkFromMessage = async (messageId: string, event: React.MouseEvent) => {
+        event.stopPropagation();
+        if (!activeThread) return;
+
+        try {
+            setForkingMessageId(messageId);
+            const forked = await forkThread(activeThread.id, { messageId });
+            onThreadForked?.(forked);
+        } catch (error) {
+            console.error('Failed to fork thread from message:', error);
+            alert('Failed to fork thread from this message.');
+        } finally {
+            setForkingMessageId(null);
+        }
+    };
+
+    const handleOpenParentThread = () => {
+        if (resolvedParentThread) {
+            onOpenThread?.(resolvedParentThread);
+        }
+    };
+
     if (!activeThread) {
         return (
             <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: theme.palette.background.default, color: theme.palette.text.primary }}>
@@ -913,6 +969,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </Paper>
         );
     }
+
+    const forkInfo = activeThread.thread_metadata?.fork;
+    const parentThreadName = resolvedParentThread?.name || forkInfo?.parent_thread_name || 'deleted thread';
+    const forkTooltip = forkInfo?.forked_at
+        ? `Forked ${forkInfo.mode === 'from_message' ? 'from a message' : 'from full thread'} on ${new Date(forkInfo.forked_at).toLocaleString()}`
+        : 'Forked thread';
 
     return (
         <Paper ref={chatRootRef} elevation={0} sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
@@ -938,6 +1000,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {isEmbedModelValid === false && <Typography variant="caption" color="error" sx={{ fontWeight: 'bold' }}>OFFLINE</Typography>}
                         </Box>
                     </Tooltip>
+                    {forkInfo && (
+                        <Tooltip title={resolvedParentThread ? `${forkTooltip}. Open parent thread.` : `${forkTooltip}. Parent thread no longer exists.`}>
+                            <Chip
+                                icon={<CallSplitIcon sx={{ fontSize: '0.85rem !important' }} />}
+                                label={`Forked from ${parentThreadName}`}
+                                size="small"
+                                clickable={Boolean(resolvedParentThread && onOpenThread)}
+                                onClick={resolvedParentThread && onOpenThread ? handleOpenParentThread : undefined}
+                                sx={{ maxWidth: 220, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
+                            />
+                        </Tooltip>
+                    )}
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
                     <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
@@ -1146,6 +1220,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             <VolumeUpIcon fontSize="small" />
                                         </IconButton>
                                     </Tooltip>
+                                    {!isUser && (
+                                        <Tooltip title="Fork from here">
+                                            <span>
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={(e) => handleForkFromMessage(msg.id, e)}
+                                                    disabled={forkingMessageId === msg.id}
+                                                    sx={{
+                                                        color: 'inherit',
+                                                        p: 0.5,
+                                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                                    }}
+                                                >
+                                                    {forkingMessageId === msg.id ? <CircularProgress size={14} /> : <CallSplitIcon fontSize="small" />}
+                                                </IconButton>
+                                            </span>
+                                        </Tooltip>
+                                    )}
                                     <Tooltip title="Delete message">
                                         <IconButton
                                             size="small"

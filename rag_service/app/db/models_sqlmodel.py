@@ -82,6 +82,10 @@ class Thread(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
     )
+    thread_metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
     created_at: datetime = Field(
         default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())

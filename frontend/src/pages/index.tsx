@@ -22,7 +22,7 @@ import PlayerControls from "../components/PlayerControls";
 import ChatInterface from "../components/ChatInterface";
 import ThreadSidebar from "../components/ThreadSidebar";
 import PdfTabs, { PdfTab } from "../components/PdfTabs";
-import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage, pollForFileReady } from "../lib/api";
+import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage, pollForFileReady, getThread } from "../lib/api";
 import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
@@ -125,6 +125,24 @@ export default function Home() {
       }
     } else {
       setActiveThread(null);
+    }
+  };
+
+  const handleThreadForked = async (thread: Thread) => {
+    setSidebarVersion(v => v + 1);
+    await handleThreadSelect(thread);
+    setRightPanelTab(1);
+  };
+
+  const handleThreadUpdated = async () => {
+    setSidebarVersion(v => v + 1);
+
+    if (!activeThread) return;
+    try {
+      const updatedThread = await getThread(activeThread.id);
+      setActiveThread(updatedThread);
+    } catch (error) {
+      console.error('Failed to refresh thread after chat update:', error);
     }
   };
 
@@ -648,6 +666,7 @@ export default function Home() {
                       setRightPanelTab(1);
                     }
                   }}
+                  onThreadForked={handleThreadForked}
                   darkMode={pdfDarkMode}
                 />
               </Box>
@@ -673,6 +692,12 @@ export default function Home() {
                     onResetChatId={() => {
                       setCurrentChatId(null);
                       setPlayRequestId(null);
+                    }}
+                    onThreadForked={handleThreadForked}
+                    onThreadUpdate={handleThreadUpdated}
+                    onOpenThread={(thread) => {
+                      handleThreadSelect(thread);
+                      setRightPanelTab(1);
                     }}
                     darkMode={pdfDarkMode}
                     autoScroll={autoScroll}
