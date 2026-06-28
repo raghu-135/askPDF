@@ -368,6 +368,19 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     setFocusedThreadId(threadId);
   };
 
+  useEffect(() => {
+    if (!focusedThreadId) return;
+
+    const clearFocusedThread = () => {
+      setFocusedThreadId(null);
+    };
+
+    document.addEventListener('click', clearFocusedThread);
+    return () => {
+      document.removeEventListener('click', clearFocusedThread);
+    };
+  }, [focusedThreadId]);
+
   const renderThreadReference = (
     threadId: string | null | undefined,
     fallbackName?: string | null
