@@ -1,0 +1,85 @@
+services:
+  test-runner:
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile
+    entrypoint: ["python", "scripts/run_tests.py"]
+    environment:
+      - LOG_LEVEL=INFO
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      - TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/test_askpdf
+      - POSTGRES_POOL_SIZE=10
+      - POSTGRES_MAX_OVERFLOW=20
+      - WEAVIATE_URL=http://weaviate:8080
+      - WEAVIATE_HYBRID_ALPHA=0.7
+      - QUERY_DEFAULTS_LIMIT=20
+      - CAPTURE_SERVICE_URL=http://browser-capture:8080
+      - LOCAL_EMBEDDING_MODEL=BAAI/bge-m3
+      - LOCAL_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+      - EMBEDDING_DEVICE=cpu
+      - RERANKER_DEVICE=cpu
+      - LLM_API_URL=http://host.docker.internal:1234/v1
+      - DEFAULT_TOKEN_BUDGET=8192
+      - DEFAULT_MAX_ITERATIONS=10
+      - MIN_MAX_ITERATIONS=1
+      - MAX_MAX_ITERATIONS=30
+      - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
+      - MAX_SYSTEM_ROLE_CHARS=500
+      - MAX_TOOL_INSTRUCTION_CHARS=500
+      - INTENT_AGENT_MAX_ITERATIONS=1
+      - MAX_ITERATIONS_SUFFICIENT_COVERAGE=2
+      - MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE=4
+      - WEB_SEARCH_ITERATION_BONUS=2
+      - DOCLING_DO_OCR=False
+      - DOCLING_DO_TABLE_STRUCTURE=True
+      - DOCLING_TABLE_MODE=FAST
+      - DOCLING_FORCE_FULL_PAGE_OCR=False
+      - DOCLING_DO_FORMULA_ENRICHMENT=False
+      - ASKPDF_REPO_DIR=/workspace
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      weaviate:
+        condition: service_healthy
+    volumes:
+      - ./rag_service:/app
+      - .:/workspace:ro
+      - test_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.36.2
+    environment:
+      - QUERY_DEFAULTS_LIMIT=20
+      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
+      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
+      - DEFAULT_VECTORIZER_MODULE=none
+      - ENABLE_API_BASED_MODULES=true
+      - CLUSTER_HOSTNAME=node1
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/v1/.well-known/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - weaviate_test_data:/var/lib/weaviate
+
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: askpdf
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d askpdf"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_test_data:
+  test_data:
+  weaviate_test_data:
