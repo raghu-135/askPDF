@@ -12,8 +12,9 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
+from sqlalchemy.orm.attributes import flag_modified
 
-from app.db.models_sqlmodel import File, Thread, ThreadFile, ThreadFileAnnotation
+from app.db.models_sqlmodel import File, Thread, ThreadFile
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import utc_now
 
@@ -74,18 +75,6 @@ class ThreadFileRepository:
         """Remove a file association from a thread (does not delete the file record itself)."""
         session = await self._get_session()
         async with session.begin():
-            # First delete any annotations for this association
-            result = await session.execute(
-                select(ThreadFileAnnotation).where(
-                    ThreadFileAnnotation.thread_id == thread_id,
-                    ThreadFileAnnotation.file_hash == file_hash
-                )
-            )
-            annotation = result.scalar_one_or_none()
-            if annotation:
-                await session.delete(annotation)
-
-            # Then delete the association
             result = await session.execute(
                 select(ThreadFile).where(
                     ThreadFile.thread_id == thread_id,
@@ -110,41 +99,6 @@ class ThreadFileRepository:
                 )
             )
             return result.scalar_one_or_none() is not None
-
-    async def get_count_for_file(self, file_hash: str) -> int:
-        """Count how many threads currently reference a file."""
-        session = await self._get_session()
-        async with session.begin():
-            result = await session.execute(
-                select(ThreadFile).where(ThreadFile.file_hash == file_hash)
-            )
-            return len(list(result.scalars().all()))
-
-    async def count_threads_with_file_for_model(
-        self,
-        file_hash: str,
-        embed_model: str,
-        exclude_thread_id: Optional[str] = None,
-    ) -> int:
-        """
-        Count thread associations for a file restricted to a specific embedding model.
-        Optionally exclude one thread (useful after detaching a file from that thread).
-        """
-        session = await self._get_session()
-        async with session.begin():
-            query = (
-                select(ThreadFile)
-                .join(Thread, ThreadFile.thread_id == Thread.id)
-                .where(
-                    ThreadFile.file_hash == file_hash,
-                    Thread.embed_model == embed_model
-                )
-            )
-            if exclude_thread_id:
-                query = query.where(ThreadFile.thread_id != exclude_thread_id)
-
-            result = await session.execute(query)
-            return len(list(result.scalars().all()))
 
     async def get_all_for_thread(self, thread_id: str) -> List[Dict[str, Any]]:
         """Get all thread-file associations for a thread."""
@@ -213,38 +167,40 @@ class ThreadFileRepository:
             result = await session.execute(query)
             return result.scalar() or 0
 
-    def _load_annotations(self, raw: Optional[str]) -> List[Dict[str, Any]]:
-        """Deserialize the annotation snapshot list from JSON."""
+    def _load_annotations(self, raw: Optional[Any]) -> List[Dict[str, Any]]:
+        """Deserialize the annotation snapshot list from JSON/JSONB."""
         if not raw:
             return []
+        if isinstance(raw, list):
+            return raw
         try:
             parsed = json.loads(raw)
             return parsed if isinstance(parsed, list) else []
         except Exception:
             return []
 
-    def _serialize_annotation_row(self, row: ThreadFileAnnotation) -> Dict[str, Any]:
-        """Convert an annotation row into the API payload shape."""
+    def _serialize_annotation_row(self, row: ThreadFile) -> Dict[str, Any]:
+        """Convert a thread-file association into the annotation API payload shape."""
         return {
             "thread_id": row.thread_id,
             "file_hash": row.file_hash,
-            "annotations": self._load_annotations(row.annotations_json),
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
+            "annotations": self._load_annotations(row.annotations),
+            "created_at": row.added_at,
+            "updated_at": row.annotations_updated_at,
         }
 
     async def get_annotation_row(
         self,
         thread_id: str,
         file_hash: str,
-    ) -> Optional[ThreadFileAnnotation]:
-        """Load the persisted row for a thread/file annotation snapshot."""
+    ) -> Optional[ThreadFile]:
+        """Load the thread/file association that owns the annotation snapshot."""
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(ThreadFileAnnotation).where(
-                    ThreadFileAnnotation.thread_id == thread_id,
-                    ThreadFileAnnotation.file_hash == file_hash
+                select(ThreadFile).where(
+                    ThreadFile.thread_id == thread_id,
+                    ThreadFile.file_hash == file_hash
                 )
             )
             return result.scalar_one_or_none()
@@ -267,40 +223,27 @@ class ThreadFileRepository:
         annotations: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Insert or replace the full annotation snapshot for a thread/file pair."""
-        annotations_json = json.dumps(annotations or [])
+        annotations_payload = list(annotations or [])
         now = utc_now()
 
         session = await self._get_session()
         async with session.begin():
-            # Try to get existing
             result = await session.execute(
-                select(ThreadFileAnnotation).where(
-                    ThreadFileAnnotation.thread_id == thread_id,
-                    ThreadFileAnnotation.file_hash == file_hash
+                select(ThreadFile).where(
+                    ThreadFile.thread_id == thread_id,
+                    ThreadFile.file_hash == file_hash
                 )
             )
-            existing = result.scalar_one_or_none()
+            association = result.scalar_one_or_none()
+            if not association:
+                raise ValueError(f"File {file_hash} is not attached to thread {thread_id}")
 
-            if existing:
-                # Update existing
-                existing.annotations_json = annotations_json
-                existing.updated_at = now
-                await session.flush()
-                await session.refresh(existing)
-                return_row = existing
-            else:
-                # Create new
-                new_annotation = ThreadFileAnnotation(
-                    thread_id=thread_id,
-                    file_hash=file_hash,
-                    annotations_json=annotations_json,
-                    created_at=now,
-                    updated_at=now,
-                )
-                session.add(new_annotation)
-                await session.flush()
-                await session.refresh(new_annotation)
-                return_row = new_annotation
+            association.annotations = annotations_payload
+            association.annotations_updated_at = now if annotations_payload else None
+            flag_modified(association, "annotations")
+            await session.flush()
+            await session.refresh(association)
+            return_row = association
         return self._serialize_annotation_row(return_row)
 
     async def delete_annotations(
@@ -313,23 +256,29 @@ class ThreadFileRepository:
         async with session.begin():
             if file_hash:
                 result = await session.execute(
-                    select(ThreadFileAnnotation).where(
-                        ThreadFileAnnotation.thread_id == thread_id,
-                        ThreadFileAnnotation.file_hash == file_hash
+                    select(ThreadFile).where(
+                        ThreadFile.thread_id == thread_id,
+                        ThreadFile.file_hash == file_hash
                     )
                 )
-                annotation = result.scalar_one_or_none()
-                if annotation:
-                    await session.delete(annotation)
-                return 1 if annotation else 0
+                association = result.scalar_one_or_none()
+                if association:
+                    association.annotations = []
+                    association.annotations_updated_at = None
+                    flag_modified(association, "annotations")
+                return 1 if association else 0
             else:
                 result = await session.execute(
-                    select(ThreadFileAnnotation).where(
-                        ThreadFileAnnotation.thread_id == thread_id
+                    select(ThreadFile).where(
+                        ThreadFile.thread_id == thread_id
                     )
                 )
-                annotations = result.scalars().all()
-                count = len(annotations)
-                for annotation in annotations:
-                    await session.delete(annotation)
+                associations = result.scalars().all()
+                count = 0
+                for association in associations:
+                    if self._load_annotations(association.annotations):
+                        count += 1
+                    association.annotations = []
+                    association.annotations_updated_at = None
+                    flag_modified(association, "annotations")
             return count

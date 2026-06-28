@@ -65,6 +65,14 @@ class ThreadFile(SQLModel, table=True):
         default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
+    annotations: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, default=list)
+    )
+    annotations_updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True))
+    )
 
 
 # ============================================================================
@@ -86,6 +94,21 @@ class Thread(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
     )
+    total_qa_pairs: int = Field(default=0)
+    total_qa_chars: int = Field(default=0)
+    avg_qa_chars: float = Field(default=0.0)
+    last_qa_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True))
+    )
+    documents_meta: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+    stats_last_updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    )
     created_at: datetime = Field(
         default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
@@ -96,7 +119,7 @@ class Thread(SQLModel, table=True):
     )
     
     # Relationships
-    messages: List["Message"] = Relationship(
+    chat_turns: List["ChatTurn"] = Relationship(
         back_populates="thread",
         sa_relationship_kwargs={"passive_deletes": True, "cascade": "all, delete-orphan"}
     )
@@ -105,15 +128,6 @@ class Thread(SQLModel, table=True):
         link_model=ThreadFile,
         sa_relationship_kwargs={"passive_deletes": True}
     )
-    stats: Optional["ThreadStats"] = Relationship(
-        back_populates="thread",
-        sa_relationship_kwargs={"passive_deletes": True, "cascade": "all, delete-orphan"}
-    )
-    annotations: List["ThreadFileAnnotation"] = Relationship(
-        back_populates="thread",
-        sa_relationship_kwargs={"passive_deletes": True, "cascade": "all, delete-orphan"}
-    )
-    
     __table_args__ = (
         Index("idx_thread_created_at", "created_at"),
     )
@@ -143,11 +157,6 @@ class File(SQLModel, table=True):
         link_model=ThreadFile,
         sa_relationship_kwargs={"passive_deletes": True}
     )
-    annotations: List["ThreadFileAnnotation"] = Relationship(
-        back_populates="file",
-        sa_relationship_kwargs={"passive_deletes": True, "cascade": "all, delete-orphan"}
-    )
-    
     # Helper method for safe JSONB mutation
     def set_file_status_key(self, key: str, value: Any) -> None:
         """Set a key in file_status, ensuring change tracking."""
@@ -164,48 +173,19 @@ class File(SQLModel, table=True):
     )
 
 
-class Message(SQLModel, table=True):
-    """Chat message entity."""
-    __tablename__ = "messages"
-    
+class ChatTurn(SQLModel, table=True):
+    """One persisted chat interaction with flexible JSONB payload."""
+    __tablename__ = "chat_turns"
+
     id: str = Field(primary_key=True)
     thread_id: str = Field(
         sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), index=True)
     )
-    role: str = Field(index=True)  # 'user' or 'assistant'
-    content: str
-    context_compact: Optional[str] = None
-    reasoning: Optional[str] = None
-    reasoning_available: bool = Field(default=False)
-    reasoning_format: str = Field(default="none")
-    web_sources: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        sa_column=Column(JSONB)
+    status: str = Field(default="completed", index=True)
+    payload: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
     )
-    created_at: datetime = Field(
-        default_factory=utc_now,
-        sa_column=Column(DateTime(timezone=True), server_default=func.now())
-    )
-    
-    # Relationships
-    thread: Optional["Thread"] = Relationship(back_populates="messages")
-    
-    __table_args__ = (
-        Index("idx_message_thread_created", "thread_id", "created_at"),
-    )
-
-
-class ThreadFileAnnotation(SQLModel, table=True):
-    """Annotations for thread-file pairs."""
-    __tablename__ = "thread_file_annotations"
-    
-    thread_id: str = Field(
-        sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), primary_key=True)
-    )
-    file_hash: str = Field(
-        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), primary_key=True)
-    )
-    annotations_json: str = Field(default="[]")
     created_at: datetime = Field(
         default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
@@ -214,34 +194,14 @@ class ThreadFileAnnotation(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), onupdate=func.now())
     )
-    
-    # Relationships
-    thread: Optional["Thread"] = Relationship(back_populates="annotations")
-    file: Optional["File"] = Relationship(back_populates="annotations")
-
-
-class ThreadStats(SQLModel, table=True):
-    """Statistics for threads."""
-    __tablename__ = "thread_stats"
-    
-    thread_id: str = Field(
-        sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), primary_key=True)
-    )
-    total_qa_pairs: int = Field(default=0)
-    total_qa_chars: int = Field(default=0)
-    avg_qa_chars: float = Field(default=0.0)
-    last_qa_at: Optional[datetime] = Field(
+    completed_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True))
     )
-    documents_meta: Dict[str, Any] = Field(
-        default_factory=dict,
-        sa_column=Column(JSONB, default=dict)
-    )
-    last_updated_at: datetime = Field(
-        default_factory=utc_now,
-        sa_column=Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    )
-    
+
     # Relationships
-    thread: Optional["Thread"] = Relationship(back_populates="stats")
+    thread: Optional["Thread"] = Relationship(back_populates="chat_turns")
+
+    __table_args__ = (
+        Index("idx_chat_turn_thread_created", "thread_id", "created_at"),
+    )

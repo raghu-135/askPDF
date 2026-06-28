@@ -283,7 +283,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
 
         db = get_vector_db()
 
-        # ── Build a file_hash → file_name lookup from thread_stats (no DB join) ──
+        # ── Build a file_hash → file_name lookup from thread metadata (no DB join) ──
         document_lookup = await get_document_metadata_lookup(thread_id)
         thread_file_hashes = list(document_lookup.keys())
         if not thread_file_hashes:
@@ -523,7 +523,7 @@ async def search_document_by_id(
         )
         expanded_chunks.sort(key=lambda x: x.get("chunk_id", 0))
 
-        # Resolve file name for source attribution from thread_stats (no DB join)
+        # Resolve file name for source attribution from thread metadata (no DB join)
         document_lookup = await get_document_metadata_lookup(thread_id)
         fname = document_lookup.get(file_hash, {}).get("file_name", file_hash)
 

@@ -16,7 +16,8 @@ from app.db import (
 )
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import Message, Thread, ThreadFile, ThreadFileAnnotation
+from app.db.models_sqlmodel import ChatTurn, Thread, ThreadFile
+from app.db.repositories.message_repo_sqlmodel import turn_id_from_message_id
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z, utc_now
 
@@ -54,24 +55,25 @@ async def fork_thread(
             if not source_thread:
                 raise SourceThreadNotFoundError("Source thread not found")
 
-            messages_result = await session.execute(
-                select(Message)
-                .where(Message.thread_id == source_thread_id)
-                .order_by(Message.created_at.asc(), Message.id.asc())
+            turns_result = await session.execute(
+                select(ChatTurn)
+                .where(ChatTurn.thread_id == source_thread_id, ChatTurn.status != "cancelled")
+                .order_by(ChatTurn.created_at.asc(), ChatTurn.id.asc())
             )
-            source_messages = list(messages_result.scalars().all())
+            source_turns = list(turns_result.scalars().all())
 
-            source_message = None
-            messages_to_copy = source_messages
+            source_turn = None
+            turns_to_copy = source_turns
             mode = "full_thread"
             if message_id:
                 mode = "from_message"
-                for index, message in enumerate(source_messages):
-                    if message.id == message_id:
-                        source_message = message
-                        messages_to_copy = source_messages[: index + 1]
+                target_turn_id = turn_id_from_message_id(message_id)
+                for index, turn in enumerate(source_turns):
+                    if turn.id == target_turn_id:
+                        source_turn = turn
+                        turns_to_copy = source_turns[: index + 1]
                         break
-                if not source_message:
+                if not source_turn:
                     raise ForkMessageNotFoundError("Fork message not found in source thread")
 
             fork_metadata = {
@@ -79,8 +81,8 @@ async def fork_thread(
                     "parent_thread_id": source_thread.id,
                     "parent_thread_name": source_thread.name,
                     "forked_at": forked_at_iso,
-                    "source_message_id": source_message.id if source_message else None,
-                    "source_message_created_at": iso_utc_z(source_message.created_at) if source_message else None,
+                    "source_message_id": message_id if source_turn else None,
+                    "source_message_created_at": iso_utc_z(source_turn.created_at) if source_turn else None,
                     "mode": mode,
                 }
             }
@@ -107,19 +109,15 @@ async def fork_thread(
             parent_metadata["fork_children"] = fork_children
             replace_jsonb_field(source_thread, "thread_metadata", parent_metadata)
 
-            for message in messages_to_copy:
+            for turn in turns_to_copy:
                 session.add(
-                    Message(
+                    ChatTurn(
                         id=str(uuid.uuid4()),
                         thread_id=new_thread_id,
-                        role=message.role,
-                        content=message.content,
-                        context_compact=message.context_compact,
-                        reasoning=message.reasoning,
-                        reasoning_available=message.reasoning_available,
-                        reasoning_format=message.reasoning_format,
-                        web_sources=copy.deepcopy(message.web_sources),
-                        created_at=message.created_at,
+                        status=turn.status,
+                        payload=copy.deepcopy(turn.payload or {}),
+                        created_at=turn.created_at,
+                        completed_at=turn.completed_at,
                     )
                 )
 
@@ -133,22 +131,8 @@ async def fork_thread(
                         thread_id=new_thread_id,
                         file_hash=association.file_hash,
                         added_at=association.added_at,
-                    )
-                )
-
-            annotations_result = await session.execute(
-                select(ThreadFileAnnotation).where(
-                    ThreadFileAnnotation.thread_id == source_thread_id
-                )
-            )
-            for annotation in annotations_result.scalars().all():
-                session.add(
-                    ThreadFileAnnotation(
-                        thread_id=new_thread_id,
-                        file_hash=annotation.file_hash,
-                        annotations_json=annotation.annotations_json,
-                        created_at=annotation.created_at,
-                        updated_at=annotation.updated_at,
+                        annotations=association.annotations,
+                        annotations_updated_at=association.annotations_updated_at,
                     )
                 )
 
@@ -158,17 +142,24 @@ async def fork_thread(
     # Import here to avoid creating tighter module import cycles during app startup.
     from app.db import get_thread_files, recompute_qa_stats
 
-    await recompute_qa_stats(new_thread_id)
-    files = await get_thread_files(new_thread_id)
+    try:
+        await recompute_qa_stats(new_thread_id)
+    except Exception as stats_err:
+        logger.warning("thread stats recompute skipped after fork: %s", stats_err)
+    try:
+        files = await get_thread_files(new_thread_id)
+    except Exception as files_err:
+        logger.warning("forked thread file reload skipped: %s", files_err)
+        files = []
     return {"thread": forked_thread, "files": files}
 
 
 async def repair_thread_documents_meta(thread_id: str, embedding_model: str, files: List[Any]) -> None:
-    """Rebuild thread_stats.documents_meta for already-indexed files attached to a thread."""
+    """Rebuild thread document metadata for already-indexed files attached to a thread."""
     vector_db = get_vector_db()
     attached_hashes = {f.file_hash for f in files}
     shape = await get_thread_shape(thread_id)
-    # Filter out non-dict entries (e.g., 'updated_at' timestamp added by merge_jsonb_field)
+    # Filter out non-dict entries left by older metadata cache formats.
     documents = shape.get("documents", {})
     file_hashes = {k for k, v in documents.items() if isinstance(v, dict)}
     for stale_hash in list(file_hashes):

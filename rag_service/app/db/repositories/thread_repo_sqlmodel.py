@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 
-from app.db.models_sqlmodel import Thread, Message, ThreadFile
+from app.db.models_sqlmodel import Thread, ChatTurn, ThreadFile
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import utc_now
@@ -95,18 +95,48 @@ class ThreadRepository:
         """List all threads with message counts and file counts."""
         session = await self._get_session()
         async with session.begin():
-            # Query threads with counts using subqueries
+            question_count = (
+                select(func.count(ChatTurn.id))
+                .where(
+                    ChatTurn.thread_id == Thread.id,
+                    ChatTurn.status != "cancelled",
+                    ChatTurn.payload["question"].astext.isnot(None),
+                    ChatTurn.payload["question"].astext != "",
+                )
+                .correlate(Thread)
+                .scalar_subquery()
+            )
+            answer_count = (
+                select(func.count(ChatTurn.id))
+                .where(
+                    ChatTurn.thread_id == Thread.id,
+                    ChatTurn.status != "cancelled",
+                    ChatTurn.payload["answer"].astext.isnot(None),
+                    ChatTurn.payload["answer"].astext != "",
+                )
+                .correlate(Thread)
+                .scalar_subquery()
+            )
+            file_count = (
+                select(func.count(ThreadFile.file_hash))
+                .where(ThreadFile.thread_id == Thread.id)
+                .correlate(Thread)
+                .scalar_subquery()
+            )
+            last_message_at = (
+                select(func.max(ChatTurn.created_at))
+                .where(ChatTurn.thread_id == Thread.id, ChatTurn.status != "cancelled")
+                .correlate(Thread)
+                .scalar_subquery()
+            )
             thread_result = await session.execute(
                 select(
                     Thread,
-                    func.count(func.distinct(Message.id)).label("message_count"),
-                    func.count(func.distinct(ThreadFile.file_hash)).label("file_count"),
-                    func.max(Message.created_at).label("last_message_at")
+                    (question_count + answer_count).label("message_count"),
+                    file_count.label("file_count"),
+                    last_message_at.label("last_message_at")
                 )
-                .outerjoin(Message, Thread.id == Message.thread_id)
-                .outerjoin(ThreadFile, Thread.id == ThreadFile.thread_id)
-                .group_by(Thread.id)
-                .order_by(func.coalesce(func.max(Message.created_at), Thread.created_at).desc())
+                .order_by(func.coalesce(last_message_at, Thread.created_at).desc())
             )
 
             threads = []

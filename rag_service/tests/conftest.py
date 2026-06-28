@@ -8,6 +8,7 @@ including connection management, session handling, and test data.
 import os
 import sys
 import asyncio
+import uuid
 from typing import AsyncGenerator, Generator
 from datetime import datetime
 
@@ -23,8 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlmodel import SQLModel
 from app.db.connection_sqlmodel import get_session, init_db
 from app.db.models_sqlmodel import (
-    Thread, File, ThreadFile, ThreadFileAnnotation,
-    Message, ThreadStats, ProcessStatus, MessageRole
+    Thread, File, ThreadFile,
+    ChatTurn, ProcessStatus, MessageRole
 )
 
 
@@ -174,10 +175,10 @@ async def sample_file(session, file_data):
     return file
 
 
-# Test data fixtures for Message model
+# Test data fixtures for ChatTurn-backed message compatibility
 @pytest.fixture
 def message_data(sample_thread):
-    """Generate sample message data."""
+    """Generate sample chat turn data."""
     return {
         "thread_id": sample_thread.id,
         "role": MessageRole.USER,
@@ -192,12 +193,23 @@ def message_data(sample_thread):
 
 @pytest_asyncio.fixture
 async def sample_message(session, message_data):
-    """Create a sample message in the database."""
+    """Create a sample chat turn in the database."""
     
     import uuid
-    message = Message(
+    message = ChatTurn(
         id=str(uuid.uuid4()),
-        **message_data,
+        thread_id=message_data["thread_id"],
+        status="completed",
+        payload={
+            "question": message_data["content"],
+            "rewritten_question": message_data["context_compact"],
+            "answer": None,
+            "reasoning": message_data["reasoning"],
+            "reasoning_available": message_data["reasoning_available"],
+            "reasoning_format": message_data["reasoning_format"],
+            "web_sources": message_data["web_sources"],
+            "metadata": {},
+        },
         created_at=datetime.utcnow()
     )
     session.add(message)
@@ -222,7 +234,6 @@ async def sample_thread_file(session, sample_thread, sample_file):
     return thread_file
 
 
-# Test data fixtures for ThreadFileAnnotation
 @pytest.fixture
 def annotation_data():
     """Generate sample annotation data."""
@@ -240,15 +251,13 @@ def annotation_data():
 
 @pytest_asyncio.fixture
 async def sample_annotation(session, sample_thread, sample_file, annotation_data):
-    """Create a sample thread-file annotation."""
-    
-    import json
-    annotation = ThreadFileAnnotation(
+    """Create a sample thread-file association with annotations."""
+    annotation = ThreadFile(
         thread_id=sample_thread.id,
         file_hash=sample_file.file_hash,
-        annotations_json=json.dumps(annotation_data["annotations"]),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        added_at=datetime.utcnow(),
+        annotations=annotation_data["annotations"],
+        annotations_updated_at=datetime.utcnow()
     )
     session.add(annotation)
     await session.commit()
@@ -256,25 +265,20 @@ async def sample_annotation(session, sample_thread, sample_file, annotation_data
     return annotation
 
 
-# Test data fixtures for ThreadStats
+# Test data fixtures for thread stats fields
 @pytest_asyncio.fixture
 async def sample_thread_stats(session, sample_thread):
-    """Create a sample thread stats record."""
-    
-    import json
-    stats = ThreadStats(
-        thread_id=sample_thread.id,
-        total_qa_pairs=5,
-        total_qa_chars=1000,
-        avg_qa_chars=200.0,
-        last_qa_at=datetime.utcnow(),
-        documents_meta=json.dumps({}),
-        last_updated_at=datetime.utcnow()
-    )
-    session.add(stats)
+    """Populate sample thread stats fields."""
+    sample_thread.total_qa_pairs = 5
+    sample_thread.total_qa_chars = 1000
+    sample_thread.avg_qa_chars = 200.0
+    sample_thread.last_qa_at = datetime.utcnow()
+    sample_thread.documents_meta = {}
+    sample_thread.stats_last_updated_at = datetime.utcnow()
+    session.add(sample_thread)
     await session.commit()
-    await session.refresh(stats)
-    return stats
+    await session.refresh(sample_thread)
+    return sample_thread
 
 
 # Fixture for multiple threads
@@ -302,20 +306,25 @@ async def multiple_threads(session, thread_data):
     return threads
 
 
-# Fixture for multiple messages
+# Fixture for multiple chat turns
 @pytest_asyncio.fixture
 async def multiple_messages(session, sample_thread):
-    """Create multiple sample messages in a thread."""
+    """Create multiple sample chat turns in a thread."""
     
     import uuid
     messages = []
     for i in range(5):
         role = MessageRole.USER if i % 2 == 0 else MessageRole.ASSISTANT
-        message = Message(
+        is_user = role == MessageRole.USER
+        message = ChatTurn(
             id=str(uuid.uuid4()),
             thread_id=sample_thread.id,
-            role=role,
-            content=fake.paragraph(nb_sentences=2),
+            status="completed",
+            payload={
+                "question": fake.paragraph(nb_sentences=2) if is_user else "",
+                "answer": fake.paragraph(nb_sentences=2) if not is_user else None,
+                "metadata": {},
+            },
             created_at=datetime.utcnow()
         )
         session.add(message)

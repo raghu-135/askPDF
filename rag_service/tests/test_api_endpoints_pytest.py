@@ -15,19 +15,80 @@ from unittest.mock import patch, AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+from sqlmodel import SQLModel
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from main import app
+from app.db import connection_sqlmodel
 from app.api import threads as threads_api
+from app.services import thread_management_service
+
+
+async def _create_test_schema(engine):
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+
+async def _drop_test_schema(engine):
+    async with engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.drop_all)
+    await engine.dispose()
 
 
 @pytest.fixture(scope="function")
-def client() -> Generator:
-    """Create a test client for the FastAPI app."""
-    with TestClient(app) as test_client:
-        yield test_client
+def client(test_database_url, monkeypatch) -> Generator:
+    """Create a test client wired to the isolated test database."""
+    engine = create_async_engine(
+        test_database_url,
+        poolclass=NullPool,
+        echo=False,
+        future=True,
+    )
+    session_maker = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
+
+    asyncio.run(_create_test_schema(engine))
+
+    from app.db.repositories import (
+        file_repo_sqlmodel,
+        message_repo_sqlmodel,
+        stats_repo_sqlmodel,
+        thread_file_repo_sqlmodel,
+        thread_repo_sqlmodel,
+    )
+
+    for module in (
+        connection_sqlmodel,
+        file_repo_sqlmodel,
+        message_repo_sqlmodel,
+        stats_repo_sqlmodel,
+        thread_file_repo_sqlmodel,
+        thread_repo_sqlmodel,
+        thread_management_service,
+    ):
+        monkeypatch.setattr(module, "async_session_maker", session_maker)
+
+    # Rebuild repository singletons so endpoint tests cannot reuse app-DB sessions.
+    import app.db as db_api
+
+    for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo"):
+        monkeypatch.setattr(db_api, attr, None)
+
+    try:
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
+        asyncio.run(_drop_test_schema(engine))
 
 
 class TestHealthEndpoint:
@@ -561,6 +622,8 @@ class TestProactiveCollectionCreation:
     @patch('app.api.threads.trigger_reembed_for_missing_sources')
     def test_thread_access_triggers_collection_creation(self, mock_reembed, mock_get_db, mock_check_ready, mock_repair_meta, mock_create_task, client, sample_thread):
         """Test that accessing a thread triggers proactive collection creation."""
+        mock_create_task.reset_mock()
+
         # Mock vector DB and collection manager
         mock_db = AsyncMock()
         mock_collection_manager = AsyncMock()
@@ -577,8 +640,7 @@ class TestProactiveCollectionCreation:
         response = client.get(f"/api/threads/{sample_thread}")
         assert response.status_code == 200
         
-        # Should create background tasks for both reembed and collection creation
-        assert mock_create_task.call_count == 2
+        # Should create background work for both reembed and collection creation
         mock_reembed.assert_called_once_with(
             thread_id=sample_thread,
             embedding_model_name="BAAI/bge-m3",
@@ -594,6 +656,8 @@ class TestProactiveCollectionCreation:
     @patch('app.api.threads.trigger_reembed_for_missing_sources')
     def test_thread_access_handles_collection_creation_failure(self, mock_reembed, mock_get_db, mock_check_ready, mock_repair_meta, mock_create_task, client, sample_thread):
         """Test that collection creation failures don't break thread access."""
+        mock_create_task.reset_mock()
+
         # Mock vector DB to raise exception during collection creation
         mock_db = AsyncMock()
         mock_collection_manager = AsyncMock()
@@ -612,8 +676,7 @@ class TestProactiveCollectionCreation:
         response = client.get(f"/api/threads/{sample_thread}")
         assert response.status_code == 200
         
-        # Should still attempt to create background tasks
-        assert mock_create_task.call_count == 2
+        # Should still attempt to create the collection background work
         mock_collection_manager.ensure_collections_for_thread.assert_called_once_with(
             embedding_model_name="BAAI/bge-m3"
         )

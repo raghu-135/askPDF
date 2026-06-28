@@ -273,12 +273,16 @@ class TestProductionErrorHandling:
         mock_client = MagicMock()
         mock_client.collections.exists.side_effect = Exception("Connection failed")
         
-        collection_manager = ModelAwareCollectionManager(mock_client)
-        
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
             registry._dimension_cache["test-model"] = 384
+            registry._model_cache["test-model"] = {
+                "dimensions": 384,
+                "sanitized_name": "test_model",
+                "is_local": True,
+            }
             mock_registry.return_value = registry
+            collection_manager = ModelAwareCollectionManager(mock_client)
             
             # Existence-check failures are logged and treated as missing collections.
             collection = await collection_manager.get_collection("DocumentChunk", "test-model")
@@ -292,12 +296,16 @@ class TestProductionErrorHandling:
         mock_client.collections.create.side_effect = [None, Exception("Creation failed"), None]
         mock_client.collections.use.return_value = MagicMock()
         
-        collection_manager = ModelAwareCollectionManager(mock_client)
-        
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
             registry._dimension_cache["test-model"] = 384
+            registry._model_cache["test-model"] = {
+                "dimensions": 384,
+                "sanitized_name": "test_model",
+                "is_local": True,
+            }
             mock_registry.return_value = registry
+            collection_manager = ModelAwareCollectionManager(mock_client)
             
             # Partial failures are logged and deferred until first use.
             await collection_manager.ensure_collections_for_thread("test-model")

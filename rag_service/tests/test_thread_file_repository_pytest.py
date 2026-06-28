@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from sqlmodel import select
 from sqlalchemy.exc import IntegrityError
-from app.db.models_sqlmodel import ThreadFile, Thread, File, ThreadFileAnnotation
+from app.db.models_sqlmodel import ThreadFile, Thread, File
 from app.db.repositories.thread_file_repo_sqlmodel import ThreadFileRepository
 
 
@@ -239,27 +239,27 @@ class TestThreadFileRepository:
     @pytest.mark.asyncio
     async def test_get_thread_file_annotations(self, repo, sample_thread, sample_file, annotation_data):
         """Retrieve annotations JSONB."""
-        annotation = ThreadFileAnnotation(
+        annotation = ThreadFile(
             thread_id=sample_thread.id,
             file_hash=sample_file.file_hash,
-            annotations_json=json.dumps(annotation_data["annotations"]),
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            added_at=datetime.utcnow(),
+            annotations=annotation_data["annotations"],
+            annotations_updated_at=datetime.utcnow()
         )
         repo.add(annotation)
         await repo.commit()
         await repo.refresh(annotation)
         
         result = await repo.execute(
-            select(ThreadFileAnnotation).where(
-                ThreadFileAnnotation.thread_id == sample_thread.id,
-                ThreadFileAnnotation.file_hash == sample_file.file_hash
+            select(ThreadFile).where(
+                ThreadFile.thread_id == sample_thread.id,
+                ThreadFile.file_hash == sample_file.file_hash
             )
         )
         retrieved = result.scalar_one_or_none()
         
         assert retrieved is not None
-        annotations = json.loads(retrieved.annotations_json)
+        annotations = retrieved.annotations
         assert len(annotations) > 0
 
     @pytest.mark.asyncio
@@ -267,12 +267,12 @@ class TestThreadFileRepository:
         """Insert/update annotations."""
         # Insert
         annotations = [{"page": 1, "text": "Test"}]
-        annotation = ThreadFileAnnotation(
+        annotation = ThreadFile(
             thread_id=sample_thread.id,
             file_hash=sample_file.file_hash,
-            annotations_json=json.dumps(annotations),
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            added_at=datetime.utcnow(),
+            annotations=annotations,
+            annotations_updated_at=datetime.utcnow()
         )
         repo.add(annotation)
         await repo.commit()
@@ -281,53 +281,55 @@ class TestThreadFileRepository:
         # Update
         new_annotations = [{"page": 1, "text": "Updated"}, {"page": 2, "text": "New"}]
         result = await repo.execute(
-            select(ThreadFileAnnotation).where(
-                ThreadFileAnnotation.thread_id == sample_thread.id,
-                ThreadFileAnnotation.file_hash == sample_file.file_hash
+            select(ThreadFile).where(
+                ThreadFile.thread_id == sample_thread.id,
+                ThreadFile.file_hash == sample_file.file_hash
             )
         )
         ann = result.scalar_one_or_none()
-        ann.annotations_json = json.dumps(new_annotations)
-        ann.updated_at = datetime.utcnow()
+        ann.annotations = new_annotations
+        ann.annotations_updated_at = datetime.utcnow()
         await repo.commit()
         await repo.refresh(ann)
         
-        updated = json.loads(ann.annotations_json)
+        updated = ann.annotations
         assert len(updated) == 2
         assert updated[0]["text"] == "Updated"
 
     @pytest.mark.asyncio
     async def test_delete_annotations_specific(self, repo, sample_thread, sample_file):
         """Delete specific thread/file annotations."""
-        annotation = ThreadFileAnnotation(
+        annotation = ThreadFile(
             thread_id=sample_thread.id,
             file_hash=sample_file.file_hash,
-            annotations_json="[]",
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            added_at=datetime.utcnow(),
+            annotations=[{"id": "a1"}],
+            annotations_updated_at=datetime.utcnow()
         )
         repo.add(annotation)
         await repo.commit()
         
-        # Delete specific
         result = await repo.execute(
-            select(ThreadFileAnnotation).where(
-                ThreadFileAnnotation.thread_id == sample_thread.id,
-                ThreadFileAnnotation.file_hash == sample_file.file_hash
+            select(ThreadFile).where(
+                ThreadFile.thread_id == sample_thread.id,
+                ThreadFile.file_hash == sample_file.file_hash
             )
         )
         ann = result.scalar_one_or_none()
-        await repo.delete(ann)
+        ann.annotations = []
+        ann.annotations_updated_at = None
         await repo.commit()
         
-        # Verify deletion
         result = await repo.execute(
-            select(ThreadFileAnnotation).where(
-                ThreadFileAnnotation.thread_id == sample_thread.id,
-                ThreadFileAnnotation.file_hash == sample_file.file_hash
+            select(ThreadFile).where(
+                ThreadFile.thread_id == sample_thread.id,
+                ThreadFile.file_hash == sample_file.file_hash
             )
         )
-        assert result.scalar_one_or_none() is None
+        cleared = result.scalar_one_or_none()
+        assert cleared is not None
+        assert cleared.annotations == []
+        assert cleared.annotations_updated_at is None
 
     @pytest.mark.asyncio
     async def test_delete_annotations_thread_wide(self, repo, sample_thread, sample_file):
@@ -345,14 +347,14 @@ class TestThreadFileRepository:
             repo.add(file)
             file_hashes.append(file_hash)
         
-        # Create annotations for the thread
+        # Create associations with annotations for the thread
         for file_hash in file_hashes:
-            annotation = ThreadFileAnnotation(
+            annotation = ThreadFile(
                 thread_id=sample_thread.id,
                 file_hash=file_hash,
-                annotations_json="[]",
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow()
+                added_at=datetime.utcnow(),
+                annotations=[{"id": file_hash}],
+                annotations_updated_at=datetime.utcnow()
             )
             repo.add(annotation)
         
@@ -360,47 +362,44 @@ class TestThreadFileRepository:
         
         # Delete all for thread
         result = await repo.execute(
-            select(ThreadFileAnnotation).where(
-                ThreadFileAnnotation.thread_id == sample_thread.id
+            select(ThreadFile).where(
+                ThreadFile.thread_id == sample_thread.id
             )
         )
         annotations = result.scalars().all()
         
         for ann in annotations:
-            await repo.delete(ann)
+            ann.annotations = []
+            ann.annotations_updated_at = None
         await repo.commit()
         
-        # Verify all deleted
         result = await repo.execute(
-            select(ThreadFileAnnotation).where(
-                ThreadFileAnnotation.thread_id == sample_thread.id
+            select(ThreadFile).where(
+                ThreadFile.thread_id == sample_thread.id
             )
         )
-        assert len(result.scalars().all()) == 0
+        assert all(not row.annotations for row in result.scalars().all())
 
     @pytest.mark.asyncio
-    async def test_annotation_timestamps(self, repo, sample_thread, sample_file):
-        """Verify created_at/updated_at update."""
-        annotation = ThreadFileAnnotation(
+    async def test_annotation_updated_at(self, repo, sample_thread, sample_file):
+        """Verify annotations_updated_at updates."""
+        annotation = ThreadFile(
             thread_id=sample_thread.id,
             file_hash=sample_file.file_hash,
-            annotations_json="[]",
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            added_at=datetime.utcnow(),
+            annotations=[],
+            annotations_updated_at=None
         )
         repo.add(annotation)
         await repo.commit()
         await repo.refresh(annotation)
         
-        original_updated = annotation.updated_at
-        
-        # Update
-        annotation.annotations_json = json.dumps([{"test": "data"}])
-        annotation.updated_at = datetime.utcnow()
+        annotation.annotations = [{"test": "data"}]
+        annotation.annotations_updated_at = datetime.utcnow()
         await repo.commit()
         await repo.refresh(annotation)
         
-        assert annotation.updated_at >= original_updated
+        assert annotation.annotations_updated_at is not None
 
     @pytest.mark.asyncio
     async def test_multiple_files_per_thread(self, repo, sample_thread):
@@ -453,17 +452,17 @@ class TestThreadFileRepository:
             }
         ]
         
-        annotation = ThreadFileAnnotation(
+        annotation = ThreadFile(
             thread_id=sample_thread.id,
             file_hash=sample_file.file_hash,
-            annotations_json=json.dumps(complex_annotations),
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            added_at=datetime.utcnow(),
+            annotations=complex_annotations,
+            annotations_updated_at=datetime.utcnow()
         )
         repo.add(annotation)
         await repo.commit()
         await repo.refresh(annotation)
         
-        retrieved = json.loads(annotation.annotations_json)
+        retrieved = annotation.annotations
         assert retrieved[0]["metadata"]["confidence"] == 0.95
         assert len(retrieved[0]["children"]) == 1

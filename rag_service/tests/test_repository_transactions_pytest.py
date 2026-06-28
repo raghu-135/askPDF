@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Import will work after migration
 try:
     from sqlmodel import select
-    from app.db.models_sqlmodel import Thread, File, Message
+    from app.db.models_sqlmodel import Thread, File, ChatTurn
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:
@@ -149,15 +149,15 @@ class TestRepositoryTransactions:
     async def test_foreign_key_constraint(self, session, sample_thread):
         """Verify FK constraint enforcement."""
         import uuid
-        # Try to create message with non-existent thread
-        message = Message(
+        # Try to create chat turn with non-existent thread
+        turn = ChatTurn(
             id=str(uuid.uuid4()),
             thread_id="non-existent-thread-id",
-            role="user",
-            content="Test message",
+            status="completed",
+            payload={"question": "Test question", "answer": "Test answer"},
             created_at=datetime.utcnow()
         )
-        session.add(message)
+        session.add(turn)
         
         # This should fail due to FK constraint
         try:
