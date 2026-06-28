@@ -396,17 +396,53 @@ You need a **chat model with tool calling support** and an **embedding model**:
 ./run_tests.sh [options]
 ```
 
+The test runner is Docker-native. `run_tests.sh` starts an isolated
+`askpdf-test` Compose project with its own PostgreSQL, Weaviate, network, and
+volumes, so macOS, Linux, Windows with Docker/WSL, and GitHub Actions all use
+the same test environment. The normal app stack can keep running while tests
+run because the test services do not publish host ports.
+
+You can also run the test container directly:
+
+```bash
+docker compose -p askpdf-test -f docker-compose.test.yml run --rm --build test-runner
+docker compose -p askpdf-test -f docker-compose.test.yml run --rm --build test-runner --api
+docker compose -p askpdf-test -f docker-compose.test.yml run --rm --build test-runner --group db
+```
+
+Set `ASKPDF_TEST_PROJECT_NAME` to override the isolated Compose project name.
+Set `ASKPDF_KEEP_TEST_CONTAINERS=1` to keep test containers and volumes after a
+run for debugging.
+
 ### Test Options
 - `--verbose` - Verbose output
 - `--file <file>` - Run specific test file
+- `--test <test>` - Run a specific test inside `--file`
 - `--coverage` - Run with coverage report
-- `--db-tests` - Run PostgreSQL database tests
+- `--unit` - Run unit and mock-based tests
+- `--db` / `--db-tests` / `--db-only` - Run PostgreSQL database tests
 - `--api` - Run API endpoint tests
+- `--integration` - Run integration tests
+- `--schema` - Run schema guardrail tests
+- `--standalone` - Run standalone verification scripts
+- `--all` / `--all-tests` - Run the full pytest suite plus standalone checks
 
 ### Test Categories
 - **Database Tests**: PostgreSQL operations, models, repositories
 - **API Tests**: Endpoint testing, integration tests
 - **Parsing Tests**: PDF processing with Docling and pdfplumber
+
+### CI and Merge Gates
+
+GitHub Actions runs Docker build and test jobs on pull requests and pushes to
+`main`. To block merges unless CI passes, configure a branch ruleset in GitHub:
+
+1. Go to **Settings → Rules → Rulesets**.
+2. Create a ruleset for `main`.
+3. Require pull requests before merging.
+4. Require status checks to pass.
+5. Select the `Docker build` and `Test suite` checks from the `CI` workflow.
+6. Block force pushes and branch deletions.
 
 </details>
 

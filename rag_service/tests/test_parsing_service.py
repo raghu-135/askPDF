@@ -25,7 +25,6 @@ import sys
 import os
 
 # Add the parent directory to the path to import parsing_service
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app.services.parsing_service import extract_text_with_coordinates, parse_with_docling, parse_with_pdfplumber
 

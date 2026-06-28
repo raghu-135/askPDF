@@ -2,13 +2,10 @@
 test_schema_guardrails.py - Tests that protect the simplified Postgres schema.
 """
 
-import os
-import sys
 
 import pytest
 from sqlalchemy import text
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app.db import models_sqlmodel
 

@@ -6,14 +6,10 @@ relationships, and data types for PostgreSQL.
 """
 
 import os
-import sys
 import pytest
 import pytest_asyncio
 from datetime import datetime
 from typing import Dict, Any
-
-# Add parent directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Import will work after migration
 try:

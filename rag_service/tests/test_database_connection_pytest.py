@@ -6,12 +6,8 @@ work correctly with SQLModel and SQLAlchemy async.
 """
 
 import os
-import sys
 import pytest
 import pytest_asyncio
-
-# Add parent directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Import will work after migration
 try:

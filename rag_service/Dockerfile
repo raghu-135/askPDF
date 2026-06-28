@@ -33,6 +33,7 @@ RUN if [ "$DOWNLOAD_LOCAL_MODELS" = "true" ]; then \
 RUN mkdir -p /models/hf /static
 
 COPY alembic alembic
+COPY scripts scripts
 COPY app app
 COPY alembic.ini main.py ./
 

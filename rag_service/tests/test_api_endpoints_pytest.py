@@ -6,89 +6,20 @@ These tests validate HTTP contracts and API behavior with a test database.
 """
 
 import asyncio
-import os
-import sys
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Generator
 from unittest.mock import patch, AsyncMock, Mock
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
-from sqlmodel import SQLModel
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-from main import app
-from app.db import connection_sqlmodel
 from app.api import threads as threads_api
-from app.services import thread_management_service
-
-
-async def _create_test_schema(engine):
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
-
-
-async def _drop_test_schema(engine):
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.drop_all)
-    await engine.dispose()
 
 
 @pytest.fixture(scope="function")
-def client(test_database_url, monkeypatch) -> Generator:
-    """Create a test client wired to the isolated test database."""
-    engine = create_async_engine(
-        test_database_url,
-        poolclass=NullPool,
-        echo=False,
-        future=True,
-    )
-    session_maker = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autocommit=False,
-        autoflush=False,
-    )
-
-    asyncio.run(_create_test_schema(engine))
-
-    from app.db.repositories import (
-        file_repo_sqlmodel,
-        message_repo_sqlmodel,
-        stats_repo_sqlmodel,
-        thread_file_repo_sqlmodel,
-        thread_repo_sqlmodel,
-    )
-
-    for module in (
-        connection_sqlmodel,
-        file_repo_sqlmodel,
-        message_repo_sqlmodel,
-        stats_repo_sqlmodel,
-        thread_file_repo_sqlmodel,
-        thread_repo_sqlmodel,
-        thread_management_service,
-    ):
-        monkeypatch.setattr(module, "async_session_maker", session_maker)
-
-    # Rebuild repository singletons so endpoint tests cannot reuse app-DB sessions.
-    import app.db as db_api
-
-    for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo"):
-        monkeypatch.setattr(db_api, attr, None)
-
-    try:
-        with TestClient(app) as test_client:
-            yield test_client
-    finally:
-        app.dependency_overrides.clear()
-        asyncio.run(_drop_test_schema(engine))
+def client(api_client) -> Generator:
+    """Keep existing test signatures while using the shared API client fixture."""
+    yield api_client
 
 
 class TestHealthEndpoint:
