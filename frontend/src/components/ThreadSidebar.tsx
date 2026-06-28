@@ -384,6 +384,15 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             Threads
           </Typography>
           <Chip label={threads.length} size="small" />
+          <Tooltip title="Create new thread">
+            <IconButton
+              size="small"
+              color="primary"
+              onClick={handleOpenCreateDialog}
+            >
+              <AddIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </Box>
         {isSelectionMode ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -431,15 +440,6 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   <DeleteIcon fontSize="small" />
                 </IconButton>
               </span>
-            </Tooltip>
-            <Tooltip title="Create new thread">
-              <IconButton
-                size="small"
-                color="primary"
-                onClick={handleOpenCreateDialog}
-              >
-                <AddIcon fontSize="small" />
-              </IconButton>
             </Tooltip>
           </Box>
         )}
