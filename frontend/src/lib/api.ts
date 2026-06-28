@@ -111,9 +111,23 @@ export interface Thread {
   name: string;
   embed_model: string;
   settings?: ThreadSettings;
+  thread_metadata?: ThreadMetadata;
   created_at: string;
   message_count?: number;
   file_count?: number;
+}
+
+export interface ThreadMetadata {
+  fork?: {
+    parent_thread_id?: string | null;
+    parent_thread_name?: string | null;
+    forked_at?: string | null;
+    source_message_id?: string | null;
+    source_message_created_at?: string | null;
+    mode?: 'from_message' | 'full_thread' | string;
+  };
+  fork_children?: string[];
+  [key: string]: any;
 }
 
 export interface ThreadSettings {
@@ -207,6 +221,22 @@ export async function updateThread(threadId: string, name: string): Promise<Thre
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function forkThread(
+  threadId: string,
+  options: { messageId?: string; name?: string } = {}
+): Promise<Thread> {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/fork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message_id: options.messageId,
+      name: options.name,
+    }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

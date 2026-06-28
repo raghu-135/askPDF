@@ -41,6 +41,7 @@ class ThreadRepository:
             name=name,
             embed_model=embed_model,
             settings={},
+            thread_metadata={},
             created_at=created_at
         )
 
@@ -116,6 +117,7 @@ class ThreadRepository:
                     "name": thread.name,
                     "embed_model": thread.embed_model,
                     "settings": thread.settings if thread.settings else {},
+                    "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
                     "created_at": thread.created_at,
                     "message_count": row[1] or 0,
                     "file_count": row[2] or 0

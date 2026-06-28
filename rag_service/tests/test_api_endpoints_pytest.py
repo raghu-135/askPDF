@@ -359,6 +359,78 @@ class TestThreadEndpoints:
         assert data["not_found_thread_ids"] == []
         assert delete_resource.await_count == 2
 
+    def test_fork_thread_endpoint(self, client):
+        """Test forking a thread."""
+        forked_thread = SimpleNamespace(
+            id="forked-thread",
+            name="Source Thread (Fork)",
+            embed_model="BAAI/bge-m3",
+            settings={"max_iterations": 3},
+            thread_metadata={
+                "fork": {
+                    "parent_thread_id": "source-thread",
+                    "parent_thread_name": "Source Thread",
+                    "forked_at": "2026-01-01T00:00:00Z",
+                    "source_message_id": "message-1",
+                    "source_message_created_at": "2026-01-01T00:00:00Z",
+                    "mode": "from_message",
+                }
+            },
+            created_at=datetime(2026, 1, 1),
+        )
+        file = SimpleNamespace(file_hash="file-1")
+
+        with (
+            patch(
+                "app.api.threads.fork_thread",
+                new_callable=AsyncMock,
+                return_value={"thread": forked_thread, "files": [file]},
+            ) as fork_thread,
+            patch("app.api.threads.trigger_reembed_for_missing_sources", Mock(return_value=None)),
+            patch("app.api.threads.asyncio.create_task") as create_task,
+        ):
+            response = client.post(
+                "/api/threads/source-thread/fork",
+                json={"message_id": "message-1"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == "forked-thread"
+        assert data["thread_metadata"]["fork"]["parent_thread_id"] == "source-thread"
+        assert data["thread_metadata"]["fork"]["source_message_id"] == "message-1"
+        fork_thread.assert_awaited_once_with(
+            source_thread_id="source-thread",
+            message_id="message-1",
+            name=None,
+        )
+        create_task.assert_called_once()
+
+    def test_fork_thread_endpoint_missing_source(self, client):
+        """Forking a missing source thread should return 404."""
+        with patch(
+            "app.api.threads.fork_thread",
+            new_callable=AsyncMock,
+            side_effect=threads_api.SourceThreadNotFoundError("missing"),
+        ):
+            response = client.post("/api/threads/missing-thread/fork", json={})
+
+        assert response.status_code == 404
+
+    def test_fork_thread_endpoint_message_from_other_thread(self, client):
+        """Forking from a message outside the source thread should return 400."""
+        with patch(
+            "app.api.threads.fork_thread",
+            new_callable=AsyncMock,
+            side_effect=threads_api.ForkMessageNotFoundError("missing message"),
+        ):
+            response = client.post(
+                "/api/threads/source-thread/fork",
+                json={"message_id": "other-message"},
+            )
+
+        assert response.status_code == 400
+
     def test_get_prompt_tools(self, client):
         """Test getting prompt tools and defaults."""
         response = client.get("/api/threads/prompt-tools")

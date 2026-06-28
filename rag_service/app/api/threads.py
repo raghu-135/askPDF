@@ -7,6 +7,7 @@ Endpoints:
 - POST /api/threads - Create thread
 - GET /api/threads - List threads
 - POST /api/threads/bulk/delete - Delete multiple threads
+- POST /api/threads/{thread_id}/fork - Fork thread
 - GET /api/threads/{thread_id} - Get thread
 - PUT /api/threads/{thread_id} - Update thread
 - GET /api/threads/{thread_id}/settings - Get thread settings
@@ -51,6 +52,7 @@ from app.models.requests import (
     ThreadBulkDeleteRequest,
     ThreadBulkDeleteResponse,
     ThreadCreateRequest,
+    ThreadForkRequest,
     ThreadSettingsResponse,
     ThreadSettingsUpdateRequest,
     ThreadUpdateRequest,
@@ -58,7 +60,12 @@ from app.models.requests import (
 )
 from app.rag.indexer import trigger_reembed_for_missing_sources
 from app.services.file_cleanup_service import cleanup_detached_file
-from app.services.thread_management_service import repair_thread_documents_meta
+from app.services.thread_management_service import (
+    ForkMessageNotFoundError,
+    SourceThreadNotFoundError,
+    fork_thread,
+    repair_thread_documents_meta,
+)
 
 router = APIRouter(tags=["threads"])
 
@@ -69,6 +76,17 @@ def _empty_thread_stats() -> dict:
         "total_chunks": 0,
         "total_chars": 0,
         "documents": {},
+    }
+
+
+def _thread_payload(thread) -> dict:
+    return {
+        "id": thread.id,
+        "name": thread.name,
+        "embed_model": thread.embed_model,
+        "settings": thread.settings if thread.settings else {},
+        "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
+        "created_at": iso_utc_z(thread.created_at),
     }
 
 
@@ -152,13 +170,7 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
         from app.db import create_thread
         thread = await create_thread(req.name, embed_model)
 
-        return {
-            "id": thread.id,
-            "name": thread.name,
-            "embed_model": thread.embed_model,
-            "settings": thread.settings,
-            "created_at": iso_utc_z(thread.created_at),
-        }
+        return _thread_payload(thread)
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -220,6 +232,39 @@ async def bulk_delete_threads_endpoint(req: ThreadBulkDeleteRequest):
     )
 
 
+@router.post("/threads/{thread_id}/fork")
+async def fork_thread_endpoint(thread_id: str, req: ThreadForkRequest):
+    """Fork a thread from an optional message point."""
+    try:
+        result = await fork_thread(
+            source_thread_id=thread_id,
+            message_id=req.message_id,
+            name=req.name,
+        )
+        thread = result["thread"]
+        files = result["files"]
+        asyncio.create_task(
+            trigger_reembed_for_missing_sources(
+                thread_id=thread.id,
+                embedding_model_name=thread.embed_model,
+                file_hashes=[f.file_hash for f in files],
+            )
+        )
+        return _thread_payload(thread)
+    except SourceThreadNotFoundError:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    except ForkMessageNotFoundError:
+        raise HTTPException(
+            status_code=400,
+            detail="Fork message not found in source thread",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/threads/{thread_id}")
 async def get_thread_endpoint(thread_id: str):
     """Get a specific thread by ID."""
@@ -260,7 +305,8 @@ async def get_thread_endpoint(thread_id: str):
             "id": thread.id,
             "name": thread.name,
             "embed_model": thread.embed_model,
-            "settings": thread.settings,
+            "settings": thread.settings if thread.settings else {},
+            "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
             "created_at": iso_utc_z(thread.created_at),
             "files": [
                 {
@@ -293,13 +339,7 @@ async def update_thread_endpoint(thread_id: str, req: ThreadUpdateRequest):
         thread = await update_thread(thread_id, req.name)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
-        return {
-            "id": thread.id,
-            "name": thread.name,
-            "embed_model": thread.embed_model,
-            "settings": thread.settings,
-            "created_at": iso_utc_z(thread.created_at),
-        }
+        return _thread_payload(thread)
     except HTTPException:
         raise
     except Exception as e:

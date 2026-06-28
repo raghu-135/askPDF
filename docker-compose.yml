@@ -42,6 +42,8 @@ services:
     depends_on:
       postgresql:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       weaviate:
         condition: service_healthy
     volumes:
@@ -56,6 +58,28 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  db-migrate:
+    build:
+      context: ./rag_service
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.db.migrate"]
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
+      - TEST_DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/test_askpdf
+      - POSTGRES_POOL_SIZE=10
+      - POSTGRES_MAX_OVERFLOW=20
+      - RUN_DB_MIGRATIONS=${RUN_DB_MIGRATIONS:-true}
+      - WEAVIATE_URL=http://weaviate:8080
+      - WEAVIATE_HYBRID_ALPHA=${WEAVIATE_HYBRID_ALPHA}
+      - CAPTURE_SERVICE_URL=http://browser-capture:8080
+    env_file:
+      - .env
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    volumes:
+      - ./rag_service:/app
 
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.36.2
