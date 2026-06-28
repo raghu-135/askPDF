@@ -12,33 +12,31 @@ import { ThumbnailsPane, ThumbImg } from "@embedpdf/plugin-thumbnail/react";
 import CollectionsIcon from "@mui/icons-material/Collections";
 import CommentIcon from "@mui/icons-material/Comment";
 import { PdfCommentsPane } from "./PdfCommentsPane";
+import { clampPanelRatio, getHorizontalDragRatio, PANEL_RATIOS } from "../lib/panel-ratio";
 
 export type SidebarTab = "thumbnails" | "comments";
 
-const MIN_SIDEBAR_WIDTH = 220;
-const MAX_SIDEBAR_WIDTH = 520;
-
 interface PdfSidebarProps {
   documentId: string;
-  width: number;
+  widthRatio: number;
   activeTab: SidebarTab;
   onTabChange: (tab: SidebarTab) => void;
-  onWidthChange: (width: number) => void;
+  onWidthRatioChange: (ratio: number) => void;
   onToggleSidebar: () => void;
   commentComposerRequest: number;
 }
 
 export const PdfSidebar = React.memo(function PdfSidebar({
   documentId,
-  width,
+  widthRatio,
   activeTab,
   onTabChange,
-  onWidthChange,
+  onWidthRatioChange,
   onToggleSidebar,
   commentComposerRequest,
 }: PdfSidebarProps) {
   const { provides: scrollPlugin } = useScroll(documentId);
-  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const dragRef = useRef<{ startX: number; startRatio: number; containerWidth: number } | null>(null);
   const [isResizing, setIsResizing] = useState(false);
 
   const handleThumbnailClick = (pageIndex: number) => {
@@ -54,8 +52,15 @@ export const PdfSidebar = React.memo(function PdfSidebar({
 
     const handlePointerMove = (event: PointerEvent) => {
       if (!dragRef.current) return;
-      const nextWidth = dragRef.current.startWidth + (event.clientX - dragRef.current.startX);
-      onWidthChange(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, nextWidth)));
+      const deltaRatio = getHorizontalDragRatio(
+        event.clientX,
+        dragRef.current.startX,
+        dragRef.current.containerWidth
+      );
+      onWidthRatioChange(clampPanelRatio(
+        dragRef.current.startRatio + deltaRatio,
+        PANEL_RATIOS.pdfSidebar
+      ));
     };
 
     const handlePointerUp = () => {
@@ -74,7 +79,7 @@ export const PdfSidebar = React.memo(function PdfSidebar({
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [isResizing, onWidthChange]);
+  }, [isResizing, onWidthRatioChange]);
 
   const tabs = useMemo(
     () => [
@@ -87,7 +92,7 @@ export const PdfSidebar = React.memo(function PdfSidebar({
   return (
     <Box
       sx={{
-        width,
+        flexBasis: `${widthRatio * 100}%`,
         flexShrink: 0,
         height: "100%",
         display: "flex",
@@ -96,7 +101,7 @@ export const PdfSidebar = React.memo(function PdfSidebar({
         borderColor: "divider",
         bgcolor: "background.paper",
         position: "relative",
-        minWidth: MIN_SIDEBAR_WIDTH,
+        minWidth: 0,
       }}
     >
       <Box
@@ -201,9 +206,11 @@ export const PdfSidebar = React.memo(function PdfSidebar({
         <Box
           onPointerDown={(event) => {
             event.preventDefault();
+            const containerWidth = event.currentTarget.parentElement?.parentElement?.getBoundingClientRect().width || window.innerWidth;
             dragRef.current = {
               startX: event.clientX,
-              startWidth: width,
+              startRatio: widthRatio,
+              containerWidth,
             };
             setIsResizing(true);
           }}

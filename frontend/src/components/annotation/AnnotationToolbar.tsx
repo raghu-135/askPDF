@@ -22,8 +22,7 @@ import GestureIcon from "@mui/icons-material/Gesture";
 import ArrowRightAltIcon from "@mui/icons-material/ArrowRightAlt";
 import UndoIcon from "@mui/icons-material/Undo";
 import RedoIcon from "@mui/icons-material/Redo";
-import NearMeIcon from "@mui/icons-material/NearMe";
-import NearMeDisabledIcon from "@mui/icons-material/NearMeDisabled";
+import PanToolIcon from "@mui/icons-material/PanTool";
 
 const activeButtonSx = {
   bgcolor: "primary.main",
@@ -169,7 +168,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = React.memo(fu
               color={isViewOnly ? "primary" : "default"}
               sx={isViewOnly ? activeButtonSx : undefined}
             >
-              {isViewOnly ? <NearMeIcon fontSize="small" /> : <NearMeDisabledIcon fontSize="small" />}
+              <PanToolIcon fontSize="small" />
             </IconButton>
           </Tooltip>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.5 }} />

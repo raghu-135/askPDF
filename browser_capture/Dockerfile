@@ -22,7 +22,7 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install FastAPI and dependencies for direct CDP
-RUN pip install fastapi uvicorn python-multipart requests websockets weasyprint
+RUN pip install fastapi uvicorn python-multipart requests websockets weasyprint pypdf
 
 # ChromeDriver will be downloaded automatically by webdriver-manager
 

@@ -42,6 +42,7 @@ import {
   type Rect,
 } from "@embedpdf/models";
 import { getAdjacentCyclicIndex } from "../lib/pdf-utils";
+import { sortSidebarAnnotationEntriesByPosition } from "../lib/annotation-utils";
 
 type PdfCommentsPaneProps = {
   documentId: string;
@@ -564,7 +565,7 @@ export function PdfCommentsPane({
       .sort((a, b) => a - b);
 
     return pageNumbers.flatMap((pageNumber) =>
-      (grouped[pageNumber] || [])
+      sortSidebarAnnotationEntriesByPosition(grouped[pageNumber] || [])
         .map((entry) => ({ pageIndex: pageNumber, entry }))
     );
   }, [grouped]);
@@ -584,7 +585,7 @@ export function PdfCommentsPane({
 
     return pageNumbers
       .map((pageIndex) => {
-        const threads = (grouped[pageIndex] || [])
+        const threads = sortSidebarAnnotationEntriesByPosition(grouped[pageIndex] || [])
           .map((entry) => ({ pageIndex, entry }));
 
         return {

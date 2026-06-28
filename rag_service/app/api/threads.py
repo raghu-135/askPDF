@@ -6,6 +6,7 @@ Endpoints:
 - POST /api/threads/prompt-preview - Get prompt preview
 - POST /api/threads - Create thread
 - GET /api/threads - List threads
+- POST /api/threads/bulk/delete - Delete multiple threads
 - GET /api/threads/{thread_id} - Get thread
 - PUT /api/threads/{thread_id} - Update thread
 - GET /api/threads/{thread_id}/settings - Get thread settings
@@ -47,6 +48,8 @@ from app.models.llm_server_client import (
 from app.models.requests import (
     PromptDefaults,
     PromptPreviewRequest,
+    ThreadBulkDeleteRequest,
+    ThreadBulkDeleteResponse,
     ThreadCreateRequest,
     ThreadSettingsResponse,
     ThreadSettingsUpdateRequest,
@@ -67,6 +70,31 @@ def _empty_thread_stats() -> dict:
         "total_chars": 0,
         "documents": {},
     }
+
+
+async def _delete_thread_resources(thread_id: str) -> bool:
+    """
+    Delete a thread, its thread-scoped vectors, and any files detached by that delete.
+
+    Returns False when the thread does not exist.
+    """
+    thread = await get_thread(thread_id)
+    if not thread:
+        return False
+
+    files = await get_thread_files(thread_id)
+
+    db = get_vector_db()
+    await db.delete_thread_data(thread_id)
+
+    deleted = await delete_thread(thread_id)
+    if not deleted:
+        return False
+
+    for file in files:
+        await cleanup_detached_file(file.file_hash, thread_id, thread.embed_model)
+
+    return True
 
 
 @router.get("/threads/prompt-tools")
@@ -145,6 +173,51 @@ async def list_threads_endpoint():
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/threads/bulk/delete", response_model=ThreadBulkDeleteResponse)
+async def bulk_delete_threads_endpoint(req: ThreadBulkDeleteRequest):
+    """Delete multiple threads, returning per-thread results."""
+    seen_thread_ids = set()
+    thread_ids = []
+    for thread_id in req.thread_ids:
+        normalized = (thread_id or "").strip()
+        if not normalized or normalized in seen_thread_ids:
+            continue
+        seen_thread_ids.add(normalized)
+        thread_ids.append(normalized)
+
+    if not thread_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="thread_ids must contain at least one thread ID",
+        )
+    if len(thread_ids) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="thread_ids cannot contain more than 100 unique thread IDs",
+        )
+
+    deleted_thread_ids = []
+    not_found_thread_ids = []
+    failed_thread_ids = []
+
+    for thread_id in thread_ids:
+        try:
+            deleted = await _delete_thread_resources(thread_id)
+            if deleted:
+                deleted_thread_ids.append(thread_id)
+            else:
+                not_found_thread_ids.append(thread_id)
+        except Exception as e:
+            traceback.print_exc()
+            failed_thread_ids.append({"thread_id": thread_id, "error": str(e)})
+
+    return ThreadBulkDeleteResponse(
+        deleted_thread_ids=deleted_thread_ids,
+        not_found_thread_ids=not_found_thread_ids,
+        failed_thread_ids=failed_thread_ids,
+    )
 
 
 @router.get("/threads/{thread_id}")
@@ -290,23 +363,9 @@ async def delete_thread_endpoint(thread_id: str):
     Delete a thread, its messages, file associations, and vector data.
     """
     try:
-        thread = await get_thread(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
-        files = await get_thread_files(thread_id)
-
-        # Delete thread-scoped vector data first
-        db = get_vector_db()
-        await db.delete_thread_data(thread_id)
-
-        # Delete from database
-        from app.db import delete_thread as db_delete_thread
-        deleted = await db_delete_thread(thread_id)
+        deleted = await _delete_thread_resources(thread_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Thread not found")
-
-        for file in files:
-            await cleanup_detached_file(file.file_hash, thread_id, thread.embed_model)
 
         return {"status": "deleted", "thread_id": thread_id}
     except HTTPException:

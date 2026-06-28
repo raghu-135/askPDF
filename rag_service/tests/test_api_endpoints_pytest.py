@@ -300,6 +300,65 @@ class TestThreadEndpoints:
         response = client.delete("/api/threads/nonexistent-id")
         assert response.status_code == 404
 
+    def test_bulk_delete_threads(self, client):
+        """Test deleting multiple threads."""
+        delete_resource = AsyncMock(side_effect=[True, True])
+
+        with patch("app.api.threads._delete_thread_resources", delete_resource):
+            response = client.post(
+                "/api/threads/bulk/delete",
+                json={"thread_ids": ["thread-1", "thread-2"]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deleted_thread_ids"] == ["thread-1", "thread-2"]
+        assert data["not_found_thread_ids"] == []
+        assert data["failed_thread_ids"] == []
+        assert delete_resource.await_count == 2
+
+    def test_bulk_delete_threads_with_missing_id(self, client):
+        """Bulk delete should delete existing IDs even when one is missing."""
+        delete_resource = AsyncMock(side_effect=[True, False, True])
+
+        with patch("app.api.threads._delete_thread_resources", delete_resource):
+            response = client.post(
+                "/api/threads/bulk/delete",
+                json={"thread_ids": ["thread-1", "missing-thread", "thread-2"]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deleted_thread_ids"] == ["thread-1", "thread-2"]
+        assert data["not_found_thread_ids"] == ["missing-thread"]
+        assert data["failed_thread_ids"] == []
+        assert delete_resource.await_count == 3
+
+    def test_bulk_delete_threads_empty_ids(self, client):
+        """Bulk delete should reject an empty thread list."""
+        response = client.post(
+            "/api/threads/bulk/delete",
+            json={"thread_ids": []},
+        )
+
+        assert response.status_code == 422
+
+    def test_bulk_delete_threads_deduplicates_ids(self, client):
+        """Bulk delete should delete duplicate IDs once."""
+        delete_resource = AsyncMock(side_effect=[True, True])
+
+        with patch("app.api.threads._delete_thread_resources", delete_resource):
+            response = client.post(
+                "/api/threads/bulk/delete",
+                json={"thread_ids": ["thread-1", "thread-1", "thread-2"]},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["deleted_thread_ids"] == ["thread-1", "thread-2"]
+        assert data["not_found_thread_ids"] == []
+        assert delete_resource.await_count == 2
+
     def test_get_prompt_tools(self, client):
         """Test getting prompt tools and defaults."""
         response = client.get("/api/threads/prompt-tools")

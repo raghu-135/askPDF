@@ -72,8 +72,9 @@ import { usePersistAnnotations } from "../hooks/usePersistAnnotations";
 import { AnnotationToolbar } from "./annotation/AnnotationToolbar";
 import { AnnotationSelectionMenu } from "./annotation/AnnotationSelectionMenu";
 import { PdfSearchHighlightLayer } from "./PdfSearchHighlightLayer";
-import { PdfSearchControls, usePdfSearch } from "./PdfSearchControls";
+import { PdfSearchControls } from "./PdfSearchControls";
 import { STANDARD_COLORS } from "./annotation/constants";
+import { usePdfSearch } from "../hooks/usePdfSearch";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import {
@@ -81,6 +82,7 @@ import {
   mapSearchResultsByPage,
   type SentenceWithPageBBoxes,
 } from "../lib/pdf-utils";
+import { clampPanelRatio, PANEL_RATIOS } from "../lib/panel-ratio";
 
 
 type BBox = {
@@ -355,10 +357,9 @@ function EmbedPdfDocumentBody({
   const theme = useTheme();
   const [showSidebar, setShowSidebar] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("thumbnails");
-  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [sidebarWidthRatio, setSidebarWidthRatio] = useState(PANEL_RATIOS.pdfSidebar.default);
   const [commentComposerRequest, setCommentComposerRequest] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  const sentenceRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
 
   const { provides: zoomScope } = useZoom(documentId);
   const zoomRef = useRef(zoomScope);
@@ -380,7 +381,6 @@ function EmbedPdfDocumentBody({
   const { provides: scrollApi } = useScroll(documentId);
   const scrollRef = useRef(scrollApi);
   scrollRef.current = scrollApi;
-  const pendingScrollIdRef = useRef<number | null>(null);
   const { provides: historyApi } = useHistoryCapability();
   const historyRef = useRef({ provides: historyApi });
   historyRef.current = { provides: historyApi };
@@ -408,14 +408,14 @@ function EmbedPdfDocumentBody({
       alignY: 35,
       behavior: "smooth",
     });
-  }, [pdfSearch.activeResult]);
+  }, [pdfSearch.activeResult, pdfSearch.navigationVersion]);
 
 
   useEffect(() => {
-    const savedWidth = window.localStorage.getItem("askpdf.pdfSidebarWidth");
-    const parsedWidth = savedWidth ? Number(savedWidth) : NaN;
-    if (Number.isFinite(parsedWidth) && parsedWidth > 0) {
-      setSidebarWidth(Math.min(520, Math.max(220, parsedWidth)));
+    const savedRatio = window.localStorage.getItem("askpdf.pdfSidebarWidthRatio");
+    const parsedRatio = savedRatio ? Number(savedRatio) : NaN;
+    if (Number.isFinite(parsedRatio) && parsedRatio > 0) {
+      setSidebarWidthRatio(clampPanelRatio(parsedRatio, PANEL_RATIOS.pdfSidebar));
     }
 
     const savedTab = window.localStorage.getItem("askpdf.pdfSidebarTab");
@@ -425,8 +425,8 @@ function EmbedPdfDocumentBody({
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem("askpdf.pdfSidebarWidth", String(sidebarWidth));
-  }, [sidebarWidth]);
+    window.localStorage.setItem("askpdf.pdfSidebarWidthRatio", String(sidebarWidthRatio));
+  }, [sidebarWidthRatio]);
 
   useEffect(() => {
     window.localStorage.setItem("askpdf.pdfSidebarTab", sidebarTab);
@@ -442,23 +442,20 @@ function EmbedPdfDocumentBody({
     // Priority: Don't let TTS scroll fight with a manual history undo/redo
     if (isHistoryProcessingRef.current) return;
 
-    if (!autoScroll || currentId === null || !sentences) {
-      pendingScrollIdRef.current = null;
-      return;
-    }
+    if (!autoScroll || currentId === null || !sentences) return;
     const s = sentences[currentId];
-    if (!s?.bboxes?.length) return;
+    const bbox = s?.bboxes?.[0];
+    if (!bbox) return;
 
-    const el = sentenceRefs.current[currentId];
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-    } else {
-      scrollRef.current?.scrollToPage({
-        pageNumber: s.bboxes[0].page,
-        behavior: "smooth",
-      });
-      pendingScrollIdRef.current = currentId;
-    }
+    scrollRef.current?.scrollToPage({
+      pageNumber: bbox.page,
+      pageCoordinates: {
+        x: bbox.x,
+        y: bbox.y,
+      },
+      alignY: 35,
+      behavior: "smooth",
+    });
   }, [currentId, autoScroll, sentences, isHistoryProcessingRef]);
 
   const scrollToAnnotation = useCallback(
@@ -797,18 +794,6 @@ function EmbedPdfDocumentBody({
                 {activeSentence.pageBBoxes.map((bbox, idx) => (
                   <div
                     key={idx}
-                    ref={(el) => {
-                      if (idx === 0) {
-                        sentenceRefs.current[activeSentence.id] = el;
-                        
-                        if (el && pendingScrollIdRef.current === activeSentence.id) {
-                          pendingScrollIdRef.current = null;
-                          requestAnimationFrame(() => {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                          });
-                        }
-                      }
-                    }}
                     style={{
                       position: "absolute",
                       left: `${(bbox.x / bbox.page_width) * 100}%`,
@@ -882,10 +867,10 @@ function EmbedPdfDocumentBody({
               {showSidebar && (
                 <PdfSidebar
                   documentId={documentId}
-                  width={sidebarWidth}
+                  widthRatio={sidebarWidthRatio}
                   activeTab={sidebarTab}
                   onTabChange={setSidebarTab}
-                  onWidthChange={setSidebarWidth}
+                  onWidthRatioChange={setSidebarWidthRatio}
                   onToggleSidebar={() => setShowSidebar(false)}
                   commentComposerRequest={commentComposerRequest}
                 />

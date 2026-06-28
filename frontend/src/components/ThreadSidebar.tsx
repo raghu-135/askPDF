@@ -30,6 +30,7 @@ import {
   Paper,
   Collapse,
   CircularProgress,
+  Checkbox,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -42,12 +43,13 @@ import LockIcon from '@mui/icons-material/Lock';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningIcon from '@mui/icons-material/Warning';
 import ErrorIcon from '@mui/icons-material/Error';
+import ClearIcon from '@mui/icons-material/Clear';
 
 import {
   Thread,
   createThread,
   listThreads,
-  deleteThread,
+  bulkDeleteThreads,
   updateThread,
 } from '../lib/api';
 import { fetchAvailableEmbedModels, checkEmbedModelReady } from '../lib/models-api';
@@ -87,6 +89,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [expanded, setExpanded] = useState(true);
   const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
   const [isCheckingEmbedModel, setIsCheckingEmbedModel] = useState(false);
+  const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
+  const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+
+  const selectedCount = selectedThreadIds.size;
+  const allThreadsSelected = threads.length > 0 && selectedCount === threads.length;
+  const someThreadsSelected = selectedCount > 0 && !allThreadsSelected;
 
 
   // Helper function to get icon and color for model type
@@ -155,18 +165,121 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     }
   };
 
-  const handleDeleteThread = async (threadId: string, event: React.MouseEvent) => {
+  const toggleThreadSelection = (
+    threadId: string,
+    checked: boolean,
+    isShiftClick: boolean
+  ) => {
+    setSelectedThreadIds(prev => {
+      const next = new Set(prev);
+      const currentIndex = threads.findIndex(thread => thread.id === threadId);
+      const lastIndex = lastSelectedThreadId
+        ? threads.findIndex(thread => thread.id === lastSelectedThreadId)
+        : -1;
+
+      if (isShiftClick && currentIndex !== -1 && lastIndex !== -1) {
+        const start = Math.min(currentIndex, lastIndex);
+        const end = Math.max(currentIndex, lastIndex);
+        threads.slice(start, end + 1).forEach(thread => {
+          if (checked) {
+            next.add(thread.id);
+          } else {
+            next.delete(thread.id);
+          }
+        });
+      } else if (checked) {
+        next.add(threadId);
+      } else {
+        next.delete(threadId);
+      }
+
+      return next;
+    });
+    setLastSelectedThreadId(threadId);
+  };
+
+  const handleToggleThreadSelection = (
+    threadId: string,
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
     event.stopPropagation();
-    if (!confirm('Delete this thread and all its messages?')) return;
+    toggleThreadSelection(
+      threadId,
+      event.target.checked,
+      (event.nativeEvent as MouseEvent).shiftKey
+    );
+  };
+
+  const handleThreadRowClick = (thread: Thread, event: React.MouseEvent) => {
+    if (!isSelectionMode) {
+      onThreadSelect(thread);
+      return;
+    }
+
+    event.preventDefault();
+    toggleThreadSelection(
+      thread.id,
+      !selectedThreadIds.has(thread.id),
+      event.shiftKey
+    );
+  };
+
+  const handleToggleAllThreads = (event: React.ChangeEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+    if (event.target.checked) {
+      setSelectedThreadIds(new Set(threads.map(thread => thread.id)));
+      setLastSelectedThreadId(threads[threads.length - 1]?.id ?? null);
+    } else {
+      setSelectedThreadIds(new Set());
+      setLastSelectedThreadId(null);
+    }
+  };
+
+  const clearThreadSelection = () => {
+    setSelectedThreadIds(new Set());
+    setLastSelectedThreadId(null);
+    setIsSelectionMode(false);
+  };
+
+  const enterThreadSelectionMode = () => {
+    setIsSelectionMode(true);
+  };
+
+  const handleBulkDeleteThreads = async () => {
+    const threadIds = Array.from(selectedThreadIds);
+    if (threadIds.length === 0) return;
+    if (!confirm(`Delete ${threadIds.length} threads and all their messages?`)) return;
 
     try {
-      await deleteThread(threadId);
-      setThreads(prev => prev.filter(t => t.id !== threadId));
-      if (activeThreadId === threadId) {
+      setIsBulkDeleting(true);
+      const result = await bulkDeleteThreads(threadIds);
+      const deletedIds = new Set(result.deleted_thread_ids);
+      const remainingSelectedIds = new Set<string>();
+      result.not_found_thread_ids.forEach(threadId => remainingSelectedIds.add(threadId));
+      result.failed_thread_ids.forEach(failure => remainingSelectedIds.add(failure.thread_id));
+
+      setThreads(prev => prev.filter(thread => !deletedIds.has(thread.id)));
+      setSelectedThreadIds(remainingSelectedIds);
+      if (remainingSelectedIds.size === 0) {
+        setIsSelectionMode(false);
+      }
+      setLastSelectedThreadId(null);
+
+      if (activeThreadId && deletedIds.has(activeThreadId)) {
         onThreadSelect(null);
       }
+
+      const failedCount = result.failed_thread_ids.length;
+      const notFoundCount = result.not_found_thread_ids.length;
+      if (failedCount > 0 || notFoundCount > 0) {
+        console.error('Bulk thread delete completed with issues:', result);
+        alert(`Deleted ${result.deleted_thread_ids.length} threads. ${failedCount + notFoundCount} could not be deleted.`);
+      }
     } catch (error) {
-      console.error('Failed to delete thread:', error);
+      console.error('Failed to delete selected threads:', error);
+      alert('Failed to delete selected threads.');
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -249,15 +362,64 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </Typography>
           <Chip label={threads.length} size="small" />
         </Box>
-        <Tooltip title="Create new thread">
-          <IconButton
-            size="small"
-            color="primary"
-            onClick={handleOpenCreateDialog}
-          >
-            <AddIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        {isSelectionMode ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Tooltip title={allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
+              <Checkbox
+                size="small"
+                checked={allThreadsSelected}
+                indeterminate={someThreadsSelected}
+                onChange={handleToggleAllThreads}
+                disabled={isBulkDeleting}
+                sx={{ p: 0.5 }}
+              />
+            </Tooltip>
+            <Tooltip title="Shift-click threads to select a range">
+              <Chip label={`${selectedCount} selected`} size="small" color="primary" />
+            </Tooltip>
+            <Tooltip title="Clear selection">
+              <IconButton size="small" onClick={clearThreadSelection} disabled={isBulkDeleting}>
+                <ClearIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Delete selected threads">
+              <span>
+                <IconButton
+                  size="small"
+                  color="error"
+                  onClick={handleBulkDeleteThreads}
+                  disabled={isBulkDeleting || selectedCount === 0}
+                >
+                  {isBulkDeleting ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+        ) : (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
+              <span>
+                <IconButton
+                  size="small"
+                  color="error"
+                  onClick={enterThreadSelectionMode}
+                  disabled={threads.length === 0}
+                >
+                  <DeleteIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Create new thread">
+              <IconButton
+                size="small"
+                color="primary"
+                onClick={handleOpenCreateDialog}
+              >
+                <AddIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        )}
       </Box>
 
       {/* Thread List */}
@@ -291,12 +453,16 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                     ? theme.palette.mode === 'dark'
                       ? theme.palette.primary.dark
                       : theme.palette.primary.light
+                    : isSelectionMode && selectedThreadIds.has(thread.id)
+                      ? theme.palette.action.selected
                     : 'transparent',
                   '&:hover': {
                     bgcolor: activeThreadId === thread.id
                       ? theme.palette.mode === 'dark'
                         ? theme.palette.primary.dark
                         : theme.palette.primary.light
+                      : isSelectionMode && selectedThreadIds.has(thread.id)
+                        ? theme.palette.action.selected
                       : theme.palette.mode === 'dark'
                         ? theme.palette.background.paper
                         : theme.palette.grey[100]
@@ -304,11 +470,23 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 }}
               >
                 <ListItemButton
-                  onClick={() => onThreadSelect(thread)}
+                  onClick={(e) => handleThreadRowClick(thread, e)}
                   selected={activeThreadId === thread.id}
-                  sx={{ py: 1 }}
+                  sx={{ py: 1, pr: isSelectionMode ? 1 : 10 }}
                 >
-                  <ListItemIcon sx={{ minWidth: 36 }}>
+                  {isSelectionMode && (
+                    <Checkbox
+                      edge="start"
+                      size="small"
+                      checked={selectedThreadIds.has(thread.id)}
+                      onChange={(e) => handleToggleThreadSelection(thread.id, e)}
+                      onClick={(e) => e.stopPropagation()}
+                      disabled={isBulkDeleting}
+                      inputProps={{ 'aria-label': `Select ${thread.name}` }}
+                      sx={{ p: 0.5, mr: 0.5 }}
+                    />
+                  )}
+                  <ListItemIcon sx={{ minWidth: isSelectionMode ? 32 : 36 }}>
                     <ChatIcon fontSize="small" color={activeThreadId === thread.id ? 'primary' : 'action'} />
                   </ListItemIcon>
 
@@ -364,22 +542,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   )}
                 </ListItemButton>
 
-                <ListItemSecondaryAction>
-                  <IconButton
-                    size="small"
-                    onClick={(e) => startEditing(thread, e)}
-                    sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
-                  >
-                    <EditIcon fontSize="small" />
-                  </IconButton>
-                  <IconButton
-                    size="small"
-                    onClick={(e) => handleDeleteThread(thread.id, e)}
-                    sx={{ opacity: 0.6, '&:hover': { opacity: 1, color: 'error.main' } }}
-                  >
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
-                </ListItemSecondaryAction>
+                {!isSelectionMode && (
+                  <ListItemSecondaryAction>
+                    <IconButton
+                      size="small"
+                      onClick={(e) => startEditing(thread, e)}
+                      sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
+                    >
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  </ListItemSecondaryAction>
+                )}
               </ListItem>
             ))}
           </List>

@@ -265,6 +265,22 @@ export async function deleteThread(threadId: string): Promise<void> {
   if (!res.ok) throw new Error(await res.text());
 }
 
+export interface BulkDeleteThreadsResponse {
+  deleted_thread_ids: string[];
+  not_found_thread_ids: string[];
+  failed_thread_ids: { thread_id: string; error: string }[];
+}
+
+export async function bulkDeleteThreads(threadIds: string[]): Promise<BulkDeleteThreadsResponse> {
+  const res = await fetch(`${API_BASE}/api/threads/bulk/delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ thread_ids: threadIds }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function addFileToThread(
   threadId: string,
   fileHash: string,
