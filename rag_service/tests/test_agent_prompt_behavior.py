@@ -1,10 +1,7 @@
 """Regression tests for orchestrator prompt/tool exposure behavior."""
 
-import os
-import sys
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.agent.agent import build_system_prompt, _format_prefetch_for_prompt
 from app.agent.agent_helpers import format_runtime_datetime_context

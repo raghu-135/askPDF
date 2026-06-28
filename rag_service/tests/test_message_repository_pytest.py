@@ -3,7 +3,6 @@ test_message_repository_pytest.py - ChatTurn-backed message compatibility tests.
 """
 
 import os
-import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -11,7 +10,6 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app.db.models_sqlmodel import ChatTurn, MessageRole
 from app.db.repositories.message_repo_sqlmodel import (
