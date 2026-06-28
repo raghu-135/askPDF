@@ -62,7 +62,6 @@ out/
 
 # TypeScript
 *.tsbuildinfo
-next-env.d.ts
 
 # IDEs and Editors
 .vscode/
