@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Import will work after migration
 try:
     from sqlmodel import select
-    from app.db.models_sqlmodel import Thread, Message, ThreadFile
+    from app.db.models_sqlmodel import Thread, ChatTurn, ThreadFile
     from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
@@ -135,17 +135,17 @@ class TestThreadRepository:
 
     @pytest.mark.asyncio
     async def test_delete_thread_cascade(self, repo, sample_thread):
-        """Delete thread, verify cascade to messages/files."""
-        # First add a message to the thread
+        """Delete thread, verify cascade to chat turns."""
+        # First add a chat turn to the thread
         import uuid
-        message = Message(
+        turn = ChatTurn(
             id=str(uuid.uuid4()),
             thread_id=sample_thread.id,
-            role="user",
-            content="Test message",
+            status="completed",
+            payload={"question": "Test question", "answer": "Test answer"},
             created_at=datetime.utcnow()
         )
-        repo.add(message)
+        repo.add(turn)
         await repo.commit()
         
         # Delete the thread

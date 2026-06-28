@@ -432,12 +432,16 @@ class TestDisasterRecoveryScenarios:
         mock_client.collections.exists.return_value = True
         mock_client.collections.use.return_value = MagicMock()
         
-        collection_manager = ModelAwareCollectionManager(mock_client)
-        
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
             registry._dimension_cache["corrupted-model"] = 384
+            registry._model_cache["corrupted-model"] = {
+                "dimensions": 384,
+                "sanitized_name": "corrupted_model",
+                "is_local": True,
+            }
             mock_registry.return_value = registry
+            collection_manager = ModelAwareCollectionManager(mock_client)
             
             # Should detect and handle corrupted collections
             collection = await collection_manager.get_collection("DocumentChunk", "corrupted-model")

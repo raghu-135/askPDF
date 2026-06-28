@@ -9,11 +9,10 @@ from sqlalchemy.future import select
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from app.db.models_sqlmodel import (
+    ChatTurn,
     File,
-    Message,
     Thread,
     ThreadFile,
-    ThreadFileAnnotation,
 )
 from app.services import thread_management_service
 
@@ -60,42 +59,51 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
                     thread_id="source-thread",
                     file_hash="file-1",
                     added_at=created_at,
-                )
-            )
-            session.add(
-                ThreadFileAnnotation(
-                    thread_id="source-thread",
-                    file_hash="file-1",
-                    annotations_json='[{"id":"a1"}]',
-                    created_at=created_at,
-                    updated_at=created_at,
+                    annotations=[{"id": "a1"}],
+                    annotations_updated_at=created_at,
                 )
             )
             session.add_all(
                 [
-                    Message(
-                        id="m1",
+                    ChatTurn(
+                        id="turn-1",
                         thread_id="source-thread",
-                        role="user",
-                        content="question",
+                        status="completed",
+                        payload={
+                            "question": "question",
+                            "rewritten_question": None,
+                            "answer": "answer",
+                            "reasoning": "",
+                            "reasoning_available": False,
+                            "reasoning_format": "none",
+                            "web_sources": [{"url": "https://example.com"}],
+                            "document_sources": [],
+                            "used_chat_ids": [],
+                            "clarification_options": None,
+                            "error": None,
+                            "metadata": {"context_compact": "Q: question\nA: answer"},
+                        },
                         created_at=created_at,
+                        completed_at=created_at,
                     ),
-                    Message(
-                        id="m2",
+                    ChatTurn(
+                        id="turn-2",
                         thread_id="source-thread",
-                        role="assistant",
-                        content="answer",
-                        context_compact="Q: question\nA: answer",
-                        reasoning_available=False,
-                        reasoning_format="none",
-                        web_sources=[{"url": "https://example.com"}],
-                        created_at=created_at,
-                    ),
-                    Message(
-                        id="m3",
-                        thread_id="source-thread",
-                        role="user",
-                        content="later question",
+                        status="failed",
+                        payload={
+                            "question": "later question",
+                            "rewritten_question": None,
+                            "answer": None,
+                            "reasoning": "",
+                            "reasoning_available": False,
+                            "reasoning_format": "none",
+                            "web_sources": [],
+                            "document_sources": [],
+                            "used_chat_ids": [],
+                            "clarification_options": None,
+                            "error": {"code": "missing_assistant_message"},
+                            "metadata": {},
+                        },
                         created_at=created_at,
                     ),
                 ]
@@ -103,29 +111,22 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
 
     result = await thread_management_service.fork_thread(
         "source-thread",
-        message_id="m2",
+        message_id="turn-1:assistant",
         name="Forked Thread",
     )
     forked = result["thread"]
 
     async with test_session_maker() as session:
-        messages = (
+        turns = (
             await session.execute(
-                select(Message)
-                .where(Message.thread_id == forked.id)
-                .order_by(Message.created_at.asc())
+                select(ChatTurn)
+                .where(ChatTurn.thread_id == forked.id)
+                .order_by(ChatTurn.created_at.asc())
             )
         ).scalars().all()
         files = (
             await session.execute(
                 select(ThreadFile).where(ThreadFile.thread_id == forked.id)
-            )
-        ).scalars().all()
-        annotations = (
-            await session.execute(
-                select(ThreadFileAnnotation).where(
-                    ThreadFileAnnotation.thread_id == forked.id
-                )
             )
         ).scalars().all()
         source_thread = (
@@ -140,13 +141,15 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
     assert "fork_children" not in forked.thread_metadata
     assert forked.thread_metadata["fork"]["parent_thread_id"] == "source-thread"
     assert forked.thread_metadata["fork"]["parent_thread_name"] == "Source Thread"
-    assert forked.thread_metadata["fork"]["source_message_id"] == "m2"
+    assert forked.thread_metadata["fork"]["source_message_id"] == "turn-1:assistant"
     assert forked.thread_metadata["fork"]["mode"] == "from_message"
     assert source_thread.thread_metadata["fork_children"] == [forked.id]
-    assert [m.content for m in messages] == ["question", "answer"]
-    assert all(m.id not in {"m1", "m2", "m3"} for m in messages)
+    assert [t.payload["question"] for t in turns] == ["question"]
+    assert [t.payload["answer"] for t in turns] == ["answer"]
+    assert all(t.id not in {"turn-1", "turn-2"} for t in turns)
     assert [f.file_hash for f in files] == ["file-1"]
-    assert annotations[0].annotations_json == '[{"id":"a1"}]'
+    assert files[0].annotations == [{"id": "a1"}]
+    assert files[0].annotations_updated_at == created_at
 
 
 @pytest.mark.asyncio
@@ -186,16 +189,16 @@ async def test_fork_thread_rejects_message_from_another_thread(engine, monkeypat
             )
             await session.flush()
             session.add(
-                Message(
-                    id="other-message",
+                ChatTurn(
+                    id="other-turn",
                     thread_id="other-thread",
-                    role="user",
-                    content="wrong thread",
+                    status="completed",
+                    payload={"question": "wrong thread", "answer": "wrong answer"},
                 )
             )
 
     with pytest.raises(thread_management_service.ForkMessageNotFoundError):
         await thread_management_service.fork_thread(
             "source-thread",
-            message_id="other-message",
+            message_id="other-turn:user",
         )

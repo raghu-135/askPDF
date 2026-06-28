@@ -1077,7 +1077,7 @@ async def trigger_reembed_for_missing_sources(
     Lazy backfill for sources and chat-memory vectors missing in vector DB.
     Called when a thread is opened.
     """
-    from app.db import get_thread_files, get_thread_messages, MessageRole
+    from app.db import get_thread_files, get_thread_turns
     if not await embed_model_check(thread_id, embedding_model_name):
         return {"status": "skipped", "reason": "embed_model_not_ready"}
 
@@ -1117,8 +1117,8 @@ async def trigger_reembed_for_missing_sources(
                 logger.warning("Skipping re-embed for file %s: %s", f.file_hash, item_err)
 
         try:
-            messages = await get_thread_messages(thread_id, limit=10000)
-            for msg in messages:
+            turns = await get_thread_turns(thread_id, limit=10000)
+            for turn in turns:
                 if not await embed_model_check(thread_id, embedding_model_name, during_run=True):
                     logger.warning(
                         "Stopping chat-memory backfill for thread %s: embed model '%s' became unavailable",
@@ -1126,23 +1126,26 @@ async def trigger_reembed_for_missing_sources(
                         embedding_model_name,
                     )
                     break
-                if msg.role != MessageRole.ASSISTANT:
+                payload = turn.payload or {}
+                answer = (payload.get("answer") or "").strip()
+                if not answer:
                     continue
-                compact_text = (msg.context_compact or "").strip()
+                metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+                compact_text = (metadata.get("context_compact") or "").strip()
                 if not compact_text:
                     continue
-                if await db.has_chat_memory_indexed(thread_id, msg.id):
+                if await db.has_chat_memory_indexed(thread_id, turn.id):
                     continue
                 chat_result = await index_chat_memory_from_compact_for_thread(
                     thread_id=thread_id,
-                    message_id=msg.id,
+                    message_id=turn.id,
                     compact_text=compact_text,
-                    answer=msg.content,
+                    answer=answer,
                     embedding_model_name=embedding_model_name,
-                    message_created_at=msg.created_at,
+                    message_created_at=turn.completed_at or turn.created_at,
                 )
                 if chat_result.get("status") == "success":
-                    reindexed_chat_messages.append(msg.id)
+                    reindexed_chat_messages.append(turn.id)
         except Exception as chat_err:
             logger.warning("Skipping chat-memory backfill for thread %s: %s", thread_id, chat_err)
 

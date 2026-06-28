@@ -11,7 +11,14 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.time_utils import iso_utc_z
 
 
-def set_jsonb_field(obj: Any, field_name: str, key: str, value: Any) -> None:
+def set_jsonb_field(
+    obj: Any,
+    field_name: str,
+    key: str,
+    value: Any,
+    *,
+    touch_updated_at: bool = False,
+) -> None:
     """
     Safely set a key in a JSONB field with proper change tracking.
     
@@ -23,12 +30,19 @@ def set_jsonb_field(obj: Any, field_name: str, key: str, value: Any) -> None:
     # Create new dict to ensure SQLAlchemy detects change
     new_value = dict(current)
     new_value[key] = value
-    new_value["updated_at"] = iso_utc_z()
+    if touch_updated_at:
+        new_value["updated_at"] = iso_utc_z()
     setattr(obj, field_name, new_value)
     flag_modified(obj, field_name)
 
 
-def merge_jsonb_field(obj: Any, field_name: str, updates: Dict[str, Any]) -> None:
+def merge_jsonb_field(
+    obj: Any,
+    field_name: str,
+    updates: Dict[str, Any],
+    *,
+    touch_updated_at: bool = False,
+) -> None:
     """
     Merge updates into a JSONB field with proper change tracking.
     
@@ -38,12 +52,19 @@ def merge_jsonb_field(obj: Any, field_name: str, updates: Dict[str, Any]) -> Non
     """
     current = getattr(obj, field_name) or {}
     new_value = {**current, **updates}
-    new_value["updated_at"] = iso_utc_z()
+    if touch_updated_at:
+        new_value["updated_at"] = iso_utc_z()
     setattr(obj, field_name, new_value)
     flag_modified(obj, field_name)
 
 
-def replace_jsonb_field(obj: Any, field_name: str, new_value: Dict[str, Any]) -> None:
+def replace_jsonb_field(
+    obj: Any,
+    field_name: str,
+    new_value: Dict[str, Any],
+    *,
+    touch_updated_at: bool = False,
+) -> None:
     """
     Completely replace a JSONB field value.
     
@@ -51,6 +72,7 @@ def replace_jsonb_field(obj: Any, field_name: str, new_value: Dict[str, Any]) ->
         replace_jsonb_field(file, "file_status", {"parsing": {"status": "completed"}})
     """
     new_value = dict(new_value)  # Ensure it's a new dict object
-    new_value["updated_at"] = iso_utc_z()
+    if touch_updated_at:
+        new_value["updated_at"] = iso_utc_z()
     setattr(obj, field_name, new_value)
     flag_modified(obj, field_name)

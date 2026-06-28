@@ -1,9 +1,8 @@
 """
 stats_repo_sqlmodel.py - Thread stats operations with SQLModel.
 
-This module provides repository methods for managing thread statistics
-and document metadata using SQLModel with PostgreSQL, including JSONB
-documents_meta handling.
+This module provides repository methods for managing denormalized thread
+statistics and document metadata stored on the threads table.
 """
 
 import json
@@ -12,11 +11,12 @@ from typing import Dict, Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
+from sqlalchemy.orm.attributes import flag_modified
 
-from app.db.models_sqlmodel import ThreadStats, Thread, Message, File, ThreadFile
-from app.db.jsonb_utils import merge_jsonb_field
+from app.db.models_sqlmodel import Thread, ChatTurn, File, ThreadFile
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import maybe_iso_utc_z
+from app.time_utils import utc_now
 
 
 class StatsRepository:
@@ -48,62 +48,60 @@ class StatsRepository:
                 return {}
         return {}
 
+    def _replace_documents_meta(self, thread: Thread, documents_meta: Dict[str, Any]) -> None:
+        """Replace thread.documents_meta without adding synthetic cache entries."""
+        thread.documents_meta = dict(documents_meta)
+        flag_modified(thread, "documents_meta")
+        thread.stats_last_updated_at = utc_now()
+
     async def get_or_create(self, thread_id: str) -> Dict[str, Any]:
-        """Get or create thread stats row."""
+        """Get thread stats values, returning an empty shape for missing threads."""
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(ThreadStats).where(ThreadStats.thread_id == thread_id)
+                select(Thread).where(Thread.id == thread_id)
             )
-            stats = result.scalar_one_or_none()
+            thread = result.scalar_one_or_none()
 
-            if not stats:
-                stats = ThreadStats(
-                    thread_id=thread_id,
-                    total_qa_pairs=0,
-                    total_qa_chars=0,
-                    avg_qa_chars=0.0,
-                    documents_meta={},
-                )
-                session.add(stats)
-                await session.flush()
-                await session.refresh(stats)
+            if not thread:
+                return {
+                    "thread_id": thread_id,
+                    "total_qa_pairs": 0,
+                    "total_qa_chars": 0,
+                    "avg_qa_chars": 0.0,
+                    "last_qa_at": None,
+                    "documents_meta": {},
+                }
 
         return {
-                "thread_id": stats.thread_id,
-                "total_qa_pairs": stats.total_qa_pairs,
-                "total_qa_chars": stats.total_qa_chars,
-                "avg_qa_chars": stats.avg_qa_chars,
-                "last_qa_at": stats.last_qa_at,
-                "documents_meta": stats.documents_meta if stats.documents_meta else {},
-            }
+            "thread_id": thread.id,
+            "total_qa_pairs": thread.total_qa_pairs,
+            "total_qa_chars": thread.total_qa_chars,
+            "avg_qa_chars": thread.avg_qa_chars,
+            "last_qa_at": thread.last_qa_at,
+            "documents_meta": self._load_documents_meta(thread.documents_meta),
+        }
 
     async def record_qa(self, thread_id: str, qa_chars: int) -> None:
         """Record a QA interaction - increment counters."""
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(ThreadStats).where(ThreadStats.thread_id == thread_id)
+                select(Thread).where(Thread.id == thread_id)
             )
-            stats = result.scalar_one_or_none()
+            thread = result.scalar_one_or_none()
 
-            if not stats:
-                # Create new stats row
-                stats = ThreadStats(
-                    thread_id=thread_id,
-                    total_qa_pairs=1,
-                    total_qa_chars=qa_chars,
-                    avg_qa_chars=float(qa_chars),
-                    documents_meta={},
-                )
-                session.add(stats)
-            else:
-                # Update existing
-                new_pairs = stats.total_qa_pairs + 1
-                new_chars = stats.total_qa_chars + qa_chars
-                stats.total_qa_pairs = new_pairs
-                stats.total_qa_chars = new_chars
-                stats.avg_qa_chars = new_chars / new_pairs
+            if not thread:
+                return
+
+            new_pairs = thread.total_qa_pairs + 1
+            new_chars = thread.total_qa_chars + qa_chars
+            now = utc_now()
+            thread.total_qa_pairs = new_pairs
+            thread.total_qa_chars = new_chars
+            thread.avg_qa_chars = new_chars / new_pairs
+            thread.last_qa_at = now
+            thread.stats_last_updated_at = now
 
             await session.flush()
 
@@ -117,29 +115,21 @@ class StatsRepository:
         file_hash: str,
         meta: Dict[str, Any]
     ) -> None:
-        """Insert or replace a document entry in thread_stats.documents_meta."""
+        """Insert or replace a document entry in thread.documents_meta."""
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(ThreadStats).where(ThreadStats.thread_id == thread_id)
+                select(Thread).where(Thread.id == thread_id)
             )
-            stats = result.scalar_one_or_none()
+            thread = result.scalar_one_or_none()
 
-            if not stats:
-                # Create new stats row with document meta
-                stats = ThreadStats(
-                    thread_id=thread_id,
-                    total_qa_pairs=0,
-                    total_qa_chars=0,
-                    avg_qa_chars=0.0,
-                    documents_meta={file_hash: meta},
-                )
-                session.add(stats)
-            else:
-                # Update existing using JSONB merge
-                current_meta = dict(stats.documents_meta or {})
-                current_meta[file_hash] = {**current_meta.get(file_hash, {}), **meta}
-                merge_jsonb_field(stats, "documents_meta", current_meta)
+            if not thread:
+                return
+
+            current_meta = self._load_documents_meta(thread.documents_meta)
+            current = current_meta.get(file_hash, {})
+            current_meta[file_hash] = {**(current if isinstance(current, dict) else {}), **meta}
+            self._replace_documents_meta(thread, current_meta)
 
             await session.flush()
 
@@ -157,62 +147,63 @@ class StatsRepository:
         thread_id: str,
         file_hash: str
     ) -> None:
-        """Remove a document entry from thread_stats.documents_meta."""
+        """Remove a document entry from thread.documents_meta."""
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(ThreadStats).where(ThreadStats.thread_id == thread_id)
+                select(Thread).where(Thread.id == thread_id)
             )
-            stats = result.scalar_one_or_none()
+            thread = result.scalar_one_or_none()
 
-            if not stats:
+            if not thread:
                 return
 
-            current_meta = dict(stats.documents_meta or {})
+            current_meta = self._load_documents_meta(thread.documents_meta)
             if file_hash in current_meta:
                 del current_meta[file_hash]
-                merge_jsonb_field(stats, "documents_meta", current_meta)
+                self._replace_documents_meta(thread, current_meta)
                 await session.flush()
 
     async def recompute_qa_stats(self, thread_id: str) -> None:
         """
-        Recompute QA stats from the messages table.
+        Recompute QA stats from chat turns.
         Called after message pair deletion to prevent drift.
         """
         session = await self._get_session()
         async with session.begin():
-            # Count assistant messages and sum their content chars
+            # Count completed/clarification turns with visible answers.
             result = await session.execute(
                 select(
-                    func.count(Message.id).label("cnt"),
-                    func.coalesce(func.sum(func.length(Message.content)), 0).label("total_chars")
+                    func.count(ChatTurn.id).label("cnt"),
+                    func.coalesce(
+                        func.sum(func.length(ChatTurn.payload["answer"].astext)),
+                        0,
+                    ).label("total_chars")
                 )
-                .where(Message.thread_id == thread_id, Message.role == "assistant")
+                .where(
+                    ChatTurn.thread_id == thread_id,
+                    ChatTurn.status.in_(["completed", "clarification"]),
+                    ChatTurn.payload["answer"].astext.isnot(None),
+                    ChatTurn.payload["answer"].astext != "",
+                )
             )
             row = result.one()
             cnt = row.cnt or 0
             total_chars = row.total_chars or 0
             avg = (total_chars / cnt) if cnt > 0 else 0.0
 
-            # Get or create stats row
             result = await session.execute(
-                select(ThreadStats).where(ThreadStats.thread_id == thread_id)
+                select(Thread).where(Thread.id == thread_id)
             )
-            stats = result.scalar_one_or_none()
+            thread = result.scalar_one_or_none()
 
-            if not stats:
-                stats = ThreadStats(
-                    thread_id=thread_id,
-                    total_qa_pairs=cnt,
-                    total_qa_chars=total_chars,
-                    avg_qa_chars=avg,
-                    documents_meta={},
-                )
-                session.add(stats)
-            else:
-                stats.total_qa_pairs = cnt
-                stats.total_qa_chars = total_chars
-                stats.avg_qa_chars = avg
+            if not thread:
+                return
+
+            thread.total_qa_pairs = cnt
+            thread.total_qa_chars = total_chars
+            thread.avg_qa_chars = avg
+            thread.stats_last_updated_at = utc_now()
 
             await session.flush()
 
@@ -221,11 +212,11 @@ class StatsRepository:
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(ThreadStats).where(ThreadStats.thread_id == thread_id)
+                select(Thread).where(Thread.id == thread_id)
             )
-            stats = result.scalar_one_or_none()
+            thread = result.scalar_one_or_none()
 
-            if not stats:
+            if not thread:
                 return {
                     "total_qa_pairs": 0,
                     "total_qa_chars": 0,
@@ -235,11 +226,11 @@ class StatsRepository:
                 }
 
             return {
-                "total_qa_pairs": stats.total_qa_pairs,
-                "total_qa_chars": stats.total_qa_chars,
-                "avg_qa_chars": round(stats.avg_qa_chars, 1),
-                "last_qa_at": stats.last_qa_at,
-                "documents": self._load_documents_meta(stats.documents_meta),
+                "total_qa_pairs": thread.total_qa_pairs,
+                "total_qa_chars": thread.total_qa_chars,
+                "avg_qa_chars": round(thread.avg_qa_chars, 1),
+                "last_qa_at": thread.last_qa_at,
+                "documents": self._load_documents_meta(thread.documents_meta),
             }
 
     async def get_thread_shape(self, thread_id: str) -> Dict[str, Any]:
@@ -248,14 +239,14 @@ class StatsRepository:
         Used by the prefetch path in chat_service and by the get_thread_shape agent tool.
 
         Thread-file associations are the source of truth for document membership.
-        The thread_stats.documents_meta JSON is only a cache for indexing details.
+        The thread.documents_meta JSON is only a cache for indexing details.
         """
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(
-                select(ThreadStats).where(ThreadStats.thread_id == thread_id)
+                select(Thread).where(Thread.id == thread_id)
             )
-            stats_row = result.scalar_one_or_none()
+            thread = result.scalar_one_or_none()
 
             files_result = await session.execute(
                 select(File, ThreadFile.added_at)
@@ -265,12 +256,12 @@ class StatsRepository:
             )
             attached_files = list(files_result.all())
 
-        if stats_row:
-            documents_cache = self._load_documents_meta(stats_row.documents_meta)
-            total_qa_pairs = stats_row.total_qa_pairs
-            total_qa_chars = stats_row.total_qa_chars
-            avg_qa_chars = round(stats_row.avg_qa_chars, 1)
-            last_qa_at = stats_row.last_qa_at
+        if thread:
+            documents_cache = self._load_documents_meta(thread.documents_meta)
+            total_qa_pairs = thread.total_qa_pairs
+            total_qa_chars = thread.total_qa_chars
+            avg_qa_chars = round(thread.avg_qa_chars, 1)
+            last_qa_at = thread.last_qa_at
         else:
             documents_cache = {}
             total_qa_pairs = 0

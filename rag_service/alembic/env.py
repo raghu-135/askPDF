@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Import SQLModel and models
 from sqlmodel import SQLModel
-from app.db.models_sqlmodel import Thread, File, Message, ThreadFile, ThreadFileAnnotation, ThreadStats
+from app.db.models_sqlmodel import Thread, File, ChatTurn, ThreadFile
 
 # this is the Alembic Config object
 config = context.config

@@ -19,8 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 try:
     from sqlmodel import SQLModel
     from app.db.models_sqlmodel import (
-        Thread, File, Message, ThreadFile,
-        ThreadFileAnnotation, ThreadStats,
+        Thread, File, ChatTurn, ThreadFile,
         ProcessStatus, MessageRole
     )
     # Only mark as available if TEST_DATABASE_URL is explicitly set
@@ -96,32 +95,33 @@ class TestFileModel:
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")
-class TestMessageModel:
-    """Test Message model definition and fields."""
+class TestChatTurnModel:
+    """Test ChatTurn model definition and fields."""
 
-    def test_message_model_creation(self):
-        """Create Message instance, verify fields."""
+    def test_chat_turn_model_creation(self):
+        """Create ChatTurn instance, verify fields."""
         import uuid
-        message = Message(
+        turn = ChatTurn(
             id=str(uuid.uuid4()),
             thread_id="thread-123",
-            role=MessageRole.USER,
-            content="Hello, world!",
-            context_compact="Compact context",
-            reasoning="My reasoning",
-            reasoning_available=True,
-            reasoning_format="markdown",
-            web_sources=[{"url": "http://example.com"}],
+            status="completed",
+            payload={
+                "question": "Hello?",
+                "rewritten_question": "Hello?",
+                "answer": "World.",
+                "reasoning": "My reasoning",
+                "reasoning_available": True,
+                "reasoning_format": "markdown",
+                "web_sources": [{"url": "http://example.com"}],
+            },
             created_at=datetime.utcnow()
         )
         
-        assert message.role == MessageRole.USER
-        assert message.content == "Hello, world!"
-        assert message.context_compact == "Compact context"
-        assert message.reasoning == "My reasoning"
-        assert message.reasoning_available is True
-        assert message.reasoning_format == "markdown"
-        assert message.web_sources == [{"url": "http://example.com"}]
+        assert turn.status == "completed"
+        assert turn.payload["question"] == "Hello?"
+        assert turn.payload["answer"] == "World."
+        assert turn.payload["reasoning"] == "My reasoning"
+        assert turn.payload["web_sources"] == [{"url": "http://example.com"}]
 
     def test_message_role_enum(self):
         """Verify MessageRole enum handling."""
@@ -144,55 +144,46 @@ class TestThreadFileModel:
         assert thread_file.thread_id == "thread-123"
         assert thread_file.file_hash == "abc123"
         assert isinstance(thread_file.added_at, datetime)
+        assert thread_file.annotations == []
 
-
-@pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")
-class TestThreadFileAnnotationModel:
-    """Test ThreadFileAnnotation model."""
-
-    def test_annotation_creation(self):
-        """Create ThreadFileAnnotation instance, verify fields."""
-        import json
+    def test_thread_file_annotations(self):
+        """Create ThreadFile with annotation snapshot fields."""
         annotations = [{"page": 1, "text": "test"}]
-        annotation = ThreadFileAnnotation(
+        thread_file = ThreadFile(
             thread_id="thread-123",
             file_hash="abc123",
-            annotations_json=json.dumps(annotations),
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            annotations=annotations,
+            annotations_updated_at=datetime.utcnow(),
         )
-        
-        assert annotation.thread_id == "thread-123"
-        assert annotation.file_hash == "abc123"
-        assert annotation.annotations_json == json.dumps(annotations)
-        assert isinstance(annotation.created_at, datetime)
-        assert isinstance(annotation.updated_at, datetime)
+
+        assert thread_file.annotations == annotations
+        assert isinstance(thread_file.annotations_updated_at, datetime)
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")
-class TestThreadStatsModel:
-    """Test ThreadStats model."""
+class TestThreadStatsFields:
+    """Test stats fields embedded on Thread."""
 
-    def test_thread_stats_creation(self):
-        """Create ThreadStats instance, verify fields."""
-        import json
-        stats = ThreadStats(
-            thread_id="thread-123",
+    def test_thread_stats_fields(self):
+        """Create Thread instance with stats fields, verify values."""
+        thread = Thread(
+            id="thread-123",
+            name="Stats Thread",
+            embed_model="test-model",
             total_qa_pairs=10,
             total_qa_chars=5000,
             avg_qa_chars=500.0,
             last_qa_at=datetime.utcnow(),
-            documents_meta=json.dumps({}),
-            last_updated_at=datetime.utcnow()
+            documents_meta={},
+            stats_last_updated_at=datetime.utcnow()
         )
         
-        assert stats.thread_id == "thread-123"
-        assert stats.total_qa_pairs == 10
-        assert stats.total_qa_chars == 5000
-        assert stats.avg_qa_chars == 500.0
-        assert isinstance(stats.last_qa_at, datetime)
-        assert stats.documents_meta == json.dumps({})
-        assert isinstance(stats.last_updated_at, datetime)
+        assert thread.total_qa_pairs == 10
+        assert thread.total_qa_chars == 5000
+        assert thread.avg_qa_chars == 500.0
+        assert isinstance(thread.last_qa_at, datetime)
+        assert thread.documents_meta == {}
+        assert isinstance(thread.stats_last_updated_at, datetime)
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")
@@ -313,18 +304,18 @@ class TestDateTimeFields:
 class TestModelRelationships:
     """Test model relationships and foreign keys."""
 
-    def test_thread_message_relationship(self):
-        """Test Thread-Message relationship concept."""
+    def test_thread_chat_turn_relationship(self):
+        """Test Thread-ChatTurn relationship concept."""
         import uuid
         thread_id = str(uuid.uuid4())
-        message = Message(
+        turn = ChatTurn(
             id=str(uuid.uuid4()),
             thread_id=thread_id,
-            role=MessageRole.USER,
-            content="Test message"
+            status="completed",
+            payload={"question": "Test question", "answer": "Test answer"}
         )
         
-        assert message.thread_id == thread_id
+        assert turn.thread_id == thread_id
         # The actual relationship would be tested with database operations
 
     def test_thread_file_relationship(self):

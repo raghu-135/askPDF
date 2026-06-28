@@ -16,13 +16,12 @@ from sqlalchemy.pool import NullPool
 
 
 INITIAL_REVISION = "8c8d6eac150a"
+THREAD_METADATA_REVISION = "2f6c9d1e8a4b"
+SIMPLIFIED_SCHEMA_REVISION = "a1f4c8d9e2b3"
 HEAD_REVISION = "head"
 BASELINE_TABLES = {
     "files",
-    "messages",
-    "thread_file_annotations",
     "thread_files",
-    "thread_stats",
     "threads",
 }
 
@@ -75,11 +74,17 @@ async def _bootstrap_legacy_database() -> None:
                 return
 
             missing_tables = BASELINE_TABLES - existing_tables
+            has_message_storage = "messages" in existing_tables or "chat_turns" in existing_tables
             if missing_tables:
                 missing = ", ".join(sorted(missing_tables))
                 raise RuntimeError(
                     "Database has application tables but is not a complete "
                     f"legacy baseline. Missing tables: {missing}"
+                )
+            if not has_message_storage:
+                raise RuntimeError(
+                    "Database has application tables but no recognized message storage "
+                    "(expected messages or chat_turns)."
                 )
 
             thread_metadata_exists = await connection.scalar(
@@ -95,11 +100,41 @@ async def _bootstrap_legacy_database() -> None:
                     """
                 )
             )
+
+            simplified_schema_exists = "chat_turns" in existing_tables
+            simplified_schema_exists = simplified_schema_exists and await connection.scalar(
+                text(
+                    """
+                    select exists (
+                        select 1
+                        from information_schema.columns
+                        where table_schema = 'public'
+                          and table_name = 'threads'
+                          and column_name = 'documents_meta'
+                    )
+                    """
+                )
+            )
+            simplified_schema_exists = simplified_schema_exists and await connection.scalar(
+                text(
+                    """
+                    select exists (
+                        select 1
+                        from information_schema.columns
+                        where table_schema = 'public'
+                          and table_name = 'thread_files'
+                          and column_name = 'annotations'
+                    )
+                    """
+                )
+            )
     finally:
         await engine.dispose()
 
-    if thread_metadata_exists:
-        _run_alembic("stamp", HEAD_REVISION)
+    if simplified_schema_exists:
+        _run_alembic("stamp", SIMPLIFIED_SCHEMA_REVISION)
+    elif thread_metadata_exists:
+        _run_alembic("stamp", THREAD_METADATA_REVISION)
     else:
         _run_alembic("stamp", INITIAL_REVISION)
 

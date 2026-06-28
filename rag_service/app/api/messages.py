@@ -88,7 +88,7 @@ async def delete_message_endpoint(message_id: str):
         # Identify both sides of the QA pair
         all_msgs = await get_thread_messages(message.thread_id, limit=10000)
         assistant_msg_id = None
-        if message.role == MessageRole.ASSISTANT:
+        if message.role == MessageRole.ASSISTANT.value:
             assistant_msg_id = message_id
         else:
             # USER → find the immediately following assistant message
@@ -96,7 +96,7 @@ async def delete_message_endpoint(message_id: str):
                 if (
                     m.id == message_id
                     and i + 1 < len(all_msgs)
-                    and all_msgs[i + 1].role == MessageRole.ASSISTANT
+                    and all_msgs[i + 1].role == MessageRole.ASSISTANT.value
                 ):
                     assistant_msg_id = all_msgs[i + 1].id
                     break
@@ -124,7 +124,9 @@ async def delete_message_endpoint(message_id: str):
         db = get_vector_db()
 
         # Delete chat-memory vector
-        vector_message_id = assistant_msg_id or message_id
+        vector_message_id = getattr(message, "turn_id", None) or (
+            (assistant_msg_id or message_id).split(":")[0]
+        )
         await db.delete_chat_memory_by_message_id(message.thread_id, vector_message_id, thread.embed_model)
 
         # Delete orphaned web_search chunks
@@ -149,7 +151,7 @@ async def delete_message_endpoint(message_id: str):
             await recompute_qa_stats(message.thread_id)
         except Exception as stats_err:
             import logging
-            logging.getLogger(__name__).warning(f"thread_stats recompute skipped after delete: {stats_err}")
+            logging.getLogger(__name__).warning(f"thread stats recompute skipped after delete: {stats_err}")
 
         return {"status": "deleted", "deleted_ids": deleted_ids}
     except HTTPException:

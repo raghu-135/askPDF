@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 # Import will work after migration
 try:
     from sqlmodel import select
-    from app.db.models_sqlmodel import Thread, File, ThreadFileAnnotation
+    from app.db.models_sqlmodel import Thread, File, ThreadFile
     from app.db.jsonb_utils import set_jsonb_field, merge_jsonb_field, replace_jsonb_field
     from sqlalchemy.orm.attributes import flag_modified
     from sqlalchemy import Integer
@@ -251,6 +251,7 @@ class TestJSONBOperations:
         assert thread.settings["section1"]["value"] == "original"
         assert thread.settings["section2"]["value"] == "updated"
         assert thread.settings["section3"]["value"] == "original"
+        assert "updated_at" not in thread.settings
 
     @pytest.mark.asyncio
     async def test_jsonb_boolean_values(self, session, sample_thread):
@@ -361,18 +362,18 @@ class TestJSONBOperations:
             }
         ]
         
-        annotation = ThreadFileAnnotation(
+        annotation = ThreadFile(
             thread_id=sample_thread.id,
             file_hash=sample_file.file_hash,
-            annotations_json=json.dumps(annotations),
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            added_at=datetime.utcnow(),
+            annotations=annotations,
+            annotations_updated_at=datetime.utcnow()
         )
         session.add(annotation)
         await session.commit()
         await session.refresh(annotation)
         
-        retrieved = json.loads(annotation.annotations_json)
+        retrieved = annotation.annotations
         assert len(retrieved) == 2
         assert retrieved[0]["label"] == "important"
         assert retrieved[1]["confidence"] == 0.87

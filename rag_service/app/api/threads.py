@@ -306,7 +306,7 @@ async def get_thread_endpoint(thread_id: str):
             "name": thread.name,
             "embed_model": thread.embed_model,
             "settings": thread.settings if thread.settings else {},
-            "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
+            "thread_metadata": getattr(thread, "thread_metadata", None) or {},
             "created_at": iso_utc_z(thread.created_at),
             "files": [
                 {
@@ -419,7 +419,7 @@ async def delete_thread_endpoint(thread_id: str):
 async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[str] = None):
     """
     Check indexing status for a thread (or specific file in thread).
-    Now uses file_status column instead of thread_stats.
+    Uses file_status for per-file indexing state.
     """
     try:
         thread = await get_thread(thread_id)

@@ -12,9 +12,7 @@ from app.db.models_sqlmodel import (
     Thread,
     File,
     ThreadFile,
-    ThreadFileAnnotation,
-    Message,
-    ThreadStats,
+    ChatTurn,
 )
 
 # Connection management (SQLModel/PostgreSQL)
@@ -270,9 +268,54 @@ async def create_message(
     )
 
 
+async def create_chat_turn(
+    thread_id: str,
+    question: str,
+    answer: str = None,
+    rewritten_question: str = None,
+    status: str = "completed",
+    reasoning: str = "",
+    reasoning_available: bool = False,
+    reasoning_format: str = "none",
+    web_sources: list = None,
+    document_sources: list = None,
+    used_chat_ids: list = None,
+    clarification_options: list = None,
+    error: dict = None,
+    metadata: dict = None,
+):
+    """Create one JSONB-backed chat turn."""
+    return await get_message_repo().create_turn(
+        thread_id=thread_id,
+        question=question,
+        answer=answer,
+        rewritten_question=rewritten_question,
+        status=status,
+        reasoning=reasoning,
+        reasoning_available=reasoning_available,
+        reasoning_format=reasoning_format,
+        web_sources=web_sources,
+        document_sources=document_sources,
+        used_chat_ids=used_chat_ids,
+        clarification_options=clarification_options,
+        error=error,
+        metadata=metadata,
+    )
+
+
 async def get_message(message_id: str):
     """Get a message by ID."""
     return await get_message_repo().get(message_id)
+
+
+async def get_chat_turn(turn_id: str):
+    """Get a persisted chat turn by ID."""
+    return await get_message_repo().get_turn(turn_id)
+
+
+async def get_thread_turns(thread_id: str, limit: int = 100, offset: int = 0):
+    """Get persisted chat turns for a thread."""
+    return await get_message_repo().get_thread_turns(thread_id, limit, offset)
 
 
 async def get_thread_messages(thread_id: str, limit: int = 100, offset: int = 0):
@@ -307,12 +350,12 @@ async def get_message_count(thread_id: str):
 
 # Stats operations
 async def remove_document_from_stats(thread_id: str, file_hash: str):
-    """Remove a document entry from thread_stats.documents_meta."""
+    """Remove a document entry from thread document metadata."""
     return await get_stats_repo().remove_document_from_stats(thread_id, file_hash)
 
 
 async def upsert_document_in_stats(thread_id: str, file_hash: str, meta: dict):
-    """Insert or replace a document entry in thread_stats.documents_meta."""
+    """Insert or replace a document entry in thread document metadata."""
     return await get_stats_repo().upsert_document_in_stats(thread_id, file_hash, meta)
 
 
@@ -322,7 +365,7 @@ async def increment_qa_stats(thread_id: str, qa_chars: int):
 
 
 async def recompute_qa_stats(thread_id: str):
-    """Recompute QA stats from the messages table."""
+    """Recompute QA stats from chat turns."""
     return await get_stats_repo().recompute_qa_stats(thread_id)
 
 
@@ -338,12 +381,9 @@ __all__ = [
     "Thread",
     "File",
     "ThreadFile",
-    "ThreadFileAnnotation",
-    "Message",
+    "ChatTurn",
     # Config
-    "DB_PATH",
     "init_db",
-    "get_db",
     # Status
     "get_scoped_indexing_status",
     # Constants
@@ -380,8 +420,11 @@ __all__ = [
     "upsert_thread_file_annotations",
     "delete_thread_file_annotations",
     # Message operations
+    "create_chat_turn",
     "create_message",
     "get_message",
+    "get_chat_turn",
+    "get_thread_turns",
     "get_thread_messages",
     "get_recent_messages",
     "update_message_context_compact",

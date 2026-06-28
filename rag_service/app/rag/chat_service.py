@@ -24,7 +24,7 @@ from app.models.llm_server_client import (
     INTENT_AGENT_MAX_ITERATIONS,
 )
 from app.db import (
-    create_message,
+    create_chat_turn,
     get_recent_messages,
     update_message_context_compact,
     MessageRole,
@@ -87,7 +87,7 @@ async def prefetch_context(
         used_chars = 0
         budget_chars = budget["recent_history_chars"]
         for msg in reversed(msgs):
-            role = "User" if msg.role == MessageRole.USER else "Assistant"
+            role = "User" if msg.role == MessageRole.USER.value else "Assistant"
             text = (msg.context_compact or msg.content or "").strip()
             if not text:
                 continue
@@ -102,7 +102,7 @@ async def prefetch_context(
 
     async def _fetch_stats_and_docs() -> Dict[str, Any]:
         """
-        Read thread shape from the pre-maintained thread_stats table.
+        Read the pre-maintained thread shape.
         O(1) lookup — no message scanning needed.
         """
         shape = await get_thread_shape(thread_id)
@@ -332,27 +332,24 @@ async def handle_thread_chat(
             assistant_message_id = None
 
             try:
-                user_message = await create_message(
+                turn = await create_chat_turn(
                     thread_id=thread_id,
-                    role=MessageRole.USER,
-                    content=req.question,
-                    context_compact=None,
-                )
-                assistant_message = await create_message(
-                    thread_id=thread_id,
-                    role=MessageRole.ASSISTANT,
-                    content=clarification_answer,
+                    question=req.question,
+                    answer=clarification_answer,
+                    rewritten_question=None,
+                    status="clarification",
                     reasoning="",
                     reasoning_available=False,
                     reasoning_format="none",
+                    clarification_options=clarification_options,
                 )
-                user_message_id = user_message.id
-                assistant_message_id = assistant_message.id
+                user_message_id = f"{turn.id}:user"
+                assistant_message_id = f"{turn.id}:assistant"
                 try:
                     qa_chars = len(req.question) + len(clarification_answer)
                     await increment_qa_stats(thread_id, qa_chars)
                 except Exception as stats_err:
-                    logger.warning(f"thread_stats QA increment skipped (clarification): {stats_err}")
+                    logger.warning(f"thread stats QA increment skipped (clarification): {stats_err}")
             except Exception as msg_err:
                 logger.warning(f"Failed to persist clarification turn for thread {thread_id}: {msg_err}")
 
@@ -442,7 +439,8 @@ async def handle_thread_chat(
         
         final_messages = result.get("messages", [])
         normalized = normalize_ai_response(final_messages[-1] if final_messages else None)
-        if not normalized["answer"]:
+        empty_model_answer = not normalized["answer"]
+        if empty_model_answer:
             last_msg = final_messages[-1] if final_messages else None
             logger.warning(
                 f"Empty answer from agent for thread {thread_id}. "
@@ -464,52 +462,57 @@ async def handle_thread_chat(
                 "reasoning_format": "none",
             }
         
-        # Store messages in database
-        user_message = await create_message(
+        metadata = {}
+        if empty_model_answer:
+            metadata["empty_model_answer"] = True
+
+        # Store the full interaction as one JSONB chat turn.
+        turn = await create_chat_turn(
             thread_id=thread_id,
-            role=MessageRole.USER,
-            content=req.question,
-            context_compact=question if question != req.question else None
-        )
-        
-        assistant_message = await create_message(
-            thread_id=thread_id,
-            role=MessageRole.ASSISTANT,
-            content=answer,
+            question=req.question,
+            answer=answer,
+            rewritten_question=question if question != req.question else None,
+            status="clarification" if clarification_options else "completed",
             reasoning=normalized["reasoning"],
             reasoning_available=normalized["reasoning_available"],
             reasoning_format=normalized["reasoning_format"],
             web_sources=web_sources if web_sources else None,
+            document_sources=document_sources,
+            used_chat_ids=used_chat_ids,
+            clarification_options=clarification_options,
+            metadata=metadata,
         )
+        user_message_id = f"{turn.id}:user"
+        assistant_message_id = f"{turn.id}:assistant"
         
         # Index in semantic memory if not a clarification
         if not clarification_options:
             indexing_result = await index_chat_memory_for_thread(
                 thread_id=thread_id,
-                message_id=assistant_message.id,
+                message_id=turn.id,
                 question=question,
                 answer=answer,
                 embedding_model_name=embed_model,
                 llm_name=llm_model,
                 context_window=context_window,
-                message_created_at=assistant_message.created_at,
+                message_created_at=turn.completed_at or turn.created_at,
             )
             compact_text = indexing_result.get("memory_compact_text") if isinstance(indexing_result, dict) else None
             if compact_text:
-                await update_message_context_compact(assistant_message.id, compact_text)
+                await update_message_context_compact(turn.id, compact_text)
 
         # Update thread stats: increment QA pair counter
         try:
             qa_chars = len(req.question) + len(answer)
             await increment_qa_stats(thread_id, qa_chars)
         except Exception as stats_err:
-            logger.warning(f"thread_stats QA increment skipped: {stats_err}")
+            logger.warning(f"thread stats QA increment skipped: {stats_err}")
 
         return {
             "answer": answer,
             "rewritten_query": question, # Return rewritten version for UI
-            "user_message_id": user_message.id,
-            "assistant_message_id": assistant_message.id,
+            "user_message_id": user_message_id,
+            "assistant_message_id": assistant_message_id,
             "used_chat_ids": used_chat_ids,
             "document_sources": document_sources,
             "web_sources": web_sources,
@@ -535,11 +538,41 @@ async def handle_thread_chat(
         elif "timeout" in str(e).lower():
             fallback_answer = "The request timed out. The LLM server might be under heavy load. Please try again."
 
+        error_payload = {
+            "code": "llm_unavailable" if "503" in str(e) or "loading" in str(e).lower() else
+                    "rate_limited" if "429" in str(e) or "rate limit" in str(e).lower() else
+                    "timeout" if "timeout" in str(e).lower() else
+                    "agent_execution_failed",
+            "raw_message": str(e),
+            "retryable": True,
+        }
+        user_message_id = None
+        assistant_message_id = None
+        try:
+            turn = await create_chat_turn(
+                thread_id=thread_id,
+                question=req.question,
+                answer=fallback_answer,
+                rewritten_question=question if question != req.question else None,
+                status="failed",
+                reasoning=f"Exception during execution: {str(e)}",
+                reasoning_available=True,
+                reasoning_format="markdown",
+                web_sources=[],
+                document_sources=[],
+                used_chat_ids=[],
+                error=error_payload,
+            )
+            user_message_id = f"{turn.id}:user"
+            assistant_message_id = f"{turn.id}:assistant"
+        except Exception as persist_err:
+            logger.warning(f"Failed to persist failed chat turn for thread {thread_id}: {persist_err}")
+
         return {
             "answer": fallback_answer,
             "rewritten_query": question,
-            "user_message_id": None,
-            "assistant_message_id": None,
+            "user_message_id": user_message_id,
+            "assistant_message_id": assistant_message_id,
             "used_chat_ids": [],
             "document_sources": [],
             "web_sources": [],
