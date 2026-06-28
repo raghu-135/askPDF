@@ -165,14 +165,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     }
   };
 
-  const handleToggleThreadSelection = (
+  const toggleThreadSelection = (
     threadId: string,
-    event: React.ChangeEvent<HTMLInputElement>
+    checked: boolean,
+    isShiftClick: boolean
   ) => {
-    event.stopPropagation();
-    const checked = event.target.checked;
-    const isShiftClick = (event.nativeEvent as MouseEvent).shiftKey;
-
     setSelectedThreadIds(prev => {
       const next = new Set(prev);
       const currentIndex = threads.findIndex(thread => thread.id === threadId);
@@ -199,6 +196,32 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       return next;
     });
     setLastSelectedThreadId(threadId);
+  };
+
+  const handleToggleThreadSelection = (
+    threadId: string,
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    event.stopPropagation();
+    toggleThreadSelection(
+      threadId,
+      event.target.checked,
+      (event.nativeEvent as MouseEvent).shiftKey
+    );
+  };
+
+  const handleThreadRowClick = (thread: Thread, event: React.MouseEvent) => {
+    if (!isSelectionMode) {
+      onThreadSelect(thread);
+      return;
+    }
+
+    event.preventDefault();
+    toggleThreadSelection(
+      thread.id,
+      !selectedThreadIds.has(thread.id),
+      event.shiftKey
+    );
   };
 
   const handleToggleAllThreads = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -341,7 +364,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         </Box>
         {isSelectionMode ? (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Tooltip title={allThreadsSelected ? "Clear selection" : "Select all threads"}>
+            <Tooltip title={allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
               <Checkbox
                 size="small"
                 checked={allThreadsSelected}
@@ -351,7 +374,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 sx={{ p: 0.5 }}
               />
             </Tooltip>
-            <Chip label={`${selectedCount} selected`} size="small" color="primary" />
+            <Tooltip title="Shift-click threads to select a range">
+              <Chip label={`${selectedCount} selected`} size="small" color="primary" />
+            </Tooltip>
             <Tooltip title="Clear selection">
               <IconButton size="small" onClick={clearThreadSelection} disabled={isBulkDeleting}>
                 <ClearIcon fontSize="small" />
@@ -372,7 +397,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </Box>
         ) : (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Tooltip title="Select threads to delete">
+            <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
               <span>
                 <IconButton
                   size="small"
@@ -445,9 +470,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 }}
               >
                 <ListItemButton
-                  onClick={() => onThreadSelect(thread)}
+                  onClick={(e) => handleThreadRowClick(thread, e)}
                   selected={activeThreadId === thread.id}
-                  sx={{ py: 1, pr: 10 }}
+                  sx={{ py: 1, pr: isSelectionMode ? 1 : 10 }}
                 >
                   {isSelectionMode && (
                     <Checkbox
@@ -517,15 +542,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   )}
                 </ListItemButton>
 
-                <ListItemSecondaryAction>
-                  <IconButton
-                    size="small"
-                    onClick={(e) => startEditing(thread, e)}
-                    sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
-                  >
-                    <EditIcon fontSize="small" />
-                  </IconButton>
-                </ListItemSecondaryAction>
+                {!isSelectionMode && (
+                  <ListItemSecondaryAction>
+                    <IconButton
+                      size="small"
+                      onClick={(e) => startEditing(thread, e)}
+                      sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
+                    >
+                      <EditIcon fontSize="small" />
+                    </IconButton>
+                  </ListItemSecondaryAction>
+                )}
               </ListItem>
             ))}
           </List>
