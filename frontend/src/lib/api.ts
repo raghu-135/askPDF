@@ -126,6 +126,7 @@ export interface ThreadMetadata {
     source_message_created_at?: string | null;
     mode?: 'from_message' | 'full_thread' | string;
   };
+  fork_children?: string[];
   [key: string]: any;
 }
 
