@@ -112,9 +112,17 @@ export interface Thread {
   embed_model: string;
   settings?: ThreadSettings;
   thread_metadata?: ThreadMetadata;
+  documents_meta?: Record<string, ThreadDocumentMeta>;
   created_at: string;
   message_count?: number;
   file_count?: number;
+}
+
+export interface ThreadDocumentMeta {
+  file_name?: string | null;
+  page_count?: number | string | null;
+  document_available_in_thread_at?: string | null;
+  [key: string]: any;
 }
 
 export interface ThreadMetadata {

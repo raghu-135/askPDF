@@ -429,13 +429,47 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     const childIds = Array.isArray(thread.thread_metadata?.fork_children)
       ? thread.thread_metadata.fork_children.filter((id): id is string => typeof id === 'string' && id.length > 0)
       : [];
+    const documents = Object.entries(thread.documents_meta || {})
+      .filter((entry): entry is [string, NonNullable<Thread['documents_meta']>[string]] => {
+        const meta = entry[1];
+        return !!meta && typeof meta === 'object' && !Array.isArray(meta);
+      })
+      .filter(([, meta]) =>
+        Boolean(meta.file_name || meta.page_count || meta.document_available_in_thread_at)
+      );
+    const sectionSx = {
+      pt: 0.75,
+      mt: 0.75,
+      borderTop: 1,
+      borderColor: 'divider',
+      '&:first-of-type': {
+        pt: 0,
+        mt: 0,
+        borderTop: 0,
+      },
+    };
 
     return (
       <Box
-        sx={{ p: 0.25, minWidth: 200, maxWidth: 280 }}
+        sx={{
+          p: 0.5,
+          pr: 0.75,
+          minWidth: 220,
+          maxWidth: 320,
+          maxHeight: 'min(360px, calc(100vh - 96px))',
+          overflowY: 'auto',
+        }}
         onClick={(event) => event.stopPropagation()}
       >
-        <Box>
+        <Box sx={sectionSx}>
+          <Typography variant="caption" color="text.secondary" component="div">
+            Created
+          </Typography>
+          <Typography variant="caption" component="div">
+            {new Date(thread.created_at).toLocaleString()}
+          </Typography>
+        </Box>
+        <Box sx={sectionSx}>
           <Typography variant="caption" color="text.secondary" component="div">
             Embedding model
           </Typography>
@@ -444,7 +478,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </Typography>
         </Box>
         {forkInfo?.parent_thread_id && (
-          <Box sx={{ mt: 0.5 }}>
+          <Box sx={sectionSx}>
             <Typography variant="caption" color="text.secondary" component="div">
               Parent
             </Typography>
@@ -452,7 +486,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </Box>
         )}
         {childIds.length > 0 && (
-          <Box sx={{ mt: 0.5 }}>
+          <Box sx={sectionSx}>
             <Typography variant="caption" color="text.secondary" component="div">
               Children
             </Typography>
@@ -465,8 +499,36 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             </Box>
           </Box>
         )}
+        {documents.length > 0 && (
+          <Box sx={sectionSx}>
+            <Typography variant="caption" color="text.secondary" component="div">
+              Documents
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              {documents.map(([fileHash, meta]) => (
+                <Box key={fileHash} sx={{ minWidth: 0 }}>
+                  {meta.file_name && (
+                    <Typography variant="caption" component="div" sx={{ fontWeight: 600, lineHeight: 1.25, wordBreak: 'break-word' }}>
+                      {meta.file_name}
+                    </Typography>
+                  )}
+                  {meta.page_count !== undefined && meta.page_count !== null && meta.page_count !== '' && (
+                    <Typography variant="caption" color="text.secondary" component="div" sx={{ lineHeight: 1.25 }}>
+                      Pages: {meta.page_count}
+                    </Typography>
+                  )}
+                  {meta.document_available_in_thread_at && (
+                    <Typography variant="caption" color="text.secondary" component="div" sx={{ lineHeight: 1.25 }}>
+                      Added: {new Date(meta.document_available_in_thread_at).toLocaleString()}
+                    </Typography>
+                  )}
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        )}
         {forkInfo?.forked_at && (
-          <Box sx={{ mt: 0.5 }}>
+          <Box sx={sectionSx}>
             <Typography variant="caption" color="text.secondary" component="div">
               Forked at
             </Typography>
@@ -627,47 +689,48 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   }
                 }}
               >
-                <ListItemButton
-                  onClick={(e) => handleThreadRowClick(thread, e)}
-                  selected={activeThreadId === thread.id}
-                  sx={{ py: 1, pr: isSelectionMode ? 1 : 12 }}
+                <Tooltip
+                  title={editingThreadId === thread.id ? "" : renderThreadTooltip(thread)}
+                  placement="left"
+                  arrow
+                  enterDelay={500}
+                  leaveDelay={150}
+                  disableHoverListener={editingThreadId === thread.id}
+                  disableInteractive={false}
                 >
-                  {isSelectionMode && (
-                    <Checkbox
-                      edge="start"
-                      size="small"
-                      checked={selectedThreadIds.has(thread.id)}
-                      onChange={(e) => handleToggleThreadSelection(thread.id, e)}
-                      onClick={(e) => e.stopPropagation()}
-                      disabled={isBulkDeleting}
-                      inputProps={{ 'aria-label': `Select ${thread.name}` }}
-                      sx={{ p: 0.5, mr: 0.5 }}
-                    />
-                  )}
+                  <ListItemButton
+                    onClick={(e) => handleThreadRowClick(thread, e)}
+                    selected={activeThreadId === thread.id}
+                    sx={{ py: 1, pr: isSelectionMode ? 1 : 12 }}
+                  >
+                    {isSelectionMode && (
+                      <Checkbox
+                        edge="start"
+                        size="small"
+                        checked={selectedThreadIds.has(thread.id)}
+                        onChange={(e) => handleToggleThreadSelection(thread.id, e)}
+                        onClick={(e) => e.stopPropagation()}
+                        disabled={isBulkDeleting}
+                        inputProps={{ 'aria-label': `Select ${thread.name}` }}
+                        sx={{ p: 0.5, mr: 0.5 }}
+                      />
+                    )}
 
-                  {editingThreadId === thread.id ? (
-                    <TextField
-                      size="small"
-                      value={editingName}
-                      onChange={(e) => setEditingName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleEditThread(thread.id);
-                        if (e.key === 'Escape') setEditingThreadId(null);
-                      }}
-                      onBlur={() => handleEditThread(thread.id)}
-                      autoFocus
-                      fullWidth
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  ) : (
-                    <Tooltip
-                      title={renderThreadTooltip(thread)}
-                      placement="left"
-                      arrow
-                      enterDelay={500}
-                      leaveDelay={150}
-                      disableInteractive={false}
-                    >
+                    {editingThreadId === thread.id ? (
+                      <TextField
+                        size="small"
+                        value={editingName}
+                        onChange={(e) => setEditingName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleEditThread(thread.id);
+                          if (e.key === 'Escape') setEditingThreadId(null);
+                        }}
+                        onBlur={() => handleEditThread(thread.id)}
+                        autoFocus
+                        fullWidth
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
                       <ListItemText
                         primary={
                           <Typography
@@ -702,9 +765,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                           </Box>
                         }
                       />
-                    </Tooltip>
-                  )}
-                </ListItemButton>
+                    )}
+                  </ListItemButton>
+                </Tooltip>
 
                 {!isSelectionMode && (
                   <ListItemSecondaryAction>
