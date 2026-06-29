@@ -10,7 +10,6 @@ import {
   ListItem,
   ListItemButton,
   ListItemText,
-  ListItemSecondaryAction,
   IconButton,
   Typography,
   TextField,
@@ -541,6 +540,29 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     );
   };
 
+  const threadActionButtonSx = {
+    width: 32,
+    height: 32,
+    flex: '0 0 32px',
+    color: 'text.secondary',
+    bgcolor: 'transparent',
+    opacity: 0.6,
+    transition: 'color 160ms ease, opacity 160ms ease, outline-color 160ms ease',
+    '&:hover, &.Mui-focusVisible': {
+      color: 'text.primary',
+      bgcolor: 'transparent',
+      opacity: 1,
+    },
+    '&.Mui-focusVisible': {
+      outline: `1px solid ${theme.palette.action.focus}`,
+      outlineOffset: -2,
+    },
+    '&.Mui-disabled': {
+      bgcolor: 'transparent',
+      opacity: 0.45,
+    },
+  };
+
   return (
     <Paper
       elevation={0}
@@ -661,6 +683,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 }}
                 disablePadding
                 sx={{
+                  display: 'flex',
+                  alignItems: 'stretch',
                   bgcolor: activeThreadId === thread.id
                     ? theme.palette.mode === 'dark'
                       ? theme.palette.primary.dark
@@ -701,7 +725,25 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   <ListItemButton
                     onClick={(e) => handleThreadRowClick(thread, e)}
                     selected={activeThreadId === thread.id}
-                    sx={{ py: 1, pr: isSelectionMode ? 1 : 12 }}
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      py: 1,
+                      pr: 1,
+                      bgcolor: 'transparent',
+                      '&:hover': {
+                        bgcolor: 'transparent',
+                      },
+                      '&.Mui-selected': {
+                        bgcolor: 'transparent',
+                      },
+                      '&.Mui-selected:hover': {
+                        bgcolor: 'transparent',
+                      },
+                      '&.Mui-focusVisible': {
+                        bgcolor: 'transparent',
+                      },
+                    }}
                   >
                     {isSelectionMode && (
                       <Checkbox
@@ -770,27 +812,37 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 </Tooltip>
 
                 {!isSelectionMode && (
-                  <ListItemSecondaryAction>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.25,
+                      flex: '0 0 auto',
+                      px: 1,
+                    }}
+                  >
                     <Tooltip title="Fork thread">
                       <span>
                         <IconButton
                           size="small"
                           onClick={(e) => handleForkThread(thread, e)}
                           disabled={forkingThreadId === thread.id}
-                          sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
+                          sx={threadActionButtonSx}
                         >
                           {forkingThreadId === thread.id ? <CircularProgress size={16} /> : <CallSplitIcon fontSize="small" />}
                         </IconButton>
                       </span>
                     </Tooltip>
-                    <IconButton
-                      size="small"
-                      onClick={(e) => startEditing(thread, e)}
-                      sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
-                    >
-                      <EditIcon fontSize="small" />
-                    </IconButton>
-                  </ListItemSecondaryAction>
+                    <Tooltip title="Rename thread">
+                      <IconButton
+                        size="small"
+                        onClick={(e) => startEditing(thread, e)}
+                        sx={threadActionButtonSx}
+                      >
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
                 )}
               </ListItem>
             ))}
