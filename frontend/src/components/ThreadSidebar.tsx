@@ -713,103 +713,112 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   }
                 }}
               >
-                <Tooltip
-                  title={editingThreadId === thread.id ? "" : renderThreadTooltip(thread)}
-                  placement="left"
-                  arrow
-                  enterDelay={500}
-                  leaveDelay={150}
-                  disableHoverListener={editingThreadId === thread.id}
-                  disableInteractive={false}
-                >
-                  <ListItemButton
-                    onClick={(e) => handleThreadRowClick(thread, e)}
-                    selected={activeThreadId === thread.id}
-                    sx={{
-                      flex: 1,
-                      minWidth: 0,
-                      py: 1,
-                      pr: 1,
+                <ListItemButton
+                  onClick={(e) => handleThreadRowClick(thread, e)}
+                  selected={activeThreadId === thread.id}
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    py: 1,
+                    pr: 1,
+                    bgcolor: 'transparent',
+                    '&:hover': {
                       bgcolor: 'transparent',
-                      '&:hover': {
-                        bgcolor: 'transparent',
-                      },
-                      '&.Mui-selected': {
-                        bgcolor: 'transparent',
-                      },
-                      '&.Mui-selected:hover': {
-                        bgcolor: 'transparent',
-                      },
-                      '&.Mui-focusVisible': {
-                        bgcolor: 'transparent',
-                      },
-                    }}
-                  >
-                    {isSelectionMode && (
-                      <Checkbox
-                        edge="start"
-                        size="small"
-                        checked={selectedThreadIds.has(thread.id)}
-                        onChange={(e) => handleToggleThreadSelection(thread.id, e)}
-                        onClick={(e) => e.stopPropagation()}
-                        disabled={isBulkDeleting}
-                        inputProps={{ 'aria-label': `Select ${thread.name}` }}
-                        sx={{ p: 0.5, mr: 0.5 }}
-                      />
-                    )}
+                    },
+                    '&.Mui-selected': {
+                      bgcolor: 'transparent',
+                    },
+                    '&.Mui-selected:hover': {
+                      bgcolor: 'transparent',
+                    },
+                    '&.Mui-focusVisible': {
+                      bgcolor: 'transparent',
+                    },
+                  }}
+                >
+                  {isSelectionMode && (
+                    <Checkbox
+                      edge="start"
+                      size="small"
+                      checked={selectedThreadIds.has(thread.id)}
+                      onChange={(e) => handleToggleThreadSelection(thread.id, e)}
+                      onClick={(e) => e.stopPropagation()}
+                      disabled={isBulkDeleting}
+                      inputProps={{ 'aria-label': `Select ${thread.name}` }}
+                      sx={{ p: 0.5, mr: 0.5 }}
+                    />
+                  )}
 
-                    {editingThreadId === thread.id ? (
-                      <TextField
-                        size="small"
-                        value={editingName}
-                        onChange={(e) => setEditingName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleEditThread(thread.id);
-                          if (e.key === 'Escape') setEditingThreadId(null);
+                  {editingThreadId === thread.id ? (
+                    <TextField
+                      size="small"
+                      value={editingName}
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleEditThread(thread.id);
+                        if (e.key === 'Escape') setEditingThreadId(null);
+                      }}
+                      onBlur={() => handleEditThread(thread.id)}
+                      autoFocus
+                      fullWidth
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <Tooltip
+                      title={renderThreadTooltip(thread)}
+                      placement="left"
+                      arrow
+                      enterDelay={500}
+                      leaveDelay={150}
+                      disableInteractive={false}
+                    >
+                      <Box
+                        sx={{
+                          display: 'inline-flex',
+                          flexDirection: 'column',
+                          minWidth: 0,
+                          maxWidth: '100%',
                         }}
-                        onBlur={() => handleEditThread(thread.id)}
-                        autoFocus
-                        fullWidth
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    ) : (
-                      <ListItemText
-                        primary={
-                          <Typography
-                            variant="body2"
-                            fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'}
-                            noWrap
-                          >
-                            {thread.name}
-                          </Typography>
-                        }
-                        secondaryTypographyProps={{ component: 'span' }}
-                        secondary={
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
-                            <Typography variant="caption" color="text.secondary">
-                              {formatDate(thread.created_at)}
+                      >
+                        <ListItemText
+                          primary={
+                            <Typography
+                              variant="body2"
+                              fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'}
+                              noWrap
+                            >
+                              {thread.name}
                             </Typography>
-                            {thread.message_count !== undefined && thread.message_count > 0 && (
-                              <Chip
-                                label={`${thread.message_count} msgs`}
-                                size="small"
-                                sx={{ height: 16, fontSize: '0.65rem' }}
-                              />
-                            )}
-                            {thread.file_count !== undefined && thread.file_count > 0 && (
-                              <Chip
-                                icon={<DescriptionIcon sx={{ fontSize: '0.7rem !important' }} />}
-                                label={thread.file_count}
-                                size="small"
-                                sx={{ height: 16, fontSize: '0.65rem' }}
-                              />
-                            )}
-                          </Box>
-                        }
-                      />
-                    )}
-                  </ListItemButton>
-                </Tooltip>
+                          }
+                          secondaryTypographyProps={{ component: 'span' }}
+                          secondary={
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, minWidth: 0, maxWidth: '100%' }}>
+                              <Typography variant="caption" color="text.secondary" noWrap>
+                                {formatDate(thread.created_at)}
+                              </Typography>
+                              {thread.message_count !== undefined && thread.message_count > 0 && (
+                                <Chip
+                                  label={`${thread.message_count} msgs`}
+                                  size="small"
+                                  sx={{ height: 16, fontSize: '0.65rem' }}
+                                />
+                              )}
+                              {thread.file_count !== undefined && thread.file_count > 0 && (
+                                <Chip
+                                  icon={<DescriptionIcon sx={{ fontSize: '0.7rem !important' }} />}
+                                  label={thread.file_count}
+                                  size="small"
+                                  sx={{ height: 16, fontSize: '0.65rem' }}
+                                />
+                              )}
+                            </Box>
+                          }
+                          sx={{ m: 0, minWidth: 0 }}
+                        />
+                      </Box>
+                    </Tooltip>
+                  )}
+                </ListItemButton>
 
                 {!isSelectionMode && (
                   <Box
