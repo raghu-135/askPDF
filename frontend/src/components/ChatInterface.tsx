@@ -21,6 +21,7 @@ import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
 import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
 import SendIcon from '@mui/icons-material/Send';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
 import MemoryIcon from '@mui/icons-material/Memory';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -149,6 +150,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
     const [resolvedParentThread, setResolvedParentThread] = useState<Thread | null>(null);
+    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+    const [editingOriginalText, setEditingOriginalText] = useState('');
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -254,6 +257,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (activeThread) {
             setClarificationOptions(null);
             lastClarificationIdsRef.current = null;
+            setEditingMessageId(null);
+            setEditingOriginalText('');
         }
     }, [activeThread?.id]);
 
@@ -688,15 +693,47 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }, [indexingStatus, llmModel, validateLlmModel]);
 
 
+    const cancelQuestionEdit = () => {
+        setEditingMessageId(null);
+        setEditingOriginalText('');
+        setInput('');
+    };
+
+    const handleEditQuestion = (msg: ChatMessage, event: React.MouseEvent) => {
+        event.stopPropagation();
+        if (loading || msg.role !== 'user') return;
+
+        const content = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '');
+        setInput(content);
+        setEditingMessageId(msg.id);
+        setEditingOriginalText(content);
+        setClarificationOptions(null);
+    };
+
     const handleSend = async (
         overrideInput?: string | React.SyntheticEvent,
         options?: { isClarificationSelection?: boolean }
     ) => {
-        const textToSend = typeof overrideInput === 'string' ? overrideInput : input.trim();
-        if (!textToSend || !llmModel || !activeThread) return;
-
+        const rawTextToSend = typeof overrideInput === 'string' ? overrideInput : input;
+        const textToSend = rawTextToSend.trim();
         const isClarificationSelection = Boolean(options?.isClarificationSelection);
         const priorClarificationIds = isClarificationSelection ? lastClarificationIdsRef.current : null;
+        const editMessageId = !isClarificationSelection ? editingMessageId : null;
+        const editOriginalText = editingOriginalText.trim();
+        const isEditingQuestion = Boolean(editMessageId);
+
+        if (!textToSend) {
+            if (isEditingQuestion) {
+                cancelQuestionEdit();
+            }
+            return;
+        }
+        if (!llmModel || !activeThread) return;
+
+        if (isEditingQuestion && textToSend === editOriginalText) {
+            cancelQuestionEdit();
+            return;
+        }
 
         setInput('');
         setClarificationOptions(null);
@@ -709,21 +746,31 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             created_at: new Date().toISOString()
         };
 
-        setMessages(prev => {
-            let updated = prev;
-            // Immediate replacement: If this is a clarification selection, remove the previous "ambiguous" turn
-            if (isClarificationSelection) {
-                const lastIds = priorClarificationIds;
-                updated = updated.filter(m => {
-                    if (m.id.startsWith('clarify-')) return false;
-                    if (lastIds && (m.id === lastIds.userId || m.id === lastIds.assistantId)) return false;
-                    return true;
-                });
-            }
-            return [...updated, tempUserMsg];
-        });
-
+        let editDeletionCompleted = false;
         try {
+            if (isEditingQuestion && editMessageId) {
+                const { deleted_ids } = await deleteMessage(editMessageId);
+                editDeletionCompleted = true;
+                setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
+                if (onResetChatId) {
+                    onResetChatId();
+                }
+            }
+
+            setMessages(prev => {
+                let updated = prev;
+                // Immediate replacement: If this is a clarification selection, remove the previous "ambiguous" turn
+                if (isClarificationSelection) {
+                    const lastIds = priorClarificationIds;
+                    updated = updated.filter(m => {
+                        if (m.id.startsWith('clarify-')) return false;
+                        if (lastIds && (m.id === lastIds.userId || m.id === lastIds.assistantId)) return false;
+                        return true;
+                    });
+                }
+                return [...updated, tempUserMsg];
+            });
+
             // Call thread chat endpoint directly without explicit warming probe, retries are handled in api.ts.
             const response = await threadChat(
                 activeThread.id,
@@ -797,6 +844,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 if (onThreadUpdate) {
                     onThreadUpdate();
                 }
+                if (isEditingQuestion) {
+                    setEditingMessageId(null);
+                    setEditingOriginalText('');
+                }
             }
 
             if (isClarificationSelection) {
@@ -809,20 +860,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         } catch (err: any) {
             console.error(err);
-            // Remove optimistic message and show error
-            setMessages(prev => {
-                const updated = prev.filter(m => m.id !== tempUserMsg.id);
-                return [
-                    ...updated,
-                    tempUserMsg,
-                    {
-                        id: 'error-' + Date.now(),
-                        role: 'assistant',
-                        content: `Error: ${err.message || "Failed to get response."}`,
-                        created_at: new Date().toISOString()
-                    }
-                ];
-            });
+            const errorMessage: ChatMessage = {
+                id: 'error-' + Date.now(),
+                role: 'assistant',
+                content: `Error: ${err.message || "Failed to get response."}`,
+                created_at: new Date().toISOString()
+            };
+            if (editDeletionCompleted) {
+                await loadMessages();
+                setEditingMessageId(null);
+                setEditingOriginalText('');
+                setMessages(prev => [...prev, errorMessage]);
+            } else {
+                // Remove optimistic message and show error
+                setMessages(prev => {
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    return [
+                        ...updated,
+                        tempUserMsg,
+                        errorMessage
+                    ];
+                });
+            }
         } finally {
             setLoading(false);
         }
@@ -877,6 +936,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             const { deleted_ids } = await deleteMessage(messageId);
             setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
+            if (editingMessageId && deleted_ids.includes(editingMessageId)) {
+                setEditingMessageId(null);
+                setEditingOriginalText('');
+                setInput('');
+            }
 
             // Critical: If the current active chat sentence belongs to a deleted message, 
             // reset the chat ID selection to prevent out-of-bounds access.
@@ -975,6 +1039,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const forkTooltip = forkInfo?.forked_at
         ? `Forked ${forkInfo.mode === 'from_message' ? 'from a message' : 'from full thread'} on ${new Date(forkInfo.forked_at).toLocaleString()}`
         : 'Forked thread';
+    const latestUserMessageId = [...messages].reverse().find(m => m.role === 'user')?.id ?? null;
 
     return (
         <Paper ref={chatRootRef} elevation={0} sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
@@ -1108,6 +1173,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 {messages.map((msg, idx) => {
                     const isRecollected = recollectedIds.has(msg.id);
                     const isUser = msg.role === 'user';
+                    const isEditingThisMessage = editingMessageId === msg.id;
+                    const isOlderQuestion = isUser && latestUserMessageId !== null && msg.id !== latestUserMessageId;
+                    const editTooltip = isEditingThisMessage
+                        ? "Editing this question"
+                        : isOlderQuestion
+                            ? "Edit and ask again at the end"
+                            : "Edit question";
                     return (
                         <ListItem
                             key={msg.id}
@@ -1142,8 +1214,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         : isRecollected
                                             ? '0 0 10px rgba(156, 39, 176, 0.5)'
                                             : 'none',
-                                    border: isRecollected ? '2px solid' : 'none',
-                                    borderColor: isRecollected ? 'secondary.main' : 'transparent',
+                                    border: (isRecollected || isEditingThisMessage) ? '2px solid' : 'none',
+                                    borderColor: isEditingThisMessage
+                                        ? 'warning.main'
+                                        : isRecollected
+                                            ? 'secondary.main'
+                                            : 'transparent',
                                     borderRadius: '12px',
                                     transition: 'all 0.2s ease',
                                     cursor: 'default',
@@ -1169,8 +1245,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         }}
                                     />
                                 )}
-
-
 
                                 {/* Action buttons */}
                                 <Box
@@ -1226,7 +1300,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                 <IconButton
                                                     size="small"
                                                     onClick={(e) => handleForkFromMessage(msg.id, e)}
-                                                    disabled={forkingMessageId === msg.id}
+                                                    disabled={forkingMessageId === msg.id || loading}
                                                     sx={{
                                                         color: 'inherit',
                                                         p: 0.5,
@@ -1238,19 +1312,40 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             </span>
                                         </Tooltip>
                                     )}
+                                    {isUser && (
+                                        <Tooltip title={editTooltip}>
+                                            <span>
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={(e) => handleEditQuestion(msg, e)}
+                                                    disabled={loading}
+                                                    sx={{
+                                                        color: isEditingThisMessage ? 'warning.light' : 'inherit',
+                                                        p: 0.5,
+                                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                                    }}
+                                                >
+                                                    <EditIcon fontSize="small" />
+                                                </IconButton>
+                                            </span>
+                                        </Tooltip>
+                                    )}
                                     <Tooltip title="Delete message">
-                                        <IconButton
-                                            size="small"
-                                            onClick={(e) => handleDeleteMessage(msg.id, e)}
-                                            sx={{
-                                                color: 'inherit',
-                                                p: 0.5,
-                                                '&:hover': { color: 'error.main' },
-                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                                            }}
-                                        >
-                                            <DeleteIcon fontSize="small" />
-                                        </IconButton>
+                                        <span>
+                                            <IconButton
+                                                size="small"
+                                                onClick={(e) => handleDeleteMessage(msg.id, e)}
+                                                disabled={loading || isEditingThisMessage}
+                                                sx={{
+                                                    color: 'inherit',
+                                                    p: 0.5,
+                                                    '&:hover': { color: 'error.main' },
+                                                    '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                                }}
+                                            >
+                                                <DeleteIcon fontSize="small" />
+                                            </IconButton>
+                                        </span>
                                     </Tooltip>
                                 </Box>
 
@@ -1521,6 +1616,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 </Box>
                             ))}
                         </Box>
+                    </Box>
+                )}
+
+                {editingMessageId && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
+                        <Chip
+                            icon={<EditIcon sx={{ fontSize: '0.9rem !important' }} />}
+                            label="Editing question"
+                            size="small"
+                            color="warning"
+                            sx={{ maxWidth: 'calc(100% - 3rem)', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
+                        />
+                        <Tooltip title="Cancel edit">
+                            <IconButton
+                                size="small"
+                                onClick={cancelQuestionEdit}
+                                disabled={loading}
+                                sx={{ flex: '0 0 auto' }}
+                            >
+                                <CloseIcon fontSize="small" />
+                            </IconButton>
+                        </Tooltip>
                     </Box>
                 )}
 
