@@ -1056,6 +1056,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         : [];
     const hasLineage = !hideInlineLineage && Boolean(forkInfo || childThreadIds.length > 0);
     const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
+    const headerSelectOutlineSx = {
+        '& fieldset': {
+            borderColor: 'transparent',
+            borderWidth: '1px',
+        },
+        '&:hover fieldset': {
+            borderColor: 'primary.main',
+        },
+        '&.Mui-focused fieldset': {
+            borderColor: 'primary.main',
+        },
+    };
     const latestUserMessageId = [...messages].reverse().find(m => m.role === 'user')?.id ?? null;
 
     return (
@@ -1167,12 +1179,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 '& .MuiOutlinedInput-root': {
                                     transition: 'all 0.3s ease',
                                     backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
+                                    ...headerSelectOutlineSx,
                                     '& fieldset': {
-                                        borderColor: showContextHighlight ? 'primary.main' : 'rgba(0, 0, 0, 0.23)',
+                                        borderColor: showContextHighlight ? 'primary.main' : 'transparent',
                                         borderWidth: showContextHighlight ? '2px' : '1px',
-                                    },
-                                    '&:hover fieldset': {
-                                        borderColor: 'primary.main',
                                     },
                                 },
                             }}
@@ -1187,6 +1197,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             value={llmModel}
                             label="Select LLM"
                             onChange={(e) => handleLlmModelChange(e.target.value)}
+                            sx={{
+                                ...headerSelectOutlineSx,
+                            }}
                         >
                             {availableModels.map(m => (
                                 <MenuItem key={m} value={m}>{m}</MenuItem>
