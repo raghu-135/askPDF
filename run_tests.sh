@@ -2,13 +2,14 @@
 # run_tests.sh - Docker-native test runner wrapper for askPDF.
 #
 # Usage:
-#   ./run_tests.sh                          # Run all pytest tests plus standalone checks
+#   ./run_tests.sh                          # Run frontend tests, all pytest tests, plus standalone checks
 #   ./run_tests.sh --unit                   # Run unit and mock-based tests
 #   ./run_tests.sh --db                     # Run PostgreSQL database tests
 #   ./run_tests.sh --api                    # Run API endpoint tests
 #   ./run_tests.sh --integration            # Run integration tests
 #   ./run_tests.sh --schema                 # Run schema validation tests
 #   ./run_tests.sh --standalone             # Run standalone proactive collection script
+#   ./run_tests.sh --frontend               # Run frontend tests only
 #   ./run_tests.sh --file test_api_integration_pytest.py --test TestAPIIntegration::test_create_thread_endpoint
 #
 # Environment:
@@ -45,4 +46,42 @@ cleanup() {
 
 trap cleanup EXIT
 
-"${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" run --rm --build test-runner "$@"
+run_frontend_tests() {
+    echo "Running frontend tests..."
+    "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" run --rm frontend-test-runner
+}
+
+args=("$@")
+backend_args=()
+run_frontend=0
+frontend_only=0
+
+if [ "$#" -eq 0 ]; then
+    run_frontend=1
+else
+    for arg in "${args[@]}"; do
+        case "$arg" in
+            --frontend)
+                run_frontend=1
+                frontend_only=1
+                ;;
+            --all|--all-tests)
+                run_frontend=1
+                backend_args+=("$arg")
+                ;;
+            *)
+                backend_args+=("$arg")
+                ;;
+        esac
+    done
+fi
+
+if [ "$run_frontend" = "1" ]; then
+    run_frontend_tests
+fi
+
+if [ "$frontend_only" = "1" ] && [ "${#backend_args[@]}" -eq 0 ]; then
+    exit 0
+fi
+
+"${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" run --rm --build test-runner "${backend_args[@]}"
