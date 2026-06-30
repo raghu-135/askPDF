@@ -35,6 +35,7 @@ import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
+import { getChatComposerState } from '../lib/chat-composer-state';
 import {
     Thread,
     Message,
@@ -562,16 +563,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
         if (!model) return;
-        if (indexingStatus === 'ready') {
-            await validateLlmModel(model);
-        }
+        await validateLlmModel(model);
     };
 
     useEffect(() => {
-        if (indexingStatus === 'ready' && llmModel && isLlmModelValid === null) {
+        if (llmModel && isLlmModelValid === null) {
             validateLlmModel(llmModel);
         }
-    }, [indexingStatus, isLlmModelValid, llmModel, validateLlmModel]);
+    }, [isLlmModelValid, llmModel, validateLlmModel]);
 
     const handleContextWindowChange = (val: number) => {
         setContextWindow(val);
@@ -673,9 +672,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setLlmModel(savedLlm);
             setIsLlmModelValid(null);
             setIsLlmToolsSupported(null);
-            if (indexingStatus === 'ready') {
-                validateLlmModel(savedLlm);
-            }
         }
 
         const savedCtx = localStorage.getItem('last_context_window');
@@ -690,7 +686,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (savedWebSearch === '1' || savedWebSearch === '0') {
             setUseWebSearch(savedWebSearch === '1');
         }
-    }, [indexingStatus, llmModel, validateLlmModel]);
+    }, [llmModel]);
+
+    const composerState = useMemo(() => getChatComposerState({
+        loading,
+        llmModel,
+        isLlmModelValid,
+        isLlmToolsSupported,
+        isEmbedModelValid,
+        indexingStatus,
+        hasInput: Boolean(input),
+    }), [
+        loading,
+        llmModel,
+        isLlmModelValid,
+        isLlmToolsSupported,
+        isEmbedModelValid,
+        indexingStatus,
+        input,
+    ]);
 
 
     const cancelQuestionEdit = () => {
@@ -1648,17 +1662,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         multiline
                         minRows={3}
                         maxRows={10}
-                        placeholder={
-                            (indexingStatus === 'blocked' || isEmbedModelValid === false)
-                                ? "Blocked: Selected embedding model is unavailable on server."
-                                : indexingStatus === 'error'
-                                    ? "Connection error. Please refresh to retry."
-                                    : indexingStatus !== 'ready'
-                                        ? "Indexing your document. This may take a moment..."
-                                        : !llmModel
-                                            ? "Select LLM model..."
-                                            : "Ask a question about your documents..." + (input ? "\n(Shift+Enter for new line)" : "")
-                        }
+                        placeholder={composerState.placeholder}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => {
@@ -1667,7 +1671,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 handleSend();
                             }
                         }}
-                        disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                        disabled={composerState.disabled}
                         sx={{
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: theme.palette.background.paper,
@@ -1696,9 +1700,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             size="medium"
                             color="primary"
                             onClick={handleSend}
-                            disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                            disabled={composerState.disabled}
                         >
-                            {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false) || indexingStatus === 'error') ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
+                            {composerState.busy ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
                         </IconButton>
                         <Tooltip title="AI prompt settings for this thread" placement="top">
                             <IconButton
