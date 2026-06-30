@@ -21,6 +21,7 @@ import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
 import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
 import SendIcon from '@mui/icons-material/Send';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
 import MemoryIcon from '@mui/icons-material/Memory';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -34,6 +35,7 @@ import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
+import { getChatComposerState } from '../lib/chat-composer-state';
 import {
     Thread,
     Message,
@@ -43,7 +45,7 @@ import {
     getThreadMessages,
     deleteMessage,
     forkThread,
-    getThread,
+    listThreads,
     getThreadIndexStatus,
     getThreadSettings,
     updateThreadSettings,
@@ -54,6 +56,7 @@ import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/models-api';
 import ChatSettingsDialog from './ChatSettingsDialog';
+import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -81,6 +84,7 @@ interface ChatInterfaceProps {
     onThreadUpdate?: () => void;
     onThreadForked?: (thread: Thread) => void;
     onOpenThread?: (thread: Thread) => void;
+    hideInlineLineage?: boolean;
     darkMode?: boolean;
     autoScroll?: boolean;
 }
@@ -96,6 +100,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onThreadUpdate,
     onThreadForked,
     onOpenThread,
+    hideInlineLineage = false,
     onResetChatId,
     darkMode = false,
     autoScroll = true
@@ -148,7 +153,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
-    const [resolvedParentThread, setResolvedParentThread] = useState<Thread | null>(null);
+    const [lineageThreads, setLineageThreads] = useState<Thread[]>([]);
+    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+    const [editingOriginalText, setEditingOriginalText] = useState('');
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -254,33 +261,40 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (activeThread) {
             setClarificationOptions(null);
             lastClarificationIdsRef.current = null;
+            setEditingMessageId(null);
+            setEditingOriginalText('');
         }
     }, [activeThread?.id]);
 
     useEffect(() => {
         const parentThreadId = activeThread?.thread_metadata?.fork?.parent_thread_id;
-        if (!parentThreadId) {
-            setResolvedParentThread(null);
+        const childThreadIds = Array.isArray(activeThread?.thread_metadata?.fork_children)
+            ? activeThread.thread_metadata.fork_children.filter((id): id is string => typeof id === 'string' && id.length > 0)
+            : [];
+        const hasLineage = !hideInlineLineage && Boolean(parentThreadId || childThreadIds.length > 0);
+
+        if (!hasLineage) {
+            setLineageThreads([]);
             return;
         }
 
         let cancelled = false;
-        getThread(parentThreadId)
-            .then(parent => {
+        listThreads()
+            .then(response => {
                 if (!cancelled) {
-                    setResolvedParentThread(parent);
+                    setLineageThreads(response.threads);
                 }
             })
             .catch(() => {
                 if (!cancelled) {
-                    setResolvedParentThread(null);
+                    setLineageThreads([]);
                 }
             });
 
         return () => {
             cancelled = true;
         };
-    }, [activeThread?.id, activeThread?.thread_metadata?.fork?.parent_thread_id]);
+    }, [activeThread?.id, activeThread?.thread_metadata?.fork?.parent_thread_id, activeThread?.thread_metadata?.fork_children, hideInlineLineage]);
 
     useEffect(() => {
         const loadTools = async () => {
@@ -557,16 +571,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
         if (!model) return;
-        if (indexingStatus === 'ready') {
-            await validateLlmModel(model);
-        }
+        await validateLlmModel(model);
     };
 
     useEffect(() => {
-        if (indexingStatus === 'ready' && llmModel && isLlmModelValid === null) {
+        if (llmModel && isLlmModelValid === null) {
             validateLlmModel(llmModel);
         }
-    }, [indexingStatus, isLlmModelValid, llmModel, validateLlmModel]);
+    }, [isLlmModelValid, llmModel, validateLlmModel]);
 
     const handleContextWindowChange = (val: number) => {
         setContextWindow(val);
@@ -668,9 +680,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setLlmModel(savedLlm);
             setIsLlmModelValid(null);
             setIsLlmToolsSupported(null);
-            if (indexingStatus === 'ready') {
-                validateLlmModel(savedLlm);
-            }
         }
 
         const savedCtx = localStorage.getItem('last_context_window');
@@ -685,18 +694,68 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (savedWebSearch === '1' || savedWebSearch === '0') {
             setUseWebSearch(savedWebSearch === '1');
         }
-    }, [indexingStatus, llmModel, validateLlmModel]);
+    }, [llmModel]);
 
+    const composerState = useMemo(() => getChatComposerState({
+        loading,
+        llmModel,
+        isLlmModelValid,
+        isLlmToolsSupported,
+        isEmbedModelValid,
+        indexingStatus,
+        hasInput: Boolean(input),
+    }), [
+        loading,
+        llmModel,
+        isLlmModelValid,
+        isLlmToolsSupported,
+        isEmbedModelValid,
+        indexingStatus,
+        input,
+    ]);
+
+
+    const cancelQuestionEdit = () => {
+        setEditingMessageId(null);
+        setEditingOriginalText('');
+        setInput('');
+    };
+
+    const handleEditQuestion = (msg: ChatMessage, event: React.MouseEvent) => {
+        event.stopPropagation();
+        if (loading || msg.role !== 'user') return;
+
+        const content = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '');
+        setInput(content);
+        setEditingMessageId(msg.id);
+        setEditingOriginalText(content);
+        setClarificationOptions(null);
+    };
 
     const handleSend = async (
         overrideInput?: string | React.SyntheticEvent,
         options?: { isClarificationSelection?: boolean }
     ) => {
-        const textToSend = typeof overrideInput === 'string' ? overrideInput : input.trim();
-        if (!textToSend || !llmModel || !activeThread) return;
-
+        const rawTextToSend = typeof overrideInput === 'string' ? overrideInput : input;
+        const textToSend = rawTextToSend.trim();
         const isClarificationSelection = Boolean(options?.isClarificationSelection);
         const priorClarificationIds = isClarificationSelection ? lastClarificationIdsRef.current : null;
+        const editMessageId = !isClarificationSelection ? editingMessageId : null;
+        const editOriginalText = editingOriginalText.trim();
+        const isEditingQuestion = Boolean(editMessageId);
+
+        if (!textToSend) {
+            if (isEditingQuestion) {
+                cancelQuestionEdit();
+            }
+            return;
+        }
+        if (!llmModel || !activeThread) return;
+
+        if (isEditingQuestion && textToSend === editOriginalText) {
+            cancelQuestionEdit();
+            return;
+        }
 
         setInput('');
         setClarificationOptions(null);
@@ -709,21 +768,31 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             created_at: new Date().toISOString()
         };
 
-        setMessages(prev => {
-            let updated = prev;
-            // Immediate replacement: If this is a clarification selection, remove the previous "ambiguous" turn
-            if (isClarificationSelection) {
-                const lastIds = priorClarificationIds;
-                updated = updated.filter(m => {
-                    if (m.id.startsWith('clarify-')) return false;
-                    if (lastIds && (m.id === lastIds.userId || m.id === lastIds.assistantId)) return false;
-                    return true;
-                });
-            }
-            return [...updated, tempUserMsg];
-        });
-
+        let editDeletionCompleted = false;
         try {
+            if (isEditingQuestion && editMessageId) {
+                const { deleted_ids } = await deleteMessage(editMessageId);
+                editDeletionCompleted = true;
+                setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
+                if (onResetChatId) {
+                    onResetChatId();
+                }
+            }
+
+            setMessages(prev => {
+                let updated = prev;
+                // Immediate replacement: If this is a clarification selection, remove the previous "ambiguous" turn
+                if (isClarificationSelection) {
+                    const lastIds = priorClarificationIds;
+                    updated = updated.filter(m => {
+                        if (m.id.startsWith('clarify-')) return false;
+                        if (lastIds && (m.id === lastIds.userId || m.id === lastIds.assistantId)) return false;
+                        return true;
+                    });
+                }
+                return [...updated, tempUserMsg];
+            });
+
             // Call thread chat endpoint directly without explicit warming probe, retries are handled in api.ts.
             const response = await threadChat(
                 activeThread.id,
@@ -797,6 +866,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 if (onThreadUpdate) {
                     onThreadUpdate();
                 }
+                if (isEditingQuestion) {
+                    setEditingMessageId(null);
+                    setEditingOriginalText('');
+                }
             }
 
             if (isClarificationSelection) {
@@ -809,20 +882,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         } catch (err: any) {
             console.error(err);
-            // Remove optimistic message and show error
-            setMessages(prev => {
-                const updated = prev.filter(m => m.id !== tempUserMsg.id);
-                return [
-                    ...updated,
-                    tempUserMsg,
-                    {
-                        id: 'error-' + Date.now(),
-                        role: 'assistant',
-                        content: `Error: ${err.message || "Failed to get response."}`,
-                        created_at: new Date().toISOString()
-                    }
-                ];
-            });
+            const errorMessage: ChatMessage = {
+                id: 'error-' + Date.now(),
+                role: 'assistant',
+                content: `Error: ${err.message || "Failed to get response."}`,
+                created_at: new Date().toISOString()
+            };
+            if (editDeletionCompleted) {
+                await loadMessages();
+                setEditingMessageId(null);
+                setEditingOriginalText('');
+                setMessages(prev => [...prev, errorMessage]);
+            } else {
+                // Remove optimistic message and show error
+                setMessages(prev => {
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    return [
+                        ...updated,
+                        tempUserMsg,
+                        errorMessage
+                    ];
+                });
+            }
         } finally {
             setLoading(false);
         }
@@ -877,6 +958,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             const { deleted_ids } = await deleteMessage(messageId);
             setMessages(prev => prev.filter(m => !deleted_ids.includes(m.id)));
+            if (editingMessageId && deleted_ids.includes(editingMessageId)) {
+                setEditingMessageId(null);
+                setEditingOriginalText('');
+                setInput('');
+            }
 
             // Critical: If the current active chat sentence belongs to a deleted message, 
             // reset the chat ID selection to prevent out-of-bounds access.
@@ -949,12 +1035,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const handleOpenParentThread = () => {
-        if (resolvedParentThread) {
-            onOpenThread?.(resolvedParentThread);
-        }
-    };
-
     if (!activeThread) {
         return (
             <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: theme.palette.background.default, color: theme.palette.text.primary }}>
@@ -971,15 +1051,29 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     const forkInfo = activeThread.thread_metadata?.fork;
-    const parentThreadName = resolvedParentThread?.name || forkInfo?.parent_thread_name || 'deleted thread';
-    const forkTooltip = forkInfo?.forked_at
-        ? `Forked ${forkInfo.mode === 'from_message' ? 'from a message' : 'from full thread'} on ${new Date(forkInfo.forked_at).toLocaleString()}`
-        : 'Forked thread';
+    const childThreadIds = Array.isArray(activeThread.thread_metadata?.fork_children)
+        ? activeThread.thread_metadata.fork_children.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : [];
+    const hasLineage = !hideInlineLineage && Boolean(forkInfo || childThreadIds.length > 0);
+    const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
+    const headerSelectOutlineSx = {
+        '& fieldset': {
+            borderColor: 'transparent',
+            borderWidth: '1px',
+        },
+        '&:hover fieldset': {
+            borderColor: 'primary.main',
+        },
+        '&.Mui-focused fieldset': {
+            borderColor: 'primary.main',
+        },
+    };
+    const latestUserMessageId = [...messages].reverse().find(m => m.role === 'user')?.id ?? null;
 
     return (
         <Paper ref={chatRootRef} elevation={0} sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
             {/* Header */}
-            <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
+            <Box sx={{ mb: 0.5, pt: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                     <Tooltip title={
                         isEmbedModelValid === null ? "Checking embedding model status..." :
@@ -1000,16 +1094,27 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {isEmbedModelValid === false && <Typography variant="caption" color="error" sx={{ fontWeight: 'bold' }}>OFFLINE</Typography>}
                         </Box>
                     </Tooltip>
-                    {forkInfo && (
-                        <Tooltip title={resolvedParentThread ? `${forkTooltip}. Open parent thread.` : `${forkTooltip}. Parent thread no longer exists.`}>
-                            <Chip
-                                icon={<CallSplitIcon sx={{ fontSize: '0.85rem !important' }} />}
-                                label={`Forked from ${parentThreadName}`}
+                    {hasLineage && (
+                        <Tooltip
+                            title={
+                                <ThreadLineageTooltipContent
+                                    thread={activeThread}
+                                    threadsById={lineageThreadsById}
+                                    onOpenThread={onOpenThread}
+                                />
+                            }
+                            arrow
+                            enterDelay={300}
+                            leaveDelay={150}
+                            disableInteractive={false}
+                        >
+                            <IconButton
                                 size="small"
-                                clickable={Boolean(resolvedParentThread && onOpenThread)}
-                                onClick={resolvedParentThread && onOpenThread ? handleOpenParentThread : undefined}
-                                sx={{ maxWidth: 220, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
-                            />
+                                aria-label="Thread lineage"
+                                sx={{ p: 0.5 }}
+                            >
+                                <CallSplitIcon fontSize="small" />
+                            </IconButton>
                         </Tooltip>
                     )}
                 </Box>
@@ -1074,12 +1179,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 '& .MuiOutlinedInput-root': {
                                     transition: 'all 0.3s ease',
                                     backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
+                                    ...headerSelectOutlineSx,
                                     '& fieldset': {
-                                        borderColor: showContextHighlight ? 'primary.main' : 'rgba(0, 0, 0, 0.23)',
+                                        borderColor: showContextHighlight ? 'primary.main' : 'transparent',
                                         borderWidth: showContextHighlight ? '2px' : '1px',
-                                    },
-                                    '&:hover fieldset': {
-                                        borderColor: 'primary.main',
                                     },
                                 },
                             }}
@@ -1094,6 +1197,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             value={llmModel}
                             label="Select LLM"
                             onChange={(e) => handleLlmModelChange(e.target.value)}
+                            sx={{
+                                ...headerSelectOutlineSx,
+                            }}
                         >
                             {availableModels.map(m => (
                                 <MenuItem key={m} value={m}>{m}</MenuItem>
@@ -1108,6 +1214,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 {messages.map((msg, idx) => {
                     const isRecollected = recollectedIds.has(msg.id);
                     const isUser = msg.role === 'user';
+                    const isEditingThisMessage = editingMessageId === msg.id;
+                    const isOlderQuestion = isUser && latestUserMessageId !== null && msg.id !== latestUserMessageId;
+                    const editTooltip = isEditingThisMessage
+                        ? "Editing this question"
+                        : isOlderQuestion
+                            ? "Edit and ask again at the end"
+                            : "Edit question";
                     return (
                         <ListItem
                             key={msg.id}
@@ -1142,8 +1255,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         : isRecollected
                                             ? '0 0 10px rgba(156, 39, 176, 0.5)'
                                             : 'none',
-                                    border: isRecollected ? '2px solid' : 'none',
-                                    borderColor: isRecollected ? 'secondary.main' : 'transparent',
+                                    border: (isRecollected || isEditingThisMessage) ? '2px solid' : 'none',
+                                    borderColor: isEditingThisMessage
+                                        ? 'warning.main'
+                                        : isRecollected
+                                            ? 'secondary.main'
+                                            : 'transparent',
                                     borderRadius: '12px',
                                     transition: 'all 0.2s ease',
                                     cursor: 'default',
@@ -1169,8 +1286,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         }}
                                     />
                                 )}
-
-
 
                                 {/* Action buttons */}
                                 <Box
@@ -1226,7 +1341,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                 <IconButton
                                                     size="small"
                                                     onClick={(e) => handleForkFromMessage(msg.id, e)}
-                                                    disabled={forkingMessageId === msg.id}
+                                                    disabled={forkingMessageId === msg.id || loading}
                                                     sx={{
                                                         color: 'inherit',
                                                         p: 0.5,
@@ -1238,19 +1353,40 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             </span>
                                         </Tooltip>
                                     )}
+                                    {isUser && (
+                                        <Tooltip title={editTooltip}>
+                                            <span>
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={(e) => handleEditQuestion(msg, e)}
+                                                    disabled={loading}
+                                                    sx={{
+                                                        color: isEditingThisMessage ? 'warning.light' : 'inherit',
+                                                        p: 0.5,
+                                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                                    }}
+                                                >
+                                                    <EditIcon fontSize="small" />
+                                                </IconButton>
+                                            </span>
+                                        </Tooltip>
+                                    )}
                                     <Tooltip title="Delete message">
-                                        <IconButton
-                                            size="small"
-                                            onClick={(e) => handleDeleteMessage(msg.id, e)}
-                                            sx={{
-                                                color: 'inherit',
-                                                p: 0.5,
-                                                '&:hover': { color: 'error.main' },
-                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                                            }}
-                                        >
-                                            <DeleteIcon fontSize="small" />
-                                        </IconButton>
+                                        <span>
+                                            <IconButton
+                                                size="small"
+                                                onClick={(e) => handleDeleteMessage(msg.id, e)}
+                                                disabled={loading || isEditingThisMessage}
+                                                sx={{
+                                                    color: 'inherit',
+                                                    p: 0.5,
+                                                    '&:hover': { color: 'error.main' },
+                                                    '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                                }}
+                                            >
+                                                <DeleteIcon fontSize="small" />
+                                            </IconButton>
+                                        </span>
                                     </Tooltip>
                                 </Box>
 
@@ -1524,6 +1660,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Box>
                 )}
 
+                {editingMessageId && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
+                        <Chip
+                            icon={<EditIcon sx={{ fontSize: '0.9rem !important' }} />}
+                            label="Editing question"
+                            size="small"
+                            color="warning"
+                            sx={{ maxWidth: 'calc(100% - 3rem)', '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
+                        />
+                        <Tooltip title="Cancel edit">
+                            <IconButton
+                                size="small"
+                                onClick={cancelQuestionEdit}
+                                disabled={loading}
+                                sx={{ flex: '0 0 auto' }}
+                            >
+                                <CloseIcon fontSize="small" />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                )}
+
                 <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch', px: 1 }}>
                     <TextField
                         fullWidth
@@ -1531,17 +1689,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         multiline
                         minRows={3}
                         maxRows={10}
-                        placeholder={
-                            (indexingStatus === 'blocked' || isEmbedModelValid === false)
-                                ? "Blocked: Selected embedding model is unavailable on server."
-                                : indexingStatus === 'error'
-                                    ? "Connection error. Please refresh to retry."
-                                    : indexingStatus !== 'ready'
-                                        ? "Indexing your document. This may take a moment..."
-                                        : !llmModel
-                                            ? "Select LLM model..."
-                                            : "Ask a question about your documents..." + (input ? "\n(Shift+Enter for new line)" : "")
-                        }
+                        placeholder={composerState.placeholder}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => {
@@ -1550,7 +1698,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 handleSend();
                             }
                         }}
-                        disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                        disabled={composerState.disabled}
                         sx={{
                             '& .MuiOutlinedInput-root': {
                                 bgcolor: theme.palette.background.paper,
@@ -1579,9 +1727,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             size="medium"
                             color="primary"
                             onClick={handleSend}
-                            disabled={loading || !llmModel || indexingStatus === 'error' || indexingStatus !== 'ready' || isLlmModelValid === false || isLlmToolsSupported === false || (llmModel !== '' && isLlmModelValid === null) || isEmbedModelValid !== true}
+                            disabled={composerState.disabled}
                         >
-                            {(loading || (llmModel && isLlmModelValid === null) || isEmbedModelValid === null || (indexingStatus !== 'ready' && isEmbedModelValid !== false) || indexingStatus === 'error') ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
+                            {composerState.busy ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
                         </IconButton>
                         <Tooltip title="AI prompt settings for this thread" placement="top">
                             <IconButton

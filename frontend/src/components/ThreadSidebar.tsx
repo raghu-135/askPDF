@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material/styles';
 
 declare const process: {
@@ -10,7 +10,6 @@ import {
   ListItem,
   ListItemButton,
   ListItemText,
-  ListItemSecondaryAction,
   IconButton,
   Typography,
   TextField,
@@ -52,13 +51,31 @@ import {
 } from '../lib/api';
 import { fetchAvailableEmbedModels, checkEmbedModelReady } from '../lib/models-api';
 import { formatDate } from '../lib/date-utils';
+import ThreadReferenceChip from './ThreadReferenceChip';
 
+
+export interface ThreadSidebarHeaderState {
+  threadCount: number;
+  hasThreads: boolean;
+  isSelectionMode: boolean;
+  selectedCount: number;
+  allThreadsSelected: boolean;
+  someThreadsSelected: boolean;
+  isBulkDeleting: boolean;
+  openCreateDialog: () => void;
+  enterSelectionMode: () => void;
+  clearSelection: () => void;
+  deleteSelectedThreads: () => void;
+  toggleAllThreads: (checked: boolean) => void;
+}
 
 interface ThreadSidebarProps {
   activeThreadId: string | null;
   onThreadSelect: (thread: Thread | null) => void;
   onThreadForked?: (thread: Thread) => void;
   onEmbedModelChange?: (model: string) => void;
+  hideHeader?: boolean;
+  onHeaderStateChange?: (state: ThreadSidebarHeaderState | null) => void;
   darkMode?: boolean;
 }
 
@@ -67,6 +84,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   onThreadSelect,
   onThreadForked,
   onEmbedModelChange,
+  hideHeader = false,
+  onHeaderStateChange,
   darkMode = false,
 }) => {
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -231,28 +250,32 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     );
   };
 
-  const handleToggleAllThreads = (event: React.ChangeEvent<HTMLInputElement>) => {
-    event.stopPropagation();
-    if (event.target.checked) {
+  const handleToggleAllThreadsChecked = useCallback((checked: boolean) => {
+    if (checked) {
       setSelectedThreadIds(new Set(threads.map(thread => thread.id)));
       setLastSelectedThreadId(threads[threads.length - 1]?.id ?? null);
     } else {
       setSelectedThreadIds(new Set());
       setLastSelectedThreadId(null);
     }
+  }, [threads]);
+
+  const handleToggleAllThreads = (event: React.ChangeEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+    handleToggleAllThreadsChecked(event.target.checked);
   };
 
-  const clearThreadSelection = () => {
+  const clearThreadSelection = useCallback(() => {
     setSelectedThreadIds(new Set());
     setLastSelectedThreadId(null);
     setIsSelectionMode(false);
-  };
+  }, []);
 
-  const enterThreadSelectionMode = () => {
+  const enterThreadSelectionMode = useCallback(() => {
     setIsSelectionMode(true);
-  };
+  }, []);
 
-  const handleBulkDeleteThreads = async () => {
+  const handleBulkDeleteThreads = useCallback(async () => {
     const threadIds = Array.from(selectedThreadIds);
     if (threadIds.length === 0) return;
     if (!confirm(`Delete ${threadIds.length} threads and all their messages?`)) return;
@@ -288,7 +311,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     } finally {
       setIsBulkDeleting(false);
     }
-  };
+  }, [activeThreadId, onThreadSelect, selectedThreadIds]);
 
   const handleEditThread = async (threadId: string) => {
     if (!editingName.trim()) return;
@@ -351,11 +374,48 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     validateEmbedModel();
   }, [newThreadEmbedModel]);
 
-  const handleOpenCreateDialog = () => {
+  const handleOpenCreateDialog = useCallback(() => {
     const now = new Date();
     setNewThreadName(`Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`);
     setCreateDialogOpen(true);
-  };
+  }, []);
+
+  const headerState = useMemo<ThreadSidebarHeaderState>(() => ({
+    threadCount: threads.length,
+    hasThreads: threads.length > 0,
+    isSelectionMode,
+    selectedCount,
+    allThreadsSelected,
+    someThreadsSelected,
+    isBulkDeleting,
+    openCreateDialog: handleOpenCreateDialog,
+    enterSelectionMode: enterThreadSelectionMode,
+    clearSelection: clearThreadSelection,
+    deleteSelectedThreads: handleBulkDeleteThreads,
+    toggleAllThreads: handleToggleAllThreadsChecked,
+  }), [
+    allThreadsSelected,
+    clearThreadSelection,
+    enterThreadSelectionMode,
+    handleBulkDeleteThreads,
+    handleOpenCreateDialog,
+    handleToggleAllThreadsChecked,
+    isBulkDeleting,
+    isSelectionMode,
+    selectedCount,
+    someThreadsSelected,
+    threads.length,
+  ]);
+
+  useEffect(() => {
+    onHeaderStateChange?.(headerState);
+  }, [headerState, onHeaderStateChange]);
+
+  useEffect(() => {
+    return () => {
+      onHeaderStateChange?.(null);
+    };
+  }, [onHeaderStateChange]);
 
   const focusThreadInList = (threadId: string, event?: React.MouseEvent) => {
     event?.preventDefault();
@@ -381,61 +441,52 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     };
   }, [focusedThreadId]);
 
-  const renderThreadReference = (
-    threadId: string | null | undefined,
-    fallbackName?: string | null
-  ) => {
-    if (!threadId) {
-      return <Typography variant="caption" color="text.secondary">None</Typography>;
-    }
-
-    const target = threadsById.get(threadId);
-    if (!target) {
-      return (
-        <Typography variant="caption" color="text.secondary">
-          {fallbackName || threadId}
-        </Typography>
-      );
-    }
-
-    return (
-      <Chip
-        label={target.name}
-        size="small"
-        clickable
-        onClick={(event) => focusThreadInList(threadId, event)}
-        onMouseDown={(event) => event.stopPropagation()}
-        sx={{
-          height: 22,
-          maxWidth: '100%',
-          color: 'primary.contrastText',
-          bgcolor: 'primary.main',
-          justifyContent: 'flex-start',
-          '& .MuiChip-label': {
-            px: 0.75,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          },
-          '&:hover, &:focus-visible': {
-            bgcolor: 'primary.dark',
-          },
-        }}
-      />
-    );
-  };
-
   const renderThreadTooltip = (thread: Thread) => {
     const forkInfo = thread.thread_metadata?.fork;
     const childIds = Array.isArray(thread.thread_metadata?.fork_children)
       ? thread.thread_metadata.fork_children.filter((id): id is string => typeof id === 'string' && id.length > 0)
       : [];
+    const documents = Object.entries(thread.documents_meta || {})
+      .filter((entry): entry is [string, NonNullable<Thread['documents_meta']>[string]] => {
+        const meta = entry[1];
+        return !!meta && typeof meta === 'object' && !Array.isArray(meta);
+      })
+      .filter(([, meta]) =>
+        Boolean(meta.file_name || meta.page_count || meta.document_available_in_thread_at)
+      );
+    const sectionSx = {
+      pt: 0.75,
+      mt: 0.75,
+      borderTop: 1,
+      borderColor: 'divider',
+      '&:first-of-type': {
+        pt: 0,
+        mt: 0,
+        borderTop: 0,
+      },
+    };
 
     return (
       <Box
-        sx={{ p: 0.25, minWidth: 200, maxWidth: 280 }}
+        sx={{
+          p: 0.5,
+          pr: 0.75,
+          minWidth: 220,
+          maxWidth: 320,
+          maxHeight: 'min(360px, calc(100vh - 96px))',
+          overflowY: 'auto',
+        }}
         onClick={(event) => event.stopPropagation()}
       >
-        <Box>
+        <Box sx={sectionSx}>
+          <Typography variant="caption" color="text.secondary" component="div">
+            Created
+          </Typography>
+          <Typography variant="caption" component="div">
+            {new Date(thread.created_at).toLocaleString()}
+          </Typography>
+        </Box>
+        <Box sx={sectionSx}>
           <Typography variant="caption" color="text.secondary" component="div">
             Embedding model
           </Typography>
@@ -444,29 +495,66 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </Typography>
         </Box>
         {forkInfo?.parent_thread_id && (
-          <Box sx={{ mt: 0.5 }}>
+          <Box sx={sectionSx}>
             <Typography variant="caption" color="text.secondary" component="div">
               Parent
             </Typography>
-            {renderThreadReference(forkInfo.parent_thread_id, forkInfo.parent_thread_name)}
+            <ThreadReferenceChip
+              threadId={forkInfo.parent_thread_id}
+              fallbackName={forkInfo.parent_thread_name}
+              threadsById={threadsById}
+              onOpenThread={(target) => focusThreadInList(target.id)}
+            />
           </Box>
         )}
         {childIds.length > 0 && (
-          <Box sx={{ mt: 0.5 }}>
+          <Box sx={sectionSx}>
             <Typography variant="caption" color="text.secondary" component="div">
               Children
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
               {childIds.map(childId => (
                 <Box key={childId}>
-                  {renderThreadReference(childId)}
+                  <ThreadReferenceChip
+                    threadId={childId}
+                    threadsById={threadsById}
+                    onOpenThread={(target) => focusThreadInList(target.id)}
+                  />
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        )}
+        {documents.length > 0 && (
+          <Box sx={sectionSx}>
+            <Typography variant="caption" color="text.secondary" component="div">
+              Documents
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+              {documents.map(([fileHash, meta]) => (
+                <Box key={fileHash} sx={{ minWidth: 0 }}>
+                  {meta.file_name && (
+                    <Typography variant="caption" component="div" sx={{ fontWeight: 600, lineHeight: 1.25, wordBreak: 'break-word' }}>
+                      {meta.file_name}
+                    </Typography>
+                  )}
+                  {meta.page_count !== undefined && meta.page_count !== null && meta.page_count !== '' && (
+                    <Typography variant="caption" color="text.secondary" component="div" sx={{ lineHeight: 1.25 }}>
+                      Pages: {meta.page_count}
+                    </Typography>
+                  )}
+                  {meta.document_available_in_thread_at && (
+                    <Typography variant="caption" color="text.secondary" component="div" sx={{ lineHeight: 1.25 }}>
+                      Added: {new Date(meta.document_available_in_thread_at).toLocaleString()}
+                    </Typography>
+                  )}
                 </Box>
               ))}
             </Box>
           </Box>
         )}
         {forkInfo?.forked_at && (
-          <Box sx={{ mt: 0.5 }}>
+          <Box sx={sectionSx}>
             <Typography variant="caption" color="text.secondary" component="div">
               Forked at
             </Typography>
@@ -477,6 +565,29 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         )}
       </Box>
     );
+  };
+
+  const threadActionButtonSx = {
+    width: 32,
+    height: 32,
+    flex: '0 0 32px',
+    color: 'text.secondary',
+    bgcolor: 'transparent',
+    opacity: 0.6,
+    transition: 'color 160ms ease, opacity 160ms ease, outline-color 160ms ease',
+    '&:hover, &.Mui-focusVisible': {
+      color: 'text.primary',
+      bgcolor: 'transparent',
+      opacity: 1,
+    },
+    '&.Mui-focusVisible': {
+      outline: `1px solid ${theme.palette.action.focus}`,
+      outlineOffset: -2,
+    },
+    '&.Mui-disabled': {
+      bgcolor: 'transparent',
+      opacity: 0.45,
+    },
   };
 
   return (
@@ -490,87 +601,88 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         color: theme.palette.text.primary
       }}
     >
-      {/* Header */}
-      <Box sx={{
-        p: 1.5,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        borderBottom: 1,
-        borderColor: 'divider',
-        bgcolor: theme.palette.background.paper
-      }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <IconButton size="small" onClick={() => setExpanded(!expanded)}>
-            {expanded ? <SpeakerNotesIcon fontSize="small" /> : <SpeakerNotesOffIcon fontSize="small" />}
-          </IconButton>
-          <Typography variant="subtitle2" fontWeight="bold">
-            Threads
-          </Typography>
-          <Chip label={threads.length} size="small" />
-          <Tooltip title="Create new thread">
-            <IconButton
-              size="small"
-              color="primary"
-              onClick={handleOpenCreateDialog}
-            >
-              <AddIcon fontSize="small" />
+      {!hideHeader && (
+        <Box sx={{
+          p: 1.5,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: 1,
+          borderColor: 'divider',
+          bgcolor: theme.palette.background.paper
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <IconButton size="small" onClick={() => setExpanded(!expanded)}>
+              {expanded ? <SpeakerNotesIcon fontSize="small" /> : <SpeakerNotesOffIcon fontSize="small" />}
             </IconButton>
-          </Tooltip>
-        </Box>
-        {isSelectionMode ? (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Tooltip title={allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
-              <Checkbox
+            <Typography variant="subtitle2" fontWeight="bold">
+              Threads
+            </Typography>
+            <Chip label={threads.length} size="small" />
+            <Tooltip title="Create new thread">
+              <IconButton
                 size="small"
-                checked={allThreadsSelected}
-                indeterminate={someThreadsSelected}
-                onChange={handleToggleAllThreads}
-                disabled={isBulkDeleting}
-                sx={{ p: 0.5 }}
-              />
-            </Tooltip>
-            <Tooltip title="Shift-click threads to select a range">
-              <Chip label={`${selectedCount} selected`} size="small" color="primary" />
-            </Tooltip>
-            <Tooltip title="Clear selection">
-              <IconButton size="small" onClick={clearThreadSelection} disabled={isBulkDeleting}>
-                <ClearIcon fontSize="small" />
+                color="primary"
+                onClick={handleOpenCreateDialog}
+              >
+                <AddIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Delete selected threads">
-              <span>
-                <IconButton
-                  size="small"
-                  color="error"
-                  onClick={handleBulkDeleteThreads}
-                  disabled={isBulkDeleting || selectedCount === 0}
-                >
-                  {isBulkDeleting ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
-                </IconButton>
-              </span>
-            </Tooltip>
           </Box>
-        ) : (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
-              <span>
-                <IconButton
+          {isSelectionMode ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Tooltip title={allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
+                <Checkbox
                   size="small"
-                  color="error"
-                  onClick={enterThreadSelectionMode}
-                  disabled={threads.length === 0}
-                >
-                  <DeleteIcon fontSize="small" />
+                  checked={allThreadsSelected}
+                  indeterminate={someThreadsSelected}
+                  onChange={handleToggleAllThreads}
+                  disabled={isBulkDeleting}
+                  sx={{ p: 0.5 }}
+                />
+              </Tooltip>
+              <Tooltip title="Shift-click threads to select a range">
+                <Chip label={`${selectedCount} selected`} size="small" color="primary" />
+              </Tooltip>
+              <Tooltip title="Clear selection">
+                <IconButton size="small" onClick={clearThreadSelection} disabled={isBulkDeleting}>
+                  <ClearIcon fontSize="small" />
                 </IconButton>
-              </span>
-            </Tooltip>
-          </Box>
-        )}
-      </Box>
+              </Tooltip>
+              <Tooltip title="Delete selected threads">
+                <span>
+                  <IconButton
+                    size="small"
+                    color="error"
+                    onClick={handleBulkDeleteThreads}
+                    disabled={isBulkDeleting || selectedCount === 0}
+                  >
+                    {isBulkDeleting ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
+                <span>
+                  <IconButton
+                    size="small"
+                    color="error"
+                    onClick={enterThreadSelectionMode}
+                    disabled={threads.length === 0}
+                  >
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+          )}
+        </Box>
+      )}
 
       {/* Thread List */}
-      <Collapse in={expanded} sx={{ flex: 1, overflow: 'auto' }}>
+      <Collapse in={hideHeader || expanded} sx={{ flex: 1, overflow: 'auto' }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
             <CircularProgress size={24} />
@@ -599,6 +711,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 }}
                 disablePadding
                 sx={{
+                  display: 'flex',
+                  alignItems: 'stretch',
                   bgcolor: activeThreadId === thread.id
                     ? theme.palette.mode === 'dark'
                       ? theme.palette.primary.dark
@@ -630,7 +744,25 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 <ListItemButton
                   onClick={(e) => handleThreadRowClick(thread, e)}
                   selected={activeThreadId === thread.id}
-                  sx={{ py: 1, pr: isSelectionMode ? 1 : 12 }}
+                  sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    py: 1,
+                    pr: 1,
+                    bgcolor: 'transparent',
+                    '&:hover': {
+                      bgcolor: 'transparent',
+                    },
+                    '&.Mui-selected': {
+                      bgcolor: 'transparent',
+                    },
+                    '&.Mui-selected:hover': {
+                      bgcolor: 'transparent',
+                    },
+                    '&.Mui-focusVisible': {
+                      bgcolor: 'transparent',
+                    },
+                  }}
                 >
                   {isSelectionMode && (
                     <Checkbox
@@ -668,66 +800,86 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                       leaveDelay={150}
                       disableInteractive={false}
                     >
-                      <ListItemText
-                        primary={
-                          <Typography
-                            variant="body2"
-                            fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'}
-                            noWrap
-                          >
-                            {thread.name}
-                          </Typography>
-                        }
-                        secondaryTypographyProps={{ component: 'span' }}
-                        secondary={
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
-                            <Typography variant="caption" color="text.secondary">
-                              {formatDate(thread.created_at)}
+                      <Box
+                        sx={{
+                          display: 'inline-flex',
+                          flexDirection: 'column',
+                          minWidth: 0,
+                          maxWidth: '100%',
+                        }}
+                      >
+                        <ListItemText
+                          primary={
+                            <Typography
+                              variant="body2"
+                              fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'}
+                              noWrap
+                            >
+                              {thread.name}
                             </Typography>
-                            {thread.message_count !== undefined && thread.message_count > 0 && (
-                              <Chip
-                                label={`${thread.message_count} msgs`}
-                                size="small"
-                                sx={{ height: 16, fontSize: '0.65rem' }}
-                              />
-                            )}
-                            {thread.file_count !== undefined && thread.file_count > 0 && (
-                              <Chip
-                                icon={<DescriptionIcon sx={{ fontSize: '0.7rem !important' }} />}
-                                label={thread.file_count}
-                                size="small"
-                                sx={{ height: 16, fontSize: '0.65rem' }}
-                              />
-                            )}
-                          </Box>
-                        }
-                      />
+                          }
+                          secondaryTypographyProps={{ component: 'span' }}
+                          secondary={
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, minWidth: 0, maxWidth: '100%' }}>
+                              <Typography variant="caption" color="text.secondary" noWrap>
+                                {formatDate(thread.created_at)}
+                              </Typography>
+                              {thread.message_count !== undefined && thread.message_count > 0 && (
+                                <Chip
+                                  label={`${thread.message_count} msgs`}
+                                  size="small"
+                                  sx={{ height: 16, fontSize: '0.65rem' }}
+                                />
+                              )}
+                              {thread.file_count !== undefined && thread.file_count > 0 && (
+                                <Chip
+                                  icon={<DescriptionIcon sx={{ fontSize: '0.7rem !important' }} />}
+                                  label={thread.file_count}
+                                  size="small"
+                                  sx={{ height: 16, fontSize: '0.65rem' }}
+                                />
+                              )}
+                            </Box>
+                          }
+                          sx={{ m: 0, minWidth: 0 }}
+                        />
+                      </Box>
                     </Tooltip>
                   )}
                 </ListItemButton>
 
                 {!isSelectionMode && (
-                  <ListItemSecondaryAction>
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 0.25,
+                      flex: '0 0 auto',
+                      px: 1,
+                    }}
+                  >
                     <Tooltip title="Fork thread">
                       <span>
                         <IconButton
                           size="small"
                           onClick={(e) => handleForkThread(thread, e)}
                           disabled={forkingThreadId === thread.id}
-                          sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
+                          sx={threadActionButtonSx}
                         >
                           {forkingThreadId === thread.id ? <CircularProgress size={16} /> : <CallSplitIcon fontSize="small" />}
                         </IconButton>
                       </span>
                     </Tooltip>
-                    <IconButton
-                      size="small"
-                      onClick={(e) => startEditing(thread, e)}
-                      sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
-                    >
-                      <EditIcon fontSize="small" />
-                    </IconButton>
-                  </ListItemSecondaryAction>
+                    <Tooltip title="Rename thread">
+                      <IconButton
+                        size="small"
+                        onClick={(e) => startEditing(thread, e)}
+                        sx={threadActionButtonSx}
+                      >
+                        <EditIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
                 )}
               </ListItem>
             ))}
