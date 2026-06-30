@@ -1073,7 +1073,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     return (
         <Paper ref={chatRootRef} elevation={0} sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
             {/* Header */}
-            <Box sx={{ mb: 1, pt: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
+            <Box sx={{ mb: 0.5, pt: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                     <Tooltip title={
                         isEmbedModelValid === null ? "Checking embedding model status..." :
