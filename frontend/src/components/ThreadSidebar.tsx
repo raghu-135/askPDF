@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material/styles';
 
 declare const process: {
@@ -51,13 +51,31 @@ import {
 } from '../lib/api';
 import { fetchAvailableEmbedModels, checkEmbedModelReady } from '../lib/models-api';
 import { formatDate } from '../lib/date-utils';
+import ThreadReferenceChip from './ThreadReferenceChip';
 
+
+export interface ThreadSidebarHeaderState {
+  threadCount: number;
+  hasThreads: boolean;
+  isSelectionMode: boolean;
+  selectedCount: number;
+  allThreadsSelected: boolean;
+  someThreadsSelected: boolean;
+  isBulkDeleting: boolean;
+  openCreateDialog: () => void;
+  enterSelectionMode: () => void;
+  clearSelection: () => void;
+  deleteSelectedThreads: () => void;
+  toggleAllThreads: (checked: boolean) => void;
+}
 
 interface ThreadSidebarProps {
   activeThreadId: string | null;
   onThreadSelect: (thread: Thread | null) => void;
   onThreadForked?: (thread: Thread) => void;
   onEmbedModelChange?: (model: string) => void;
+  hideHeader?: boolean;
+  onHeaderStateChange?: (state: ThreadSidebarHeaderState | null) => void;
   darkMode?: boolean;
 }
 
@@ -66,6 +84,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   onThreadSelect,
   onThreadForked,
   onEmbedModelChange,
+  hideHeader = false,
+  onHeaderStateChange,
   darkMode = false,
 }) => {
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -230,28 +250,32 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     );
   };
 
-  const handleToggleAllThreads = (event: React.ChangeEvent<HTMLInputElement>) => {
-    event.stopPropagation();
-    if (event.target.checked) {
+  const handleToggleAllThreadsChecked = useCallback((checked: boolean) => {
+    if (checked) {
       setSelectedThreadIds(new Set(threads.map(thread => thread.id)));
       setLastSelectedThreadId(threads[threads.length - 1]?.id ?? null);
     } else {
       setSelectedThreadIds(new Set());
       setLastSelectedThreadId(null);
     }
+  }, [threads]);
+
+  const handleToggleAllThreads = (event: React.ChangeEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+    handleToggleAllThreadsChecked(event.target.checked);
   };
 
-  const clearThreadSelection = () => {
+  const clearThreadSelection = useCallback(() => {
     setSelectedThreadIds(new Set());
     setLastSelectedThreadId(null);
     setIsSelectionMode(false);
-  };
+  }, []);
 
-  const enterThreadSelectionMode = () => {
+  const enterThreadSelectionMode = useCallback(() => {
     setIsSelectionMode(true);
-  };
+  }, []);
 
-  const handleBulkDeleteThreads = async () => {
+  const handleBulkDeleteThreads = useCallback(async () => {
     const threadIds = Array.from(selectedThreadIds);
     if (threadIds.length === 0) return;
     if (!confirm(`Delete ${threadIds.length} threads and all their messages?`)) return;
@@ -287,7 +311,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     } finally {
       setIsBulkDeleting(false);
     }
-  };
+  }, [activeThreadId, onThreadSelect, selectedThreadIds]);
 
   const handleEditThread = async (threadId: string) => {
     if (!editingName.trim()) return;
@@ -350,11 +374,48 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     validateEmbedModel();
   }, [newThreadEmbedModel]);
 
-  const handleOpenCreateDialog = () => {
+  const handleOpenCreateDialog = useCallback(() => {
     const now = new Date();
     setNewThreadName(`Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`);
     setCreateDialogOpen(true);
-  };
+  }, []);
+
+  const headerState = useMemo<ThreadSidebarHeaderState>(() => ({
+    threadCount: threads.length,
+    hasThreads: threads.length > 0,
+    isSelectionMode,
+    selectedCount,
+    allThreadsSelected,
+    someThreadsSelected,
+    isBulkDeleting,
+    openCreateDialog: handleOpenCreateDialog,
+    enterSelectionMode: enterThreadSelectionMode,
+    clearSelection: clearThreadSelection,
+    deleteSelectedThreads: handleBulkDeleteThreads,
+    toggleAllThreads: handleToggleAllThreadsChecked,
+  }), [
+    allThreadsSelected,
+    clearThreadSelection,
+    enterThreadSelectionMode,
+    handleBulkDeleteThreads,
+    handleOpenCreateDialog,
+    handleToggleAllThreadsChecked,
+    isBulkDeleting,
+    isSelectionMode,
+    selectedCount,
+    someThreadsSelected,
+    threads.length,
+  ]);
+
+  useEffect(() => {
+    onHeaderStateChange?.(headerState);
+  }, [headerState, onHeaderStateChange]);
+
+  useEffect(() => {
+    return () => {
+      onHeaderStateChange?.(null);
+    };
+  }, [onHeaderStateChange]);
 
   const focusThreadInList = (threadId: string, event?: React.MouseEvent) => {
     event?.preventDefault();
@@ -379,49 +440,6 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       document.removeEventListener('click', clearFocusedThread);
     };
   }, [focusedThreadId]);
-
-  const renderThreadReference = (
-    threadId: string | null | undefined,
-    fallbackName?: string | null
-  ) => {
-    if (!threadId) {
-      return <Typography variant="caption" color="text.secondary">None</Typography>;
-    }
-
-    const target = threadsById.get(threadId);
-    if (!target) {
-      return (
-        <Typography variant="caption" color="text.secondary">
-          {fallbackName || threadId}
-        </Typography>
-      );
-    }
-
-    return (
-      <Chip
-        label={target.name}
-        size="small"
-        clickable
-        onClick={(event) => focusThreadInList(threadId, event)}
-        onMouseDown={(event) => event.stopPropagation()}
-        sx={{
-          height: 22,
-          maxWidth: '100%',
-          color: 'primary.contrastText',
-          bgcolor: 'primary.main',
-          justifyContent: 'flex-start',
-          '& .MuiChip-label': {
-            px: 0.75,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          },
-          '&:hover, &:focus-visible': {
-            bgcolor: 'primary.dark',
-          },
-        }}
-      />
-    );
-  };
 
   const renderThreadTooltip = (thread: Thread) => {
     const forkInfo = thread.thread_metadata?.fork;
@@ -481,7 +499,12 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             <Typography variant="caption" color="text.secondary" component="div">
               Parent
             </Typography>
-            {renderThreadReference(forkInfo.parent_thread_id, forkInfo.parent_thread_name)}
+            <ThreadReferenceChip
+              threadId={forkInfo.parent_thread_id}
+              fallbackName={forkInfo.parent_thread_name}
+              threadsById={threadsById}
+              onOpenThread={(target) => focusThreadInList(target.id)}
+            />
           </Box>
         )}
         {childIds.length > 0 && (
@@ -492,7 +515,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
               {childIds.map(childId => (
                 <Box key={childId}>
-                  {renderThreadReference(childId)}
+                  <ThreadReferenceChip
+                    threadId={childId}
+                    threadsById={threadsById}
+                    onOpenThread={(target) => focusThreadInList(target.id)}
+                  />
                 </Box>
               ))}
             </Box>
@@ -574,87 +601,88 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         color: theme.palette.text.primary
       }}
     >
-      {/* Header */}
-      <Box sx={{
-        p: 1.5,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        borderBottom: 1,
-        borderColor: 'divider',
-        bgcolor: theme.palette.background.paper
-      }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <IconButton size="small" onClick={() => setExpanded(!expanded)}>
-            {expanded ? <SpeakerNotesIcon fontSize="small" /> : <SpeakerNotesOffIcon fontSize="small" />}
-          </IconButton>
-          <Typography variant="subtitle2" fontWeight="bold">
-            Threads
-          </Typography>
-          <Chip label={threads.length} size="small" />
-          <Tooltip title="Create new thread">
-            <IconButton
-              size="small"
-              color="primary"
-              onClick={handleOpenCreateDialog}
-            >
-              <AddIcon fontSize="small" />
+      {!hideHeader && (
+        <Box sx={{
+          p: 1.5,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: 1,
+          borderColor: 'divider',
+          bgcolor: theme.palette.background.paper
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <IconButton size="small" onClick={() => setExpanded(!expanded)}>
+              {expanded ? <SpeakerNotesIcon fontSize="small" /> : <SpeakerNotesOffIcon fontSize="small" />}
             </IconButton>
-          </Tooltip>
-        </Box>
-        {isSelectionMode ? (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Tooltip title={allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
-              <Checkbox
+            <Typography variant="subtitle2" fontWeight="bold">
+              Threads
+            </Typography>
+            <Chip label={threads.length} size="small" />
+            <Tooltip title="Create new thread">
+              <IconButton
                 size="small"
-                checked={allThreadsSelected}
-                indeterminate={someThreadsSelected}
-                onChange={handleToggleAllThreads}
-                disabled={isBulkDeleting}
-                sx={{ p: 0.5 }}
-              />
-            </Tooltip>
-            <Tooltip title="Shift-click threads to select a range">
-              <Chip label={`${selectedCount} selected`} size="small" color="primary" />
-            </Tooltip>
-            <Tooltip title="Clear selection">
-              <IconButton size="small" onClick={clearThreadSelection} disabled={isBulkDeleting}>
-                <ClearIcon fontSize="small" />
+                color="primary"
+                onClick={handleOpenCreateDialog}
+              >
+                <AddIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="Delete selected threads">
-              <span>
-                <IconButton
-                  size="small"
-                  color="error"
-                  onClick={handleBulkDeleteThreads}
-                  disabled={isBulkDeleting || selectedCount === 0}
-                >
-                  {isBulkDeleting ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
-                </IconButton>
-              </span>
-            </Tooltip>
           </Box>
-        ) : (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
-              <span>
-                <IconButton
+          {isSelectionMode ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Tooltip title={allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
+                <Checkbox
                   size="small"
-                  color="error"
-                  onClick={enterThreadSelectionMode}
-                  disabled={threads.length === 0}
-                >
-                  <DeleteIcon fontSize="small" />
+                  checked={allThreadsSelected}
+                  indeterminate={someThreadsSelected}
+                  onChange={handleToggleAllThreads}
+                  disabled={isBulkDeleting}
+                  sx={{ p: 0.5 }}
+                />
+              </Tooltip>
+              <Tooltip title="Shift-click threads to select a range">
+                <Chip label={`${selectedCount} selected`} size="small" color="primary" />
+              </Tooltip>
+              <Tooltip title="Clear selection">
+                <IconButton size="small" onClick={clearThreadSelection} disabled={isBulkDeleting}>
+                  <ClearIcon fontSize="small" />
                 </IconButton>
-              </span>
-            </Tooltip>
-          </Box>
-        )}
-      </Box>
+              </Tooltip>
+              <Tooltip title="Delete selected threads">
+                <span>
+                  <IconButton
+                    size="small"
+                    color="error"
+                    onClick={handleBulkDeleteThreads}
+                    disabled={isBulkDeleting || selectedCount === 0}
+                  >
+                    {isBulkDeleting ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
+                <span>
+                  <IconButton
+                    size="small"
+                    color="error"
+                    onClick={enterThreadSelectionMode}
+                    disabled={threads.length === 0}
+                  >
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+          )}
+        </Box>
+      )}
 
       {/* Thread List */}
-      <Collapse in={expanded} sx={{ flex: 1, overflow: 'auto' }}>
+      <Collapse in={hideHeader || expanded} sx={{ flex: 1, overflow: 'auto' }}>
         {loading ? (
           <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
             <CircularProgress size={24} />

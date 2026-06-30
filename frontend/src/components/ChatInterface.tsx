@@ -45,7 +45,7 @@ import {
     getThreadMessages,
     deleteMessage,
     forkThread,
-    getThread,
+    listThreads,
     getThreadIndexStatus,
     getThreadSettings,
     updateThreadSettings,
@@ -56,6 +56,7 @@ import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/models-api';
 import ChatSettingsDialog from './ChatSettingsDialog';
+import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -83,6 +84,7 @@ interface ChatInterfaceProps {
     onThreadUpdate?: () => void;
     onThreadForked?: (thread: Thread) => void;
     onOpenThread?: (thread: Thread) => void;
+    hideInlineLineage?: boolean;
     darkMode?: boolean;
     autoScroll?: boolean;
 }
@@ -98,6 +100,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     onThreadUpdate,
     onThreadForked,
     onOpenThread,
+    hideInlineLineage = false,
     onResetChatId,
     darkMode = false,
     autoScroll = true
@@ -150,7 +153,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
-    const [resolvedParentThread, setResolvedParentThread] = useState<Thread | null>(null);
+    const [lineageThreads, setLineageThreads] = useState<Thread[]>([]);
     const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
     const [editingOriginalText, setEditingOriginalText] = useState('');
 
@@ -265,28 +268,33 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     useEffect(() => {
         const parentThreadId = activeThread?.thread_metadata?.fork?.parent_thread_id;
-        if (!parentThreadId) {
-            setResolvedParentThread(null);
+        const childThreadIds = Array.isArray(activeThread?.thread_metadata?.fork_children)
+            ? activeThread.thread_metadata.fork_children.filter((id): id is string => typeof id === 'string' && id.length > 0)
+            : [];
+        const hasLineage = !hideInlineLineage && Boolean(parentThreadId || childThreadIds.length > 0);
+
+        if (!hasLineage) {
+            setLineageThreads([]);
             return;
         }
 
         let cancelled = false;
-        getThread(parentThreadId)
-            .then(parent => {
+        listThreads()
+            .then(response => {
                 if (!cancelled) {
-                    setResolvedParentThread(parent);
+                    setLineageThreads(response.threads);
                 }
             })
             .catch(() => {
                 if (!cancelled) {
-                    setResolvedParentThread(null);
+                    setLineageThreads([]);
                 }
             });
 
         return () => {
             cancelled = true;
         };
-    }, [activeThread?.id, activeThread?.thread_metadata?.fork?.parent_thread_id]);
+    }, [activeThread?.id, activeThread?.thread_metadata?.fork?.parent_thread_id, activeThread?.thread_metadata?.fork_children, hideInlineLineage]);
 
     useEffect(() => {
         const loadTools = async () => {
@@ -1027,12 +1035,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const handleOpenParentThread = () => {
-        if (resolvedParentThread) {
-            onOpenThread?.(resolvedParentThread);
-        }
-    };
-
     if (!activeThread) {
         return (
             <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: theme.palette.background.default, color: theme.palette.text.primary }}>
@@ -1049,10 +1051,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
 
     const forkInfo = activeThread.thread_metadata?.fork;
-    const parentThreadName = resolvedParentThread?.name || forkInfo?.parent_thread_name || 'deleted thread';
-    const forkTooltip = forkInfo?.forked_at
-        ? `Forked ${forkInfo.mode === 'from_message' ? 'from a message' : 'from full thread'} on ${new Date(forkInfo.forked_at).toLocaleString()}`
-        : 'Forked thread';
+    const childThreadIds = Array.isArray(activeThread.thread_metadata?.fork_children)
+        ? activeThread.thread_metadata.fork_children.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : [];
+    const hasLineage = !hideInlineLineage && Boolean(forkInfo || childThreadIds.length > 0);
+    const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
     const latestUserMessageId = [...messages].reverse().find(m => m.role === 'user')?.id ?? null;
 
     return (
@@ -1079,16 +1082,27 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {isEmbedModelValid === false && <Typography variant="caption" color="error" sx={{ fontWeight: 'bold' }}>OFFLINE</Typography>}
                         </Box>
                     </Tooltip>
-                    {forkInfo && (
-                        <Tooltip title={resolvedParentThread ? `${forkTooltip}. Open parent thread.` : `${forkTooltip}. Parent thread no longer exists.`}>
-                            <Chip
-                                icon={<CallSplitIcon sx={{ fontSize: '0.85rem !important' }} />}
-                                label={`Forked from ${parentThreadName}`}
+                    {hasLineage && (
+                        <Tooltip
+                            title={
+                                <ThreadLineageTooltipContent
+                                    thread={activeThread}
+                                    threadsById={lineageThreadsById}
+                                    onOpenThread={onOpenThread}
+                                />
+                            }
+                            arrow
+                            enterDelay={300}
+                            leaveDelay={150}
+                            disableInteractive={false}
+                        >
+                            <IconButton
                                 size="small"
-                                clickable={Boolean(resolvedParentThread && onOpenThread)}
-                                onClick={resolvedParentThread && onOpenThread ? handleOpenParentThread : undefined}
-                                sx={{ maxWidth: 220, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis' } }}
-                            />
+                                aria-label="Thread lineage"
+                                sx={{ p: 0.5 }}
+                            >
+                                <CallSplitIcon fontSize="small" />
+                            </IconButton>
                         </Tooltip>
                     )}
                 </Box>
