@@ -110,7 +110,6 @@ class ThreadChatRequest(BaseModel):
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
     intent_agent_skip_clarify: Optional[bool] = None
-    reasoning_mode: Optional[bool] = None
     client_timezone: Optional[str] = Field(default=None, max_length=100)
     client_locale: Optional[str] = Field(default=None, max_length=50)
     client_now_iso: Optional[str] = Field(default=None, max_length=80)
@@ -129,7 +128,6 @@ class ThreadSettingsResponse(BaseModel):
     intent_agent_max_iterations: int = Field(
         default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10
     )
-    reasoning_mode: bool = True
     use_reranker: bool = True
 
 
@@ -144,7 +142,6 @@ class ThreadSettingsUpdateRequest(BaseModel):
     )
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
-    reasoning_mode: Optional[bool] = None
     use_reranker: Optional[bool] = None
 
 
@@ -165,7 +162,6 @@ class PromptDefaults(BaseModel):
     custom_instructions: str
     use_intent_agent: bool = True
     intent_agent_max_iterations: int = INTENT_AGENT_MAX_ITERATIONS
-    reasoning_mode: bool = True
     use_reranker: bool = True
 
 
@@ -178,7 +174,6 @@ class PromptPreviewRequest(BaseModel):
     )
     use_web_search: bool = False
     intent_agent_ran: bool = True
-    reasoning_mode: bool = True
     client_timezone: Optional[str] = Field(default=None, max_length=100)
     client_locale: Optional[str] = Field(default=None, max_length=50)
     client_now_iso: Optional[str] = Field(default=None, max_length=80)

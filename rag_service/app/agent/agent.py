@@ -18,17 +18,13 @@ from langgraph.graph.message import add_messages
 from app.models.llm_server_client import get_llm, get_embedding_model, DEFAULT_TOKEN_BUDGET, DEFAULT_MAX_ITERATIONS
 from app.prompts.loaders import (
     get_orchestrator_prompt,
-    get_orchestrator_prompt_compact,
     get_orchestrator_phase0_prompt,
-    get_orchestrator_phase0_prompt_compact,
     get_intent_agent_prompt,
     get_web_search_mandate,
 )
 from app.agent.agent_helpers import (
     build_chat_prompt,
     parse_intent_response,
-    evidence_insufficient,
-    collect_tool_sources,
     format_runtime_datetime_context,
 )
 from app.agent.external_research_tools import (
@@ -109,9 +105,6 @@ class AgentState(TypedDict):
     custom_instructions: str
     pre_fetch_bundle: Optional[Dict[str, Any]]
     intent_agent_ran: bool  # True when Intent Agent preprocessed the query; False = Orchestrator self-preprocesses
-    reasoning_mode: bool
-    working_query: str
-    intent_reference_type: str
     client_timezone: Optional[str]
     client_locale: Optional[str]
     client_now_iso: Optional[str]
@@ -774,7 +767,6 @@ class IntentAgentState(TypedDict):
     max_iterations: int
     intent_result: Optional[Dict[str, Any]]
     pre_fetch_bundle: Optional[Dict[str, Any]]
-    reasoning_mode: bool
     intent_tools_used: bool
     use_web_search: bool
     client_timezone: Optional[str]
@@ -800,7 +792,6 @@ async def call_intent_model(state: IntentAgentState, config: RunnableConfig):
         llm_with_tools = llm
     iteration = state.get("iteration_count", 0) + 1
     context_window = state.get("context_window", DEFAULT_TOKEN_BUDGET)
-    reasoning_mode = state.get("reasoning_mode", True)
 
     # Load and format the Intent Agent prompt
     bundle = state.get("pre_fetch_bundle")
@@ -1216,7 +1207,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
     system_role = sanitize_system_role(state.get("system_role", ""))
     tool_instructions = normalize_tool_instructions(state.get("tool_instructions", {}))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
-    reasoning_mode = state.get("reasoning_mode", True)
     use_web_search = state.get("use_web_search", False)
     intent_agent_ran = state.get("intent_agent_ran", True)
 
@@ -1227,7 +1217,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
         custom_instructions=custom_instructions,
         use_web_search=use_web_search,
         intent_agent_ran=intent_agent_ran,
-        reasoning_mode=reasoning_mode,
         client_timezone=state.get("client_timezone"),
         client_locale=state.get("client_locale"),
         client_now_iso=state.get("client_now_iso"),
@@ -1238,36 +1227,29 @@ async def call_model(state: AgentState, config: RunnableConfig):
     if bundle:
         bundle_text = _format_prefetch_for_prompt(bundle)
         if bundle_text:
-            if reasoning_mode:
-                prompt_content += (
-                    "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
-                    "Pre-fetched context (recent turns, semantic history, document evidence, document list) is\n"
-                    "already present in the PRE-FETCHED CONTEXT block below. Before calling any tool:\n"
-                    "1. Assess whether the pre-fetched content answers the rewritten query with confidence.\n"
-                    "   If YES, skip document/history tool calls — but still follow the external retrieval\n"
-                    "   mandate below when active external retrieval tools are available.\n"
-                    "2. If document evidence is present but the rewritten query is more specific than the raw question:\n"
-                    "   call search_documents or search_document_by_id ONCE with the rewritten query.\n"
-                    "3. If the question targets a specific document and its file_hash is in the document list:\n"
-                    "   prefer search_document_by_id (scoped) over search_documents (all documents).\n"
-                    "4. If the Intent Agent classified the reference type as TEMPORAL, prefer\n"
-                    "   search_thread_timeline over search_conversation_history for first/latest/since/order questions.\n"
-                    "5. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
-                    "   conversation and semantic history are already in the pre-fetched block.\n"
-                    + (
-                        "6. EXTERNAL SEARCH IS ENABLED AND MANDATORY: call search_web for general web needs,\n"
-                        "   and preserve explicit source or tool constraints from the user when selecting\n"
-                        "   among the active external retrieval tools. Pre-fetched document evidence does\n"
-                        "   NOT replace external search. Batch external search with any document search.\n"
-                        if use_web_search else ""
-                    )
-                ) + bundle_text
-            else:
-                prompt_content += (
-                    "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
-                    "Use the PRE-FETCHED CONTEXT block below directly. Tool calls are disabled in compact mode;\n"
-                    "the system will run automatic retrieval after this response if evidence is insufficient."
-                ) + bundle_text
+            prompt_content += (
+                "\n\nPRE-FETCH RETRIEVAL POLICY (LOCKED):\n"
+                "Pre-fetched context (recent turns, semantic history, document evidence, document list) is\n"
+                "already present in the PRE-FETCHED CONTEXT block below. Before calling any tool:\n"
+                "1. Assess whether the pre-fetched content answers the rewritten query with confidence.\n"
+                "   If YES, skip document/history tool calls — but still follow the external retrieval\n"
+                "   mandate below when active external retrieval tools are available.\n"
+                "2. If document evidence is present but the rewritten query is more specific than the raw question:\n"
+                "   call search_documents or search_document_by_id ONCE with the rewritten query.\n"
+                "3. If the question targets a specific document and its file_hash is in the document list:\n"
+                "   prefer search_document_by_id (scoped) over search_documents (all documents).\n"
+                "4. If the Intent Agent classified the reference type as TEMPORAL, prefer\n"
+                "   search_thread_timeline over search_conversation_history for first/latest/since/order questions.\n"
+                "5. Do NOT call search_conversation_history just to re-read recent turns — the recent\n"
+                "   conversation and semantic history are already in the pre-fetched block.\n"
+                + (
+                    "6. EXTERNAL SEARCH IS ENABLED AND MANDATORY: call search_web for general web needs,\n"
+                    "   and preserve explicit source or tool constraints from the user when selecting\n"
+                    "   among the active external retrieval tools. Pre-fetched document evidence does\n"
+                    "   NOT replace external search. Batch external search with any document search.\n"
+                    if use_web_search else ""
+                )
+            ) + bundle_text
 
     prompt_template = build_chat_prompt()
     input_messages = prompt_template.format_messages(
@@ -1276,7 +1258,7 @@ async def call_model(state: AgentState, config: RunnableConfig):
     )
 
     active_tools = get_active_tools(use_external_research=use_web_search)
-    llm_with_tools = llm.bind_tools(active_tools) if reasoning_mode else llm
+    llm_with_tools = llm.bind_tools(active_tools)
 
     # Log complete prompt for Orchestrator Agent in OpenAI-like format
     logger.debug(f"--- ORCHESTRATOR AGENT PROMPT BEGIN [thread_id: {state.get('thread_id')}, iteration: {iteration}] ---")
@@ -1297,24 +1279,6 @@ async def call_model(state: AgentState, config: RunnableConfig):
     return {"messages": [response], "iteration_count": iteration}
 
 
-def _looks_like_tool_call_text(text: str) -> bool:
-    if not text:
-        return False
-    try:
-        data = json.loads(text)
-    except Exception:
-        return False
-    if not isinstance(data, dict):
-        return False
-    if data.get("type") == "function":
-        return True
-    if "function" in data and "parameters" in data:
-        return True
-    if "tool" in data and "tool_input" in data:
-        return True
-    return False
-
-
 async def force_final_answer(state: AgentState, config: RunnableConfig):
     """
     Fallback when the tool-iteration budget is exhausted or the model returns empty text.
@@ -1331,7 +1295,6 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
     use_web_search = state.get("use_web_search", False)
     intent_agent_ran = state.get("intent_agent_ran", True)
-    reasoning_mode = state.get("reasoning_mode", True)
 
     # ── Extract original user question ──
     original_question = ""
@@ -1372,7 +1335,6 @@ async def force_final_answer(state: AgentState, config: RunnableConfig):
         custom_instructions=custom_instructions,
         use_web_search=use_web_search,
         intent_agent_ran=intent_agent_ran,
-        reasoning_mode=reasoning_mode,
         client_timezone=state.get("client_timezone"),
         client_locale=state.get("client_locale"),
         client_now_iso=state.get("client_now_iso"),
@@ -1418,7 +1380,6 @@ def should_continue(state: AgentState):
     last_message = messages[-1]
     iteration_count = state.get("iteration_count", 0)
     max_iterations = state.get("max_iterations", DEFAULT_MAX_ITERATIONS)
-    reasoning_mode = state.get("reasoning_mode", True)
 
     if getattr(last_message, "tool_calls", None):
         if iteration_count >= max_iterations:
@@ -1432,13 +1393,6 @@ def should_continue(state: AgentState):
             logger.warning(f"Reaching max agent iterations ({iteration_count}/{max_iterations}). Forcing termination.")
             return "force_final_answer"
         return "tools"
-
-    if not reasoning_mode and evidence_insufficient(state):
-        if iteration_count >= max_iterations:
-            logger.warning(f"Reaching max agent iterations ({iteration_count}/{max_iterations}). Forcing termination.")
-            return "force_final_answer"
-        logger.info("Non-reasoning mode: auto-tools pass triggered (no tool calls, insufficient evidence).")
-        return "auto_tools"
 
     # Detect empty-content response after tool execution (e.g. model outputs nothing after
     # receiving tool results). Force a final answer instead of silently ending with blank text.
@@ -1454,119 +1408,8 @@ def should_continue(state: AgentState):
             logger.warning("LLM returned empty response after tool execution. Triggering force_final_answer.")
             return "force_final_answer"
 
-    if not reasoning_mode:
-        content = getattr(last_message, "content", "")
-        if isinstance(content, list):
-            from reasoning import _text_from_content_item
-            content = "\n".join([_text_from_content_item(i) for i in content if i]).strip()
-        if isinstance(content, str) and _looks_like_tool_call_text(content.strip()):
-            logger.warning("Non-reasoning mode: model returned tool-call-like JSON. Forcing final answer.")
-            return "force_final_answer"
-
     return END
 
-
-async def auto_tools(state: AgentState, config: RunnableConfig):
-    """
-    Non-reasoning fallback: run required tools when the model fails to call any.
-    """
-    tool_messages: list[ToolMessage] = []
-    document_sources: list[Dict[str, Any]] = []
-    web_sources: list[Dict[str, Any]] = []
-    used_chat_ids: list[str] = []
-
-    working_query = state.get("working_query", "")
-    use_web_search = state.get("use_web_search", False)
-    intent_ref = state.get("intent_reference_type", "NONE")
-    prefetch = state.get("pre_fetch_bundle") or {}
-    documents = prefetch.get("documents") or []
-
-    async def _record_auto_tool_result(tool_name: str, result: str, elapsed_ms: float):
-        tool_messages.append(ToolMessage(content=result, tool_call_id=f"auto_{tool_name}"))
-        collect_tool_sources(result, document_sources, web_sources, used_chat_ids)
-        logger.info(
-            "Tool invocation end | node=auto_tools thread_id=%s tool=%s call_id=auto_%s elapsed_ms=%.1f result_chars=%d result_preview=%s",
-            state.get("thread_id"),
-            tool_name,
-            tool_name,
-            elapsed_ms,
-            len(result or ""),
-            _truncate_for_log(result or "", max_chars=300),
-        )
-
-    async def _run_auto_tool(tool_name: str, args: Dict[str, Any], tool_func):
-        logger.info(
-            "Tool invocation start | node=auto_tools thread_id=%s tool=%s call_id=auto_%s args=%s",
-            state.get("thread_id"),
-            tool_name,
-            tool_name,
-            _truncate_for_log(args),
-        )
-        start = time.perf_counter()
-        try:
-            result = await tool_func()
-        except Exception:
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.exception(
-                "Tool invocation failed | node=auto_tools thread_id=%s tool=%s call_id=auto_%s elapsed_ms=%.1f args=%s",
-                state.get("thread_id"),
-                tool_name,
-                tool_name,
-                elapsed_ms,
-                _truncate_for_log(args),
-            )
-            raise
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        await _record_auto_tool_result(tool_name, result, elapsed_ms)
-
-    if use_web_search and not state.get("web_sources"):
-        await _run_auto_tool(
-            "search_web",
-            {"query": working_query},
-            lambda: search_web.ainvoke({"query": working_query}, config=config),
-        )
-
-    if documents and not state.get("document_sources"):
-        if intent_ref == "ENTITY" and len(documents) == 1:
-            file_hash = documents[0].get("file_hash")
-            if file_hash:
-                await _run_auto_tool(
-                    "search_document_by_id",
-                    {"query": working_query, "file_hash": file_hash},
-                    lambda: search_document_by_id.ainvoke(
-                        {"query": working_query, "file_hash": file_hash},
-                        config=config,
-                    ),
-                )
-        else:
-            await _run_auto_tool(
-                "search_documents",
-                {"query": working_query},
-                lambda: search_documents.ainvoke({"query": working_query}, config=config),
-            )
-
-    if intent_ref == "TEMPORAL":
-        await _run_auto_tool(
-            "search_thread_timeline",
-            {"query": working_query, "sources": "all", "order": "relevance"},
-            lambda: search_thread_timeline.ainvoke(
-                {"query": working_query, "sources": "all", "order": "relevance"},
-                config=config,
-            ),
-        )
-    elif intent_ref == "SEMANTIC":
-        await _run_auto_tool(
-            "search_conversation_history",
-            {"query": working_query},
-            lambda: search_conversation_history.ainvoke({"query": working_query}, config=config),
-        )
-
-    return {
-        "messages": tool_messages,
-        "document_sources": document_sources,
-        "web_sources": web_sources,
-        "used_chat_ids": used_chat_ids,
-    }
 
 def clarification_router(state: AgentState):
     if state.get("clarification_options"):
@@ -1579,15 +1422,13 @@ workflow = StateGraph(AgentState)
 workflow.add_node("agent", call_model)
 workflow.add_node("tools", OrchestratorToolNode(tools_list))
 workflow.add_node("force_final_answer", force_final_answer)
-workflow.add_node("auto_tools", auto_tools)
 
 workflow.add_edge(START, "agent")
 workflow.add_conditional_edges(
     "agent",
     should_continue,
-    {"tools": "tools", "auto_tools": "auto_tools", "force_final_answer": "force_final_answer", END: END},
+    {"tools": "tools", "force_final_answer": "force_final_answer", END: END},
 )
-workflow.add_edge("auto_tools", "agent")
 
 workflow.add_conditional_edges("tools", clarification_router, {END: END, "agent": "agent"})
 workflow.add_edge("force_final_answer", END)
@@ -1678,7 +1519,6 @@ def build_system_prompt(
     custom_instructions: str = "",
     use_web_search: bool = False,
     intent_agent_ran: bool = True,
-    reasoning_mode: bool = True,
     client_timezone: Optional[str] = None,
     client_locale: Optional[str] = None,
     client_now_iso: Optional[str] = None,
@@ -1690,7 +1530,7 @@ def build_system_prompt(
     playbook = normalize_tool_instructions(tool_instructions or {}, tool_items=active_tools)
     
     # Load base template
-    template = get_orchestrator_prompt() if reasoning_mode else get_orchestrator_prompt_compact()
+    template = get_orchestrator_prompt()
     
     # Setup variables for template substitution
     if intent_agent_ran:
@@ -1705,7 +1545,7 @@ def build_system_prompt(
     else:
         intent_agent_note = "No upstream query preprocessor ran for this turn — you are responsible for both query preprocessing AND orchestration. Your job is to:"
         preprocessing_phase_note = "  0. Preprocess the raw user query: resolve coreferences, standalone-ify, assess coverage (Phase 0)."
-        phase0 = get_orchestrator_phase0_prompt() if reasoning_mode else get_orchestrator_phase0_prompt_compact()
+        phase0 = get_orchestrator_phase0_prompt()
         phase_count = "six"
         phase_start = " Begin with Phase 0 — Preprocess."
         orient_word = "working"
@@ -1716,32 +1556,28 @@ def build_system_prompt(
     
     # Build tool registry/playbook sections only when tools are actually bound.
     EDIT = "(USER-CONFIGURABLE)"
-    if reasoning_mode:
-        tool_registry_section = (
-            f"\n\n{'=' * 64}\nTOOL REGISTRY {EDIT}:\n{'=' * 64}\n"
-            + "\n".join(
-                [
-                    f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n    {item['description']}"
-                    for item in catalog
-                ]
-            )
+    tool_registry_section = (
+        f"\n\n{'=' * 64}\nTOOL REGISTRY {EDIT}:\n{'=' * 64}\n"
+        + "\n".join(
+            [
+                f"- {item['display_name']} (tool name: `{item['tool_name']}`)\n    {item['description']}"
+                for item in catalog
+            ]
         )
-        tool_playbook_section = (
-            f"\n\n{'=' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'=' * 64}\n"
-            + "\n".join(
-                [
-                    f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
-                    for item in catalog
-                ]
-            )
+    )
+    tool_playbook_section = (
+        f"\n\n{'=' * 64}\nTOOL PLAYBOOK {EDIT}:\n{'=' * 64}\n"
+        + "\n".join(
+            [
+                f"- `{item['tool_name']}`: {playbook.get(item['id'], item['default_prompt'])}"
+                for item in catalog
+            ]
         )
-    else:
-        tool_registry_section = ""
-        tool_playbook_section = ""
+    )
 
     # Build web search mandate section if enabled
     web_search_mandate_section = ""
-    if use_web_search and reasoning_mode:
+    if use_web_search:
         LOCK = "(LOCKED — not overridable)"
         web_search_mandate_section = (
             f"\n\n{'=' * 64}\nWEB SEARCH MANDATE {LOCK} — overrides pre-fetch sufficiency\n"

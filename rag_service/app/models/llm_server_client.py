@@ -201,7 +201,6 @@ def default_thread_settings():
         "custom_instructions": "",
         "use_intent_agent": True,
         "intent_agent_max_iterations": INTENT_AGENT_MAX_ITERATIONS,
-        "reasoning_mode": True,
         "use_reranker": True,
     }
 

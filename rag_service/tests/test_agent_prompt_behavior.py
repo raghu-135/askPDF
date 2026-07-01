@@ -1,5 +1,6 @@
 """Regression tests for orchestrator prompt/tool exposure behavior."""
 
+import inspect
 from datetime import datetime, timezone
 
 
@@ -7,32 +8,33 @@ from app.agent.agent import build_system_prompt, _format_prefetch_for_prompt
 from app.agent.agent_helpers import format_runtime_datetime_context
 
 
-def test_compact_prompt_does_not_advertise_callable_tools():
-    """Compact mode should not tell the model that disabled tools are callable."""
+def test_system_prompt_has_no_reasoning_mode_argument():
+    """Non-reasoning orchestration support should not be part of the prompt API."""
+    signature = inspect.signature(build_system_prompt)
+
+    assert "reasoning_mode" not in signature.parameters
+
+
+def test_system_prompt_exposes_tool_registry():
+    """The orchestrator prompt should expose real bound tools."""
     prompt = build_system_prompt(
         context_window=8192,
-        use_web_search=True,
-        reasoning_mode=False,
-    )
-
-    assert "TOOL REGISTRY" not in prompt
-    assert "TOOL PLAYBOOK" not in prompt
-    assert "tool name: `get_thread_shape`" not in prompt
-    assert "WEB SEARCH MANDATE" not in prompt
-    assert "Tool calls are disabled in compact mode" in prompt
-
-
-def test_reasoning_prompt_keeps_tool_registry():
-    """Reasoning mode should continue to expose real bound tools."""
-    prompt = build_system_prompt(
-        context_window=8192,
-        reasoning_mode=True,
     )
 
     assert "TOOL REGISTRY" in prompt
     assert "tool name: `get_thread_shape`" in prompt
     assert "tool name: `search_thread_timeline`" in prompt
     assert "find_topic_anchor_in_history" not in prompt
+
+
+def test_system_prompt_includes_web_search_mandate_when_enabled():
+    prompt = build_system_prompt(
+        context_window=8192,
+        use_web_search=True,
+    )
+
+    assert "WEB SEARCH MANDATE" in prompt
+    assert "Tool calls are disabled in compact mode" not in prompt
 
 
 def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
@@ -64,7 +66,7 @@ def test_system_prompt_includes_runtime_datetime_context():
 
 
 def test_system_prompt_includes_temporal_metadata_contract():
-    prompt = build_system_prompt(context_window=8192, reasoning_mode=True)
+    prompt = build_system_prompt(context_window=8192)
 
     assert "TEMPORAL METADATA CONTRACT" in prompt
     assert "message_created_at" in prompt

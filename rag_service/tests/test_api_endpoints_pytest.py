@@ -14,6 +14,13 @@ from unittest.mock import patch, AsyncMock, Mock
 import pytest
 
 from app.api import threads as threads_api
+from app.models.requests import (
+    PromptDefaults,
+    PromptPreviewRequest,
+    ThreadChatRequest,
+    ThreadSettingsResponse,
+    ThreadSettingsUpdateRequest,
+)
 
 
 @pytest.fixture(scope="function")
@@ -431,6 +438,7 @@ class TestThreadEndpoints:
         assert "tools" in data
         assert "defaults" in data
         assert isinstance(data["tools"], list)
+        assert "reasoning_mode" not in data["defaults"]
 
     def test_prompt_preview(self, client):
         """Test getting prompt preview."""
@@ -447,6 +455,22 @@ class TestThreadEndpoints:
         data = response.json()
         assert "prompt" in data
         assert isinstance(data["prompt"], str)
+
+    def test_reasoning_mode_removed_from_request_models(self):
+        """Reasoning-mode compatibility should not be exposed by API schemas."""
+        for model in (
+            ThreadChatRequest,
+            ThreadSettingsResponse,
+            ThreadSettingsUpdateRequest,
+            PromptDefaults,
+            PromptPreviewRequest,
+        ):
+            assert "reasoning_mode" not in model.model_fields
+
+        filtered = threads_api._public_thread_settings(
+            {"max_iterations": 3, "reasoning_mode": True, "unknown": "value"}
+        )
+        assert filtered == {"max_iterations": 3}
 
 
 class TestMessageEndpoints:

@@ -49,7 +49,6 @@ async def prefetch_context(
     embed_model_name: str,
     context_window: int,
     use_web_search: bool,
-    reasoning_mode: bool,
     use_reranker: bool,
 ) -> Dict[str, Any]:
     """
@@ -237,7 +236,6 @@ async def handle_thread_chat(
     custom_instructions = getattr(req, 'custom_instructions_override', "") or ""
     use_intent_agent = getattr(req, 'use_intent_agent', True)
     intent_agent_skip_clarify = bool(getattr(req, 'intent_agent_skip_clarify', False))
-    reasoning_mode = getattr(req, 'reasoning_mode', True)
     client_timezone = getattr(req, 'client_timezone', None)
     client_locale = getattr(req, 'client_locale', None)
     client_now_iso = getattr(req, 'client_now_iso', None)
@@ -263,7 +261,6 @@ async def handle_thread_chat(
             embed_model_name=embed_model,
             context_window=context_window,
             use_web_search=use_web_search,
-            reasoning_mode=reasoning_mode,
             use_reranker=use_reranker,
         )
 
@@ -286,7 +283,6 @@ async def handle_thread_chat(
                 "max_iterations": intent_agent_max_iterations,
                 "intent_result": None,
                 "pre_fetch_bundle": prefetch_bundle,
-                "reasoning_mode": reasoning_mode,
                 "intent_tools_used": False,
                 "use_web_search": use_web_search,
                 "client_timezone": client_timezone,
@@ -370,7 +366,6 @@ async def handle_thread_chat(
          
         # Normalize question from intent results
         question = intent.get("rewritten_query") or question
-        reference_type = intent.get("reference_type", "NONE")
 
         logger.info(
             f"Intent analysis done for thread {thread_id} | "
@@ -403,9 +398,6 @@ async def handle_thread_chat(
             "pre_fetch_bundle": prefetch_bundle,
             # Signal whether the Intent Agent ran; Orchestrator adapts its prompting strategy
             "intent_agent_ran": use_intent_agent,
-            "reasoning_mode": reasoning_mode,
-            "working_query": question,
-            "intent_reference_type": reference_type,
             "client_timezone": client_timezone,
             "client_locale": client_locale,
             "client_now_iso": client_now_iso,

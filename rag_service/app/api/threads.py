@@ -79,12 +79,20 @@ def _empty_thread_stats() -> dict:
     }
 
 
+def _public_thread_settings(settings: Optional[dict]) -> dict:
+    """Return persisted thread settings without stale/unknown settings keys."""
+    if not isinstance(settings, dict) or not settings:
+        return {}
+    allowed_keys = set(merge_thread_settings({}).keys())
+    return {key: value for key, value in settings.items() if key in allowed_keys}
+
+
 def _thread_payload(thread) -> dict:
     return {
         "id": thread.id,
         "name": thread.name,
         "embed_model": thread.embed_model,
-        "settings": thread.settings if thread.settings else {},
+        "settings": _public_thread_settings(thread.settings),
         "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
         "created_at": iso_utc_z(thread.created_at),
     }
@@ -145,7 +153,6 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
             custom_instructions=req.custom_instructions or "",
             use_web_search=req.use_web_search,
             intent_agent_ran=req.intent_agent_ran,
-            reasoning_mode=req.reasoning_mode,
             client_timezone=req.client_timezone,
             client_locale=req.client_locale,
             client_now_iso=req.client_now_iso,
@@ -181,6 +188,8 @@ async def list_threads_endpoint():
     """List all threads with message and file counts."""
     try:
         threads = await list_threads()
+        for thread in threads:
+            thread["settings"] = _public_thread_settings(thread.get("settings"))
         return {"threads": threads}
     except Exception as e:
         traceback.print_exc()
@@ -305,7 +314,7 @@ async def get_thread_endpoint(thread_id: str):
             "id": thread.id,
             "name": thread.name,
             "embed_model": thread.embed_model,
-            "settings": thread.settings if thread.settings else {},
+            "settings": _public_thread_settings(thread.settings),
             "thread_metadata": getattr(thread, "thread_metadata", None) or {},
             "created_at": iso_utc_z(thread.created_at),
             "files": [

@@ -145,7 +145,6 @@ export interface ThreadSettings {
   custom_instructions: string;
   use_intent_agent: boolean;
   intent_agent_max_iterations: number;
-  reasoning_mode: boolean;
   use_reranker: boolean;
 }
 
@@ -166,7 +165,6 @@ export interface PromptDefaults {
   custom_instructions: string;
   use_intent_agent: boolean;
   intent_agent_max_iterations: number;
-  reasoning_mode: boolean;
   use_reranker?: boolean;
 }
 
@@ -282,7 +280,6 @@ export async function getPromptPreview(payload: {
   custom_instructions: string;
   use_web_search?: boolean;
   intent_agent_ran?: boolean;
-  reasoning_mode?: boolean;
 }): Promise<{ prompt: string }> {
   const res = await fetch(`${API_BASE}/api/threads/prompt-preview`, {
     method: "POST",
@@ -487,7 +484,6 @@ export async function threadChat(
   customInstructionsOverride?: string,
   useIntentAgent?: boolean,
   intentAgentMaxIterations?: number,
-  reasoningMode?: boolean,
   intentAgentSkipClarify?: boolean
 ): Promise<{
   answer: string;
@@ -531,9 +527,6 @@ export async function threadChat(
   }
   if (typeof intentAgentSkipClarify === "boolean") {
     payload.intent_agent_skip_clarify = intentAgentSkipClarify;
-  }
-  if (typeof reasoningMode === "boolean") {
-    payload.reasoning_mode = reasoningMode;
   }
 
   const maxRetries = 2;

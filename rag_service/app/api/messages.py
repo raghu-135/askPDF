@@ -192,8 +192,6 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
             req.intent_agent_max_iterations = thread_settings.get(
                 "intent_agent_max_iterations", INTENT_AGENT_MAX_ITERATIONS
             )
-        if req.reasoning_mode is None:
-            req.reasoning_mode = thread_settings.get("reasoning_mode", True)
 
         result = await handle_thread_chat(thread_id, req, thread.embed_model)
         return result

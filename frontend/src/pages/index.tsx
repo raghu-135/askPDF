@@ -831,8 +831,7 @@ export default function Home() {
                   </Typography>
                   <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
                     <li>Open the <b>Chat</b> tab and click the <b>gear icon</b> to configure AI prompt settings for the current thread.</li>
-                    <li>Toggle <b>Reasoning mode</b> for deeper multi-step answers on reasoning-capable models.</li>
-                    <li>Use <b>Intent Agent</b> (requires Reasoning mode) to rewrite follow-up questions into standalone queries.</li>
+                    <li>Use <b>Intent Agent</b> to rewrite follow-up questions into standalone queries.</li>
                     <li>Enable <b>Reranker</b> to improve ordering of retrieved chunks.</li>
                     <li>Customize <b>Tools</b> to control which capabilities the assistant can use.</li>
                     <li>Edit the <b>System role</b> to change the assistant's behavior and tone.</li>

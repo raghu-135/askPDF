@@ -27,7 +27,6 @@ interface ChatSettingsDialogProps {
     maxIterations: number;
     minMaxIterations: number | null;
     maxMaxIterations: number | null;
-    reasoningMode: boolean;
     useIntentAgent: boolean;
     useReranker: boolean;
     systemRole: string;
@@ -39,7 +38,6 @@ interface ChatSettingsDialogProps {
     
     // Change handlers
     onMaxIterationsChange: (value: number) => void;
-    onReasoningModeChange: (checked: boolean) => void;
     onIntentAgentChange: (checked: boolean) => void;
     onRerankerChange: (checked: boolean) => void;
     onSystemRoleChange: (value: string) => void;
@@ -61,7 +59,6 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     maxIterations,
     minMaxIterations,
     maxMaxIterations,
-    reasoningMode,
     useIntentAgent,
     useReranker,
     systemRole,
@@ -71,7 +68,6 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     effectiveToolInstructions,
     promptPreview,
     onMaxIterationsChange,
-    onReasoningModeChange,
     onIntentAgentChange,
     onRerankerChange,
     onSystemRoleChange,
@@ -127,52 +123,20 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     <FormControlLabel
                         control={
                             <Switch
-                                checked={reasoningMode}
-                                onChange={(e) => {
-                                    const isChecked = e.target.checked;
-                                    onReasoningModeChange(isChecked);
-                                    // If reasoning mode is disabled, also disable the intent agent
-                                    if (!isChecked) {
-                                        onIntentAgentChange(false);
-                                    }
-                                }}
-                            />
-                        }
-                        label={
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>Reasoning mode</Typography>
-                            </Box>
-                        }
-                    />
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
-                        Uses detailed multi-step prompts for reasoning-capable models. Turn off for compact prompts that
-                        perform better on non-reasoning models.
-                    </Typography>
-                </Box>
-                <Box>
-                    <FormControlLabel
-                        control={
-                            <Switch
                                 checked={useIntentAgent}
-                                disabled={!reasoningMode}
                                 onChange={(e) => onIntentAgentChange(e.target.checked)}
                             />
                         }
                         label={
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500, color: (!reasoningMode ? "text.disabled" : "text.primary") }}>Intent Agent</Typography>
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>Intent Agent</Typography>
                             </Box>
                         }
                     />
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25, opacity: !reasoningMode ? 0.6 : 1 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
                         Before answering, runs a lightweight LLM pass to detect ambiguity, rewrite follow-up questions
                         into standalone queries, and estimate whether the pre-fetched context is sufficient — reducing
                         unnecessary tool calls.
-                        {!reasoningMode && (
-                            <Box component="span" sx={{ display: 'block', mt: 0.5, color: 'warning.main', fontWeight: 500 }}>
-                                Requires Reasoning mode to be enabled.
-                            </Box>
-                        )}
                     </Typography>
                 </Box>
                 <Box>

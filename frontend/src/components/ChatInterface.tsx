@@ -139,8 +139,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [useIntentAgent, setUseIntentAgent] = useState(true);
     const [intentAgentMaxIterations, setIntentAgentMaxIterations] = useState(1);
     const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
-    const [reasoningMode, setReasoningMode] = useState(true);
-    const [defaultReasoningMode, setDefaultReasoningMode] = useState(true);
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
 
@@ -251,11 +249,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(defaultCustomInstructions);
             setUseIntentAgent(true);
             setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
-            setReasoningMode(defaultReasoningMode);
             setIsEmbedModelValid(null);
             setIsLlmToolsSupported(null);
         }
-    }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions, defaultReasoningMode]);
+    }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions, defaultIntentAgentMaxIterations]);
 
     useEffect(() => {
         if (activeThread) {
@@ -308,7 +305,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
-                    setDefaultReasoningMode(res.defaults.reasoning_mode ?? true);
                     setDefaultUseReranker(res.defaults.use_reranker ?? true);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
@@ -319,7 +315,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
                         setUseIntentAgent(res.defaults.use_intent_agent ?? true);
                         setIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
-                        setReasoningMode(res.defaults.reasoning_mode ?? true);
                         setUseReranker(res.defaults.use_reranker ?? true);
                     }
                 }
@@ -341,7 +336,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(settings.custom_instructions ?? defaultCustomInstructions);
             setUseIntentAgent(settings.use_intent_agent ?? true);
             setIntentAgentMaxIterations(settings.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
-            setReasoningMode(settings.reasoning_mode ?? defaultReasoningMode);
             setUseReranker(settings.use_reranker ?? defaultUseReranker);
         } catch (error) {
             console.error('Failed to load thread settings:', error);
@@ -351,7 +345,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(defaultCustomInstructions);
             setUseIntentAgent(true);
             setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
-            setReasoningMode(defaultReasoningMode);
             setUseReranker(defaultUseReranker);
         }
     };
@@ -467,7 +460,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     custom_instructions: customInstructions,
                     use_web_search: useWebSearch,
                     intent_agent_ran: useIntentAgent,
-                    reasoning_mode: reasoningMode,
                 });
                 if (!cancelled) {
                     setPromptPreview(res.prompt || '');
@@ -482,7 +474,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             cancelled = true;
             clearTimeout(timeoutId);
         };
-    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, useIntentAgent, reasoningMode]);
+    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, useIntentAgent]);
 
     const resetAllSettingsToDefault = () => {
         const defaults: Record<string, string> = {};
@@ -495,7 +487,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setCustomInstructions(defaultCustomInstructions);
         setUseIntentAgent(true);
         setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
-        setReasoningMode(defaultReasoningMode);
         setUseReranker(defaultUseReranker);
     };
 
@@ -807,7 +798,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 customInstructions,
                 isClarificationSelection ? false : useIntentAgent,
                 !isClarificationSelection && useIntentAgent ? intentAgentMaxIterations : undefined,
-                reasoningMode,
                 undefined
             );
 
@@ -989,7 +979,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 custom_instructions: customInstructions,
                 use_intent_agent: useIntentAgent,
                 intent_agent_max_iterations: Math.max(1, Math.min(10, intentAgentMaxIterations)),
-                reasoning_mode: reasoningMode,
                 use_reranker: useReranker,
             });
             setMaxIterations(saved.max_iterations);
@@ -998,7 +987,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setCustomInstructions(saved.custom_instructions);
             setUseIntentAgent(saved.use_intent_agent ?? true);
             setIntentAgentMaxIterations(saved.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
-            setReasoningMode(saved.reasoning_mode ?? defaultReasoningMode);
             setUseReranker(saved.use_reranker ?? defaultUseReranker);
             setSettingsDialogOpen(false);
         } catch (error) {
@@ -1758,7 +1746,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 maxIterations={maxIterations}
                 minMaxIterations={minMaxIterations}
                 maxMaxIterations={maxMaxIterations}
-                reasoningMode={reasoningMode}
                 useIntentAgent={useIntentAgent}
                 useReranker={useReranker}
                 systemRole={systemRole}
@@ -1768,12 +1755,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions={effectiveToolInstructions}
                 promptPreview={promptPreview}
                 onMaxIterationsChange={(value) => setMaxIterations(value)}
-                onReasoningModeChange={(checked) => {
-                    setReasoningMode(checked);
-                    if (!checked) {
-                        setUseIntentAgent(false);
-                    }
-                }}
                 onIntentAgentChange={(checked) => setUseIntentAgent(checked)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
                 onSystemRoleChange={(value) => setSystemRole(value)}
