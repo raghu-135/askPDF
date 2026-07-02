@@ -119,6 +119,8 @@ class TemplateValidator:
             "router": "router",
             "retrieval_worker": "retrieval_worker",
             "memory_worker": "memory_worker",
+            "timeline_worker": "timeline_worker",
+            "web_worker": "web_worker",
             "direct_answer": "direct_answer",
             "synthesizer": "synthesizer",
             "finalizer": "finalizer",
@@ -151,6 +153,8 @@ class TemplateValidator:
             expected_routes = {
                 "document": "retrieval_worker",
                 "memory": "memory_worker",
+                "timeline": "timeline_worker",
+                "web": "web_worker",
                 "direct": "direct_answer",
                 "clarify": "finalizer",
             }

@@ -507,6 +507,8 @@ class TestRouterRagRuntime:
         [
             ("document", ["context_loader", "router", "retrieval_worker", "synthesizer", "finalizer"], "completed"),
             ("memory", ["context_loader", "router", "memory_worker", "synthesizer", "finalizer"], "completed"),
+            ("timeline", ["context_loader", "router", "timeline_worker", "synthesizer", "finalizer"], "completed"),
+            ("web", ["context_loader", "router", "web_worker", "synthesizer", "finalizer"], "completed"),
             ("clarify", ["context_loader", "router", "finalizer"], "clarification"),
         ],
     )
@@ -619,12 +621,22 @@ class TestRouterRagRuntime:
             "content": "Memory worker evidence.",
             "__used_chat_ids__": ["turn-1"],
         }
+        timeline_payload = {
+            "content": "Timeline worker evidence.",
+            "__timeline_events__": [{"timeline_event_type": "document_added", "timeline_event_at": "2026-07-01T00:00:00Z"}],
+        }
+        web_payload = {
+            "content": "Web worker evidence.",
+            "__web_sources__": [{"url": "https://example.com", "title": "Example"}],
+        }
         fake_llm = FakeLlm()
 
         monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool(document_payload))
         monkeypatch.setattr("app.agent_patterns.graph.search_conversation_history", FakeTool(memory_payload))
+        monkeypatch.setattr("app.agent_patterns.graph.search_thread_timeline", FakeTool(timeline_payload))
+        monkeypatch.setattr("app.agent_patterns.graph.search_web", FakeTool(web_payload))
         monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
@@ -633,7 +645,7 @@ class TestRouterRagRuntime:
         req = SimpleNamespace(
             question="Route coverage?",
             llm_model="test-llm",
-            use_web_search=False,
+            use_web_search=route == "web",
             use_reranker=False,
             context_window=8192,
             system_role_override="",
@@ -671,6 +683,11 @@ class TestRouterRagRuntime:
         elif route == "memory":
             assert result["used_chat_ids"] == ["turn-1"]
             assert result["answer"] == "Final answer from memory route."
+        elif route == "timeline":
+            assert result["answer"] == "Final answer from timeline route."
+        elif route == "web":
+            assert result["web_sources"] == [{"url": "https://example.com", "title": "Example"}]
+            assert result["answer"] == "Final answer from web route."
         else:
             assert result["clarification_options"] == ["Which uploaded document?", "Which previous answer?"]
             assert result["answer"].startswith("I need a bit more clarification.")

@@ -13,11 +13,12 @@ from app.agent.reasoning import normalize_ai_response
 from app.agent.prompting import sanitize_custom_instructions, sanitize_system_role
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.models.retry import invoke_with_retry
-from app.rag.agent_tools import search_conversation_history, search_documents
+from app.agent.external_research_tools import search_web
+from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
 from app.rag.chat_service import prefetch_context
 
 
-RouterRoute = Literal["document", "memory", "direct", "clarify"]
+RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarify"]
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,8 @@ class NodeRegistry:
             "router": self.router,
             "retrieval_worker": self.retrieval_worker,
             "memory_worker": self.memory_worker,
+            "timeline_worker": self.timeline_worker,
+            "web_worker": self.web_worker,
             "direct_answer": self.direct_answer,
             "synthesizer": self.synthesizer,
             "finalizer": self.finalizer,
@@ -171,8 +174,12 @@ class NodeRegistry:
             "Routes:\n"
             "- document: answer needs uploaded document evidence or cached web snippets.\n"
             "- memory: answer needs prior conversation memory.\n"
+            "- timeline: answer depends on chronology, first/latest, before/after, since, or event ordering.\n"
+            "- web: answer needs live internet evidence and web search is enabled.\n"
             "- direct: pre-fetched context is enough for a concise answer.\n"
             "- clarify: the question is ambiguous and needs 2-4 options.\n\n"
+            f"Live web search enabled: {bool(state.get('use_web_search', False))}\n"
+            "Do not choose web when live web search is disabled; choose document, memory, direct, or clarify instead.\n\n"
             "Return only JSON with keys route, reason, clarification_options.\n"
             "clarification_options must be null unless route is clarify.\n\n"
             f"Question:\n{state['question']}\n\n"
@@ -186,7 +193,10 @@ class NodeRegistry:
             ],
         )
         parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
-        route = parsed.get("route") if parsed.get("route") in {"document", "memory", "direct", "clarify"} else "document"
+        allowed_routes = {"document", "memory", "timeline", "direct", "clarify"}
+        if state.get("use_web_search", False):
+            allowed_routes.add("web")
+        route = parsed.get("route") if parsed.get("route") in allowed_routes else "document"
         clarification_options = parsed.get("clarification_options")
         if route == "clarify" and not isinstance(clarification_options, list):
             clarification_options = [
@@ -243,6 +253,41 @@ class NodeRegistry:
             "evidence": evidence,
             "used_chat_ids": used_chat_ids,
             "node_events": _append_event(state, "memory_worker", data),
+        }
+
+    async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        started = time.perf_counter()
+        raw = await search_thread_timeline.ainvoke(
+            {"query": state["question"], "sources": "all", "order": "relevance", "max_results": 10},
+            config=config,
+        )
+        payload = _tool_payload(raw)
+        evidence = payload.get("content", "")
+        data = {
+            "evidence_chars": len(str(evidence or "")),
+            "timeline_event_count": len(payload.get("__timeline_events__", []) or []),
+        }
+        _log_node_end(state, "timeline_worker", started, data)
+        return {
+            "evidence": evidence,
+            "node_events": _append_event(state, "timeline_worker", data),
+        }
+
+    async def web_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        started = time.perf_counter()
+        raw = await search_web.ainvoke(state["question"], config=config)
+        payload = _tool_payload(raw)
+        web_sources = [*state.get("web_sources", []), *payload.get("__web_sources__", [])]
+        evidence = payload.get("content", "")
+        data = {
+            "evidence_chars": len(str(evidence or "")),
+            "web_source_count": len(web_sources),
+        }
+        _log_node_end(state, "web_worker", started, data)
+        return {
+            "evidence": evidence,
+            "web_sources": web_sources,
+            "node_events": _append_event(state, "web_worker", data),
         }
 
     async def direct_answer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
