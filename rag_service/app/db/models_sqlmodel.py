@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 from enum import Enum
 
-from sqlalchemy import Column, DateTime, func, Index, String, Integer, Float, ForeignKey
+from sqlalchemy import Boolean, Column, DateTime, func, Index, String, Integer, Float, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from app.time_utils import iso_utc_z, utc_now
 from sqlmodel import SQLModel, Field, Relationship
@@ -204,4 +204,104 @@ class ChatTurn(SQLModel, table=True):
 
     __table_args__ = (
         Index("idx_chat_turn_thread_created", "thread_id", "created_at"),
+    )
+
+
+class AgentPatternTemplate(SQLModel, table=True):
+    """Versioned agent pattern template family."""
+    __tablename__ = "agent_pattern_templates"
+
+    id: str = Field(primary_key=True)
+    name: str = Field(index=True)
+    description: str = ""
+    visibility: str = Field(default="builtin", index=True)
+    owner_id: Optional[str] = Field(default=None, index=True)
+    current_version_id: Optional[str] = Field(default=None, index=True)
+    is_builtin: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="false"),
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), onupdate=func.now())
+    )
+
+    __table_args__ = (
+        Index("idx_agent_pattern_template_builtin", "is_builtin"),
+    )
+
+
+class AgentPatternTemplateVersion(SQLModel, table=True):
+    """Immutable spec for a single agent pattern version."""
+    __tablename__ = "agent_pattern_template_versions"
+
+    id: str = Field(primary_key=True)
+    template_id: str = Field(
+        sa_column=Column(String, ForeignKey("agent_pattern_templates.id", ondelete="CASCADE"), index=True)
+    )
+    version: int = Field(index=True)
+    schema_version: int = Field(default=1)
+    spec_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+    validation_result_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+    changelog: Optional[str] = None
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+
+    __table_args__ = (
+        Index("idx_agent_pattern_template_version_unique", "template_id", "version", unique=True),
+    )
+
+
+class AgentRun(SQLModel, table=True):
+    """Execution record for one frozen agent pattern run."""
+    __tablename__ = "agent_runs"
+
+    id: str = Field(primary_key=True)
+    thread_id: str = Field(
+        sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), index=True)
+    )
+    user_id: Optional[str] = Field(default=None, index=True)
+    template_id: str = Field(
+        sa_column=Column(String, ForeignKey("agent_pattern_templates.id", ondelete="RESTRICT"), index=True)
+    )
+    template_version_id: str = Field(
+        sa_column=Column(String, ForeignKey("agent_pattern_template_versions.id", ondelete="RESTRICT"), index=True)
+    )
+    resolved_spec_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+    status: str = Field(default="running", index=True)
+    checkpoint_thread_id: Optional[str] = None
+    started_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    completed_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True))
+    )
+    error_json: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB)
+    )
+    metrics_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+
+    __table_args__ = (
+        Index("idx_agent_run_thread_started", "thread_id", "started_at"),
     )

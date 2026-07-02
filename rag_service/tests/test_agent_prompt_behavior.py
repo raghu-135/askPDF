@@ -4,8 +4,8 @@ import inspect
 from datetime import datetime, timezone
 
 
-from app.agent.agent import build_system_prompt, _format_prefetch_for_prompt
 from app.agent.agent_helpers import format_runtime_datetime_context
+from app.agent.prompting import build_system_prompt, format_prefetch_for_prompt
 
 
 def test_system_prompt_has_no_reasoning_mode_argument():
@@ -77,7 +77,7 @@ def test_system_prompt_includes_temporal_metadata_contract():
 
 
 def test_prefetch_document_inventory_includes_document_level_counts():
-    prompt = _format_prefetch_for_prompt(
+    prompt = format_prefetch_for_prompt(
         {
             "documents": [
                 {

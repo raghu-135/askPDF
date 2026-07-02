@@ -13,6 +13,9 @@ from app.db.models_sqlmodel import (
     File,
     ThreadFile,
     ChatTurn,
+    AgentPatternTemplate,
+    AgentPatternTemplateVersion,
+    AgentRun,
 )
 
 # Connection management (SQLModel/PostgreSQL)
@@ -43,6 +46,7 @@ _file_repo = None
 _message_repo = None
 _thread_file_repo = None
 _stats_repo = None
+_agent_pattern_repo = None
 
 
 def get_thread_repo():
@@ -88,6 +92,15 @@ def get_stats_repo():
         from app.db.repositories.stats_repo_sqlmodel import StatsRepository
         _stats_repo = StatsRepository()
     return _stats_repo
+
+
+def get_agent_pattern_repo():
+    """Get the agent pattern repository instance."""
+    global _agent_pattern_repo
+    if _agent_pattern_repo is None:
+        from app.agent_patterns.repository import AgentPatternRepository
+        _agent_pattern_repo = AgentPatternRepository()
+    return _agent_pattern_repo
 
 
 # Thread operations
@@ -382,6 +395,9 @@ __all__ = [
     "File",
     "ThreadFile",
     "ChatTurn",
+    "AgentPatternTemplate",
+    "AgentPatternTemplateVersion",
+    "AgentRun",
     # Config
     "init_db",
     # Status
@@ -431,6 +447,8 @@ __all__ = [
     "delete_message",
     "delete_message_pair",
     "get_message_count",
+    # Agent pattern operations
+    "get_agent_pattern_repo",
     # Stats operations
     "remove_document_from_stats",
     "upsert_document_in_stats",

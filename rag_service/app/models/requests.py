@@ -129,6 +129,7 @@ class ThreadSettingsResponse(BaseModel):
         default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10
     )
     use_reranker: bool = True
+    agent_pattern: Dict[str, str] = Field(default_factory=lambda: {"template_id": "router_rag_agent"})
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -143,6 +144,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     use_intent_agent: Optional[bool] = None
     intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
     use_reranker: Optional[bool] = None
+    agent_pattern: Optional[Dict[str, str]] = None
 
 
 class ToolCatalogEntry(BaseModel):

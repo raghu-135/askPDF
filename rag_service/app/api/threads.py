@@ -22,7 +22,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
-from app.agent.agent import (
+from app.agent.prompting import (
     build_system_prompt,
     get_tool_catalog,
     normalize_tool_instructions,

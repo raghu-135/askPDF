@@ -38,6 +38,8 @@ from app.api.threads import router as threads_router
 from app.api.files import router as files_router
 from app.api.messages import router as messages_router
 from app.api.models import router as models_router
+from app.api.agent_patterns import router as agent_patterns_router
+from app.agent_patterns.repository import AgentPatternRepository
 from app.db.connection_sqlmodel import init_db, close_db
 from app.db.vector import get_vector_db
 
@@ -51,6 +53,7 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("Initializing PostgreSQL database with SQLModel...")
         await init_db()
+        await AgentPatternRepository().seed_builtin_templates()
         logger.info("Database initialization complete.")
     except Exception as e:
         logger.critical(f"Failed to initialize database: {e}", exc_info=True)
@@ -95,6 +98,7 @@ app.include_router(threads_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(messages_router, prefix="/api")
 app.include_router(models_router, prefix="/api")
+app.include_router(agent_patterns_router, prefix="/api")
 
 @app.get("/health")
 async def health_check():

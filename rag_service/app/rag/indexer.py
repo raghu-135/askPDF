@@ -399,7 +399,7 @@ async def summarize_qa(
             "Summary:"
         )
         # Use simple invoke for summarization
-        from app.agent.agent import invoke_with_retry
+        from app.models.retry import invoke_with_retry
         response = await invoke_with_retry(llm.ainvoke, [HumanMessage(content=prompt)])
         return response.content.strip()
     except Exception as e:
@@ -644,7 +644,7 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
     Uses asyncio.to_thread to prevent blocking the FastAPI event loop.
     """
-    from app.agent.agent import invoke_with_retry
+    from app.models.retry import invoke_with_retry
     embed_model = get_embedding_model(embedding_model_name)
     batch_size = 100  # LLM API/server strict batch size limits
     vectors = []

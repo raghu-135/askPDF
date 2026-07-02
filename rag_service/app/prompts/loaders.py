@@ -1,7 +1,8 @@
 """
 Prompt file loaders - Simple utilities to load prompt markdown files.
 
-All composition logic lives in agent.py. This module just handles file I/O.
+Prompt composition lives in agent/prompting.py and graph runtimes. This module
+just handles file I/O.
 """
 
 from pathlib import Path

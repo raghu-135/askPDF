@@ -13,6 +13,7 @@ import {
     Switch,
     Tooltip,
     IconButton,
+    MenuItem,
 } from '@mui/material';
 import ReplayIcon from '@mui/icons-material/Replay';
 import { PromptToolDefinition } from '../lib/api';
@@ -29,6 +30,7 @@ interface ChatSettingsDialogProps {
     maxMaxIterations: number | null;
     useIntentAgent: boolean;
     useReranker: boolean;
+    agentPatternId: string;
     systemRole: string;
     toolInstructions: Record<string, string>;
     customInstructions: string;
@@ -40,6 +42,7 @@ interface ChatSettingsDialogProps {
     onMaxIterationsChange: (value: number) => void;
     onIntentAgentChange: (checked: boolean) => void;
     onRerankerChange: (checked: boolean) => void;
+    onAgentPatternChange: (value: string) => void;
     onSystemRoleChange: (value: string) => void;
     onToolInstructionChange: (toolId: string, value: string) => void;
     onCustomInstructionsChange: (value: string) => void;
@@ -61,6 +64,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     maxMaxIterations,
     useIntentAgent,
     useReranker,
+    agentPatternId,
     systemRole,
     toolInstructions,
     customInstructions,
@@ -70,6 +74,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onMaxIterationsChange,
     onIntentAgentChange,
     onRerankerChange,
+    onAgentPatternChange,
     onSystemRoleChange,
     onToolInstructionChange,
     onCustomInstructionsChange,
@@ -118,6 +123,15 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                 ) : (
                     <Typography variant="caption" color="error">Iteration limits not loaded from server.</Typography>
                 )}
+                <TextField
+                    select
+                    label="Agent pattern"
+                    value={agentPatternId}
+                    onChange={(e) => onAgentPatternChange(e.target.value)}
+                    helperText="Router RAG uses the compiled agent-pattern graph."
+                >
+                    <MenuItem value="router_rag_agent">Router RAG Agent</MenuItem>
+                </TextField>
                 <Divider />
                 <Box>
                     <FormControlLabel

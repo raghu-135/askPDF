@@ -6,9 +6,9 @@ import json
 import pytest
 
 from app.agent import external_research_tools
-from app.agent import agent as agent_module
 from app.agent.agent_helpers import collect_tool_sources
 from app.db.vector.adapter import WeaviateAdapter
+from app.rag import agent_tools
 from app.rag import indexer
 from app.rag.retrieval import fetch_semantic_history, group_document_chunks
 
@@ -522,11 +522,16 @@ def test_web_context_exposes_search_performed_time():
 
 
 def test_thread_timeline_tool_replaces_topic_anchor():
-    tool_names = {tool.name for tool in agent_module.core_tools_list}
+    tool_names = {
+        agent_tools.get_thread_shape.name,
+        agent_tools.search_documents.name,
+        agent_tools.search_conversation_history.name,
+        agent_tools.search_thread_timeline.name,
+    }
     assert "search_thread_timeline" in tool_names
     assert "find_topic_anchor_in_history" not in tool_names
 
-    schema = agent_module.search_thread_timeline.args_schema.model_json_schema()
+    schema = agent_tools.search_thread_timeline.args_schema.model_json_schema()
     assert schema["properties"]["sources"]["enum"] == ["all", "conversation", "documents", "web_cache"]
     assert schema["properties"]["order"]["enum"] == ["relevance", "oldest", "newest"]
 
@@ -612,7 +617,7 @@ async def test_get_thread_shape_surfaces_document_level_counts(monkeypatch):
         ),
     )
 
-    output = await agent_module.get_thread_shape.ainvoke(
+    output = await agent_tools.get_thread_shape.ainvoke(
         {},
         config={"configurable": {"thread_id": "thread-1"}},
     )
@@ -652,10 +657,10 @@ async def test_search_thread_timeline_returns_sorted_mixed_source_events(monkeyp
         async def aembed_query(self, query):
             return [0.1, 0.2]
 
-    monkeypatch.setattr(agent_module, "get_vector_db", lambda: fake_db)
-    monkeypatch.setattr(agent_module, "get_embedding_model", lambda _name: FakeEmbeddingModel())
+    monkeypatch.setattr(agent_tools, "get_vector_db", lambda: fake_db)
+    monkeypatch.setattr(agent_tools, "get_embedding_model", lambda _name: FakeEmbeddingModel())
     monkeypatch.setattr(
-        agent_module,
+        agent_tools,
         "get_document_metadata_lookup",
         AsyncMock(
             return_value={
@@ -667,9 +672,9 @@ async def test_search_thread_timeline_returns_sorted_mixed_source_events(monkeyp
             }
         ),
     )
-    monkeypatch.setattr(agent_module, "rerank_document_chunks", AsyncMock(side_effect=lambda _q, chunks: chunks))
+    monkeypatch.setattr(agent_tools, "rerank_document_chunks", AsyncMock(side_effect=lambda _q, chunks: chunks))
 
-    raw = await agent_module.search_thread_timeline.ainvoke(
+    raw = await agent_tools.search_thread_timeline.ainvoke(
         {"query": "benefits timeline", "sources": "all", "order": "oldest", "max_results": 10},
         config={"configurable": {"thread_id": "thread-1", "embedding_model": "embed-1"}},
     )

@@ -15,10 +15,12 @@ from app.api.threads import router as threads_router
 from app.api.files import router as files_router
 from app.api.messages import router as messages_router
 from app.api.models import router as models_router
+from app.api.agent_patterns import router as agent_patterns_router
 
 __all__ = [
     "threads_router",
     "files_router",
     "messages_router",
     "models_router",
+    "agent_patterns_router",
 ]

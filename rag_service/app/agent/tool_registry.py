@@ -5,7 +5,7 @@ This powers:
   - Tool catalog in the UI
   - Tool playbook injected into the system prompt
 
-Keep this file DRY and free of imports from agent.py to avoid cycles.
+Keep this file DRY and free of runtime imports to avoid cycles.
 """
 
 TOOL_FRIENDLY_CONFIG = {

@@ -103,6 +103,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_repo_sqlmodel,
     )
     from app.services import thread_management_service
+    from app.agent_patterns import repository as agent_pattern_repository
 
     for module in (
         connection_sqlmodel,
@@ -112,13 +113,14 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_file_repo_sqlmodel,
         thread_repo_sqlmodel,
         thread_management_service,
+        agent_pattern_repository,
     ):
         monkeypatch.setattr(module, "async_session_maker", session_maker)
 
     # Rebuild repository singletons so endpoint tests cannot reuse app-DB sessions.
     import app.db as db_api
 
-    for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo"):
+    for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo", "_agent_pattern_repo"):
         monkeypatch.setattr(db_api, attr, None)
 
 

@@ -12,7 +12,8 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
-from app.agent.agent import normalize_tool_instructions
+from app.agent.prompting import normalize_tool_instructions
+from app.agent_patterns.service import AgentRunService
 from app.db import (
     MessageRole,
     delete_message_pair,
@@ -29,7 +30,6 @@ from app.models.llm_server_client import (
     merge_thread_settings,
 )
 from app.models.requests import ThreadChatRequest
-from app.rag.chat_service import handle_thread_chat
 
 router = APIRouter(tags=["messages"])
 
@@ -193,7 +193,7 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
                 "intent_agent_max_iterations", INTENT_AGENT_MAX_ITERATIONS
             )
 
-        result = await handle_thread_chat(thread_id, req, thread.embed_model)
+        result = await AgentRunService().run_thread_chat(thread_id, req, thread.embed_model)
         return result
     except HTTPException:
         raise

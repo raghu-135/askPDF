@@ -146,6 +146,9 @@ export interface ThreadSettings {
   use_intent_agent: boolean;
   intent_agent_max_iterations: number;
   use_reranker: boolean;
+  agent_pattern?: {
+    template_id: 'router_rag_agent' | string;
+  };
 }
 
 export interface PromptToolDefinition {

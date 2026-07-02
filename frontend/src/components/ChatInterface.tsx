@@ -72,6 +72,10 @@ type ClarificationChoice = {
     isOriginal: boolean;
 };
 
+const normalizeAgentPatternForUi = (templateId?: string | null) => (
+    templateId === 'router_rag_agent' ? templateId : 'router_rag_agent'
+);
+
 interface ChatInterfaceProps {
     ragApiUrl?: string;
     activeThread: Thread | null;
@@ -141,6 +145,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
+    const [agentPatternId, setAgentPatternId] = useState('router_rag_agent');
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -337,6 +342,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setUseIntentAgent(settings.use_intent_agent ?? true);
             setIntentAgentMaxIterations(settings.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
             setUseReranker(settings.use_reranker ?? defaultUseReranker);
+            setAgentPatternId(normalizeAgentPatternForUi(settings.agent_pattern?.template_id));
         } catch (error) {
             console.error('Failed to load thread settings:', error);
             setMaxIterations(defaultMaxIterations);
@@ -488,6 +494,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setUseIntentAgent(true);
         setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
         setUseReranker(defaultUseReranker);
+        setAgentPatternId('router_rag_agent');
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -980,6 +987,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 use_intent_agent: useIntentAgent,
                 intent_agent_max_iterations: Math.max(1, Math.min(10, intentAgentMaxIterations)),
                 use_reranker: useReranker,
+                agent_pattern: { template_id: normalizeAgentPatternForUi(agentPatternId) },
             });
             setMaxIterations(saved.max_iterations);
             setSystemRole(saved.system_role);
@@ -988,6 +996,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setUseIntentAgent(saved.use_intent_agent ?? true);
             setIntentAgentMaxIterations(saved.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
             setUseReranker(saved.use_reranker ?? defaultUseReranker);
+            setAgentPatternId(normalizeAgentPatternForUi(saved.agent_pattern?.template_id));
             setSettingsDialogOpen(false);
         } catch (error) {
             console.error('Failed to save thread settings:', error);
@@ -1748,6 +1757,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 maxMaxIterations={maxMaxIterations}
                 useIntentAgent={useIntentAgent}
                 useReranker={useReranker}
+                agentPatternId={agentPatternId}
                 systemRole={systemRole}
                 toolInstructions={toolInstructions}
                 customInstructions={customInstructions}
@@ -1757,6 +1767,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onMaxIterationsChange={(value) => setMaxIterations(value)}
                 onIntentAgentChange={(checked) => setUseIntentAgent(checked)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
+                onAgentPatternChange={(value) => setAgentPatternId(value)}
                 onSystemRoleChange={(value) => setSystemRole(value)}
                 onToolInstructionChange={(toolId, value) =>
                     setToolInstructions((prev) => ({

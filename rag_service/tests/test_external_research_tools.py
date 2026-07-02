@@ -2,7 +2,8 @@ import pytest
 from langchain_core.tools import tool
 
 from app.agent import external_research_tools
-from app.agent.agent import OrchestratorToolNode, format_intent_tool_context
+from app.agent.prompting import format_intent_tool_context
+from app.agent.tool_node import RecoverableToolNode
 from app.prompts.loaders import get_web_search_mandate, load_prompt
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
@@ -168,7 +169,7 @@ def test_orchestrator_tool_node_configures_recoverable_tool_errors():
         """Test tool that always fails."""
         raise RuntimeError("simulated tool outage")
 
-    node = OrchestratorToolNode([failing_tool])
+    node = RecoverableToolNode([failing_tool])
     message = node._handle_tool_errors(RuntimeError("simulated tool outage"))
 
     assert "Tool execution failed: RuntimeError: simulated tool outage" in message
