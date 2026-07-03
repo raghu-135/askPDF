@@ -11,6 +11,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agent.reasoning import normalize_ai_response
 from app.agent.prompting import sanitize_custom_instructions, sanitize_system_role
+from app.agent.tool_contract import compact_tool_event, normalize_tool_result
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.models.retry import invoke_with_retry
 from app.agent.external_research_tools import search_web
@@ -51,11 +52,41 @@ class RouterRagState(TypedDict, total=False):
     reasoning_available: bool
     reasoning_format: str
     node_events: List[Dict[str, Any]]
+    tool_events: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
 
 
 def _append_event(state: RouterRagState, node: str, data: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     return [*state.get("node_events", []), {"node": node, **(data or {})}]
+
+
+def _append_tool_event(state: RouterRagState, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [*state.get("tool_events", []), compact_tool_event(payload)]
+
+
+def _tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: str, tool_name: str) -> RunnableConfig:
+    updated = dict(config or {})
+    configurable = dict(updated.get("configurable") or {})
+    configurable.update(
+        {
+            "agent_run_id": state.get("agent_run_id"),
+            "caller_node": caller_node,
+            "route": state.get("route"),
+            "tool_name": tool_name,
+        }
+    )
+    updated["configurable"] = configurable
+    metadata = dict(updated.get("metadata") or {})
+    metadata.update(
+        {
+            "agent_run_id": state.get("agent_run_id"),
+            "caller_node": caller_node,
+            "route": state.get("route"),
+            "tool_name": tool_name,
+        }
+    )
+    updated["metadata"] = metadata
+    return updated
 
 
 def _log_node_end(
@@ -93,17 +124,6 @@ def _safe_json_object(raw: str) -> Dict[str, Any]:
             except Exception:
                 return {}
     return {}
-
-
-def _tool_payload(raw: Any) -> Dict[str, Any]:
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        parsed = _safe_json_object(raw)
-        if parsed:
-            return parsed
-        return {"content": raw}
-    return {"content": str(raw or "")}
 
 
 def _format_prefetch_summary(bundle: Dict[str, Any]) -> str:
@@ -214,11 +234,13 @@ class NodeRegistry:
 
     async def retrieval_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        tool_name = "search_documents"
+        tool_config = _tool_config(state, config, caller_node="retrieval_worker", tool_name=tool_name)
         raw = await search_documents.ainvoke(
             {"query": state["question"], "max_results": 10},
-            config=config,
+            config=tool_config,
         )
-        payload = _tool_payload(raw)
+        payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         document_sources = [*state.get("document_sources", []), *payload.get("__document_sources__", [])]
         web_sources = [*state.get("web_sources", []), *payload.get("__web_sources__", [])]
         evidence = payload.get("content", "")
@@ -233,15 +255,18 @@ class NodeRegistry:
             "document_sources": document_sources,
             "web_sources": web_sources,
             "node_events": _append_event(state, "retrieval_worker", data),
+            "tool_events": _append_tool_event(state, payload),
         }
 
     async def memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        tool_name = "search_conversation_history"
+        tool_config = _tool_config(state, config, caller_node="memory_worker", tool_name=tool_name)
         raw = await search_conversation_history.ainvoke(
             {"query": state["question"], "max_results": 10},
-            config=config,
+            config=tool_config,
         )
-        payload = _tool_payload(raw)
+        payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         evidence = payload.get("content", "")
         used_chat_ids = [*state.get("used_chat_ids", []), *payload.get("__used_chat_ids__", [])]
         data = {
@@ -253,15 +278,18 @@ class NodeRegistry:
             "evidence": evidence,
             "used_chat_ids": used_chat_ids,
             "node_events": _append_event(state, "memory_worker", data),
+            "tool_events": _append_tool_event(state, payload),
         }
 
     async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        tool_name = "search_thread_timeline"
+        tool_config = _tool_config(state, config, caller_node="timeline_worker", tool_name=tool_name)
         raw = await search_thread_timeline.ainvoke(
             {"query": state["question"], "sources": "all", "order": "relevance", "max_results": 10},
-            config=config,
+            config=tool_config,
         )
-        payload = _tool_payload(raw)
+        payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         evidence = payload.get("content", "")
         data = {
             "evidence_chars": len(str(evidence or "")),
@@ -271,12 +299,15 @@ class NodeRegistry:
         return {
             "evidence": evidence,
             "node_events": _append_event(state, "timeline_worker", data),
+            "tool_events": _append_tool_event(state, payload),
         }
 
     async def web_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        raw = await search_web.ainvoke(state["question"], config=config)
-        payload = _tool_payload(raw)
+        tool_name = "search_web"
+        tool_config = _tool_config(state, config, caller_node="web_worker", tool_name=tool_name)
+        raw = await search_web.ainvoke(state["question"], config=tool_config)
+        payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         web_sources = [*state.get("web_sources", []), *payload.get("__web_sources__", [])]
         evidence = payload.get("content", "")
         data = {
@@ -288,6 +319,7 @@ class NodeRegistry:
             "evidence": evidence,
             "web_sources": web_sources,
             "node_events": _append_event(state, "web_worker", data),
+            "tool_events": _append_tool_event(state, payload),
         }
 
     async def direct_answer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
@@ -9,6 +8,7 @@ from pydantic import BaseModel, Field
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
+from app.agent.tool_contract import make_tool_error_result, make_tool_result, tool_started
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_embedding_model
 from app.models.retry import invoke_with_retry
@@ -169,11 +169,19 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
     Snapshot of thread content inventory: documents + QA history volume.
     Use to calibrate retrieval strategy before making tool calls.
     """
+    started = tool_started()
+    tool_name = "get_thread_shape"
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("thread_id")
         if not thread_id:
-            return "No thread context found."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No thread context found.",
+                config=config,
+                started=started,
+                warnings=["missing_thread_id"],
+            ).to_json()
 
         from app.db import get_thread_shape as _get_shape
         shape = await _get_shape(thread_id)
@@ -215,9 +223,21 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
         else:
             lines.append("Documents   : none uploaded yet")
 
-        return "\n".join(lines)
+        return make_tool_result(
+            tool_name=tool_name,
+            content="\n".join(lines),
+            config=config,
+            started=started,
+            artifacts={"thread_shape": shape},
+        ).to_json()
     except Exception as e:
-        return f"Error reading thread shape: {e}"
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=e,
+            config=config,
+            started=started,
+            user_message=f"Error reading thread shape: {e}",
+        ).to_json()
 
 
 @tool
@@ -226,6 +246,8 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
     Semantic search across all uploaded documents and cached web results.
     Returns labeled passages with surrounding context for citation.
     """
+    started = tool_started()
+    tool_name = "search_documents"
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("thread_id")
@@ -234,7 +256,13 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         use_reranker = conf.get("use_reranker", True)
 
         if not thread_id or not embedding_model:
-            return "No thread context found."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No thread context found.",
+                config=config,
+                started=started,
+                warnings=["missing_thread_context"],
+            ).to_json()
 
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
@@ -243,7 +271,13 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         document_lookup = await get_document_metadata_lookup(thread_id)
         thread_file_hashes = list(document_lookup.keys())
         if not thread_file_hashes:
-            return "No documents are linked to this thread yet."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No documents are linked to this thread yet.",
+                config=config,
+                started=started,
+                warnings=["no_thread_documents"],
+            ).to_json()
 
         raw_doc_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
@@ -260,7 +294,13 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 len(thread_file_hashes),
                 embedding_model,
             )
-            return "Document index is missing for this thread. Re-open the thread to trigger re-indexing."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="Document index is missing for this thread. Re-open the thread to trigger re-indexing.",
+                config=config,
+                started=started,
+                warnings=["missing_document_vectors"],
+            ).to_json()
         if use_reranker:
             raw_doc_chunks = await rerank_document_chunks(query, raw_doc_chunks)
 
@@ -298,7 +338,13 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             web_chunks = await rerank_document_chunks(query, web_chunks)
 
         if not expanded_doc_chunks and not web_chunks:
-            return "No relevant content found in documents or cached web results."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No relevant content found in documents or cached web results.",
+                config=config,
+                started=started,
+                warnings=["no_relevant_content"],
+            ).to_json()
 
         context_parts = []
         document_context, document_sources = group_document_chunks(expanded_doc_chunks, document_lookup)
@@ -339,15 +385,33 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
             prefix = f"Cached web result from search performed at {performed_at}:\n" if performed_at else ""
             context_parts.append(f'{prefix}[Source: Internet Search - "{group["title"]}" | {url}]\n{combined_text}')
 
-        result: Dict[str, Any] = {"content": "\n\n".join(context_parts)}
+        content = "\n\n".join(context_parts)
+        artifacts = {
+            "document_sources": document_sources,
+            "web_sources": web_sources,
+        }
+        legacy_fields: Dict[str, Any] = {}
         if document_sources:
-            result["__document_sources__"] = document_sources
+            legacy_fields["__document_sources__"] = document_sources
         if web_sources:
-            result["__web_sources__"] = web_sources
-        return json.dumps(result)
+            legacy_fields["__web_sources__"] = web_sources
+        return make_tool_result(
+            tool_name=tool_name,
+            content=content,
+            config=config,
+            started=started,
+            sources=[*document_sources, *web_sources],
+            artifacts=artifacts,
+        ).to_json(legacy_fields=legacy_fields)
     except Exception as e:
         logger.error("Error in search_documents: %s", e, exc_info=True)
-        return f"Error retrieving knowledge: {e}"
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=e,
+            config=config,
+            started=started,
+            user_message=f"Error retrieving knowledge: {e}",
+        ).to_json()
 
 
 @tool
@@ -356,6 +420,8 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
     Semantic search across past conversation Q/A pairs in this thread.
     Returns the most relevant exchanges regardless of time.
     """
+    started = tool_started()
+    tool_name = "search_conversation_history"
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("thread_id")
@@ -363,7 +429,13 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         use_reranker = conf.get("use_reranker", True)
 
         if not thread_id or not embedding_model:
-            return "No thread context found."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No thread context found.",
+                config=config,
+                started=started,
+                warnings=["missing_thread_context"],
+            ).to_json()
 
         embed_model = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embed_model.aembed_query, query)
@@ -377,14 +449,30 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         )
 
         if not history:
-            return "No relevant past conversations found."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No relevant past conversations found.",
+                config=config,
+                started=started,
+                warnings=["no_relevant_conversation_history"],
+            ).to_json()
 
-        return json.dumps({
-            "content": history,
-            "__used_chat_ids__": used_ids,
-        })
+        return make_tool_result(
+            tool_name=tool_name,
+            content=history,
+            config=config,
+            started=started,
+            artifacts={"used_chat_ids": used_ids},
+        ).to_json(legacy_fields={"__used_chat_ids__": used_ids})
     except Exception as e:
-        return f"Error retrieving chat memory: {e}"
+        logger.error("Error in search_conversation_history: %s", e, exc_info=True)
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=e,
+            config=config,
+            started=started,
+            user_message=f"Error retrieving chat memory: {e}",
+        ).to_json()
 
 
 @tool(args_schema=ThreadTimelineSearchInput)
@@ -402,13 +490,21 @@ async def search_thread_timeline(
     earliest/latest evidence, what happened before or after another event, or
     what changed since a time.
     """
+    started = tool_started()
+    tool_name = "search_thread_timeline"
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         use_reranker = conf.get("use_reranker", True)
         if not thread_id or not embedding_model:
-            return "No thread context found."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No thread context found.",
+                config=config,
+                started=started,
+                warnings=["missing_thread_context"],
+            ).to_json()
 
         max_results = max(1, min(int(max_results or 10), 30))
         requested_sources = sources if sources in {"all", "conversation", "documents", "web_cache"} else "all"
@@ -463,10 +559,21 @@ async def search_thread_timeline(
         events.sort(key=lambda event: _event_sort_key(event, order))
         events = events[:max_results]
 
-        return json.dumps({
-            "content": _format_timeline_content(events),
-            "__timeline_events__": events,
-        })
+        return make_tool_result(
+            tool_name=tool_name,
+            content=_format_timeline_content(events),
+            config=config,
+            started=started,
+            sources=events,
+            artifacts={"timeline_events": events},
+            warnings=[] if events else ["no_timeline_events"],
+        ).to_json(legacy_fields={"__timeline_events__": events})
     except Exception as e:
         logger.error("Error in search_thread_timeline: %s", e, exc_info=True)
-        return f"Error searching thread timeline: {e}"
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=e,
+            config=config,
+            started=started,
+            user_message=f"Error searching thread timeline: {e}",
+        ).to_json()

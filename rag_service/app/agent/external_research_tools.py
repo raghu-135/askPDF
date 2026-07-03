@@ -16,6 +16,7 @@ from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.tools import BaseTool, tool
 from langchain_core.runnables import RunnableConfig
 
+from app.agent.tool_contract import make_tool_error_result, make_tool_result, tool_started
 from app.rag.retrieval import rerank_document_chunks
 from app.time_utils import iso_utc_z
 
@@ -116,10 +117,18 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
     Args:
         query: Concise, keyword-rich search query.
     """
+    started = tool_started()
+    tool_name = "search_web"
     try:
         conf = config.get("configurable", {}) if config else {}
         if not conf.get("use_web_search", False):
-            return "Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available. Answer using only the uploaded documents and conversation history."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available. Answer using only the uploaded documents and conversation history.",
+                config=config,
+                started=started,
+                warnings=["web_search_disabled"],
+            ).to_json()
         use_reranker = conf.get("use_reranker", True)
 
         logger.info(f"--- WEB SEARCH INITIATED --- Query: '{query}'")
@@ -128,7 +137,13 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
 
         result = await _run_web_search(query, max_results=6)
         if not result:
-            return "Web search returned no usable text."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="Web search returned no usable text.",
+                config=config,
+                started=started,
+                warnings=["no_usable_web_results"],
+            ).to_json()
         web_search_performed_at = iso_utc_z()
 
         texts = result["texts"]
@@ -161,18 +176,31 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
             except Exception as idx_err:
                 logger.warning(f"Web search indexing skipped: {idx_err}")
 
-        return json.dumps(
-            _format_web_context(
-                texts,
-                urls,
-                titles,
-                scores=scores,
-                web_search_performed_at=web_search_performed_at,
-            )
+        payload = _format_web_context(
+            texts,
+            urls,
+            titles,
+            scores=scores,
+            web_search_performed_at=web_search_performed_at,
         )
+        web_sources = payload.get("__web_sources__", [])
+        return make_tool_result(
+            tool_name=tool_name,
+            content=payload.get("content", ""),
+            config=config,
+            started=started,
+            sources=web_sources,
+            artifacts={"web_sources": web_sources},
+        ).to_json(legacy_fields={"__web_sources__": web_sources})
     except Exception as e:
         logger.error(f"Web search failed: {e}", exc_info=True)
-        return f"Web search failed: {str(e)}"
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=e,
+            config=config,
+            started=started,
+            user_message=f"Web search failed: {str(e)}",
+        ).to_json()
 
 
 @tool
@@ -184,20 +212,49 @@ async def search_web_intent(query: str, config: RunnableConfig = None) -> str:
     Args:
         query: Concise query aimed at identifying a term or entity.
     """
+    started = tool_started()
+    tool_name = "search_web_intent"
     try:
         conf = config.get("configurable", {}) if config else {}
         if not conf.get("use_web_search", False):
-            return "Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available.",
+                config=config,
+                started=started,
+                warnings=["web_search_disabled"],
+            ).to_json()
 
         logger.info(f"--- INTENT WEB SEARCH INITIATED --- Query: '{query}'")
         result = await _run_web_search(query, max_results=None)
         if not result:
-            return "Web search returned no usable text."
+            return make_tool_result(
+                tool_name=tool_name,
+                content="Web search returned no usable text.",
+                config=config,
+                started=started,
+                warnings=["no_usable_web_results"],
+            ).to_json()
 
-        return json.dumps(_format_web_context(result["texts"], result["urls"], result["titles"]))
+        payload = _format_web_context(result["texts"], result["urls"], result["titles"])
+        web_sources = payload.get("__web_sources__", [])
+        return make_tool_result(
+            tool_name=tool_name,
+            content=payload.get("content", ""),
+            config=config,
+            started=started,
+            sources=web_sources,
+            artifacts={"web_sources": web_sources},
+        ).to_json(legacy_fields={"__web_sources__": web_sources})
     except Exception as e:
         logger.error(f"Intent web search failed: {e}", exc_info=True)
-        return f"Web search failed: {str(e)}"
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=e,
+            config=config,
+            started=started,
+            user_message=f"Web search failed: {str(e)}",
+        ).to_json()
 
 
 def _build_tool(

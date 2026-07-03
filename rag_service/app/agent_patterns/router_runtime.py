@@ -69,6 +69,7 @@ async def handle_router_rag_chat(
         "web_sources": [],
         "used_chat_ids": [],
         "node_events": [],
+        "tool_events": [],
         "errors": [],
     }
 
@@ -90,6 +91,7 @@ async def handle_router_rag_chat(
             "agent_route": result.get("route"),
             "agent_route_reason": result.get("route_reason"),
             "agent_node_events": result.get("node_events", []),
+            "agent_tool_events": result.get("tool_events", []),
         }
         turn = await create_chat_turn(
             thread_id=thread_id,
@@ -131,7 +133,7 @@ async def handle_router_rag_chat(
 
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         logger.info(
-            "Router RAG run completed | run_id=%s thread_id=%s route=%s status=%s elapsed_ms=%.1f document_sources=%s web_sources=%s used_chat_ids=%s node_events=%s",
+            "Router RAG run completed | run_id=%s thread_id=%s route=%s status=%s elapsed_ms=%.1f document_sources=%s web_sources=%s used_chat_ids=%s node_events=%s tool_events=%s",
             agent_run_id,
             thread_id,
             result.get("route"),
@@ -141,6 +143,7 @@ async def handle_router_rag_chat(
             len(result.get("web_sources") or []),
             len(result.get("used_chat_ids") or []),
             len(result.get("node_events") or []),
+            len(result.get("tool_events") or []),
         )
 
         return {
@@ -159,6 +162,7 @@ async def handle_router_rag_chat(
             "route": result.get("route"),
             "route_reason": result.get("route_reason"),
             "node_events": result.get("node_events") or [],
+            "tool_events": result.get("tool_events") or [],
             "duration_ms": duration_ms,
             **agent_run_context,
         }

@@ -492,6 +492,8 @@ class TestRouterRagRuntime:
         assert turn.status == "completed"
         assert turn.payload["metadata"]["agent_run_id"] == "run-1"
         assert turn.payload["metadata"]["agent_route"] == "direct"
+        assert turn.payload["metadata"]["agent_tool_events"] == []
+        assert result["tool_events"] == []
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
         assert "Router RAG run started | run_id=run-1" in log_text
@@ -677,15 +679,26 @@ class TestRouterRagRuntime:
         assert turn is not None
         assert turn.status == expected_status
         assert turn.payload["metadata"]["agent_route"] == route
+        if route == "clarify":
+            assert result["tool_events"] == []
+        else:
+            assert len(result["tool_events"]) == 1
+            assert result["tool_events"][0]["caller_node"] == expected_nodes[2]
+            assert result["tool_events"][0]["ok"] is True
+            assert turn.payload["metadata"]["agent_tool_events"] == result["tool_events"]
         if route == "document":
+            assert result["tool_events"][0]["tool_name"] == "search_documents"
             assert result["document_sources"] == [{"file_hash": "file-1", "file_name": "diffusionblocks.pdf"}]
             assert result["answer"] == "Final answer from document route."
         elif route == "memory":
+            assert result["tool_events"][0]["tool_name"] == "search_conversation_history"
             assert result["used_chat_ids"] == ["turn-1"]
             assert result["answer"] == "Final answer from memory route."
         elif route == "timeline":
+            assert result["tool_events"][0]["tool_name"] == "search_thread_timeline"
             assert result["answer"] == "Final answer from timeline route."
         elif route == "web":
+            assert result["tool_events"][0]["tool_name"] == "search_web"
             assert result["web_sources"] == [{"url": "https://example.com", "title": "Example"}]
             assert result["answer"] == "Final answer from web route."
         else:
