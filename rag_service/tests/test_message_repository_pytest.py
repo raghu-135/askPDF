@@ -45,7 +45,13 @@ class TestMessageRepository:
             reasoning_available=True,
             reasoning_format="markdown",
             web_sources=[{"url": "https://example.com"}],
-            metadata={"context_compact": "Q/A compact"},
+            metadata={
+                "context_compact": "Q/A compact",
+                "agent_run_id": "run-1",
+                "agent_pattern_id": "router_rag_agent",
+                "agent_pattern_version": 1,
+                "agent_route": "document",
+            },
             created_at=created_at,
         )
 
@@ -59,6 +65,9 @@ class TestMessageRepository:
         assert messages[1].content == "We now store chat turns."
         assert messages[1].reasoning_available is True
         assert messages[1].web_sources == [{"url": "https://example.com"}]
+        assert messages[1].metadata["agent_run_id"] == "run-1"
+        assert messages[1].metadata["agent_pattern_id"] == "router_rag_agent"
+        assert messages[1].metadata["agent_route"] == "document"
 
     @pytest.mark.asyncio
     async def test_get_message_by_compatibility_id(self, repo, sample_thread):

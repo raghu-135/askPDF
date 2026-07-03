@@ -2,6 +2,7 @@
 test_message_api_pytest.py - Message API endpoint contract tests.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
 
@@ -13,6 +14,47 @@ from app.api import messages as messages_api
 
 class TestMessageEndpoints:
     """Test suite for message endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_thread_messages_exposes_safe_agent_metadata(self):
+        """Message listing should preserve run ids without leaking full internals."""
+        thread = SimpleNamespace(id="thread-1")
+        assistant = SimpleNamespace(
+            id="turn-1:assistant",
+            role=MessageRole.ASSISTANT.value,
+            content="Answer",
+            context_compact="compact memory",
+            reasoning="",
+            reasoning_available=False,
+            reasoning_format="none",
+            web_sources=[],
+            metadata={
+                "agent_run_id": "run-1",
+                "agent_pattern_id": "router_rag_agent",
+                "agent_pattern_version": 1,
+                "agent_route": "document",
+                "agent_route_reason": "Question needs document evidence.",
+                "agent_node_events": [{"node": "router"}],
+                "context_compact": "internal compact text",
+            },
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+
+        with (
+            patch("app.api.messages.get_thread", new_callable=AsyncMock, return_value=thread),
+            patch("app.api.messages.get_thread_messages", new_callable=AsyncMock, return_value=[assistant]),
+        ):
+            data = await messages_api.get_thread_messages_endpoint("thread-1")
+
+        assert data["thread_id"] == "thread-1"
+        metadata = data["messages"][0]["metadata"]
+        assert metadata == {
+            "agent_run_id": "run-1",
+            "agent_pattern_id": "router_rag_agent",
+            "agent_pattern_version": 1,
+            "agent_route": "document",
+            "agent_route_reason": "Question needs document evidence.",
+        }
 
     @pytest.mark.asyncio
     async def test_delete_missing_message_is_idempotent(self):
