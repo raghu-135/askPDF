@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.agent.tool_registry import get_tool_contract_metadata
@@ -82,6 +82,7 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
         "user_id": run.user_id,
         "template_id": run.template_id,
         "template_version_id": run.template_version_id,
+        "chat_turn_id": run.chat_turn_id,
         "resolved_spec_json": run.resolved_spec_json,
         "status": run.status,
         "checkpoint_thread_id": run.checkpoint_thread_id,
@@ -143,6 +144,35 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
             "error_count": metrics.get("error_count", 1),
         }
     return payload
+
+
+def _run_summary_payload(run) -> Dict[str, Any]:
+    metrics = run.metrics_json if isinstance(run.metrics_json, dict) else {}
+    error = run.error_json if isinstance(run.error_json, dict) else None
+    return {
+        "id": run.id,
+        "thread_id": run.thread_id,
+        "template_id": run.template_id,
+        "template_version_id": run.template_version_id,
+        "chat_turn_id": run.chat_turn_id,
+        "status": run.status,
+        "started_at": iso_utc_z(run.started_at) if run.started_at else None,
+        "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,
+        "metrics": {
+            "duration_ms": metrics.get("duration_ms"),
+            "route": metrics.get("route"),
+            "node_event_count": metrics.get("node_event_count", 0),
+            "tool_event_count": metrics.get("tool_event_count", 0),
+            "tool_warning_count": metrics.get("tool_warning_count", 0),
+            "tool_error_count": metrics.get("tool_error_count", 0),
+            "error_count": metrics.get("error_count", 0),
+        },
+        "error": {
+            "code": error.get("code"),
+            "raw_message": error.get("raw_message"),
+            "retryable": error.get("retryable"),
+        } if error else None,
+    }
 
 
 @router.get("/agent-patterns")
@@ -229,6 +259,21 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
         "template_version_id": version.id,
         "validation": TemplateValidator().report(resolved_spec),
         "resolved_spec_json": resolved_spec,
+    }
+
+
+@router.get("/threads/{thread_id}/agent-runs")
+async def list_thread_agent_runs(thread_id: str, limit: int = Query(20, ge=1, le=100)):
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    repo = AgentPatternRepository()
+    runs = await repo.list_runs_for_thread(thread_id, limit=limit)
+    return {
+        "thread_id": thread_id,
+        "limit": limit,
+        "agent_runs": [_run_summary_payload(run) for run in runs],
     }
 
 

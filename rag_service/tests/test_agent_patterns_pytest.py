@@ -297,6 +297,28 @@ class TestAgentPatternRepository:
         assert completed.resolved_spec_json == {"pattern_type": ROUTER_RAG_AGENT_ID}
 
     @pytest.mark.asyncio
+    async def test_list_runs_for_thread_orders_recent_first_and_limits(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        first = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "n": 1},
+        )
+        second = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "n": 2},
+        )
+
+        runs = await repo.list_runs_for_thread(sample_thread.id, limit=1)
+
+        assert [run.id for run in runs] == [second.id]
+        assert first.id != second.id
+
+    @pytest.mark.asyncio
     async def test_unsupported_simple_rag_template_is_not_exposed(self, repo):
         await repo.seed_builtin_templates()
 
@@ -727,6 +749,7 @@ class TestRouterRagRuntime:
             turn = await check_session.get(ChatTurn, result["user_message_id"].split(":")[0])
 
         assert result["answer"] == "DiffusionBlocks focuses on modular diffusion model research."
+        assert result["chat_turn_id"] == turn.id
         assert result["route"] == "direct"
         assert [event["node"] for event in result["node_events"]] == [
             "context_loader",
@@ -1072,6 +1095,7 @@ class TestRouterRagRuntime:
             turn = await check_session.get(ChatTurn, result["user_message_id"].split(":")[0])
 
         assert result["agent_error"]["code"] == "router_rag_execution_failed"
+        assert result["chat_turn_id"] == turn.id
         assert result["route"] == "document"
         assert [event["node"] for event in result["node_events"]] == ["context_loader", "router"]
         assert result["tool_events"] == []
@@ -1164,6 +1188,62 @@ class TestAgentPatternApi:
         assert payload["validation"]["unknown_allowed_tool_ids"] == ["mystery_tool"]
 
     @pytest.mark.asyncio
+    async def test_list_thread_agent_runs_returns_recent_compact_summaries(self, api_client, engine, sample_thread):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            first = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            await repo.complete_run(
+                first.id,
+                status="completed",
+                metrics_json={"duration_ms": 10.0, "route": "direct", "node_event_count": 2},
+            )
+            second = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            await repo.complete_run(
+                second.id,
+                status="failed",
+                metrics_json={"duration_ms": 5.0, "route": "document", "error_count": 1},
+                error_json={"code": "router_rag_execution_failed", "raw_message": "boom", "retryable": True},
+            )
+
+        response = api_client.get(f"/api/threads/{sample_thread.id}/agent-runs?limit=1")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["thread_id"] == sample_thread.id
+        assert payload["limit"] == 1
+        assert len(payload["agent_runs"]) == 1
+        summary = payload["agent_runs"][0]
+        assert summary["id"] == second.id
+        assert summary["status"] == "failed"
+        assert summary["metrics"]["route"] == "document"
+        assert summary["metrics"]["error_count"] == 1
+        assert summary["error"]["code"] == "router_rag_execution_failed"
+        assert "resolved_spec_json" not in summary
+
+    def test_list_thread_agent_runs_returns_404_for_missing_thread(self, api_client):
+        response = api_client.get(f"/api/threads/{uuid.uuid4()}/agent-runs")
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
     async def test_get_agent_run_includes_debug_telemetry(self, api_client, engine, sample_thread):
         session_factory = async_sessionmaker(
             engine,
@@ -1180,21 +1260,6 @@ class TestAgentPatternApi:
                 template_id=template.id,
                 template_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
-            )
-            await repo.complete_run(
-                run.id,
-                status="completed",
-                metrics_json={
-                    "duration_ms": 42.0,
-                    "route": "web",
-                    "node_event_count": 1,
-                    "node_elapsed_ms": {"router": 4.5},
-                    "node_total_elapsed_ms": 4.5,
-                    "tool_event_count": 1,
-                    "tool_warning_count": 0,
-                    "tool_error_count": 0,
-                    "tool_elapsed_ms": 12.3,
-                },
             )
 
         turn = ChatTurn(
@@ -1224,12 +1289,31 @@ class TestAgentPatternApi:
         async with session_factory() as write_session:
             write_session.add(turn)
             await write_session.commit()
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.complete_run(
+                run.id,
+                status="completed",
+                metrics_json={
+                    "duration_ms": 42.0,
+                    "route": "web",
+                    "node_event_count": 1,
+                    "node_elapsed_ms": {"router": 4.5},
+                    "node_total_elapsed_ms": 4.5,
+                    "tool_event_count": 1,
+                    "tool_warning_count": 0,
+                    "tool_error_count": 0,
+                    "tool_elapsed_ms": 12.3,
+                },
+                chat_turn_id=turn.id,
+            )
 
         response = api_client.get(f"/api/agent-runs/{run.id}")
 
         assert response.status_code == 200
         payload = response.json()["agent_run"]
         assert payload["id"] == run.id
+        assert payload["chat_turn_id"] == turn.id
         assert payload["metrics_json"]["tool_event_count"] == 1
         assert payload["debug"]["chat_turn_id"] == turn.id
         assert payload["debug"]["route"] == "web"

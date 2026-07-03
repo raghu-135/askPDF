@@ -279,6 +279,10 @@ class AgentRun(SQLModel, table=True):
     template_version_id: str = Field(
         sa_column=Column(String, ForeignKey("agent_pattern_template_versions.id", ondelete="RESTRICT"), index=True)
     )
+    chat_turn_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("chat_turns.id", ondelete="SET NULL"), index=True)
+    )
     resolved_spec_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)

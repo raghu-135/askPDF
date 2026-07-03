@@ -103,6 +103,7 @@ class AgentRunService:
                 status=status,
                 metrics_json=metrics,
                 error_json=error_json,
+                chat_turn_id=result.get("chat_turn_id"),
             )
             result.update(context)
             return result

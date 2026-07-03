@@ -163,6 +163,7 @@ async def handle_router_rag_chat(
         return {
             "answer": answer,
             "rewritten_query": question,
+            "chat_turn_id": turn.id,
             "user_message_id": user_message_id,
             "assistant_message_id": assistant_message_id,
             "used_chat_ids": result.get("used_chat_ids") or [],
@@ -237,6 +238,7 @@ async def handle_router_rag_chat(
         return {
             "answer": fallback_answer,
             "rewritten_query": question,
+            "chat_turn_id": turn.id,
             "user_message_id": f"{turn.id}:user",
             "assistant_message_id": f"{turn.id}:assistant",
             "used_chat_ids": [],

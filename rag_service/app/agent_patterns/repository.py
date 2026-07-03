@@ -123,9 +123,25 @@ class AgentPatternRepository:
         async with session.begin():
             return await session.get(AgentRun, run_id)
 
+    async def list_runs_for_thread(self, thread_id: str, *, limit: int = 20) -> list[AgentRun]:
+        session = await self._get_session()
+        bounded_limit = max(1, min(int(limit), 100))
+        async with session.begin():
+            result = await session.execute(
+                select(AgentRun)
+                .where(AgentRun.thread_id == thread_id)
+                .order_by(AgentRun.started_at.desc(), AgentRun.id.desc())
+                .limit(bounded_limit)
+            )
+            return list(result.scalars().all())
+
     async def get_chat_turn_for_run(self, run: AgentRun) -> Optional[ChatTurn]:
         session = await self._get_session()
         async with session.begin():
+            if run.chat_turn_id:
+                chat_turn = await session.get(ChatTurn, run.chat_turn_id)
+                if chat_turn is not None:
+                    return chat_turn
             result = await session.execute(
                 select(ChatTurn)
                 .where(
@@ -170,6 +186,7 @@ class AgentPatternRepository:
         status: str,
         metrics_json: Optional[Dict[str, Any]] = None,
         error_json: Optional[Dict[str, Any]] = None,
+        chat_turn_id: Optional[str] = None,
         completed_at: Optional[datetime] = None,
     ) -> Optional[AgentRun]:
         session = await self._get_session()
@@ -182,6 +199,8 @@ class AgentPatternRepository:
             replace_jsonb_field(run, "metrics_json", metrics_json or {})
             if error_json is not None:
                 replace_jsonb_field(run, "error_json", error_json)
+            if chat_turn_id is not None:
+                run.chat_turn_id = chat_turn_id
             await session.flush()
             await session.refresh(run)
             return run
