@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent_patterns.router_runtime import handle_router_rag_chat
 from app.agent_patterns.graph import NodeRegistry, TemplateCompiler
+from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
@@ -21,6 +22,42 @@ from app.db.models_sqlmodel import ChatTurn
 
 
 SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
+
+
+class TestAgentRunMetrics:
+    def test_build_run_metrics_rolls_up_node_tool_and_error_counts(self):
+        metrics = build_run_metrics(
+            {
+                "route": "document",
+                "node_events": [
+                    {"node": "router", "elapsed_ms": 2.25},
+                    {"node": "retrieval_worker", "elapsed_ms": 7.75},
+                    {"node": "retrieval_worker", "elapsed_ms": 1.0},
+                ],
+                "tool_events": [
+                    {"tool_name": "search_documents", "ok": True, "elapsed_ms": 11.5, "warnings": ["low_sources"]},
+                    {"tool_name": "search_web", "ok": False, "elapsed_ms": 3.0, "warnings": []},
+                ],
+                "errors": [{"code": "worker_error"}],
+                "document_sources": [{"id": "doc-1"}],
+                "web_sources": [],
+                "used_chat_ids": ["chat-1"],
+            },
+            duration_ms=25.123,
+        )
+
+        assert metrics["duration_ms"] == 25.12
+        assert metrics["route"] == "document"
+        assert metrics["node_event_count"] == 3
+        assert metrics["node_elapsed_ms"] == {"router": 2.25, "retrieval_worker": 8.75}
+        assert metrics["node_total_elapsed_ms"] == 11.0
+        assert metrics["tool_event_count"] == 2
+        assert metrics["tool_warning_count"] == 1
+        assert metrics["tool_error_count"] == 1
+        assert metrics["tool_elapsed_ms"] == 14.5
+        assert metrics["error_count"] == 1
+        assert metrics["document_source_count"] == 1
+        assert metrics["used_chat_id_count"] == 1
 
 
 class TestRouterRagTemplateValidator:
@@ -384,7 +421,16 @@ class TestAgentRunService:
                     "used_chat_ids": [],
                     "clarification_options": None,
                     "route": "direct",
-                    "node_events": [{"node": "router"}],
+                    "node_events": [{"node": "router", "elapsed_ms": 3.5}],
+                    "tool_events": [
+                        {
+                            "tool_name": "search_documents",
+                            "caller_node": "retrieval_worker",
+                            "ok": True,
+                            "elapsed_ms": 9.25,
+                            "warnings": [],
+                        }
+                    ],
                     **agent_run_context,
                 }
 
@@ -415,6 +461,9 @@ class TestAgentRunService:
         assert run.status == "completed"
         assert run.metrics_json["route"] == "direct"
         assert run.metrics_json["node_event_count"] == 1
+        assert run.metrics_json["node_elapsed_ms"] == {"router": 3.5}
+        assert run.metrics_json["tool_event_count"] == 1
+        assert run.metrics_json["tool_elapsed_ms"] == 9.25
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
@@ -604,6 +653,7 @@ class TestRouterRagRuntime:
             "direct_answer",
             "finalizer",
         ]
+        assert all(isinstance(event.get("elapsed_ms"), (int, float)) for event in result["node_events"])
         assert result["agent_run_id"] == "run-1"
         assert turn is not None
         assert turn.status == "completed"
@@ -793,6 +843,7 @@ class TestRouterRagRuntime:
 
         assert result["route"] == route
         assert [event["node"] for event in result["node_events"]] == expected_nodes
+        assert all(isinstance(event.get("elapsed_ms"), (int, float)) for event in result["node_events"])
         assert turn is not None
         assert turn.status == expected_status
         assert turn.payload["metadata"]["agent_route"] == route
@@ -891,7 +942,17 @@ class TestAgentPatternApi:
             await repo.complete_run(
                 run.id,
                 status="completed",
-                metrics_json={"duration_ms": 42.0, "tool_event_count": 1},
+                metrics_json={
+                    "duration_ms": 42.0,
+                    "route": "web",
+                    "node_event_count": 1,
+                    "node_elapsed_ms": {"router": 4.5},
+                    "node_total_elapsed_ms": 4.5,
+                    "tool_event_count": 1,
+                    "tool_warning_count": 0,
+                    "tool_error_count": 0,
+                    "tool_elapsed_ms": 12.3,
+                },
             )
 
         turn = ChatTurn(
@@ -905,7 +966,7 @@ class TestAgentPatternApi:
                     "agent_run_id": run.id,
                     "agent_route": "web",
                     "agent_route_reason": "Needs live evidence.",
-                    "agent_node_events": [{"node": "router", "route": "web"}],
+                    "agent_node_events": [{"node": "router", "route": "web", "elapsed_ms": 4.5}],
                     "agent_tool_events": [
                         {
                             "tool_name": "search_web",
@@ -931,7 +992,12 @@ class TestAgentPatternApi:
         assert payload["debug"]["chat_turn_id"] == turn.id
         assert payload["debug"]["route"] == "web"
         assert payload["debug"]["route_reason"] == "Needs live evidence."
-        assert payload["debug"]["node_events"] == [{"node": "router", "route": "web"}]
+        assert payload["debug"]["metrics"]["duration_ms"] == 42.0
+        assert payload["debug"]["metrics"]["route"] == "web"
+        assert payload["debug"]["metrics"]["node_event_count"] == 1
+        assert payload["debug"]["metrics"]["node_elapsed_ms"] == {"router": 4.5}
+        assert payload["debug"]["metrics"]["tool_elapsed_ms"] == 12.3
+        assert payload["debug"]["node_events"] == [{"node": "router", "route": "web", "elapsed_ms": 4.5}]
         assert payload["debug"]["tool_events"][0]["tool_name"] == "search_web"
         assert payload["debug"]["tool_events"][0]["tool_id"] == "live_web_recon"
         assert payload["debug"]["tool_events"][0]["tool_category"] == "web"

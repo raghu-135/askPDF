@@ -4,6 +4,7 @@ import time
 import logging
 from typing import Any, Dict, Optional
 
+from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.templates import ROUTER_RAG_AGENT_ID
 from app.agent_patterns.validator import TemplateResolver
@@ -96,23 +97,7 @@ class AgentRunService:
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
             status = "failed" if error_json else "completed"
-            tool_events = result.get("tool_events") or []
-            metrics = {
-                "duration_ms": duration_ms,
-                "document_source_count": len(result.get("document_sources") or []),
-                "web_source_count": len(result.get("web_sources") or []),
-                "used_chat_id_count": len(result.get("used_chat_ids") or []),
-                "clarification": bool(result.get("clarification_options")),
-                "route": result.get("route"),
-                "node_event_count": len(result.get("node_events") or []),
-                "tool_event_count": len(tool_events),
-                "tool_warning_count": sum(len(event.get("warnings") or []) for event in tool_events if isinstance(event, dict)),
-                "tool_error_count": sum(1 for event in tool_events if isinstance(event, dict) and not event.get("ok", True)),
-                "tool_elapsed_ms": round(
-                    sum(float(event.get("elapsed_ms") or 0) for event in tool_events if isinstance(event, dict)),
-                    2,
-                ),
-            }
+            metrics = build_run_metrics(result, duration_ms=duration_ms)
             await self.repository.complete_run(
                 run.id,
                 status=status,

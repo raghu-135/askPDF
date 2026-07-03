@@ -42,7 +42,7 @@ from app.api.agent_patterns import router as agent_patterns_router
 from app.api.tools import router as tools_router
 from app.agent_patterns.repository import AgentPatternRepository
 from app.db.connection_sqlmodel import init_db, close_db
-from app.db.vector import get_vector_db
+from app.db.vector import close_vector_db, get_vector_db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -75,6 +75,12 @@ async def lifespan(app: FastAPI):
         logger.info("Database connections closed.")
     except Exception as e:
         logger.error(f"Error during database shutdown: {e}")
+    try:
+        logger.info("Closing Weaviate client connection...")
+        close_vector_db()
+        logger.info("Weaviate client connection closed.")
+    except Exception as e:
+        logger.error(f"Error during Weaviate shutdown: {e}")
 
 app = FastAPI(
     title="RAG Service",

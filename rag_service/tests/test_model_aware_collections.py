@@ -11,7 +11,9 @@ This test suite validates:
 
 import pytest
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+import app.db.vector as vector_module
 from app.db.vector.model_registry import EmbeddingModelRegistry, get_embedding_model_registry
 from app.db.vector.collection_manager import ModelAwareCollectionManager
 from app.db.vector.adapter import WeaviateAdapter
@@ -25,6 +27,18 @@ def seed_model(registry, model_name="test-model", dimensions=384):
         "is_local": False,
     }
     registry._dimension_cache[model_name] = dimensions
+
+
+def test_close_vector_db_closes_and_clears_singleton(monkeypatch):
+    closed = []
+    adapter = SimpleNamespace(close=lambda: closed.append(True))
+
+    monkeypatch.setattr(vector_module, "_singleton_instance", adapter)
+
+    vector_module.close_vector_db()
+
+    assert closed == [True]
+    assert vector_module._singleton_instance is None
 
 
 @pytest.fixture

@@ -1558,29 +1558,58 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                         {agentRunErrors[msg.agent_run_id]}
                                                     </Typography>
                                                 )}
-                                                {agentRunDetails[msg.agent_run_id]?.debug && (
-                                                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                                                {agentRunDetails[msg.agent_run_id]?.debug && (() => {
+                                                    const runDetails = agentRunDetails[msg.agent_run_id];
+                                                    const debug = runDetails.debug;
+                                                    const metrics = debug?.metrics || runDetails.metrics_json || {};
+                                                    const durationMs = Number(metrics.duration_ms);
+                                                    const hasDuration = Number.isFinite(durationMs) && durationMs > 0;
+                                                    const nodeCount = Number(metrics.node_event_count ?? debug?.node_event_count ?? debug?.node_events?.length ?? 0);
+                                                    const toolCount = Number(metrics.tool_event_count ?? debug?.tool_event_count ?? 0);
+                                                    const warningCount = Number(metrics.tool_warning_count ?? debug?.tool_warning_count ?? 0);
+                                                    const errorCount = Number(metrics.tool_error_count ?? debug?.tool_error_count ?? 0);
+                                                    return (
+                                                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
                                                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
                                                             <Chip
                                                                 size="small"
-                                                                label={`Status: ${agentRunDetails[msg.agent_run_id].status}`}
+                                                                label={`Status: ${runDetails.status}`}
+                                                                variant="outlined"
+                                                            />
+                                                            {metrics.route && (
+                                                                <Chip
+                                                                    size="small"
+                                                                    label={`Route: ${metrics.route}`}
+                                                                    variant="outlined"
+                                                                />
+                                                            )}
+                                                            {hasDuration && (
+                                                                <Chip
+                                                                    size="small"
+                                                                    label={`Run: ${Math.round(durationMs)}ms`}
+                                                                    variant="outlined"
+                                                                />
+                                                            )}
+                                                            <Chip
+                                                                size="small"
+                                                                label={`Nodes: ${Number.isFinite(nodeCount) ? nodeCount : 0}`}
                                                                 variant="outlined"
                                                             />
                                                             <Chip
                                                                 size="small"
-                                                                label={`Tools: ${agentRunDetails[msg.agent_run_id].debug?.tool_event_count ?? 0}`}
+                                                                label={`Tools: ${Number.isFinite(toolCount) ? toolCount : 0}`}
                                                                 variant="outlined"
                                                             />
                                                             <Chip
                                                                 size="small"
-                                                                color={(agentRunDetails[msg.agent_run_id].debug?.tool_warning_count ?? 0) > 0 ? 'warning' : 'default'}
-                                                                label={`Warnings: ${agentRunDetails[msg.agent_run_id].debug?.tool_warning_count ?? 0}`}
+                                                                color={Number.isFinite(warningCount) && warningCount > 0 ? 'warning' : 'default'}
+                                                                label={`Warnings: ${Number.isFinite(warningCount) ? warningCount : 0}`}
                                                                 variant="outlined"
                                                             />
                                                             <Chip
                                                                 size="small"
-                                                                color={(agentRunDetails[msg.agent_run_id].debug?.tool_error_count ?? 0) > 0 ? 'error' : 'default'}
-                                                                label={`Errors: ${agentRunDetails[msg.agent_run_id].debug?.tool_error_count ?? 0}`}
+                                                                color={Number.isFinite(errorCount) && errorCount > 0 ? 'error' : 'default'}
+                                                                label={`Errors: ${Number.isFinite(errorCount) ? errorCount : 0}`}
                                                                 variant="outlined"
                                                             />
                                                         </Box>
@@ -1589,16 +1618,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                 <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, mb: 0.5 }}>
                                                                     Nodes
                                                                 </Typography>
-                                                                {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).slice(-6).map((event, eventIndex) => (
-                                                                    <Typography
-                                                                        key={`node-${eventIndex}`}
-                                                                        variant="caption"
-                                                                        sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
-                                                                    >
-                                                                        {event.node || event.name || 'node'}: {Math.round(Number(event.elapsed_ms || 0))}ms
-                                                                        {event.route ? `, route ${event.route}` : ''}
-                                                                    </Typography>
-                                                                ))}
+                                                                {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).slice(-6).map((event, eventIndex) => {
+                                                                    const elapsedMs = Number(event.elapsed_ms);
+                                                                    const hasElapsed = Number.isFinite(elapsedMs) && elapsedMs > 0;
+                                                                    return (
+                                                                        <Typography
+                                                                            key={`node-${eventIndex}`}
+                                                                            variant="caption"
+                                                                            sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
+                                                                        >
+                                                                            {event.node || event.name || 'node'}
+                                                                            {hasElapsed ? `: ${Math.round(elapsedMs)}ms` : ''}
+                                                                            {event.route ? `${hasElapsed ? ', ' : ': '}route ${event.route}` : ''}
+                                                                        </Typography>
+                                                                    );
+                                                                })}
                                                             </Box>
                                                         )}
                                                         {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).length > 0 && (
@@ -1643,8 +1677,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                 })}
                                                             </Box>
                                                         )}
-                                                    </Box>
-                                                )}
+                                                        </Box>
+                                                    );
+                                                })()}
                                             </Box>
                                         </details>
                                     </Box>

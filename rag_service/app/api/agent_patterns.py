@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.agent.tool_registry import get_tool_contract_metadata
+from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.validator import TemplateValidator
 from app.time_utils import iso_utc_z
@@ -85,23 +86,28 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
             for event in tool_events
             if isinstance(event, dict)
         ]
+        metrics = run.metrics_json if isinstance(run.metrics_json, dict) else {}
+        event_metrics = build_run_metrics(
+            {
+                "route": metadata.get("agent_route"),
+                "node_events": node_events,
+                "tool_events": enriched_tool_events,
+            },
+            duration_ms=metrics.get("duration_ms") or 0,
+        )
+        debug_metrics = {**event_metrics, **metrics}
         payload["debug"] = {
             "chat_turn_id": chat_turn.id,
             "chat_turn_status": chat_turn.status,
             "route": metadata.get("agent_route"),
             "route_reason": metadata.get("agent_route_reason"),
+            "metrics": debug_metrics,
             "node_events": node_events,
             "tool_events": enriched_tool_events,
-            "tool_event_count": len(enriched_tool_events),
-            "tool_warning_count": sum(
-                len(event.get("warnings") or [])
-                for event in enriched_tool_events
-            ),
-            "tool_error_count": sum(
-                1
-                for event in enriched_tool_events
-                if not event.get("ok", True)
-            ),
+            "node_event_count": debug_metrics.get("node_event_count", 0),
+            "tool_event_count": debug_metrics.get("tool_event_count", 0),
+            "tool_warning_count": debug_metrics.get("tool_warning_count", 0),
+            "tool_error_count": debug_metrics.get("tool_error_count", 0),
         }
     return payload
 

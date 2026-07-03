@@ -57,8 +57,17 @@ class RouterRagState(TypedDict, total=False):
     errors: List[Dict[str, Any]]
 
 
-def _append_event(state: RouterRagState, node: str, data: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    return [*state.get("node_events", []), {"node": node, **(data or {})}]
+def _append_event(
+    state: RouterRagState,
+    node: str,
+    data: Optional[Dict[str, Any]] = None,
+    *,
+    started: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    event = {"node": node, **(data or {})}
+    if started is not None:
+        event["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 2)
+    return [*state.get("node_events", []), event]
 
 
 def _append_tool_event(state: RouterRagState, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -185,7 +194,7 @@ class NodeRegistry:
             "document_sources": list(bundle.get("document_sources", [])),
             "web_sources": list(bundle.get("web_sources", [])),
             "used_chat_ids": list(bundle.get("used_chat_ids", [])),
-            "node_events": _append_event(state, "context_loader", data),
+            "node_events": _append_event(state, "context_loader", data, started=started),
         }
 
     async def router(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -231,7 +240,7 @@ class NodeRegistry:
             "route": route,
             "route_reason": str(parsed.get("reason") or ""),
             "clarification_options": clarification_options if route == "clarify" else None,
-            "node_events": _append_event(state, "router", data),
+            "node_events": _append_event(state, "router", data, started=started),
         }
 
     async def retrieval_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -257,7 +266,7 @@ class NodeRegistry:
             "evidence": evidence,
             "document_sources": document_sources,
             "web_sources": web_sources,
-            "node_events": _append_event(state, "retrieval_worker", data),
+            "node_events": _append_event(state, "retrieval_worker", data, started=started),
             "tool_events": _append_tool_event(state, payload),
         }
 
@@ -281,7 +290,7 @@ class NodeRegistry:
         return {
             "evidence": evidence,
             "used_chat_ids": used_chat_ids,
-            "node_events": _append_event(state, "memory_worker", data),
+            "node_events": _append_event(state, "memory_worker", data, started=started),
             "tool_events": _append_tool_event(state, payload),
         }
 
@@ -303,7 +312,7 @@ class NodeRegistry:
         _log_node_end(state, "timeline_worker", started, data)
         return {
             "evidence": evidence,
-            "node_events": _append_event(state, "timeline_worker", data),
+            "node_events": _append_event(state, "timeline_worker", data, started=started),
             "tool_events": _append_tool_event(state, payload),
         }
 
@@ -324,7 +333,7 @@ class NodeRegistry:
         return {
             "evidence": evidence,
             "web_sources": web_sources,
-            "node_events": _append_event(state, "web_worker", data),
+            "node_events": _append_event(state, "web_worker", data, started=started),
             "tool_events": _append_tool_event(state, payload),
         }
 
@@ -371,7 +380,7 @@ class NodeRegistry:
             "reasoning": normalized["reasoning"],
             "reasoning_available": normalized["reasoning_available"],
             "reasoning_format": normalized["reasoning_format"],
-            "node_events": _append_event(state, node_name, data),
+            "node_events": _append_event(state, node_name, data, started=started),
         }
 
     async def finalizer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -387,11 +396,11 @@ class NodeRegistry:
                 "reasoning": "",
                 "reasoning_available": False,
                 "reasoning_format": "none",
-                "node_events": _append_event(state, "finalizer", data),
+                "node_events": _append_event(state, "finalizer", data, started=started),
             }
         data = {"answer_chars": len(state.get("final_answer") or "")}
         _log_node_end(state, "finalizer", started, data)
-        return {"node_events": _append_event(state, "finalizer", data)}
+        return {"node_events": _append_event(state, "finalizer", data, started=started)}
 
 
 def router_route(state: RouterRagState) -> str:

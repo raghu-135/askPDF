@@ -31,6 +31,15 @@ def get_vector_db() -> WeaviateAdapter:
     return _singleton_instance
 
 
+def close_vector_db() -> None:
+    """Close and clear the shared Weaviate adapter singleton."""
+
+    global _singleton_instance
+    if _singleton_instance is not None:
+        _singleton_instance.close()
+        _singleton_instance = None
+
+
 __all__ = [
     # Config
     "CollectionNames",
@@ -42,4 +51,5 @@ __all__ = [
     "WeaviateAdapter",
     # Public API
     "get_vector_db",
+    "close_vector_db",
 ]
