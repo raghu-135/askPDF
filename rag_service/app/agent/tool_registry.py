@@ -8,6 +8,170 @@ This powers:
 Keep this file DRY and free of runtime imports to avoid cycles.
 """
 
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any, Dict, List
+
+
+TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
+    "get_thread_shape": {
+        "id": "thread_shape",
+        "category": "context",
+        "allowed_caller_nodes": ["context_loader", "router", "retrieval_worker", "memory_worker", "timeline_worker"],
+        "artifact_keys": ["thread_shape"],
+        "warning_codes": ["missing_thread_id"],
+    },
+    "search_documents": {
+        "id": "document_evidence",
+        "category": "retrieval",
+        "allowed_caller_nodes": ["retrieval_worker"],
+        "artifact_keys": ["document_sources", "web_sources"],
+        "warning_codes": [
+            "missing_thread_context",
+            "no_thread_documents",
+            "missing_document_vectors",
+            "no_relevant_content",
+        ],
+    },
+    "search_document_by_id": {
+        "id": "focused_document_evidence",
+        "category": "retrieval",
+        "allowed_caller_nodes": ["retrieval_worker"],
+        "artifact_keys": ["document_sources"],
+        "warning_codes": ["missing_thread_context", "missing_document_vectors", "no_relevant_content"],
+    },
+    "search_conversation_history": {
+        "id": "deep_memory",
+        "category": "memory",
+        "allowed_caller_nodes": ["memory_worker"],
+        "artifact_keys": ["used_chat_ids"],
+        "warning_codes": ["missing_thread_context", "no_relevant_conversation_history"],
+    },
+    "search_thread_timeline": {
+        "id": "thread_timeline",
+        "category": "timeline",
+        "allowed_caller_nodes": ["timeline_worker"],
+        "artifact_keys": ["timeline_events"],
+        "warning_codes": ["missing_thread_context", "no_timeline_events"],
+    },
+    "search_web": {
+        "id": "live_web_recon",
+        "category": "web",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["web_sources"],
+        "warning_codes": ["web_search_disabled", "no_usable_web_results"],
+    },
+    "search_web_intent": {
+        "id": "intent_web_lookup",
+        "category": "intent",
+        "allowed_caller_nodes": ["intent_agent"],
+        "artifact_keys": ["web_sources"],
+        "warning_codes": ["web_search_disabled", "no_usable_web_results"],
+    },
+    "wikipedia": {
+        "id": "wikipedia_reference",
+        "category": "external_research",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["provider_tool"],
+        "warning_codes": ["empty_external_tool_result"],
+    },
+    "wikidata": {
+        "id": "wikidata_reference",
+        "category": "external_research",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["provider_tool"],
+        "warning_codes": ["empty_external_tool_result"],
+    },
+    "arxiv": {
+        "id": "arxiv_research",
+        "category": "external_research",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["provider_tool"],
+        "warning_codes": ["empty_external_tool_result"],
+    },
+    "pub_med": {
+        "id": "pubmed_research",
+        "category": "external_research",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["provider_tool"],
+        "warning_codes": ["empty_external_tool_result"],
+    },
+    "pubmed": {
+        "id": "pubmed_research",
+        "category": "external_research",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["provider_tool"],
+        "warning_codes": ["empty_external_tool_result"],
+    },
+    "semanticscholar": {
+        "id": "semantic_scholar_research",
+        "category": "external_research",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["provider_tool"],
+        "warning_codes": ["empty_external_tool_result"],
+    },
+    "semantic_scholar": {
+        "id": "semantic_scholar_research",
+        "category": "external_research",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["provider_tool"],
+        "warning_codes": ["empty_external_tool_result"],
+    },
+    "stack_exchange": {
+        "id": "stackexchange_reference",
+        "category": "external_research",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["provider_tool"],
+        "warning_codes": ["empty_external_tool_result"],
+    },
+    "yahoo_finance_news": {
+        "id": "yahoo_finance_news",
+        "category": "external_research",
+        "allowed_caller_nodes": ["web_worker"],
+        "artifact_keys": ["provider_tool"],
+        "warning_codes": ["empty_external_tool_result"],
+    },
+    "ask_for_clarification": {
+        "id": "clarify_intent",
+        "category": "control",
+        "allowed_caller_nodes": ["router", "finalizer"],
+        "artifact_keys": [],
+        "warning_codes": [],
+    },
+}
+
+
+def get_tool_contract_metadata(tool_name: str) -> Dict[str, Any]:
+    """Return contract metadata for a canonical tool name."""
+
+    return deepcopy(TOOL_CONTRACT_METADATA.get(tool_name, {}))
+
+
+def list_tool_contract_metadata() -> List[Dict[str, Any]]:
+    """Return all known tool contract records sorted by canonical tool name."""
+
+    records = []
+    for tool_name, metadata in sorted(TOOL_CONTRACT_METADATA.items()):
+        record = {"tool_name": tool_name, **metadata}
+        friendly = TOOL_FRIENDLY_CONFIG.get(tool_name) or {}
+        for key in ("display_name", "description"):
+            if key in friendly:
+                record[key] = friendly[key]
+        records.append(deepcopy(record))
+    return records
+
+
+def known_tool_contract_ids() -> set[str]:
+    """Public tool IDs allowed in versioned agent pattern specs."""
+
+    return {
+        metadata["id"]
+        for metadata in TOOL_CONTRACT_METADATA.values()
+        if isinstance(metadata, dict) and metadata.get("id")
+    }
+
+
 TOOL_FRIENDLY_CONFIG = {
     "search_documents": {
         "id": "document_evidence",

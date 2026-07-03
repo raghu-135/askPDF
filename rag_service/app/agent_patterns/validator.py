@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
-from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
+from app.agent.tool_registry import known_tool_contract_ids
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
     ROUTER_RAG_AGENT_ID,
@@ -21,11 +21,7 @@ class TemplateValidationError(ValueError):
 
 
 def _known_tool_ids() -> set[str]:
-    return {
-        config["id"]
-        for config in TOOL_FRIENDLY_CONFIG.values()
-        if isinstance(config, dict) and config.get("id")
-    }
+    return known_tool_contract_ids()
 
 
 class TemplateValidator:
