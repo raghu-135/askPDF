@@ -241,8 +241,9 @@ class NodeRegistry:
             config=tool_config,
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
-        document_sources = [*state.get("document_sources", []), *payload.get("__document_sources__", [])]
-        web_sources = [*state.get("web_sources", []), *payload.get("__web_sources__", [])]
+        artifacts = payload.get("artifacts") or {}
+        document_sources = [*state.get("document_sources", []), *artifacts.get("document_sources", [])]
+        web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
         evidence = payload.get("content", "")
         data = {
             "evidence_chars": len(str(evidence or "")),
@@ -267,8 +268,9 @@ class NodeRegistry:
             config=tool_config,
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
+        artifacts = payload.get("artifacts") or {}
         evidence = payload.get("content", "")
-        used_chat_ids = [*state.get("used_chat_ids", []), *payload.get("__used_chat_ids__", [])]
+        used_chat_ids = [*state.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])]
         data = {
             "evidence_chars": len(str(evidence or "")),
             "used_chat_id_count": len(used_chat_ids),
@@ -290,10 +292,11 @@ class NodeRegistry:
             config=tool_config,
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
+        artifacts = payload.get("artifacts") or {}
         evidence = payload.get("content", "")
         data = {
             "evidence_chars": len(str(evidence or "")),
-            "timeline_event_count": len(payload.get("__timeline_events__", []) or []),
+            "timeline_event_count": len(artifacts.get("timeline_events", []) or []),
         }
         _log_node_end(state, "timeline_worker", started, data)
         return {
@@ -308,7 +311,8 @@ class NodeRegistry:
         tool_config = _tool_config(state, config, caller_node="web_worker", tool_name=tool_name)
         raw = await search_web.ainvoke(state["question"], config=tool_config)
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
-        web_sources = [*state.get("web_sources", []), *payload.get("__web_sources__", [])]
+        artifacts = payload.get("artifacts") or {}
+        web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
         evidence = payload.get("content", "")
         data = {
             "evidence_chars": len(str(evidence or "")),

@@ -6,7 +6,7 @@ import json
 import pytest
 
 from app.agent import external_research_tools
-from app.agent.agent_helpers import collect_tool_sources
+from app.agent.tool_contract import collect_tool_sources, normalize_tool_result
 from app.db.vector.adapter import WeaviateAdapter
 from app.rag import agent_tools
 from app.rag import indexer
@@ -589,6 +589,34 @@ def test_collect_tool_sources_preserves_timeline_events():
     assert web_sources[0]["timeline_event_type"] == "web_search_performed"
 
 
+def test_collect_tool_sources_accepts_tool_contract_envelope():
+    document_sources = []
+    web_sources = []
+    used_chat_ids = []
+
+    collect_tool_sources(
+        json.dumps(
+            {
+                "ok": True,
+                "content": "Evidence",
+                "artifacts": {
+                    "document_sources": [{"file_hash": "file-1"}],
+                    "web_sources": [{"url": "https://example.com"}],
+                    "used_chat_ids": ["msg-1"],
+                },
+                "trace": {"tool_name": "search_documents"},
+            }
+        ),
+        document_sources,
+        web_sources,
+        used_chat_ids,
+    )
+
+    assert document_sources == [{"file_hash": "file-1"}]
+    assert web_sources == [{"url": "https://example.com"}]
+    assert used_chat_ids == ["msg-1"]
+
+
 @pytest.mark.asyncio
 async def test_get_thread_shape_surfaces_document_level_counts(monkeypatch):
     import app.db as db_module
@@ -621,10 +649,13 @@ async def test_get_thread_shape_surfaces_document_level_counts(monkeypatch):
         {},
         config={"configurable": {"thread_id": "thread-1"}},
     )
+    payload = normalize_tool_result(output, tool_name="get_thread_shape")
 
-    assert "4 pages" in output
-    assert "123 words" in output
-    assert "12 sentences" in output
+    assert payload["ok"] is True
+    assert payload["trace"]["tool_name"] == "get_thread_shape"
+    assert "4 pages" in payload["content"]
+    assert "123 words" in payload["content"]
+    assert "12 sentences" in payload["content"]
 
 
 @pytest.mark.asyncio
@@ -678,9 +709,11 @@ async def test_search_thread_timeline_returns_sorted_mixed_source_events(monkeyp
         {"query": "benefits timeline", "sources": "all", "order": "oldest", "max_results": 10},
         config={"configurable": {"thread_id": "thread-1", "embedding_model": "embed-1"}},
     )
-    payload = json.loads(raw)
+    payload = normalize_tool_result(raw, tool_name="search_thread_timeline")
     events = payload["__timeline_events__"]
 
+    assert payload["ok"] is True
+    assert payload["trace"]["tool_name"] == "search_thread_timeline"
     assert [event["timeline_event_type"] for event in events] == [
         "document_added_to_thread",
         "message_created",

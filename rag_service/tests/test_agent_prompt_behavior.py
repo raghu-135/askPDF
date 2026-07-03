@@ -4,8 +4,7 @@ import inspect
 from datetime import datetime, timezone
 
 
-from app.agent.agent_helpers import format_runtime_datetime_context
-from app.agent.prompting import build_system_prompt, format_prefetch_for_prompt
+from app.agent.prompting import build_system_prompt, format_prefetch_for_prompt, format_runtime_datetime_context
 
 
 def test_system_prompt_has_no_reasoning_mode_argument():
