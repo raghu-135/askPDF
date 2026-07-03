@@ -275,6 +275,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             lastClarificationIdsRef.current = null;
             setEditingMessageId(null);
             setEditingOriginalText('');
+            setAgentRunDetails({});
+            setAgentRunLoading({});
+            setAgentRunErrors({});
         }
     }, [activeThread?.id]);
 
