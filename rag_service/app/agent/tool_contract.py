@@ -304,13 +304,11 @@ def collect_tool_sources(
     if not isinstance(content, str):
         return
     data = normalize_tool_result(content)
-    if "__document_sources__" in data:
-        document_sources.extend(data["__document_sources__"])
-    if "__web_sources__" in data:
-        web_sources.extend(data["__web_sources__"])
-    if "__used_chat_ids__" in data:
-        used_chat_ids.extend(data["__used_chat_ids__"])
-    for event in data.get("__timeline_events__", []) or []:
+    artifacts = data.get("artifacts") if isinstance(data.get("artifacts"), dict) else {}
+    document_sources.extend(artifacts.get("document_sources") or [])
+    web_sources.extend(artifacts.get("web_sources") or [])
+    used_chat_ids.extend(artifacts.get("used_chat_ids") or [])
+    for event in artifacts.get("timeline_events") or []:
         if not isinstance(event, dict):
             continue
         source_type = event.get("source_type")

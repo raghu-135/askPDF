@@ -8,7 +8,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent_patterns.router_runtime import handle_router_rag_chat
-from app.agent_patterns.graph import TemplateCompiler
+from app.agent_patterns.graph import NodeRegistry, TemplateCompiler
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
@@ -71,6 +71,100 @@ class TestRouterRagTemplateValidator:
         graph = TemplateCompiler().compile(builtin_router_rag_spec())
 
         assert graph is not None
+
+
+class TestRouterRagGraphToolConsumers:
+    @pytest.mark.asyncio
+    async def test_workers_consume_tool_artifacts_without_legacy_fields(self, monkeypatch):
+        class FakeTool:
+            def __init__(self, payload):
+                self.payload = payload
+
+            async def ainvoke(self, _args, config=None):
+                assert "__document_sources__" not in self.payload
+                assert "__web_sources__" not in self.payload
+                assert "__used_chat_ids__" not in self.payload
+                assert "__timeline_events__" not in self.payload
+                return self.payload
+
+        registry = NodeRegistry()
+        base_state = {
+            "agent_run_id": "run-1",
+            "thread_id": "thread-1",
+            "question": "What does the document say?",
+            "route": "document",
+            "document_sources": [],
+            "web_sources": [],
+            "used_chat_ids": [],
+            "node_events": [],
+            "tool_events": [],
+        }
+        config = {"configurable": {"thread_id": "thread-1"}}
+
+        monkeypatch.setattr(
+            "app.agent_patterns.graph.search_documents",
+            FakeTool(
+                {
+                    "content": "Document evidence.",
+                    "artifacts": {
+                        "document_sources": [{"file_hash": "file-1", "file_name": "paper.pdf"}],
+                        "web_sources": [{"url": "https://cached.example", "title": "Cached"}],
+                    },
+                    "sources": [{"file_hash": "file-1", "file_name": "paper.pdf"}],
+                }
+            ),
+        )
+        document_update = await registry.retrieval_worker(dict(base_state), config)
+        assert document_update["document_sources"] == [{"file_hash": "file-1", "file_name": "paper.pdf"}]
+        assert document_update["web_sources"] == [{"url": "https://cached.example", "title": "Cached"}]
+        assert document_update["tool_events"][0]["tool_name"] == "search_documents"
+
+        monkeypatch.setattr(
+            "app.agent_patterns.graph.search_conversation_history",
+            FakeTool(
+                {
+                    "content": "Memory evidence.",
+                    "artifacts": {"used_chat_ids": ["turn-1:assistant"]},
+                }
+            ),
+        )
+        memory_update = await registry.memory_worker(dict(base_state, route="memory"), config)
+        assert memory_update["used_chat_ids"] == ["turn-1:assistant"]
+        assert memory_update["tool_events"][0]["tool_name"] == "search_conversation_history"
+
+        monkeypatch.setattr(
+            "app.agent_patterns.graph.search_thread_timeline",
+            FakeTool(
+                {
+                    "content": "Timeline evidence.",
+                    "artifacts": {
+                        "timeline_events": [
+                            {
+                                "timeline_event_type": "message_created",
+                                "timeline_event_at": "2026-07-01T00:00:00Z",
+                            }
+                        ]
+                    },
+                }
+            ),
+        )
+        timeline_update = await registry.timeline_worker(dict(base_state, route="timeline"), config)
+        assert timeline_update["node_events"][-1]["timeline_event_count"] == 1
+        assert timeline_update["tool_events"][0]["tool_name"] == "search_thread_timeline"
+
+        monkeypatch.setattr(
+            "app.agent_patterns.graph.search_web",
+            FakeTool(
+                {
+                    "content": "Web evidence.",
+                    "artifacts": {"web_sources": [{"url": "https://example.com", "title": "Example"}]},
+                    "sources": [{"url": "https://example.com", "title": "Example"}],
+                }
+            ),
+        )
+        web_update = await registry.web_worker(dict(base_state, route="web"), config)
+        assert web_update["web_sources"] == [{"url": "https://example.com", "title": "Example"}]
+        assert web_update["tool_events"][0]["tool_name"] == "search_web"
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")

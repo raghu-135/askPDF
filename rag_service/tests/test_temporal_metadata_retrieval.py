@@ -617,6 +617,82 @@ def test_collect_tool_sources_accepts_tool_contract_envelope():
     assert used_chat_ids == ["msg-1"]
 
 
+def test_collect_tool_sources_uses_artifact_timeline_events_without_legacy_aliases():
+    document_sources = []
+    web_sources = []
+    used_chat_ids = []
+
+    collect_tool_sources(
+        json.dumps(
+            {
+                "ok": True,
+                "content": "Timeline evidence",
+                "artifacts": {
+                    "timeline_events": [
+                        {
+                            "source_type": "conversation",
+                            "message_id": "msg-1",
+                            "timeline_event_at": "2026-06-25T19:10:00Z",
+                            "timeline_event_type": "message_created",
+                        },
+                        {
+                            "source_type": "document",
+                            "file_hash": "file-1",
+                            "file_name": "benefits.pdf",
+                            "document_source_type": "pdf",
+                            "document_available_in_thread_at": "2026-06-25T19:00:00Z",
+                            "timeline_event_at": "2026-06-25T19:00:00Z",
+                            "timeline_event_type": "document_added_to_thread",
+                        },
+                        {
+                            "source_type": "web_cache",
+                            "url": "https://example.com",
+                            "title": "Example",
+                            "web_search_performed_at": "2026-06-25T19:15:00Z",
+                            "timeline_event_at": "2026-06-25T19:15:00Z",
+                            "timeline_event_type": "web_search_performed",
+                        },
+                    ],
+                },
+                "trace": {"tool_name": "search_thread_timeline"},
+            }
+        ),
+        document_sources,
+        web_sources,
+        used_chat_ids,
+    )
+
+    assert used_chat_ids == ["msg-1"]
+    assert document_sources == [
+        {
+            "text": "",
+            "file_hash": "file-1",
+            "file_name": "benefits.pdf",
+            "source_type": "pdf",
+            "document_available_in_thread_at": "2026-06-25T19:00:00Z",
+            "timeline_event_at": "2026-06-25T19:00:00Z",
+            "timeline_event_type": "document_added_to_thread",
+            "page_count": None,
+            "word_count": None,
+            "sentence_count": None,
+            "languages": None,
+            "filetype": None,
+            "element_types": None,
+        }
+    ]
+    assert web_sources == [
+        {
+            "text": "",
+            "url": "https://example.com",
+            "title": "Example",
+            "web_search_performed_at": "2026-06-25T19:15:00Z",
+            "timeline_event_at": "2026-06-25T19:15:00Z",
+            "timeline_event_type": "web_search_performed",
+            "score": None,
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_get_thread_shape_surfaces_document_level_counts(monkeypatch):
     import app.db as db_module
