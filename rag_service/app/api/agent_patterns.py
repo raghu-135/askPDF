@@ -8,7 +8,15 @@ from pydantic import BaseModel, Field
 from app.agent.tool_registry import get_tool_contract_metadata
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
-from app.agent_patterns.validator import TemplateValidator
+from app.agent_patterns.templates import (
+    ALLOWED_ROUTER_RAG_CONFIG_KEYS,
+    ROUTER_RAG_AGENT_ID,
+    ROUTER_RAG_AGENT_VERSION,
+    ROUTER_RAG_NODE_TOOL_REQUIREMENTS,
+    ROUTER_RAG_REQUIRED_TOOL_IDS,
+)
+from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
+from app.db import get_thread, get_thread_settings
 from app.time_utils import iso_utc_z
 
 
@@ -17,6 +25,10 @@ router = APIRouter(tags=["agent-patterns"])
 
 class TemplateValidationRequest(BaseModel):
     spec: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ThreadAgentConfigValidationRequest(BaseModel):
+    overrides: Dict[str, Any] = Field(default_factory=dict)
 
 
 def _template_payload(template) -> Dict[str, Any]:
@@ -34,12 +46,14 @@ def _template_payload(template) -> Dict[str, Any]:
 
 
 def _version_payload(version) -> Dict[str, Any]:
+    validator = TemplateValidator()
     return {
         "id": version.id,
         "template_id": version.template_id,
         "version": version.version,
         "schema_version": version.schema_version,
         "spec_json": version.spec_json,
+        "validation": validator.report(version.spec_json),
         "validation_result_json": version.validation_result_json,
         "changelog": version.changelog,
         "created_at": iso_utc_z(version.created_at) if version.created_at else None,
@@ -149,16 +163,72 @@ async def get_agent_pattern(template_id: str):
     return {
         "agent_pattern": _template_payload(template),
         "current_version": _version_payload(version),
+        "capabilities": {
+            "required_tool_ids": sorted(ROUTER_RAG_REQUIRED_TOOL_IDS),
+            "node_tool_requirements": dict(sorted(ROUTER_RAG_NODE_TOOL_REQUIREMENTS.items())),
+        },
     }
 
 
 @router.post("/agent-patterns/validate")
 async def validate_agent_pattern(req: TemplateValidationRequest):
     validator = TemplateValidator()
-    errors = validator.collect_errors(req.spec)
+    return validator.report(req.spec)
+
+
+@router.post("/threads/{thread_id}/agent-config/validate")
+async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigValidationRequest):
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    repo = AgentPatternRepository()
+    await repo.seed_builtin_templates()
+    thread_settings = await get_thread_settings(thread_id)
+    agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
+    agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
+    template_id = agent_settings.get("template_id") or ROUTER_RAG_AGENT_ID
+    if template_id != ROUTER_RAG_AGENT_ID:
+        template_id = ROUTER_RAG_AGENT_ID
+
+    template, version = await repo.get_template_with_current_version(template_id)
+    if not template or not version:
+        raise HTTPException(status_code=404, detail="Agent pattern not found")
+
+    resolver = TemplateResolver()
+    try:
+        resolved_spec = resolver.resolve(
+            version.spec_json,
+            thread_settings=thread_settings,
+            request_overrides=req.overrides,
+        )
+    except TemplateValidationError as exc:
+        candidate = dict(version.spec_json or {})
+        candidate_config = dict(candidate.get("config") or {})
+        for source in (thread_settings or {}, req.overrides or {}):
+            for key in ALLOWED_ROUTER_RAG_CONFIG_KEYS:
+                value = source.get(key) if isinstance(source, dict) else None
+                if value is not None:
+                    candidate_config[key] = value
+        candidate["config"] = candidate_config
+        report = TemplateValidator().report(candidate)
+        report["errors"] = report["errors"] or [str(exc)]
+        return {
+            "valid": False,
+            "template_id": template.id,
+            "template_version": version.version,
+            "template_version_id": version.id,
+            "validation": report,
+            "resolved_spec_json": candidate,
+        }
+
     return {
-        "valid": not errors,
-        "errors": errors,
+        "valid": True,
+        "template_id": template.id,
+        "template_version": version.version,
+        "template_version_id": version.id,
+        "validation": TemplateValidator().report(resolved_spec),
+        "resolved_spec_json": resolved_spec,
     }
 
 

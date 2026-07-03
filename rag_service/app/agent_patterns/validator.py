@@ -107,6 +107,27 @@ class TemplateValidator:
 
         return errors
 
+    def report(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a structured validation report for admin/debug API consumers."""
+
+        errors = self.collect_errors(spec)
+        config = spec.get("config") if isinstance(spec, dict) else {}
+        config = config if isinstance(config, dict) else {}
+        allowed_tool_ids = config.get("allowed_tool_ids") if isinstance(config.get("allowed_tool_ids"), list) else []
+        known_tool_ids = _known_tool_ids()
+        return {
+            "valid": not errors,
+            "errors": errors,
+            "warnings": [],
+            "schema_version": spec.get("schema_version") if isinstance(spec, dict) else None,
+            "pattern_type": spec.get("pattern_type") if isinstance(spec, dict) else None,
+            "supported_pattern_types": [ROUTER_RAG_AGENT_ID],
+            "allowed_tool_ids": allowed_tool_ids,
+            "required_tool_ids": sorted(ROUTER_RAG_REQUIRED_TOOL_IDS),
+            "missing_required_tool_ids": sorted(ROUTER_RAG_REQUIRED_TOOL_IDS - set(allowed_tool_ids)),
+            "unknown_allowed_tool_ids": sorted(set(allowed_tool_ids) - known_tool_ids),
+        }
+
     def _collect_router_tool_permission_errors(self, allowed_tool_ids: set[str]) -> list[str]:
         errors: list[str] = []
         contracts_by_id = tool_contracts_by_id()

@@ -1096,6 +1096,9 @@ class TestAgentPatternApi:
         payload = detail.json()
         assert payload["agent_pattern"]["id"] == ROUTER_RAG_AGENT_ID
         assert payload["current_version"]["version"] == ROUTER_RAG_AGENT_VERSION
+        assert payload["current_version"]["validation"]["valid"] is True
+        assert "document_evidence" in payload["capabilities"]["required_tool_ids"]
+        assert payload["capabilities"]["node_tool_requirements"]["retrieval_worker"] == "document_evidence"
 
         stale_detail = api_client.get("/api/agent-patterns/simple_rag_agent")
         assert stale_detail.status_code == 404
@@ -1119,11 +1122,46 @@ class TestAgentPatternApi:
         )
 
         assert valid.status_code == 200
-        assert valid.json() == {"valid": True, "errors": []}
+        valid_payload = valid.json()
+        assert valid_payload["valid"] is True
+        assert valid_payload["errors"] == []
+        assert valid_payload["pattern_type"] == ROUTER_RAG_AGENT_ID
+        assert "document_evidence" in valid_payload["required_tool_ids"]
         assert invalid.status_code == 200
-        assert invalid.json()["valid"] is False
+        invalid_payload = invalid.json()
+        assert invalid_payload["valid"] is False
+        assert invalid_payload["unknown_allowed_tool_ids"] == ["mystery_tool"]
+        assert "document_evidence" in invalid_payload["missing_required_tool_ids"]
         assert stale.status_code == 200
         assert stale.json()["valid"] is False
+
+    def test_validate_thread_agent_config_endpoint_resolves_without_running_chat(self, api_client, sample_thread):
+        response = api_client.post(
+            f"/api/threads/{sample_thread.id}/agent-config/validate",
+            json={"overrides": {"use_web_search": True, "max_iterations": 2}},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["valid"] is True
+        assert payload["template_id"] == ROUTER_RAG_AGENT_ID
+        assert payload["template_version"] == ROUTER_RAG_AGENT_VERSION
+        assert payload["validation"]["valid"] is True
+        assert payload["resolved_spec_json"]["config"]["use_web_search"] is True
+        assert payload["resolved_spec_json"]["config"]["max_iterations"] == 2
+
+    def test_validate_thread_agent_config_endpoint_reports_invalid_overrides(self, api_client, sample_thread):
+        response = api_client.post(
+            f"/api/threads/{sample_thread.id}/agent-config/validate",
+            json={"overrides": {"allowed_tool_ids": ["mystery_tool"]}},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["valid"] is False
+        assert payload["template_id"] == ROUTER_RAG_AGENT_ID
+        assert payload["validation"]["valid"] is False
+        assert payload["validation"]["unknown_allowed_tool_ids"] == ["mystery_tool"]
 
     @pytest.mark.asyncio
     async def test_get_agent_run_includes_debug_telemetry(self, api_client, engine, sample_thread):
