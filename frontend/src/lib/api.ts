@@ -185,6 +185,14 @@ export interface WebSource {
   score?: number;
 }
 
+export interface AgentMessageMetadata {
+  agent_run_id?: string;
+  agent_pattern_id?: string;
+  agent_pattern_version?: number | string;
+  agent_route?: string;
+  agent_route_reason?: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -196,6 +204,39 @@ export interface Message {
   reasoning_format?: 'structured' | 'tagged_text' | 'none';
   context_compact?: string;
   web_sources?: WebSource[];
+  metadata?: AgentMessageMetadata;
+  agent_run_id?: string;
+  agent_pattern_id?: string;
+  agent_pattern_version?: number | string;
+  agent_route?: string;
+  agent_route_reason?: string;
+}
+
+export interface AgentRunDebug {
+  chat_turn_id?: string;
+  chat_turn_status?: string;
+  route?: string;
+  route_reason?: string;
+  node_events?: Record<string, any>[];
+  tool_events?: Record<string, any>[];
+  tool_event_count?: number;
+  tool_warning_count?: number;
+  tool_error_count?: number;
+}
+
+export interface AgentRunDetails {
+  id: string;
+  thread_id: string;
+  status: string;
+  template_id: string;
+  template_version_id?: string;
+  resolved_spec_json?: Record<string, any>;
+  metrics_json?: Record<string, any>;
+  error_json?: Record<string, any> | null;
+  started_at?: string;
+  completed_at?: string | null;
+  debug?: AgentRunDebug;
+  [key: string]: any;
 }
 
 export async function createThread(name: string, embedModel: string): Promise<Thread> {
@@ -474,6 +515,13 @@ export async function deleteMessage(messageId: string): Promise<{ deleted_ids: s
   return res.json();
 }
 
+export async function getAgentRun(runId: string): Promise<AgentRunDetails> {
+  const res = await fetch(`${API_BASE}/api/agent-runs/${runId}`);
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.agent_run;
+}
+
 export async function threadChat(
   threadId: string,
   question: string,
@@ -500,6 +548,12 @@ export async function threadChat(
   reasoning_format?: 'structured' | 'tagged_text' | 'none';
   rewritten_query?: string;
   clarification_options?: string[] | null;
+  agent_run_id?: string;
+  agent_pattern_id?: string;
+  agent_pattern_version?: number | string;
+  route?: string;
+  agent_route?: string;
+  agent_route_reason?: string;
 }> {
   const payload: any = {
     thread_id: threadId,

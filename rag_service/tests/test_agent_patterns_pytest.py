@@ -752,3 +752,70 @@ class TestAgentPatternApi:
         assert invalid.json()["valid"] is False
         assert stale.status_code == 200
         assert stale.json()["valid"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_agent_run_includes_debug_telemetry(self, api_client, engine, sample_thread):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            run = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            await repo.complete_run(
+                run.id,
+                status="completed",
+                metrics_json={"duration_ms": 42.0, "tool_event_count": 1},
+            )
+
+        turn = ChatTurn(
+            id=str(uuid.uuid4()),
+            thread_id=sample_thread.id,
+            status="completed",
+            payload={
+                "question": "What happened?",
+                "answer": "Answer",
+                "metadata": {
+                    "agent_run_id": run.id,
+                    "agent_route": "web",
+                    "agent_route_reason": "Needs live evidence.",
+                    "agent_node_events": [{"node": "router", "route": "web"}],
+                    "agent_tool_events": [
+                        {
+                            "tool_name": "search_web",
+                            "caller_node": "web_worker",
+                            "ok": True,
+                            "elapsed_ms": 12.3,
+                            "warnings": [],
+                        }
+                    ],
+                },
+            },
+        )
+        async with session_factory() as write_session:
+            write_session.add(turn)
+            await write_session.commit()
+
+        response = api_client.get(f"/api/agent-runs/{run.id}")
+
+        assert response.status_code == 200
+        payload = response.json()["agent_run"]
+        assert payload["id"] == run.id
+        assert payload["metrics_json"]["tool_event_count"] == 1
+        assert payload["debug"]["chat_turn_id"] == turn.id
+        assert payload["debug"]["route"] == "web"
+        assert payload["debug"]["route_reason"] == "Needs live evidence."
+        assert payload["debug"]["node_events"] == [{"node": "router", "route": "web"}]
+        assert payload["debug"]["tool_events"][0]["tool_name"] == "search_web"
+        assert payload["debug"]["tool_event_count"] == 1
+        assert payload["debug"]["tool_warning_count"] == 0
+        assert payload["debug"]["tool_error_count"] == 0

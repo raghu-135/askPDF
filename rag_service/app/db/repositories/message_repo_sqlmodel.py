@@ -40,6 +40,7 @@ class ExpandedMessage:
     reasoning_available: bool = False
     reasoning_format: str = "none"
     web_sources: Optional[List[Dict[str, Any]]] = None
+    metadata: Optional[Dict[str, Any]] = None
     turn_id: Optional[str] = None
     turn_status: Optional[str] = None
 
@@ -121,6 +122,7 @@ def _expand_turn(turn: ChatTurn) -> List[ExpandedMessage]:
                 reasoning_available=bool(payload.get("reasoning_available")),
                 reasoning_format=payload.get("reasoning_format") or "none",
                 web_sources=payload.get("web_sources") or None,
+                metadata=payload.get("metadata") or {},
                 created_at=created_at,
                 turn_id=turn.id,
                 turn_status=turn.status,

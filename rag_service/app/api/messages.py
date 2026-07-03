@@ -34,6 +34,20 @@ from app.models.requests import ThreadChatRequest
 router = APIRouter(tags=["messages"])
 
 
+def _agent_message_metadata(message) -> dict:
+    metadata = getattr(message, "metadata", None)
+    if not isinstance(metadata, dict):
+        return {}
+    allowed_keys = {
+        "agent_run_id",
+        "agent_pattern_id",
+        "agent_pattern_version",
+        "agent_route",
+        "agent_route_reason",
+    }
+    return {key: metadata[key] for key in allowed_keys if key in metadata}
+
+
 @router.get("/threads/{thread_id}/messages")
 async def get_thread_messages_endpoint(
     thread_id: str, limit: int = 100, offset: int = 0
@@ -57,6 +71,7 @@ async def get_thread_messages_endpoint(
                     "reasoning_available": m.reasoning_available,
                     "reasoning_format": m.reasoning_format,
                     "web_sources": m.web_sources,
+                    "metadata": _agent_message_metadata(m),
                     "created_at": iso_utc_z(m.created_at),
                 }
                 for m in messages

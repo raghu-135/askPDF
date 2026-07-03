@@ -15,6 +15,7 @@ from app.db.models_sqlmodel import (
     AgentPatternTemplate,
     AgentPatternTemplateVersion,
     AgentRun,
+    ChatTurn,
 )
 from app.time_utils import utc_now
 
@@ -121,6 +122,20 @@ class AgentPatternRepository:
         session = await self._get_session()
         async with session.begin():
             return await session.get(AgentRun, run_id)
+
+    async def get_chat_turn_for_run(self, run: AgentRun) -> Optional[ChatTurn]:
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(ChatTurn)
+                .where(
+                    ChatTurn.thread_id == run.thread_id,
+                    ChatTurn.payload["metadata"]["agent_run_id"].astext == run.id,
+                )
+                .order_by(ChatTurn.created_at.desc(), ChatTurn.id.desc())
+                .limit(1)
+            )
+            return result.scalar_one_or_none()
 
     async def create_run(
         self,

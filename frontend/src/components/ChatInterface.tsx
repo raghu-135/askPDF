@@ -50,7 +50,9 @@ import {
     getThreadSettings,
     updateThreadSettings,
     getPromptTools,
-    getPromptPreview
+    getPromptPreview,
+    getAgentRun,
+    AgentRunDetails,
 } from '../lib/api';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
@@ -65,6 +67,11 @@ interface ChatMessage extends Message {
     reasoning_format?: 'structured' | 'tagged_text' | 'none';
     rewritten_query?: string;
     web_sources?: WebSource[];
+    agent_run_id?: string;
+    agent_pattern_id?: string;
+    agent_pattern_version?: number | string;
+    agent_route?: string;
+    agent_route_reason?: string;
 }
 
 type ClarificationChoice = {
@@ -159,6 +166,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [lineageThreads, setLineageThreads] = useState<Thread[]>([]);
     const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
     const [editingOriginalText, setEditingOriginalText] = useState('');
+    const [agentRunDetails, setAgentRunDetails] = useState<Record<string, AgentRunDetails>>({});
+    const [agentRunLoading, setAgentRunLoading] = useState<Record<string, boolean>>({});
+    const [agentRunErrors, setAgentRunErrors] = useState<Record<string, string>>({});
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -365,6 +375,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 isRecollected: false,
                 rewritten_query: m.role === 'user' ? m.context_compact : undefined,
                 web_sources: m.role === 'assistant' ? (m.web_sources || []) : undefined,
+                agent_run_id: m.role === 'assistant' ? m.metadata?.agent_run_id : undefined,
+                agent_pattern_id: m.role === 'assistant' ? m.metadata?.agent_pattern_id : undefined,
+                agent_pattern_version: m.role === 'assistant' ? m.metadata?.agent_pattern_version : undefined,
+                agent_route: m.role === 'assistant' ? m.metadata?.agent_route : undefined,
+                agent_route_reason: m.role === 'assistant' ? m.metadata?.agent_route_reason : undefined,
             })));
         } catch (error) {
             console.error('Failed to load messages:', error);
@@ -845,6 +860,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             reasoning_available: !!response.reasoning_available,
                             reasoning_format: response.reasoning_format || 'none',
                             web_sources: response.web_sources || [],
+                            agent_run_id: response.agent_run_id,
+                            agent_pattern_id: response.agent_pattern_id,
+                            agent_pattern_version: response.agent_pattern_version,
+                            agent_route: response.agent_route || response.route,
+                            agent_route_reason: response.agent_route_reason,
                             created_at: new Date().toISOString()
                         });
                     }
@@ -1030,6 +1050,36 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         } finally {
             setForkingMessageId(null);
         }
+    };
+
+    const handleAgentRunToggle = async (msg: ChatMessage, event: React.SyntheticEvent<HTMLDetailsElement>) => {
+        const details = event.currentTarget;
+        const runId = msg.agent_run_id;
+        if (!details.open || !runId || agentRunDetails[runId] || agentRunLoading[runId]) return;
+
+        setAgentRunLoading(prev => ({ ...prev, [runId]: true }));
+        setAgentRunErrors(prev => {
+            const next = { ...prev };
+            delete next[runId];
+            return next;
+        });
+        try {
+            const run = await getAgentRun(runId);
+            setAgentRunDetails(prev => ({ ...prev, [runId]: run }));
+        } catch (error: any) {
+            setAgentRunErrors(prev => ({
+                ...prev,
+                [runId]: error?.message || 'Unable to load agent run.',
+            }));
+        } finally {
+            setAgentRunLoading(prev => ({ ...prev, [runId]: false }));
+        }
+    };
+
+    const formatAgentPatternLabel = (msg: ChatMessage) => {
+        const pattern = msg.agent_pattern_id || 'agent';
+        const version = msg.agent_pattern_version;
+        return version ? `${pattern} v${version}` : pattern;
     };
 
     if (!activeThread) {
@@ -1464,6 +1514,110 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             >
                                                 {msg.reasoning}
                                             </Typography>
+                                        </details>
+                                    </Box>
+                                )}
+                                {msg.role === 'assistant' && msg.agent_run_id && (
+                                    <Box sx={{ mt: 1 }}>
+                                        <details onToggle={(event) => handleAgentRunToggle(msg, event)}>
+                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                Agent run: {formatAgentPatternLabel(msg)}
+                                                {msg.agent_route ? ` - ${msg.agent_route}` : ''}
+                                            </summary>
+                                            <Box
+                                                sx={{
+                                                    mt: 1,
+                                                    p: 1,
+                                                    borderRadius: 1,
+                                                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    gap: 0.75,
+                                                }}
+                                            >
+                                                <Typography variant="caption" sx={{ display: 'block', wordBreak: 'break-all' }}>
+                                                    Run ID: {msg.agent_run_id}
+                                                </Typography>
+                                                {msg.agent_route_reason && (
+                                                    <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                                                        Route reason: {msg.agent_route_reason}
+                                                    </Typography>
+                                                )}
+                                                {agentRunLoading[msg.agent_run_id] && (
+                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                        <CircularProgress size={14} />
+                                                        <Typography variant="caption" color="text.secondary">Loading run details...</Typography>
+                                                    </Box>
+                                                )}
+                                                {agentRunErrors[msg.agent_run_id] && (
+                                                    <Typography variant="caption" color="error">
+                                                        {agentRunErrors[msg.agent_run_id]}
+                                                    </Typography>
+                                                )}
+                                                {agentRunDetails[msg.agent_run_id]?.debug && (
+                                                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                                                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                                                            <Chip
+                                                                size="small"
+                                                                label={`Status: ${agentRunDetails[msg.agent_run_id].status}`}
+                                                                variant="outlined"
+                                                            />
+                                                            <Chip
+                                                                size="small"
+                                                                label={`Tools: ${agentRunDetails[msg.agent_run_id].debug?.tool_event_count ?? 0}`}
+                                                                variant="outlined"
+                                                            />
+                                                            <Chip
+                                                                size="small"
+                                                                color={(agentRunDetails[msg.agent_run_id].debug?.tool_warning_count ?? 0) > 0 ? 'warning' : 'default'}
+                                                                label={`Warnings: ${agentRunDetails[msg.agent_run_id].debug?.tool_warning_count ?? 0}`}
+                                                                variant="outlined"
+                                                            />
+                                                            <Chip
+                                                                size="small"
+                                                                color={(agentRunDetails[msg.agent_run_id].debug?.tool_error_count ?? 0) > 0 ? 'error' : 'default'}
+                                                                label={`Errors: ${agentRunDetails[msg.agent_run_id].debug?.tool_error_count ?? 0}`}
+                                                                variant="outlined"
+                                                            />
+                                                        </Box>
+                                                        {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).length > 0 && (
+                                                            <Box>
+                                                                <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, mb: 0.5 }}>
+                                                                    Nodes
+                                                                </Typography>
+                                                                {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).slice(-6).map((event, eventIndex) => (
+                                                                    <Typography
+                                                                        key={`node-${eventIndex}`}
+                                                                        variant="caption"
+                                                                        sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
+                                                                    >
+                                                                        {event.node || event.name || 'node'}: {Math.round(Number(event.elapsed_ms || 0))}ms
+                                                                        {event.route ? `, route ${event.route}` : ''}
+                                                                    </Typography>
+                                                                ))}
+                                                            </Box>
+                                                        )}
+                                                        {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).length > 0 && (
+                                                            <Box>
+                                                                <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, mb: 0.5 }}>
+                                                                    Tools
+                                                                </Typography>
+                                                                {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).slice(-6).map((event, eventIndex) => (
+                                                                    <Typography
+                                                                        key={`tool-${eventIndex}`}
+                                                                        variant="caption"
+                                                                        sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
+                                                                    >
+                                                                        {event.tool || event.tool_name || 'tool'} from {event.caller_node || 'node'}:
+                                                                        {' '}{event.ok === false ? 'failed' : 'ok'}, {Math.round(Number(event.elapsed_ms || 0))}ms
+                                                                        {Array.isArray(event.warnings) && event.warnings.length > 0 ? `, warnings ${event.warnings.length}` : ''}
+                                                                    </Typography>
+                                                                ))}
+                                                            </Box>
+                                                        )}
+                                                    </Box>
+                                                )}
+                                            </Box>
                                         </details>
                                     </Box>
                                 )}

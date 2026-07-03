@@ -44,8 +44,8 @@ def _version_payload(version) -> Dict[str, Any]:
     }
 
 
-def _run_payload(run) -> Dict[str, Any]:
-    return {
+def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
+    payload = {
         "id": run.id,
         "thread_id": run.thread_id,
         "user_id": run.user_id,
@@ -59,6 +59,31 @@ def _run_payload(run) -> Dict[str, Any]:
         "error_json": run.error_json,
         "metrics_json": run.metrics_json,
     }
+    if chat_turn is not None:
+        turn_payload = chat_turn.payload if isinstance(chat_turn.payload, dict) else {}
+        metadata = turn_payload.get("metadata") if isinstance(turn_payload.get("metadata"), dict) else {}
+        tool_events = metadata.get("agent_tool_events") if isinstance(metadata.get("agent_tool_events"), list) else []
+        node_events = metadata.get("agent_node_events") if isinstance(metadata.get("agent_node_events"), list) else []
+        payload["debug"] = {
+            "chat_turn_id": chat_turn.id,
+            "chat_turn_status": chat_turn.status,
+            "route": metadata.get("agent_route"),
+            "route_reason": metadata.get("agent_route_reason"),
+            "node_events": node_events,
+            "tool_events": tool_events,
+            "tool_event_count": len(tool_events),
+            "tool_warning_count": sum(
+                len(event.get("warnings") or [])
+                for event in tool_events
+                if isinstance(event, dict)
+            ),
+            "tool_error_count": sum(
+                1
+                for event in tool_events
+                if isinstance(event, dict) and not event.get("ok", True)
+            ),
+        }
+    return payload
 
 
 @router.get("/agent-patterns")
@@ -94,7 +119,9 @@ async def validate_agent_pattern(req: TemplateValidationRequest):
 
 @router.get("/agent-runs/{run_id}")
 async def get_agent_run(run_id: str):
-    run = await AgentPatternRepository().get_run(run_id)
+    repo = AgentPatternRepository()
+    run = await repo.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Agent run not found")
-    return {"agent_run": _run_payload(run)}
+    chat_turn = await repo.get_chat_turn_for_run(run)
+    return {"agent_run": _run_payload(run, chat_turn=chat_turn)}
