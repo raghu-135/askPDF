@@ -1,6 +1,7 @@
 import os
 import uuid
 import logging
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -18,7 +19,8 @@ from app.agent_patterns.templates import (
     builtin_router_rag_spec,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
-from app.db.models_sqlmodel import ChatTurn
+from app.db.models_sqlmodel import AgentRun, ChatTurn
+from app.time_utils import utc_now
 
 
 SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
@@ -317,6 +319,107 @@ class TestAgentPatternRepository:
 
         assert [run.id for run in runs] == [second.id]
         assert first.id != second.id
+
+    @pytest.mark.asyncio
+    async def test_prune_runs_before_deletes_only_matching_old_statuses(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        old_completed = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_completed"},
+        )
+        old_running = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_running"},
+        )
+        recent_completed = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "recent_completed"},
+        )
+        old_at = utc_now() - timedelta(days=45)
+        recent_at = utc_now() - timedelta(days=1)
+
+        session = await repo._get_session()
+        async with session.begin():
+            old_completed_row = await session.get(AgentRun, old_completed.id)
+            old_running_row = await session.get(AgentRun, old_running.id)
+            recent_completed_row = await session.get(AgentRun, recent_completed.id)
+            old_completed_row.started_at = old_at
+            old_completed_row.status = "completed"
+            old_running_row.started_at = old_at
+            old_running_row.status = "running"
+            recent_completed_row.started_at = recent_at
+            recent_completed_row.status = "completed"
+
+        deleted_ids = await repo.prune_runs_before(
+            utc_now() - timedelta(days=30),
+            statuses=["completed", "failed"],
+            thread_id=sample_thread.id,
+        )
+
+        assert deleted_ids == [old_completed.id]
+        assert await repo.get_run(old_completed.id) is None
+        assert await repo.get_run(old_running.id) is not None
+        assert await repo.get_run(recent_completed.id) is not None
+
+    @pytest.mark.asyncio
+    async def test_prune_runs_before_requires_explicit_statuses(self, repo):
+        with pytest.raises(ValueError, match="statuses must contain at least one status"):
+            await repo.prune_runs_before(utc_now(), statuses=[])
+
+    @pytest.mark.asyncio
+    async def test_fail_stale_running_runs_marks_only_old_running_rows_failed(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        stale_running = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "stale_running"},
+        )
+        recent_running = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "recent_running"},
+        )
+        stale_completed = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "stale_completed"},
+        )
+        old_at = utc_now() - timedelta(hours=6)
+        recent_at = utc_now() - timedelta(minutes=5)
+
+        session = await repo._get_session()
+        async with session.begin():
+            stale_running_row = await session.get(AgentRun, stale_running.id)
+            recent_running_row = await session.get(AgentRun, recent_running.id)
+            stale_completed_row = await session.get(AgentRun, stale_completed.id)
+            stale_running_row.started_at = old_at
+            recent_running_row.started_at = recent_at
+            stale_completed_row.started_at = old_at
+            stale_completed_row.status = "completed"
+
+        failed_ids = await repo.fail_stale_running_runs(utc_now() - timedelta(hours=1))
+
+        assert failed_ids == [stale_running.id]
+        stale_running_after = await repo.get_run(stale_running.id)
+        recent_running_after = await repo.get_run(recent_running.id)
+        stale_completed_after = await repo.get_run(stale_completed.id)
+        assert stale_running_after.status == "failed"
+        assert stale_running_after.completed_at is not None
+        assert stale_running_after.error_json["code"] == "agent_run_stale"
+        assert stale_running_after.metrics_json["error_count"] == 1
+        assert recent_running_after.status == "running"
+        assert stale_completed_after.status == "completed"
 
     @pytest.mark.asyncio
     async def test_unsupported_simple_rag_template_is_not_exposed(self, repo):
