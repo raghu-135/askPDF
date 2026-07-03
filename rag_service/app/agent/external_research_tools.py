@@ -13,7 +13,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from langchain_community.tools import DuckDuckGoSearchResults
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool, StructuredTool, tool
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.tool_contract import make_tool_error_result, make_tool_result, tool_started
@@ -266,11 +266,56 @@ def _build_tool(
     try:
         tool_cls = _import_attr(tool_path, class_name)
         tool = factory(tool_cls) if factory else tool_cls()
-        logger.info("Registered external research tool: %s (%s)", display_name, tool.name)
-        return tool
+        wrapped_tool = _wrap_external_tool_with_contract(tool)
+        logger.info("Registered external research tool: %s (%s)", display_name, wrapped_tool.name)
+        return wrapped_tool
     except Exception as exc:
         logger.warning("Skipping external research tool %s: %s", display_name, exc)
         return None
+
+
+def _tool_input_from_kwargs(kwargs: Dict[str, Any]) -> Any:
+    if len(kwargs) == 1:
+        return next(iter(kwargs.values()))
+    return kwargs
+
+
+def _wrap_external_tool_with_contract(base_tool: BaseTool) -> BaseTool:
+    """Wrap a third-party LangChain tool with the askPDF tool result contract."""
+
+    tool_name = base_tool.name
+    description = base_tool.description or f"External research tool: {tool_name}"
+
+    async def contracted_external_tool(config: RunnableConfig = None, **kwargs: Any) -> str:
+        started = tool_started()
+        try:
+            tool_input = _tool_input_from_kwargs(kwargs)
+            raw = await base_tool.ainvoke(tool_input, config=config)
+            content = raw if isinstance(raw, str) else str(raw or "")
+            warnings = [] if content.strip() else ["empty_external_tool_result"]
+            return make_tool_result(
+                tool_name=tool_name,
+                content=content,
+                config=config,
+                started=started,
+                warnings=warnings,
+                artifacts={"provider_tool": base_tool.__class__.__name__},
+            ).to_json()
+        except Exception as exc:
+            return make_tool_error_result(
+                tool_name=tool_name,
+                error=exc,
+                config=config,
+                started=started,
+                user_message=f"{tool_name} failed: {exc}",
+            ).to_json()
+
+    return StructuredTool.from_function(
+        coroutine=contracted_external_tool,
+        name=tool_name,
+        description=description,
+        args_schema=base_tool.args_schema,
+    )
 
 
 def _wikipedia_tool(tool_cls: Any) -> BaseTool:

@@ -3,6 +3,7 @@ from langchain_core.tools import tool
 
 from app.agent import external_research_tools
 from app.agent.prompting import format_intent_tool_context
+from app.agent.tool_contract import normalize_tool_result
 from app.agent.tool_node import RecoverableToolNode
 from app.prompts.loaders import get_web_search_mandate, load_prompt
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
@@ -88,6 +89,44 @@ def test_external_research_tools_have_prompt_metadata():
     missing = expected_tool_names - set(TOOL_FRIENDLY_CONFIG)
     assert not missing
     assert "find_topic_anchor_in_history" not in TOOL_FRIENDLY_CONFIG
+
+
+@pytest.mark.asyncio
+async def test_external_tool_wrapper_returns_contract_envelope():
+    @tool
+    async def fake_reference(query: str) -> str:
+        """Lookup fake reference material."""
+        return f"reference: {query}"
+
+    wrapped = external_research_tools._wrap_external_tool_with_contract(fake_reference)
+    raw = await wrapped.ainvoke(
+        {"query": "diffusion"},
+        config={"configurable": {"agent_run_id": "run-1", "caller_node": "web_worker"}},
+    )
+    payload = normalize_tool_result(raw, tool_name=wrapped.name)
+
+    assert wrapped.name == "fake_reference"
+    assert payload["ok"] is True
+    assert payload["content"] == "reference: diffusion"
+    assert payload["trace"]["agent_run_id"] == "run-1"
+    assert payload["trace"]["caller_node"] == "web_worker"
+    assert payload["artifacts"]["provider_tool"]
+
+
+@pytest.mark.asyncio
+async def test_external_tool_wrapper_converts_provider_errors_to_recoverable_result():
+    @tool
+    async def failing_reference(query: str) -> str:
+        """Lookup fake reference material."""
+        raise RuntimeError("provider unavailable")
+
+    wrapped = external_research_tools._wrap_external_tool_with_contract(failing_reference)
+    raw = await wrapped.ainvoke({"query": "diffusion"})
+    payload = normalize_tool_result(raw, tool_name=wrapped.name)
+
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "RuntimeError"
+    assert "provider unavailable" in payload["content"]
 
 
 def test_yahoo_finance_news_guidance_requires_ticker_and_search_web_prereq():
