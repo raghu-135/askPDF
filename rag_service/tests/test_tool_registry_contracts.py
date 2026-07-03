@@ -4,6 +4,7 @@ from app.agent.tool_registry import (
     get_tool_contract_metadata,
     known_tool_contract_ids,
     list_tool_contract_metadata,
+    validate_tool_call_allowed,
 )
 from app.agent_patterns.templates import builtin_router_rag_spec
 from app.agent_patterns.validator import TemplateValidator
@@ -69,6 +70,28 @@ def test_tool_contract_records_are_schema_like():
         assert metadata["allowed_caller_nodes"] == contract["allowed_caller_nodes"]
         assert metadata["artifact_keys"] == contract["artifact_keys"]
         assert metadata["warning_codes"] == contract["warning_codes"]
+
+
+def test_tool_call_validation_enforces_allowed_caller_nodes():
+    validate_tool_call_allowed("search_documents", "retrieval_worker")
+    validate_tool_call_allowed("search_conversation_history", "memory_worker")
+    validate_tool_call_allowed("search_thread_timeline", "timeline_worker")
+    validate_tool_call_allowed("search_web", "web_worker")
+
+    try:
+        validate_tool_call_allowed("search_documents", "memory_worker")
+    except ValueError as exc:
+        assert "search_documents is not allowed from caller node memory_worker" in str(exc)
+        assert "retrieval_worker" in str(exc)
+    else:
+        raise AssertionError("Expected disallowed caller node to raise")
+
+    try:
+        validate_tool_call_allowed("unknown_tool", "retrieval_worker")
+    except ValueError as exc:
+        assert "Unknown tool contract: unknown_tool" in str(exc)
+    else:
+        raise AssertionError("Expected unknown tool contract to raise")
 
 
 def test_tool_contracts_endpoint(api_client):

@@ -175,6 +175,20 @@ def known_tool_contract_ids() -> set[str]:
     }
 
 
+def validate_tool_call_allowed(tool_name: str, caller_node: str) -> None:
+    """Raise when a graph node attempts to call a tool outside its contract."""
+
+    contract = TOOL_CONTRACT_METADATA.get(tool_name)
+    if not contract:
+        raise ValueError(f"Unknown tool contract: {tool_name}")
+    allowed_nodes = contract.get("allowed_caller_nodes") or []
+    if caller_node not in allowed_nodes:
+        raise ValueError(
+            f"Tool {tool_name} is not allowed from caller node {caller_node}; "
+            f"allowed caller nodes: {', '.join(allowed_nodes) or 'none'}"
+        )
+
+
 TOOL_FRIENDLY_CONFIG = {
     "search_documents": {
         "id": "document_evidence",

@@ -74,6 +74,29 @@ class TestRouterRagTemplateValidator:
 
 
 class TestRouterRagGraphToolConsumers:
+    def test_tool_config_enforces_registry_contracts(self):
+        from app.agent_patterns.graph import _tool_config
+
+        state = {"agent_run_id": "run-1", "route": "document"}
+        config = {"configurable": {"thread_id": "thread-1"}}
+
+        allowed = _tool_config(
+            state,
+            config,
+            caller_node="retrieval_worker",
+            tool_name="search_documents",
+        )
+        assert allowed["configurable"]["caller_node"] == "retrieval_worker"
+        assert allowed["configurable"]["tool_name"] == "search_documents"
+
+        with pytest.raises(ValueError, match="search_documents is not allowed from caller node memory_worker"):
+            _tool_config(
+                state,
+                config,
+                caller_node="memory_worker",
+                tool_name="search_documents",
+            )
+
     @pytest.mark.asyncio
     async def test_workers_consume_tool_artifacts_without_legacy_fields(self, monkeypatch):
         class FakeTool:

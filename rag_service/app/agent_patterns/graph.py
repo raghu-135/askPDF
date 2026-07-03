@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agent.reasoning import normalize_ai_response
 from app.agent.prompting import sanitize_custom_instructions, sanitize_system_role
 from app.agent.tool_contract import compact_tool_event, normalize_tool_result
+from app.agent.tool_registry import validate_tool_call_allowed
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.models.retry import invoke_with_retry
 from app.agent.external_research_tools import search_web
@@ -65,6 +66,7 @@ def _append_tool_event(state: RouterRagState, payload: Dict[str, Any]) -> List[D
 
 
 def _tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: str, tool_name: str) -> RunnableConfig:
+    validate_tool_call_allowed(tool_name, caller_node)
     updated = dict(config or {})
     configurable = dict(updated.get("configurable") or {})
     configurable.update(
