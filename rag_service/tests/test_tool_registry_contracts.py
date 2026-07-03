@@ -62,4 +62,26 @@ def test_tool_contract_records_are_schema_like():
         assert isinstance(contract["allowed_caller_nodes"], list)
         assert isinstance(contract["artifact_keys"], list)
         assert isinstance(contract["warning_codes"], list)
-        assert get_tool_contract_metadata(tool_name) == contract
+        metadata = get_tool_contract_metadata(tool_name)
+        assert metadata["tool_name"] == tool_name
+        assert metadata["id"] == contract["id"]
+        assert metadata["category"] == contract["category"]
+        assert metadata["allowed_caller_nodes"] == contract["allowed_caller_nodes"]
+        assert metadata["artifact_keys"] == contract["artifact_keys"]
+        assert metadata["warning_codes"] == contract["warning_codes"]
+
+
+def test_tool_contracts_endpoint(api_client):
+    response = api_client.get("/api/tools/contracts")
+
+    assert response.status_code == 200
+    tools = response.json()["tools"]
+    by_name = {tool["tool_name"]: tool for tool in tools}
+
+    assert by_name["search_documents"]["id"] == "document_evidence"
+    assert by_name["search_documents"]["display_name"] == "Document Evidence"
+    assert by_name["search_documents"]["allowed_caller_nodes"] == ["retrieval_worker"]
+    assert by_name["search_documents"]["artifact_keys"] == ["document_sources", "web_sources"]
+    assert "missing_thread_context" in by_name["search_documents"]["warning_codes"]
+    assert by_name["search_web"]["category"] == "web"
+    assert "web_search_disabled" in by_name["search_web"]["warning_codes"]

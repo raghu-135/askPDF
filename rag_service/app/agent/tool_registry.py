@@ -145,7 +145,15 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
 def get_tool_contract_metadata(tool_name: str) -> Dict[str, Any]:
     """Return contract metadata for a canonical tool name."""
 
-    return deepcopy(TOOL_CONTRACT_METADATA.get(tool_name, {}))
+    contract = TOOL_CONTRACT_METADATA.get(tool_name)
+    if not contract:
+        return {}
+    record = {"tool_name": tool_name, **contract}
+    friendly = TOOL_FRIENDLY_CONFIG.get(tool_name) or {}
+    for key in ("display_name", "description"):
+        if key in friendly:
+            record[key] = friendly[key]
+    return deepcopy(record)
 
 
 def list_tool_contract_metadata() -> List[Dict[str, Any]]:
@@ -153,12 +161,7 @@ def list_tool_contract_metadata() -> List[Dict[str, Any]]:
 
     records = []
     for tool_name, metadata in sorted(TOOL_CONTRACT_METADATA.items()):
-        record = {"tool_name": tool_name, **metadata}
-        friendly = TOOL_FRIENDLY_CONFIG.get(tool_name) or {}
-        for key in ("display_name", "description"):
-            if key in friendly:
-                record[key] = friendly[key]
-        records.append(deepcopy(record))
+        records.append(get_tool_contract_metadata(tool_name))
     return records
 
 

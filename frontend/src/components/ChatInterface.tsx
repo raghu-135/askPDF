@@ -1082,6 +1082,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         return version ? `${pattern} v${version}` : pattern;
     };
 
+    const formatToolEventName = (event: Record<string, any>) => (
+        event.tool_display_name || event.tool || event.tool_name || 'tool'
+    );
+
     if (!activeThread) {
         return (
             <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: theme.palette.background.default, color: theme.palette.text.primary }}>
@@ -1602,17 +1606,41 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                 <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, mb: 0.5 }}>
                                                                     Tools
                                                                 </Typography>
-                                                                {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).slice(-6).map((event, eventIndex) => (
-                                                                    <Typography
-                                                                        key={`tool-${eventIndex}`}
-                                                                        variant="caption"
-                                                                        sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
-                                                                    >
-                                                                        {event.tool || event.tool_name || 'tool'} from {event.caller_node || 'node'}:
-                                                                        {' '}{event.ok === false ? 'failed' : 'ok'}, {Math.round(Number(event.elapsed_ms || 0))}ms
-                                                                        {Array.isArray(event.warnings) && event.warnings.length > 0 ? `, warnings ${event.warnings.length}` : ''}
-                                                                    </Typography>
-                                                                ))}
+                                                                {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).slice(-6).map((event, eventIndex) => {
+                                                                    const warnings = Array.isArray(event.warnings) ? event.warnings : [];
+                                                                    const artifactKeys = Array.isArray(event.artifact_keys) ? event.artifact_keys : [];
+                                                                    return (
+                                                                        <Box
+                                                                            key={`tool-${eventIndex}`}
+                                                                            sx={{
+                                                                                display: 'flex',
+                                                                                flexDirection: 'column',
+                                                                                gap: 0.35,
+                                                                                py: 0.35,
+                                                                            }}
+                                                                        >
+                                                                            <Typography
+                                                                                variant="caption"
+                                                                                sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
+                                                                            >
+                                                                                {formatToolEventName(event)} from {event.caller_node || 'node'}:
+                                                                                {' '}{event.ok === false ? 'failed' : 'ok'}, {Math.round(Number(event.elapsed_ms || 0))}ms
+                                                                                {typeof event.source_count === 'number' ? `, sources ${event.source_count}` : ''}
+                                                                            </Typography>
+                                                                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4 }}>
+                                                                                {event.tool_category && (
+                                                                                    <Chip size="small" variant="outlined" label={event.tool_category} sx={{ height: 18, fontSize: '0.65rem' }} />
+                                                                                )}
+                                                                                {artifactKeys.slice(0, 4).map((artifactKey) => (
+                                                                                    <Chip key={artifactKey} size="small" variant="outlined" label={artifactKey} sx={{ height: 18, fontSize: '0.65rem' }} />
+                                                                                ))}
+                                                                                {warnings.map((warning) => (
+                                                                                    <Chip key={warning} size="small" color="warning" variant="outlined" label={warning} sx={{ height: 18, fontSize: '0.65rem' }} />
+                                                                                ))}
+                                                                            </Box>
+                                                                        </Box>
+                                                                    );
+                                                                })}
                                                             </Box>
                                                         )}
                                                     </Box>

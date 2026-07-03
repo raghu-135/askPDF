@@ -5,6 +5,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.agent.tool_registry import get_tool_contract_metadata
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.validator import TemplateValidator
 from app.time_utils import iso_utc_z
@@ -44,6 +45,21 @@ def _version_payload(version) -> Dict[str, Any]:
     }
 
 
+def _enriched_tool_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    tool_name = event.get("tool_name")
+    contract = get_tool_contract_metadata(tool_name) if isinstance(tool_name, str) else {}
+    if not contract:
+        return dict(event)
+    return {
+        **event,
+        "tool_id": contract.get("id"),
+        "tool_category": contract.get("category"),
+        "tool_display_name": contract.get("display_name"),
+        "artifact_keys": contract.get("artifact_keys", []),
+        "known_warning_codes": contract.get("warning_codes", []),
+    }
+
+
 def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
     payload = {
         "id": run.id,
@@ -64,23 +80,27 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
         metadata = turn_payload.get("metadata") if isinstance(turn_payload.get("metadata"), dict) else {}
         tool_events = metadata.get("agent_tool_events") if isinstance(metadata.get("agent_tool_events"), list) else []
         node_events = metadata.get("agent_node_events") if isinstance(metadata.get("agent_node_events"), list) else []
+        enriched_tool_events = [
+            _enriched_tool_event(event)
+            for event in tool_events
+            if isinstance(event, dict)
+        ]
         payload["debug"] = {
             "chat_turn_id": chat_turn.id,
             "chat_turn_status": chat_turn.status,
             "route": metadata.get("agent_route"),
             "route_reason": metadata.get("agent_route_reason"),
             "node_events": node_events,
-            "tool_events": tool_events,
-            "tool_event_count": len(tool_events),
+            "tool_events": enriched_tool_events,
+            "tool_event_count": len(enriched_tool_events),
             "tool_warning_count": sum(
                 len(event.get("warnings") or [])
-                for event in tool_events
-                if isinstance(event, dict)
+                for event in enriched_tool_events
             ),
             "tool_error_count": sum(
                 1
-                for event in tool_events
-                if isinstance(event, dict) and not event.get("ok", True)
+                for event in enriched_tool_events
+                if not event.get("ok", True)
             ),
         }
     return payload

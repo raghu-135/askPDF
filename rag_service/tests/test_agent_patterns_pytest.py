@@ -910,6 +910,11 @@ class TestAgentPatternApi:
         assert payload["debug"]["route_reason"] == "Needs live evidence."
         assert payload["debug"]["node_events"] == [{"node": "router", "route": "web"}]
         assert payload["debug"]["tool_events"][0]["tool_name"] == "search_web"
+        assert payload["debug"]["tool_events"][0]["tool_id"] == "live_web_recon"
+        assert payload["debug"]["tool_events"][0]["tool_category"] == "web"
+        assert payload["debug"]["tool_events"][0]["tool_display_name"] == "Internet Search"
+        assert payload["debug"]["tool_events"][0]["artifact_keys"] == ["web_sources"]
+        assert "web_search_disabled" in payload["debug"]["tool_events"][0]["known_warning_codes"]
         assert payload["debug"]["tool_event_count"] == 1
         assert payload["debug"]["tool_warning_count"] == 0
         assert payload["debug"]["tool_error_count"] == 0

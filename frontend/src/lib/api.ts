@@ -212,13 +212,30 @@ export interface Message {
   agent_route_reason?: string;
 }
 
+export interface AgentToolEvent {
+  tool_name?: string;
+  tool_id?: string;
+  tool_category?: string;
+  tool_display_name?: string;
+  artifact_keys?: string[];
+  known_warning_codes?: string[];
+  caller_node?: string;
+  ok?: boolean;
+  elapsed_ms?: number;
+  result_chars?: number;
+  source_count?: number;
+  warnings?: string[];
+  error?: Record<string, any> | null;
+  [key: string]: any;
+}
+
 export interface AgentRunDebug {
   chat_turn_id?: string;
   chat_turn_status?: string;
   route?: string;
   route_reason?: string;
   node_events?: Record<string, any>[];
-  tool_events?: Record<string, any>[];
+  tool_events?: AgentToolEvent[];
   tool_event_count?: number;
   tool_warning_count?: number;
   tool_error_count?: number;
