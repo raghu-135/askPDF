@@ -21,6 +21,30 @@ class AskPdfTool(Protocol):
         ...
 
 
+class ToolWarningCode:
+    EMPTY_EXTERNAL_TOOL_RESULT = "empty_external_tool_result"
+    MISSING_DOCUMENT_VECTORS = "missing_document_vectors"
+    MISSING_THREAD_CONTEXT = "missing_thread_context"
+    MISSING_THREAD_ID = "missing_thread_id"
+    NO_RELEVANT_CONTENT = "no_relevant_content"
+    NO_RELEVANT_CONVERSATION_HISTORY = "no_relevant_conversation_history"
+    NO_THREAD_DOCUMENTS = "no_thread_documents"
+    NO_TIMELINE_EVENTS = "no_timeline_events"
+    NO_USABLE_WEB_RESULTS = "no_usable_web_results"
+    TOOL_OUTPUT_CONTENT_COERCED = "tool_output_content_coerced"
+    TOOL_OUTPUT_MISSING_CONTENT = "tool_output_missing_content"
+    TOOL_OUTPUT_SOURCES_INVALID = "tool_output_sources_invalid"
+    WEB_SEARCH_DISABLED = "web_search_disabled"
+
+
+class ToolErrorCode:
+    TOOL_FAILED_SUFFIX = "failed"
+
+    @staticmethod
+    def failed(tool_name: str) -> str:
+        return f"{tool_name}_{ToolErrorCode.TOOL_FAILED_SUFFIX}"
+
+
 class ToolError(BaseModel):
     code: str
     message: str
@@ -141,7 +165,7 @@ def make_tool_error_result(
     code: Optional[str] = None,
 ) -> ToolResult:
     tool_error = ToolError(
-        code=code or f"{tool_name}_failed",
+        code=code or ToolErrorCode.failed(tool_name),
         message=str(error),
         type=type(error).__name__,
         retryable=True,
@@ -200,10 +224,10 @@ def normalize_tool_result(raw: Any, *, tool_name: str = "unknown_tool", config: 
     content = payload.get("content")
     if content is None:
         content = ""
-        warnings.append("tool_output_missing_content")
+        warnings.append(ToolWarningCode.TOOL_OUTPUT_MISSING_CONTENT)
     if not isinstance(content, str):
         content = str(content)
-        warnings.append("tool_output_content_coerced")
+        warnings.append(ToolWarningCode.TOOL_OUTPUT_CONTENT_COERCED)
 
     artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
     legacy_artifacts = {
@@ -223,7 +247,7 @@ def normalize_tool_result(raw: Any, *, tool_name: str = "unknown_tool", config: 
         sources = raw_sources
     else:
         sources = []
-        warnings.append("tool_output_sources_invalid")
+        warnings.append(ToolWarningCode.TOOL_OUTPUT_SOURCES_INVALID)
 
     trace = payload.get("trace") if isinstance(payload.get("trace"), dict) else tool_trace(tool_name, config).model_dump(mode="json")
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}

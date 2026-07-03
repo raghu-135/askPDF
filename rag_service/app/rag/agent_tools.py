@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from app.agent.tool_contract import make_tool_error_result, make_tool_result, tool_started
+from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_embedding_model
 from app.models.retry import invoke_with_retry
@@ -180,7 +180,7 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
                 content="No thread context found.",
                 config=config,
                 started=started,
-                warnings=["missing_thread_id"],
+                warnings=[ToolWarningCode.MISSING_THREAD_ID],
             ).to_json()
 
         from app.db import get_thread_shape as _get_shape
@@ -261,7 +261,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 content="No thread context found.",
                 config=config,
                 started=started,
-                warnings=["missing_thread_context"],
+                warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
         embed_model = get_embedding_model(embedding_model)
@@ -276,7 +276,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 content="No documents are linked to this thread yet.",
                 config=config,
                 started=started,
-                warnings=["no_thread_documents"],
+                warnings=[ToolWarningCode.NO_THREAD_DOCUMENTS],
             ).to_json()
 
         raw_doc_chunks = await db.search_knowledge_sources(
@@ -299,7 +299,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 content="Document index is missing for this thread. Re-open the thread to trigger re-indexing.",
                 config=config,
                 started=started,
-                warnings=["missing_document_vectors"],
+                warnings=[ToolWarningCode.MISSING_DOCUMENT_VECTORS],
             ).to_json()
         if use_reranker:
             raw_doc_chunks = await rerank_document_chunks(query, raw_doc_chunks)
@@ -343,7 +343,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 content="No relevant content found in documents or cached web results.",
                 config=config,
                 started=started,
-                warnings=["no_relevant_content"],
+                warnings=[ToolWarningCode.NO_RELEVANT_CONTENT],
             ).to_json()
 
         context_parts = []
@@ -434,7 +434,7 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
                 content="No thread context found.",
                 config=config,
                 started=started,
-                warnings=["missing_thread_context"],
+                warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
         embed_model = get_embedding_model(embedding_model)
@@ -454,7 +454,7 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
                 content="No relevant past conversations found.",
                 config=config,
                 started=started,
-                warnings=["no_relevant_conversation_history"],
+                warnings=[ToolWarningCode.NO_RELEVANT_CONVERSATION_HISTORY],
             ).to_json()
 
         return make_tool_result(
@@ -503,7 +503,7 @@ async def search_thread_timeline(
                 content="No thread context found.",
                 config=config,
                 started=started,
-                warnings=["missing_thread_context"],
+                warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
         max_results = max(1, min(int(max_results or 10), 30))
@@ -566,7 +566,7 @@ async def search_thread_timeline(
             started=started,
             sources=events,
             artifacts={"timeline_events": events},
-            warnings=[] if events else ["no_timeline_events"],
+            warnings=[] if events else [ToolWarningCode.NO_TIMELINE_EVENTS],
         ).to_json(legacy_fields={"__timeline_events__": events})
     except Exception as e:
         logger.error("Error in search_thread_timeline: %s", e, exc_info=True)

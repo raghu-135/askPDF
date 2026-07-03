@@ -16,7 +16,7 @@ from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.tools import BaseTool, StructuredTool, tool
 from langchain_core.runnables import RunnableConfig
 
-from app.agent.tool_contract import make_tool_error_result, make_tool_result, tool_started
+from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
 from app.rag.retrieval import rerank_document_chunks
 from app.time_utils import iso_utc_z
 
@@ -127,7 +127,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
                 content="Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available. Answer using only the uploaded documents and conversation history.",
                 config=config,
                 started=started,
-                warnings=["web_search_disabled"],
+                warnings=[ToolWarningCode.WEB_SEARCH_DISABLED],
             ).to_json()
         use_reranker = conf.get("use_reranker", True)
 
@@ -142,7 +142,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
                 content="Web search returned no usable text.",
                 config=config,
                 started=started,
-                warnings=["no_usable_web_results"],
+                warnings=[ToolWarningCode.NO_USABLE_WEB_RESULTS],
             ).to_json()
         web_search_performed_at = iso_utc_z()
 
@@ -222,7 +222,7 @@ async def search_web_intent(query: str, config: RunnableConfig = None) -> str:
                 content="Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available.",
                 config=config,
                 started=started,
-                warnings=["web_search_disabled"],
+                warnings=[ToolWarningCode.WEB_SEARCH_DISABLED],
             ).to_json()
 
         logger.info(f"--- INTENT WEB SEARCH INITIATED --- Query: '{query}'")
@@ -233,7 +233,7 @@ async def search_web_intent(query: str, config: RunnableConfig = None) -> str:
                 content="Web search returned no usable text.",
                 config=config,
                 started=started,
-                warnings=["no_usable_web_results"],
+                warnings=[ToolWarningCode.NO_USABLE_WEB_RESULTS],
             ).to_json()
 
         payload = _format_web_context(result["texts"], result["urls"], result["titles"])
@@ -292,7 +292,7 @@ def _wrap_external_tool_with_contract(base_tool: BaseTool) -> BaseTool:
             tool_input = _tool_input_from_kwargs(kwargs)
             raw = await base_tool.ainvoke(tool_input, config=config)
             content = raw if isinstance(raw, str) else str(raw or "")
-            warnings = [] if content.strip() else ["empty_external_tool_result"]
+            warnings = [] if content.strip() else [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT]
             return make_tool_result(
                 tool_name=tool_name,
                 content=content,

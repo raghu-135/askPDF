@@ -1,6 +1,8 @@
 import pytest
 
 from app.agent.tool_contract import (
+    ToolErrorCode,
+    ToolWarningCode,
     compact_tool_event,
     make_tool_error_result,
     make_tool_result,
@@ -54,7 +56,7 @@ class TestAskPdfToolContract:
         payload = normalize_tool_result({"ok": True}, tool_name="bad_tool")
 
         assert payload["content"] == ""
-        assert "tool_output_missing_content" in payload["warnings"]
+        assert ToolWarningCode.TOOL_OUTPUT_MISSING_CONTENT in payload["warnings"]
 
     def test_make_tool_error_result_is_recoverable_and_compact(self):
         config = {"configurable": {"agent_run_id": "run-1", "caller_node": "web_worker"}}
@@ -71,6 +73,7 @@ class TestAskPdfToolContract:
 
         assert payload["ok"] is False
         assert payload["content"] == "Web search failed: network unavailable"
+        assert payload["error"]["code"] == ToolErrorCode.failed("search_web")
         assert payload["error"]["type"] == "RuntimeError"
         assert event["tool_name"] == "search_web"
         assert event["caller_node"] == "web_worker"
