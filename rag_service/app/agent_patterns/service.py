@@ -108,14 +108,15 @@ class AgentRunService:
             return result
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
+            error_json = {
+                "code": "agent_run_failed",
+                "raw_message": str(exc),
+                "retryable": True,
+            }
             await self.repository.complete_run(
                 run.id,
                 status="failed",
-                metrics_json={"duration_ms": duration_ms},
-                error_json={
-                    "code": "agent_run_failed",
-                    "raw_message": str(exc),
-                    "retryable": True,
-                },
+                metrics_json=build_run_metrics({"agent_error": error_json}, duration_ms=duration_ms),
+                error_json=error_json,
             )
             raise

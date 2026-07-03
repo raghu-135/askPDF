@@ -234,6 +234,7 @@ export interface AgentRunDebug {
   chat_turn_status?: string;
   route?: string;
   route_reason?: string;
+  error?: Record<string, any> | null;
   metrics?: Record<string, any>;
   node_events?: Record<string, any>[];
   tool_events?: AgentToolEvent[];
@@ -241,6 +242,7 @@ export interface AgentRunDebug {
   tool_event_count?: number;
   tool_warning_count?: number;
   tool_error_count?: number;
+  error_count?: number;
 }
 
 export interface AgentRunDetails {

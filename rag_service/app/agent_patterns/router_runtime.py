@@ -17,6 +17,14 @@ from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 logger = logging.getLogger(__name__)
 
 
+async def _invoke_graph_with_partial_state(app: Any, state: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    latest_state = dict(state)
+    async for chunk in app.astream(state, config=config, stream_mode="values"):
+        if isinstance(chunk, dict):
+            latest_state = chunk
+    return latest_state
+
+
 async def handle_router_rag_chat(
     thread_id: str,
     req: Any,
@@ -38,9 +46,13 @@ async def handle_router_rag_chat(
     system_role = getattr(req, "system_role_override", "") or ""
     tool_instructions = getattr(req, "tool_instructions_override", None) or {}
     custom_instructions = getattr(req, "custom_instructions_override", "") or ""
+    pattern_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
+    allowed_tool_ids = pattern_config.get("allowed_tool_ids")
+    allowed_tool_ids = allowed_tool_ids if isinstance(allowed_tool_ids, list) else []
 
     started = time.perf_counter()
     app = TemplateCompiler().compile(resolved_spec)
+    telemetry_sink: Dict[str, Any] = {"node_events": [], "tool_events": []}
     config = {
         "configurable": {
             "thread_id": thread_id,
@@ -48,6 +60,7 @@ async def handle_router_rag_chat(
             "context_window": context_window,
             "use_web_search": use_web_search,
             "use_reranker": use_reranker,
+            "telemetry_sink": telemetry_sink,
         }
     }
     state = {
@@ -62,6 +75,7 @@ async def handle_router_rag_chat(
         "system_role": system_role,
         "tool_instructions": tool_instructions,
         "custom_instructions": custom_instructions,
+        "allowed_tool_ids": allowed_tool_ids,
         "client_timezone": getattr(req, "client_timezone", None),
         "client_locale": getattr(req, "client_locale", None),
         "client_now_iso": getattr(req, "client_now_iso", None),
@@ -82,7 +96,7 @@ async def handle_router_rag_chat(
             agent_run_context.get("agent_pattern_version"),
             len(question or ""),
         )
-        result = await app.ainvoke(state, config=config)
+        result = await _invoke_graph_with_partial_state(app, state, config)
         answer = result.get("final_answer") or "I was unable to compose an answer. Please try rephrasing your question."
         clarification_options = result.get("clarification_options")
         status = "clarification" if clarification_options else "completed"
@@ -168,6 +182,7 @@ async def handle_router_rag_chat(
         }
     except Exception as exc:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial_result = result if isinstance(locals().get("result"), dict) else state
         logger.exception(
             "Router RAG run failed | run_id=%s thread_id=%s elapsed_ms=%.1f",
             agent_run_id,
@@ -183,6 +198,28 @@ async def handle_router_rag_chat(
             "raw_message": str(exc),
             "retryable": True,
         }
+        node_events = partial_result.get("node_events") or telemetry_sink.get("node_events") or []
+        tool_events = partial_result.get("tool_events") or telemetry_sink.get("tool_events") or []
+        route = partial_result.get("route")
+        route_reason = partial_result.get("route_reason")
+        for event in reversed(node_events):
+            if not isinstance(event, dict):
+                continue
+            if route is None and event.get("route"):
+                route = event.get("route")
+            if route_reason is None and event.get("route_reason"):
+                route_reason = event.get("route_reason")
+            if route is not None and route_reason is not None:
+                break
+        errors = [*partial_result.get("errors", []), error_payload]
+        metadata = {
+            **agent_run_context,
+            "agent_route": route,
+            "agent_route_reason": route_reason,
+            "agent_node_events": node_events,
+            "agent_tool_events": tool_events,
+            "agent_error": error_payload,
+        }
         turn = await create_chat_turn(
             thread_id=thread_id,
             question=req.question,
@@ -195,7 +232,7 @@ async def handle_router_rag_chat(
             document_sources=[],
             used_chat_ids=[],
             error=error_payload,
-            metadata=agent_run_context,
+            metadata=metadata,
         )
         return {
             "answer": fallback_answer,
@@ -210,6 +247,12 @@ async def handle_router_rag_chat(
             "reasoning_available": True,
             "reasoning_format": "markdown",
             "context": "Compiled Router RAG Agent execution failed gracefully.",
+            "route": route,
+            "route_reason": route_reason,
+            "node_events": node_events,
+            "tool_events": tool_events,
+            "errors": errors,
+            "duration_ms": duration_ms,
             "agent_error": error_payload,
             **agent_run_context,
         }

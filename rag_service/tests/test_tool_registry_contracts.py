@@ -48,7 +48,7 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
 def test_template_validator_accepts_external_contract_ids():
     spec = builtin_router_rag_spec()
     spec["config"]["allowed_tool_ids"] = [
-        "document_evidence",
+        *spec["config"]["allowed_tool_ids"],
         "wikipedia_reference",
         "semantic_scholar_research",
     ]

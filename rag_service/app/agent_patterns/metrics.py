@@ -44,7 +44,7 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
         "tool_warning_count": sum(len(event.get("warnings") or []) for event in tool_events),
         "tool_error_count": sum(1 for event in tool_events if not event.get("ok", True)),
         "tool_elapsed_ms": _sum_elapsed(tool_events),
-        "error_count": len(errors) + (1 if result.get("agent_error") else 0),
+        "error_count": len(errors) if errors else (1 if result.get("agent_error") else 0),
         "document_source_count": len(result.get("document_sources") or []),
         "web_source_count": len(result.get("web_sources") or []),
         "used_chat_id_count": len(result.get("used_chat_ids") or []),

@@ -12,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agent.reasoning import normalize_ai_response
 from app.agent.prompting import sanitize_custom_instructions, sanitize_system_role
 from app.agent.tool_contract import compact_tool_event, normalize_tool_result
-from app.agent.tool_registry import validate_tool_call_allowed
+from app.agent.tool_registry import get_tool_contract_id, validate_tool_call_allowed
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.models.retry import invoke_with_retry
 from app.agent.external_research_tools import search_web
@@ -55,6 +55,7 @@ class RouterRagState(TypedDict, total=False):
     node_events: List[Dict[str, Any]]
     tool_events: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
+    allowed_tool_ids: List[str]
 
 
 def _append_event(
@@ -63,19 +64,38 @@ def _append_event(
     data: Optional[Dict[str, Any]] = None,
     *,
     started: Optional[float] = None,
+    config: Optional[RunnableConfig] = None,
 ) -> List[Dict[str, Any]]:
     event = {"node": node, **(data or {})}
     if started is not None:
         event["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 2)
+    telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
+    if isinstance(telemetry_sink, dict):
+        telemetry_sink.setdefault("node_events", []).append(dict(event))
     return [*state.get("node_events", []), event]
 
 
-def _append_tool_event(state: RouterRagState, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return [*state.get("tool_events", []), compact_tool_event(payload)]
+def _append_tool_event(
+    state: RouterRagState,
+    payload: Dict[str, Any],
+    *,
+    config: Optional[RunnableConfig] = None,
+) -> List[Dict[str, Any]]:
+    event = compact_tool_event(payload)
+    telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
+    if isinstance(telemetry_sink, dict):
+        telemetry_sink.setdefault("tool_events", []).append(dict(event))
+    return [*state.get("tool_events", []), event]
 
 
 def _tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: str, tool_name: str) -> RunnableConfig:
     validate_tool_call_allowed(tool_name, caller_node)
+    contract_id = get_tool_contract_id(tool_name)
+    allowed_tool_ids = state.get("allowed_tool_ids")
+    if not isinstance(allowed_tool_ids, list) or contract_id not in allowed_tool_ids:
+        raise ValueError(
+            f"Tool {tool_name} with contract ID {contract_id} is not enabled for this agent run"
+        )
     updated = dict(config or {})
     configurable = dict(updated.get("configurable") or {})
     configurable.update(
@@ -194,7 +214,7 @@ class NodeRegistry:
             "document_sources": list(bundle.get("document_sources", [])),
             "web_sources": list(bundle.get("web_sources", [])),
             "used_chat_ids": list(bundle.get("used_chat_ids", [])),
-            "node_events": _append_event(state, "context_loader", data, started=started),
+            "node_events": _append_event(state, "context_loader", data, started=started, config=config),
         }
 
     async def router(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -234,13 +254,14 @@ class NodeRegistry:
                 "Ask about the uploaded document content.",
                 "Ask about prior conversation context.",
             ]
-        data = {"route": route}
+        route_reason = str(parsed.get("reason") or "")
+        data = {"route": route, "route_reason": route_reason}
         _log_node_end(state, "router", started, data)
         return {
             "route": route,
-            "route_reason": str(parsed.get("reason") or ""),
+            "route_reason": route_reason,
             "clarification_options": clarification_options if route == "clarify" else None,
-            "node_events": _append_event(state, "router", data, started=started),
+            "node_events": _append_event(state, "router", data, started=started, config=config),
         }
 
     async def retrieval_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -266,8 +287,8 @@ class NodeRegistry:
             "evidence": evidence,
             "document_sources": document_sources,
             "web_sources": web_sources,
-            "node_events": _append_event(state, "retrieval_worker", data, started=started),
-            "tool_events": _append_tool_event(state, payload),
+            "node_events": _append_event(state, "retrieval_worker", data, started=started, config=config),
+            "tool_events": _append_tool_event(state, payload, config=config),
         }
 
     async def memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -290,8 +311,8 @@ class NodeRegistry:
         return {
             "evidence": evidence,
             "used_chat_ids": used_chat_ids,
-            "node_events": _append_event(state, "memory_worker", data, started=started),
-            "tool_events": _append_tool_event(state, payload),
+            "node_events": _append_event(state, "memory_worker", data, started=started, config=config),
+            "tool_events": _append_tool_event(state, payload, config=config),
         }
 
     async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -312,8 +333,8 @@ class NodeRegistry:
         _log_node_end(state, "timeline_worker", started, data)
         return {
             "evidence": evidence,
-            "node_events": _append_event(state, "timeline_worker", data, started=started),
-            "tool_events": _append_tool_event(state, payload),
+            "node_events": _append_event(state, "timeline_worker", data, started=started, config=config),
+            "tool_events": _append_tool_event(state, payload, config=config),
         }
 
     async def web_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -333,17 +354,17 @@ class NodeRegistry:
         return {
             "evidence": evidence,
             "web_sources": web_sources,
-            "node_events": _append_event(state, "web_worker", data, started=started),
-            "tool_events": _append_tool_event(state, payload),
+            "node_events": _append_event(state, "web_worker", data, started=started, config=config),
+            "tool_events": _append_tool_event(state, payload, config=config),
         }
 
     async def direct_answer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        return await self._answer_from_context(state, node_name="direct_answer")
+        return await self._answer_from_context(state, config, node_name="direct_answer")
 
     async def synthesizer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        return await self._answer_from_context(state, node_name="synthesizer")
+        return await self._answer_from_context(state, config, node_name="synthesizer")
 
-    async def _answer_from_context(self, state: RouterRagState, *, node_name: str) -> Dict[str, Any]:
+    async def _answer_from_context(self, state: RouterRagState, config: RunnableConfig, *, node_name: str) -> Dict[str, Any]:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         context = state.get("evidence") or _format_prefetch_summary(state.get("pre_fetch_bundle") or {})
@@ -380,7 +401,7 @@ class NodeRegistry:
             "reasoning": normalized["reasoning"],
             "reasoning_available": normalized["reasoning_available"],
             "reasoning_format": normalized["reasoning_format"],
-            "node_events": _append_event(state, node_name, data, started=started),
+            "node_events": _append_event(state, node_name, data, started=started, config=config),
         }
 
     async def finalizer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -396,11 +417,11 @@ class NodeRegistry:
                 "reasoning": "",
                 "reasoning_available": False,
                 "reasoning_format": "none",
-                "node_events": _append_event(state, "finalizer", data, started=started),
+                "node_events": _append_event(state, "finalizer", data, started=started, config=config),
             }
         data = {"answer_chars": len(state.get("final_answer") or "")}
         _log_node_end(state, "finalizer", started, data)
-        return {"node_events": _append_event(state, "finalizer", data, started=started)}
+        return {"node_events": _append_event(state, "finalizer", data, started=started, config=config)}
 
 
 def router_route(state: RouterRagState) -> str:
@@ -414,6 +435,9 @@ class TemplateCompiler:
         self.registry = registry or NodeRegistry()
 
     def compile(self, spec: Dict[str, Any]):
+        from app.agent_patterns.validator import TemplateValidator
+
+        TemplateValidator().validate(spec)
         graph_spec = (spec.get("config") or {}).get("graph") or {}
         workflow = StateGraph(RouterRagState)
         for node in graph_spec.get("nodes", []):

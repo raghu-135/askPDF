@@ -3,10 +3,12 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
-from app.agent.tool_registry import known_tool_contract_ids
+from app.agent.tool_registry import known_tool_contract_ids, tool_contracts_by_id
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
+    ROUTER_RAG_NODE_TOOL_REQUIREMENTS,
     ROUTER_RAG_AGENT_ID,
+    ROUTER_RAG_REQUIRED_TOOL_IDS,
 )
 from app.models.llm_server_client import (
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -86,6 +88,11 @@ class TemplateValidator:
             unknown_tool_ids = sorted(set(allowed_tool_ids) - known_tool_ids)
             if unknown_tool_ids:
                 errors.append(f"unknown allowed_tool_ids: {', '.join(unknown_tool_ids)}")
+            if pattern_type == ROUTER_RAG_AGENT_ID:
+                missing_tool_ids = sorted(ROUTER_RAG_REQUIRED_TOOL_IDS - set(allowed_tool_ids))
+                if missing_tool_ids:
+                    errors.append(f"router_rag_agent missing required allowed_tool_ids: {', '.join(missing_tool_ids)}")
+                errors.extend(self._collect_router_tool_permission_errors(set(allowed_tool_ids)))
 
         prefetch_policy = config.get("prefetch_policy", {})
         if not isinstance(prefetch_policy, dict):
@@ -98,6 +105,22 @@ class TemplateValidator:
         if pattern_type == ROUTER_RAG_AGENT_ID:
             errors.extend(self._collect_router_graph_errors(config.get("graph")))
 
+        return errors
+
+    def _collect_router_tool_permission_errors(self, allowed_tool_ids: set[str]) -> list[str]:
+        errors: list[str] = []
+        contracts_by_id = tool_contracts_by_id()
+        for caller_node, contract_id in sorted(ROUTER_RAG_NODE_TOOL_REQUIREMENTS.items()):
+            if contract_id not in allowed_tool_ids:
+                continue
+            contracts = contracts_by_id.get(contract_id) or []
+            if not contracts:
+                errors.append(f"router_rag_agent required tool contract is not registered: {contract_id}")
+                continue
+            if not any(caller_node in (contract.get("allowed_caller_nodes") or []) for contract in contracts):
+                errors.append(
+                    f"router_rag_agent tool contract {contract_id} is not allowed from node {caller_node}"
+                )
         return errors
 
     def _collect_router_graph_errors(self, graph: Any) -> list[str]:

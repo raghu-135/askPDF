@@ -9,6 +9,23 @@ ROUTER_RAG_AGENT_VERSION = 1
 ROUTER_RAG_AGENT_VERSION_ID = f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_VERSION}"
 SUPPORTED_BUILTIN_TEMPLATE_IDS = {ROUTER_RAG_AGENT_ID}
 
+ROUTER_RAG_REQUIRED_TOOL_IDS = {
+    "document_evidence",
+    "deep_memory",
+    "thread_timeline",
+    "live_web_recon",
+    "clarify_intent",
+}
+
+ROUTER_RAG_NODE_TOOL_REQUIREMENTS = {
+    "retrieval_worker": "document_evidence",
+    "memory_worker": "deep_memory",
+    "timeline_worker": "thread_timeline",
+    "web_worker": "live_web_recon",
+    "router": "clarify_intent",
+    "finalizer": "clarify_intent",
+}
+
 
 ALLOWED_ROUTER_RAG_CONFIG_KEYS = {
     "use_intent_agent",

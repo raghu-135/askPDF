@@ -104,6 +104,15 @@ class TestRouterRagTemplateValidator:
 
         assert "graph nodes must match" in str(exc.value)
 
+    def test_rejects_router_rag_specs_missing_required_tools(self):
+        spec = builtin_router_rag_spec()
+        spec["config"]["allowed_tool_ids"].remove("document_evidence")
+
+        with pytest.raises(TemplateValidationError) as exc:
+            TemplateValidator().validate(spec)
+
+        assert "missing required allowed_tool_ids: document_evidence" in str(exc.value)
+
     def test_compiles_builtin_router_rag_spec(self):
         graph = TemplateCompiler().compile(builtin_router_rag_spec())
 
@@ -114,7 +123,11 @@ class TestRouterRagGraphToolConsumers:
     def test_tool_config_enforces_registry_contracts(self):
         from app.agent_patterns.graph import _tool_config
 
-        state = {"agent_run_id": "run-1", "route": "document"}
+        state = {
+            "agent_run_id": "run-1",
+            "route": "document",
+            "allowed_tool_ids": builtin_router_rag_spec()["config"]["allowed_tool_ids"],
+        }
         config = {"configurable": {"thread_id": "thread-1"}}
 
         allowed = _tool_config(
@@ -131,6 +144,14 @@ class TestRouterRagGraphToolConsumers:
                 state,
                 config,
                 caller_node="memory_worker",
+                tool_name="search_documents",
+            )
+
+        with pytest.raises(ValueError, match="is not enabled for this agent run"):
+            _tool_config(
+                dict(state, allowed_tool_ids=["deep_memory"]),
+                config,
+                caller_node="retrieval_worker",
                 tool_name="search_documents",
             )
 
@@ -158,6 +179,7 @@ class TestRouterRagGraphToolConsumers:
             "used_chat_ids": [],
             "node_events": [],
             "tool_events": [],
+            "allowed_tool_ids": builtin_router_rag_spec()["config"]["allowed_tool_ids"],
         }
         config = {"configurable": {"thread_id": "thread-1"}}
 
@@ -464,6 +486,65 @@ class TestAgentRunService:
         assert run.metrics_json["node_elapsed_ms"] == {"router": 3.5}
         assert run.metrics_json["tool_event_count"] == 1
         assert run.metrics_json["tool_elapsed_ms"] == 9.25
+
+    @pytest.mark.asyncio
+    async def test_run_thread_chat_persists_failed_run_metrics(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+
+            async def fake_get_thread_settings(_thread_id):
+                return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
+
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context):
+                return {
+                    "answer": "fallback",
+                    "document_sources": [],
+                    "web_sources": [],
+                    "used_chat_ids": [],
+                    "clarification_options": None,
+                    "route": "document",
+                    "node_events": [{"node": "router", "elapsed_ms": 4.0}],
+                    "tool_events": [],
+                    "errors": [{"code": "router_rag_execution_failed"}],
+                    "agent_error": {"code": "router_rag_execution_failed", "raw_message": "boom", "retryable": True},
+                    **agent_run_context,
+                }
+
+            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+
+            req = SimpleNamespace(
+                question="What is this about?",
+                llm_model="test-llm",
+                use_intent_agent=False,
+                use_web_search=False,
+                use_reranker=True,
+                max_iterations=1,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+            )
+            result = await AgentRunService(repository=repo).run_thread_chat(
+                sample_thread.id,
+                req,
+                sample_thread.embed_model,
+            )
+
+            run = await repo.get_run(result["agent_run_id"])
+
+        assert run.status == "failed"
+        assert run.error_json["code"] == "router_rag_execution_failed"
+        assert run.metrics_json["route"] == "document"
+        assert run.metrics_json["node_event_count"] == 1
+        assert run.metrics_json["error_count"] == 1
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
@@ -879,6 +960,129 @@ class TestRouterRagRuntime:
         for node in expected_nodes:
             assert f"node={node}" in log_text
 
+    @pytest.mark.asyncio
+    async def test_handle_router_rag_chat_failed_run_keeps_partial_telemetry(
+        self,
+        engine,
+        sample_thread,
+        monkeypatch,
+    ):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        class FakeLlm:
+            async def ainvoke(self, messages):
+                return SimpleNamespace(content='{"route":"document","reason":"needs docs","clarification_options":null}')
+
+        class FailingTool:
+            async def ainvoke(self, _args, config=None):
+                raise RuntimeError("document tool exploded")
+
+        async def fake_prefetch_context(**kwargs):
+            return {
+                "recent_history_text": "",
+                "semantic_history_text": "",
+                "document_evidence_text": "",
+                "web_evidence_text": "",
+                "stats": {"total_messages": 0, "estimated_history_tokens": 0},
+                "documents": [{"file_name": "paper.pdf", "file_hash": "file-1"}],
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+            }
+
+        async def fake_create_chat_turn(
+            *,
+            thread_id,
+            question,
+            answer,
+            rewritten_question=None,
+            status="completed",
+            reasoning="",
+            reasoning_available=False,
+            reasoning_format="none",
+            web_sources=None,
+            document_sources=None,
+            used_chat_ids=None,
+            clarification_options=None,
+            error=None,
+            metadata=None,
+        ):
+            turn = ChatTurn(
+                id=str(uuid.uuid4()),
+                thread_id=thread_id,
+                status=status,
+                payload={
+                    "question": question,
+                    "rewritten_question": rewritten_question,
+                    "answer": answer,
+                    "reasoning": reasoning,
+                    "reasoning_available": reasoning_available,
+                    "reasoning_format": reasoning_format,
+                    "web_sources": web_sources or [],
+                    "document_sources": document_sources or [],
+                    "used_chat_ids": used_chat_ids or [],
+                    "clarification_options": clarification_options,
+                    "error": error,
+                    "metadata": metadata or {},
+                },
+            )
+            async with session_factory() as write_session:
+                write_session.add(turn)
+                await write_session.commit()
+                await write_session.refresh(turn)
+            return turn
+
+        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
+        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FailingTool())
+        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
+
+        req = SimpleNamespace(
+            question="What is in the document?",
+            llm_model="test-llm",
+            use_web_search=False,
+            use_reranker=False,
+            context_window=8192,
+            system_role_override="",
+            tool_instructions_override={},
+            custom_instructions_override="",
+            client_timezone=None,
+            client_locale=None,
+            client_now_iso=None,
+        )
+
+        result = await handle_router_rag_chat(
+            sample_thread.id,
+            req,
+            sample_thread.embed_model,
+            resolved_spec=builtin_router_rag_spec(),
+            agent_run_context={
+                "agent_run_id": "run-failed",
+                "agent_pattern_id": ROUTER_RAG_AGENT_ID,
+                "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
+            },
+        )
+
+        async with session_factory() as check_session:
+            turn = await check_session.get(ChatTurn, result["user_message_id"].split(":")[0])
+
+        assert result["agent_error"]["code"] == "router_rag_execution_failed"
+        assert result["route"] == "document"
+        assert [event["node"] for event in result["node_events"]] == ["context_loader", "router"]
+        assert result["tool_events"] == []
+        assert result["errors"][0]["raw_message"] == "document tool exploded"
+        assert turn.status == "failed"
+        assert turn.payload["metadata"]["agent_run_id"] == "run-failed"
+        assert turn.payload["metadata"]["agent_route"] == "document"
+        assert turn.payload["metadata"]["agent_node_events"] == result["node_events"]
+        assert turn.payload["metadata"]["agent_tool_events"] == []
+        assert turn.payload["metadata"]["agent_error"]["raw_message"] == "document tool exploded"
+
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestAgentPatternApi:
@@ -1007,3 +1211,46 @@ class TestAgentPatternApi:
         assert payload["debug"]["tool_event_count"] == 1
         assert payload["debug"]["tool_warning_count"] == 0
         assert payload["debug"]["tool_error_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_get_failed_agent_run_without_turn_includes_error_debug(self, api_client, engine, sample_thread):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            run = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            await repo.complete_run(
+                run.id,
+                status="failed",
+                metrics_json={
+                    "duration_ms": 3.0,
+                    "route": None,
+                    "node_event_count": 0,
+                    "tool_event_count": 0,
+                    "tool_warning_count": 0,
+                    "tool_error_count": 0,
+                    "error_count": 1,
+                },
+                error_json={"code": "agent_run_failed", "raw_message": "compile failed", "retryable": True},
+            )
+
+        response = api_client.get(f"/api/agent-runs/{run.id}")
+
+        assert response.status_code == 200
+        payload = response.json()["agent_run"]
+        assert payload["status"] == "failed"
+        assert payload["debug"]["chat_turn_id"] is None
+        assert payload["debug"]["error"]["code"] == "agent_run_failed"
+        assert payload["debug"]["metrics"]["error_count"] == 1
+        assert payload["debug"]["error_count"] == 1

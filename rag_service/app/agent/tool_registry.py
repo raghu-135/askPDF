@@ -175,6 +175,27 @@ def known_tool_contract_ids() -> set[str]:
     }
 
 
+def get_tool_contract_id(tool_name: str) -> str:
+    """Return the public contract ID for a canonical tool name."""
+
+    contract = TOOL_CONTRACT_METADATA.get(tool_name)
+    if not contract or not contract.get("id"):
+        raise ValueError(f"Unknown tool contract: {tool_name}")
+    return str(contract["id"])
+
+
+def tool_contracts_by_id() -> Dict[str, List[Dict[str, Any]]]:
+    """Return contract metadata grouped by public contract ID."""
+
+    records: Dict[str, List[Dict[str, Any]]] = {}
+    for tool_name in TOOL_CONTRACT_METADATA:
+        metadata = get_tool_contract_metadata(tool_name)
+        contract_id = metadata.get("id")
+        if isinstance(contract_id, str) and contract_id:
+            records.setdefault(contract_id, []).append(metadata)
+    return records
+
+
 def validate_tool_call_allowed(tool_name: str, caller_node: str) -> None:
     """Raise when a graph node attempts to call a tool outside its contract."""
 

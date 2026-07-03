@@ -1567,7 +1567,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     const nodeCount = Number(metrics.node_event_count ?? debug?.node_event_count ?? debug?.node_events?.length ?? 0);
                                                     const toolCount = Number(metrics.tool_event_count ?? debug?.tool_event_count ?? 0);
                                                     const warningCount = Number(metrics.tool_warning_count ?? debug?.tool_warning_count ?? 0);
-                                                    const errorCount = Number(metrics.tool_error_count ?? debug?.tool_error_count ?? 0);
+                                                    const errorCount = Number(metrics.error_count ?? debug?.error_count ?? metrics.tool_error_count ?? debug?.tool_error_count ?? 0);
                                                     return (
                                                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
                                                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
