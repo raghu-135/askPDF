@@ -8,7 +8,6 @@ from app.models.llm_server_client import (
     LOCAL_EMBEDDING_MODEL,
     DEFAULT_MAX_ITERATIONS,
     DEFAULT_TOKEN_BUDGET,
-    INTENT_AGENT_MAX_ITERATIONS,
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
     MAX_MAX_ITERATIONS,
     MAX_SYSTEM_ROLE_CHARS,
@@ -107,9 +106,6 @@ class ThreadChatRequest(BaseModel):
     custom_instructions_override: Optional[str] = Field(
         default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
-    use_intent_agent: Optional[bool] = None
-    intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
-    intent_agent_skip_clarify: Optional[bool] = None
     client_timezone: Optional[str] = Field(default=None, max_length=100)
     client_locale: Optional[str] = Field(default=None, max_length=50)
     client_now_iso: Optional[str] = Field(default=None, max_length=80)
@@ -124,10 +120,6 @@ class ThreadSettingsResponse(BaseModel):
     custom_instructions: str = Field(
         default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
-    use_intent_agent: bool = True
-    intent_agent_max_iterations: int = Field(
-        default=INTENT_AGENT_MAX_ITERATIONS, ge=1, le=10
-    )
     use_reranker: bool = True
     agent_pattern: Dict[str, str] = Field(default_factory=lambda: {"template_id": "router_rag_agent"})
 
@@ -141,8 +133,6 @@ class ThreadSettingsUpdateRequest(BaseModel):
     custom_instructions: Optional[str] = Field(
         default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
-    use_intent_agent: Optional[bool] = None
-    intent_agent_max_iterations: Optional[int] = Field(default=None, ge=1, le=10)
     use_reranker: Optional[bool] = None
     agent_pattern: Optional[Dict[str, str]] = None
 
@@ -162,8 +152,6 @@ class PromptDefaults(BaseModel):
     system_role: str
     tool_instructions: Dict[str, str]
     custom_instructions: str
-    use_intent_agent: bool = True
-    intent_agent_max_iterations: int = INTENT_AGENT_MAX_ITERATIONS
     use_reranker: bool = True
 
 
@@ -175,7 +163,8 @@ class PromptPreviewRequest(BaseModel):
         default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
     use_web_search: bool = False
-    intent_agent_ran: bool = True
+    agent_pattern: Optional[Dict[str, str]] = None
+    agent_pattern_id: Optional[str] = None
     client_timezone: Optional[str] = Field(default=None, max_length=100)
     client_locale: Optional[str] = Field(default=None, max_length=50)
     client_now_iso: Optional[str] = Field(default=None, max_length=80)

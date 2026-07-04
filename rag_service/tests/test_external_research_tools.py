@@ -2,10 +2,9 @@ import pytest
 from langchain_core.tools import tool
 
 from app.agent import external_research_tools
-from app.agent.prompting import format_intent_tool_context
 from app.agent.tool_contract import normalize_tool_result
 from app.agent.tool_node import RecoverableToolNode
-from app.prompts.loaders import get_web_search_mandate, load_prompt
+from app.prompts.loaders import get_web_search_mandate
 from app.agent.tool_registry import TOOL_FRIENDLY_CONFIG
 
 
@@ -82,7 +81,6 @@ def test_external_research_tools_have_prompt_metadata():
         "semantic_scholar",
         "stack_exchange",
         "yahoo_finance_news",
-        "search_web_intent",
         "search_thread_timeline",
     }
 
@@ -154,38 +152,6 @@ def test_web_search_mandate_allows_source_specific_tools():
     assert "call search_web for every factual" in mandate
     assert "source-specific external tool" not in mandate
     assert "instead of substituting search_web" not in mandate
-
-
-def test_intent_prompt_preserves_explicit_source_requests():
-    prompt = load_prompt("intent_agent/system.md").lower()
-
-    assert "orchestrator has its own tool catalog" in prompt
-    assert "{intent_tool_context}" in prompt
-    role_section = prompt.split("## output contract", 1)[0]
-    assert "{intent_tool_context}" not in role_section
-    assert "{orchestrator_tool_context}" not in role_section
-    assert "there are two separate tool scopes" in prompt
-    assert "intent agent tool catalog (callable by you now)" in prompt
-    assert "downstream orchestrator tool catalog (not callable by you)" in prompt
-    assert "preserve explicit source, connector, or tool constraints" in prompt
-    assert "handoff constraints for the orchestrator's tool selection" in prompt
-
-
-def test_intent_tool_context_lists_bound_tools_when_enabled():
-    context = format_intent_tool_context([external_research_tools.search_web_intent]).lower()
-
-    assert "intent agent tool catalog (callable by you now)" in context
-    assert "only the tools in this section are callable by you" in context
-    assert "`search_web_intent`" in context
-    assert "intent web search" in context
-    assert "do not use results as answer evidence" in context
-
-
-def test_intent_tool_context_reports_no_active_tools_when_disabled():
-    context = format_intent_tool_context([]).lower()
-
-    assert "intent agent tool catalog (callable by you now)" in context
-    assert "no intent-stage tools are active" in context
 
 
 def test_arxiv_guidance_omits_dependency_version_detail():

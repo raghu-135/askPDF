@@ -28,7 +28,6 @@ interface ChatSettingsDialogProps {
     maxIterations: number;
     minMaxIterations: number | null;
     maxMaxIterations: number | null;
-    useIntentAgent: boolean;
     useReranker: boolean;
     agentPatternId: string;
     systemRole: string;
@@ -40,7 +39,6 @@ interface ChatSettingsDialogProps {
     
     // Change handlers
     onMaxIterationsChange: (value: number) => void;
-    onIntentAgentChange: (checked: boolean) => void;
     onRerankerChange: (checked: boolean) => void;
     onAgentPatternChange: (value: string) => void;
     onSystemRoleChange: (value: string) => void;
@@ -62,7 +60,6 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     maxIterations,
     minMaxIterations,
     maxMaxIterations,
-    useIntentAgent,
     useReranker,
     agentPatternId,
     systemRole,
@@ -72,7 +69,6 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     effectiveToolInstructions,
     promptPreview,
     onMaxIterationsChange,
-    onIntentAgentChange,
     onRerankerChange,
     onAgentPatternChange,
     onSystemRoleChange,
@@ -134,26 +130,6 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     <MenuItem value="plan_execute_rag_agent">Plan-and-Execute RAG Agent</MenuItem>
                 </TextField>
                 <Divider />
-                <Box>
-                    <FormControlLabel
-                        control={
-                            <Switch
-                                checked={useIntentAgent}
-                                onChange={(e) => onIntentAgentChange(e.target.checked)}
-                            />
-                        }
-                        label={
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>Intent Agent</Typography>
-                            </Box>
-                        }
-                    />
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
-                        Before answering, runs a lightweight LLM pass to detect ambiguity, rewrite follow-up questions
-                        into standalone queries, and estimate whether the pre-fetched context is sufficient — reducing
-                        unnecessary tool calls.
-                    </Typography>
-                </Box>
                 <Box>
                     <FormControlLabel
                         control={
@@ -243,7 +219,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     </Tooltip>
                 </Box>
                 <TextField
-                    label="Full Prompt Preview"
+                    label="Runtime Prompt Preview"
                     value={promptPreview}
                     multiline
                     minRows={14}

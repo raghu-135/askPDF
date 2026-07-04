@@ -151,9 +151,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
     const [clarificationPanelRatio, setClarificationPanelRatio] = useState(0.3);
     const [isClarificationResizing, setIsClarificationResizing] = useState(false);
-    const [useIntentAgent, setUseIntentAgent] = useState(true);
-    const [intentAgentMaxIterations, setIntentAgentMaxIterations] = useState(1);
-    const [defaultIntentAgentMaxIterations, setDefaultIntentAgentMaxIterations] = useState(1);
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
     const [agentPatternId, setAgentPatternId] = useState('router_rag_agent');
@@ -190,13 +187,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setSystemRole(settings?.system_role ?? defaultSystemRole);
         setToolInstructions(settings?.tool_instructions ?? {});
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
-        setUseIntentAgent(settings?.use_intent_agent ?? true);
-        setIntentAgentMaxIterations(settings?.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
         setAgentPatternId(normalizeAgentPatternForUi(settings?.agent_pattern?.template_id));
     }, [
         defaultCustomInstructions,
-        defaultIntentAgentMaxIterations,
         defaultMaxIterations,
         defaultSystemRole,
         defaultUseReranker,
@@ -341,7 +335,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setMaxMaxIterations(res.defaults.max_max_iterations);
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
-                    setDefaultIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
                     setDefaultUseReranker(res.defaults.use_reranker ?? true);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
@@ -350,8 +343,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         setMaxIterations(res.defaults.max_iterations);
                         setSystemRole(res.defaults.system_role ?? '');
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
-                        setUseIntentAgent(res.defaults.use_intent_agent ?? true);
-                        setIntentAgentMaxIterations(res.defaults.intent_agent_max_iterations ?? 1);
                         setUseReranker(res.defaults.use_reranker ?? true);
                     }
                 }
@@ -492,7 +483,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     tool_instructions: effectiveToolInstructions,
                     custom_instructions: customInstructions,
                     use_web_search: useWebSearch,
-                    intent_agent_ran: useIntentAgent,
+                    agent_pattern_id: normalizeAgentPatternForUi(agentPatternId),
                 });
                 if (!cancelled) {
                     setPromptPreview(res.prompt || '');
@@ -507,7 +498,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             cancelled = true;
             clearTimeout(timeoutId);
         };
-    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, useIntentAgent]);
+    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, agentPatternId]);
 
     const resetAllSettingsToDefault = () => {
         const defaults: Record<string, string> = {};
@@ -518,8 +509,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setSystemRole(defaultSystemRole);
         setToolInstructions(defaults);
         setCustomInstructions(defaultCustomInstructions);
-        setUseIntentAgent(true);
-        setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
         setUseReranker(defaultUseReranker);
         setAgentPatternId('router_rag_agent');
     };
@@ -829,10 +818,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 maxIterations,
                 systemRole,
                 effectiveToolInstructions,
-                customInstructions,
-                isClarificationSelection ? false : useIntentAgent,
-                !isClarificationSelection && useIntentAgent ? intentAgentMaxIterations : undefined,
-                undefined
+                customInstructions
             );
 
             // Handle ambiguous query / clarification options
@@ -1016,8 +1002,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 system_role: systemRole,
                 tool_instructions: effectiveToolInstructions,
                 custom_instructions: customInstructions,
-                use_intent_agent: useIntentAgent,
-                intent_agent_max_iterations: Math.max(1, Math.min(10, intentAgentMaxIterations)),
                 use_reranker: useReranker,
                 agent_pattern: { template_id: normalizeAgentPatternForUi(agentPatternId) },
             });
@@ -2020,7 +2004,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 maxIterations={maxIterations}
                 minMaxIterations={minMaxIterations}
                 maxMaxIterations={maxMaxIterations}
-                useIntentAgent={useIntentAgent}
                 useReranker={useReranker}
                 agentPatternId={agentPatternId}
                 systemRole={systemRole}
@@ -2030,7 +2013,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions={effectiveToolInstructions}
                 promptPreview={promptPreview}
                 onMaxIterationsChange={(value) => setMaxIterations(value)}
-                onIntentAgentChange={(checked) => setUseIntentAgent(checked)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
                 onAgentPatternChange={(value) => setAgentPatternId(value)}
                 onSystemRoleChange={(value) => setSystemRole(value)}

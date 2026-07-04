@@ -54,7 +54,6 @@ class AgentRunService:
         )
 
         request_overrides = {
-            "use_intent_agent": getattr(req, "use_intent_agent", None),
             "use_web_search": getattr(req, "use_web_search", None),
             "use_reranker": getattr(req, "use_reranker", None),
             "max_iterations": getattr(req, "max_iterations", None),

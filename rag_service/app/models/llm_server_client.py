@@ -124,7 +124,6 @@ MAX_CUSTOM_INSTRUCTIONS_CHARS = get_env_int("MAX_CUSTOM_INSTRUCTIONS_CHARS")
 MAX_SYSTEM_ROLE_CHARS = get_env_int("MAX_SYSTEM_ROLE_CHARS")
 MAX_TOOL_INSTRUCTION_CHARS = get_env_int("MAX_TOOL_INSTRUCTION_CHARS")
 
-INTENT_AGENT_MAX_ITERATIONS = get_env_int("INTENT_AGENT_MAX_ITERATIONS")
 MAX_ITERATIONS_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_SUFFICIENT_COVERAGE")
 MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE = get_env_int("MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE")
 WEB_SEARCH_ITERATION_BONUS = get_env_int("WEB_SEARCH_ITERATION_BONUS")
@@ -199,8 +198,6 @@ def default_thread_settings():
         "system_role": DEFAULT_SYSTEM_ROLE,
         "tool_instructions": {},
         "custom_instructions": "",
-        "use_intent_agent": True,
-        "intent_agent_max_iterations": INTENT_AGENT_MAX_ITERATIONS,
         "use_reranker": True,
         "agent_pattern": {"template_id": "router_rag_agent"},
     }

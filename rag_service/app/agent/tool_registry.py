@@ -62,13 +62,6 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "artifact_keys": ["web_sources"],
         "warning_codes": ["web_search_disabled", "no_usable_web_results"],
     },
-    "search_web_intent": {
-        "id": "intent_web_lookup",
-        "category": "intent",
-        "allowed_caller_nodes": ["intent_agent"],
-        "artifact_keys": ["web_sources"],
-        "warning_codes": ["web_search_disabled", "no_usable_web_results"],
-    },
     "wikipedia": {
         "id": "wikipedia_reference",
         "category": "external_research",
@@ -240,12 +233,6 @@ TOOL_FRIENDLY_CONFIG = {
         "display_name": "Internet Search",
         "description": "Live web search for external or time-sensitive information; cached to the thread.",
         "default_prompt": "Use when information is outside the uploaded documents or likely time-sensitive. Run in parallel with document search when enabled.",
-    },
-    "search_web_intent": {
-        "id": "intent_web_lookup",
-        "display_name": "Intent Web Search",
-        "description": "Lightweight web search for intent disambiguation before orchestration.",
-        "default_prompt": "Use only to identify unfamiliar terms or acronyms, detect time-sensitive intent, or disambiguate between plausible entities before rewriting. Do not use results as answer evidence; preserve the user's original scope and pass the clarified query to the Orchestrator.",
     },
     "wikipedia": {
         "id": "wikipedia_reference",

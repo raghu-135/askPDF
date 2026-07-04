@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any, Callable, Dict, List, Literal, Optional, TypedDict
 
@@ -10,7 +11,6 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from app.agent.reasoning import normalize_ai_response
-from app.agent.prompting import sanitize_custom_instructions, sanitize_system_role
 from app.agent.tool_contract import compact_tool_event, normalize_tool_result
 from app.agent.tool_registry import get_tool_contract_id, validate_tool_call_allowed
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
@@ -18,12 +18,39 @@ from app.models.retry import invoke_with_retry
 from app.agent.external_research_tools import search_web
 from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
 from app.rag.chat_service import prefetch_context
+from app.agent_patterns.prompting import build_final_answer_messages, build_planner_prompt, build_router_prompt
 from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES
 
 
 RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarify"]
 
 logger = logging.getLogger(__name__)
+
+
+TEMPORAL_PLAN_RE = re.compile(
+    r"\b("
+    r"latest|most\s+recent|recent|newest|current|first|earliest|oldest|last|"
+    r"since|before|after|earlier|later|timeline|chronolog(?:y|ical)|sequence|order|"
+    r"when|date|time"
+    r")\b",
+    re.IGNORECASE,
+)
+
+MEMORY_PLAN_RE = re.compile(
+    r"\b("
+    r"previously|prior|earlier\s+(answer|conversation|chat|discussion)|"
+    r"remember|discussed|talked\s+about|said\s+before|you\s+said|we\s+(said|discussed|talked)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+DOCUMENT_PLAN_RE = re.compile(
+    r"\b("
+    r"document|pdf|paper|uploaded|upload|file|source|page|section|chapter|"
+    r"quote|cite|citation|excerpt|summar(?:y|ize)|abstract"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 class RouterRagState(TypedDict, total=False):
@@ -203,9 +230,43 @@ def _skipped_worker_update(
     return {"node_events": _append_event(state, worker_node, data, started=started, config=config)}
 
 
-def normalize_execution_plan(parsed: Dict[str, Any], *, use_web_search: bool) -> Dict[str, Any]:
+def infer_required_plan_steps(question: Optional[str]) -> List[str]:
+    """Return worker nodes that should be present for obvious query intent cues."""
+
+    text = str(question or "")
+    required: List[str] = []
+    if TEMPORAL_PLAN_RE.search(text):
+        required.append("timeline_worker")
+    if MEMORY_PLAN_RE.search(text) and "memory_worker" not in required and "timeline_worker" not in required:
+        required.append("memory_worker")
+    if DOCUMENT_PLAN_RE.search(text) and "retrieval_worker" not in required:
+        required.append("retrieval_worker")
+    return required
+
+
+def _ordered_plan_steps(steps: List[str]) -> List[str]:
+    return [node for node in PLAN_EXECUTE_WORKER_NODES if node in steps]
+
+
+def _fallback_clarification_options() -> List[str]:
+    return [
+        "Do I want an answer based on the uploaded document evidence?",
+        "Do I want an answer based on what we discussed earlier in this thread?",
+        "Do I want an answer based on the timeline or order of events in this thread?",
+    ]
+
+
+def normalize_execution_plan(
+    parsed: Dict[str, Any],
+    *,
+    use_web_search: bool,
+    question: Optional[str] = None,
+) -> Dict[str, Any]:
     allowed_routes = {"execute", "direct", "clarify"}
     route = parsed.get("route") if parsed.get("route") in allowed_routes else "execute"
+    required_steps = infer_required_plan_steps(question)
+    if route == "direct" and required_steps:
+        route = "execute"
     raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
     steps: List[str] = []
     if isinstance(raw_steps, list):
@@ -220,16 +281,18 @@ def normalize_execution_plan(parsed: Dict[str, Any], *, use_web_search: bool) ->
                 steps.append(node)
     if not use_web_search:
         steps = [step for step in steps if step != "web_worker"]
+    if route == "execute":
+        for required_step in required_steps:
+            if required_step not in steps:
+                steps.append(required_step)
     if route == "execute" and not steps:
         steps = ["retrieval_worker"]
+    steps = _ordered_plan_steps(steps)
     if route != "execute":
         steps = []
     clarification_options = parsed.get("clarification_options")
     if route == "clarify" and not isinstance(clarification_options, list):
-        clarification_options = [
-            "Ask about uploaded document evidence.",
-            "Ask about prior conversation context.",
-        ]
+        clarification_options = _fallback_clarification_options()
     return {
         "route": route,
         "route_reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),
@@ -287,25 +350,7 @@ class NodeRegistry:
     async def planner(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
-        prompt = (
-            "Create a bounded retrieval plan for this askPDF question.\n"
-            "Routes:\n"
-            "- execute: run one or more retrieval workers, then synthesize.\n"
-            "- direct: pre-fetched context is enough for a concise answer.\n"
-            "- clarify: the question is ambiguous and needs 2-4 options.\n\n"
-            "Worker nodes available for execute:\n"
-            "- retrieval_worker: uploaded document or cached web snippet evidence.\n"
-            "- memory_worker: prior conversation memory.\n"
-            "- timeline_worker: chronology, first/latest, before/after, since, event ordering.\n"
-            "- web_worker: live internet evidence, only when live web search is enabled.\n\n"
-            f"Live web search enabled: {bool(state.get('use_web_search', False))}\n"
-            "Do not include web_worker when live web search is disabled.\n"
-            "Return only JSON with keys route, reason, execution_plan, clarification_options.\n"
-            "execution_plan must be an array of worker node IDs and must be empty unless route is execute.\n"
-            "clarification_options must be null unless route is clarify.\n\n"
-            f"Question:\n{state['question']}\n\n"
-            f"Pre-fetched context:\n{_format_prefetch_summary(state.get('pre_fetch_bundle') or {})}"
-        )
+        prompt = build_planner_prompt(state)
         response = await invoke_with_retry(
             llm.ainvoke,
             [
@@ -314,7 +359,11 @@ class NodeRegistry:
             ],
         )
         parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
-        normalized = normalize_execution_plan(parsed, use_web_search=bool(state.get("use_web_search", False)))
+        normalized = normalize_execution_plan(
+            parsed,
+            use_web_search=bool(state.get("use_web_search", False)),
+            question=state.get("question"),
+        )
         data = {
             "route": normalized["route"],
             "route_reason": normalized["route_reason"],
@@ -329,22 +378,7 @@ class NodeRegistry:
     async def router(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
-        prompt = (
-            "Route this askPDF question to exactly one route.\n"
-            "Routes:\n"
-            "- document: answer needs uploaded document evidence or cached web snippets.\n"
-            "- memory: answer needs prior conversation memory.\n"
-            "- timeline: answer depends on chronology, first/latest, before/after, since, or event ordering.\n"
-            "- web: answer needs live internet evidence and web search is enabled.\n"
-            "- direct: pre-fetched context is enough for a concise answer.\n"
-            "- clarify: the question is ambiguous and needs 2-4 options.\n\n"
-            f"Live web search enabled: {bool(state.get('use_web_search', False))}\n"
-            "Do not choose web when live web search is disabled; choose document, memory, direct, or clarify instead.\n\n"
-            "Return only JSON with keys route, reason, clarification_options.\n"
-            "clarification_options must be null unless route is clarify.\n\n"
-            f"Question:\n{state['question']}\n\n"
-            f"Pre-fetched context:\n{_format_prefetch_summary(state.get('pre_fetch_bundle') or {})}"
-        )
+        prompt = build_router_prompt(state)
         response = await invoke_with_retry(
             llm.ainvoke,
             [
@@ -359,10 +393,7 @@ class NodeRegistry:
         route = parsed.get("route") if parsed.get("route") in allowed_routes else "document"
         clarification_options = parsed.get("clarification_options")
         if route == "clarify" and not isinstance(clarification_options, list):
-            clarification_options = [
-                "Ask about the uploaded document content.",
-                "Ask about prior conversation context.",
-            ]
+            clarification_options = _fallback_clarification_options()
         route_reason = str(parsed.get("reason") or "")
         data = {"route": route, "route_reason": route_reason}
         _log_node_end(state, "router", started, data)
@@ -487,26 +518,12 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         context = state.get("evidence") or _format_prefetch_summary(state.get("pre_fetch_bundle") or {})
-        system_parts = [
-            "You answer askPDF questions using the supplied context. Cite document or web sources when they are present.",
-        ]
-        system_role = sanitize_system_role(state.get("system_role", ""))
-        custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
-        if system_role:
-            system_parts.append(system_role)
-        if custom_instructions:
-            system_parts.append(custom_instructions)
+        messages = build_final_answer_messages(state, context)
         response = await invoke_with_retry(
             llm.ainvoke,
             [
-                SystemMessage(content="\n\n".join(system_parts)),
-                HumanMessage(
-                    content=(
-                        f"Question:\n{state['question']}\n\n"
-                        f"Context:\n{context}\n\n"
-                        "Write the final answer. If the context is insufficient, say what is missing."
-                    )
-                ),
+                SystemMessage(content=messages["system"]),
+                HumanMessage(content=messages["human"]),
             ],
         )
         normalized = normalize_ai_response(response)

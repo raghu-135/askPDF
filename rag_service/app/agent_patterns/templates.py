@@ -49,7 +49,6 @@ PLAN_EXECUTE_WORKER_NODES = [
 
 
 ALLOWED_ROUTER_RAG_CONFIG_KEYS = {
-    "use_intent_agent",
     "use_web_search",
     "use_reranker",
     "max_iterations",
@@ -66,7 +65,6 @@ BUILTIN_ROUTER_RAG_SPEC: Dict[str, Any] = {
     "schema_version": 1,
     "pattern_type": ROUTER_RAG_AGENT_ID,
     "config": {
-        "use_intent_agent": False,
         "use_web_search": False,
         "use_reranker": True,
         "max_iterations": 1,
@@ -127,7 +125,6 @@ BUILTIN_PLAN_EXECUTE_RAG_SPEC: Dict[str, Any] = {
     "schema_version": 1,
     "pattern_type": PLAN_EXECUTE_RAG_AGENT_ID,
     "config": {
-        "use_intent_agent": False,
         "use_web_search": False,
         "use_reranker": True,
         "max_iterations": 1,

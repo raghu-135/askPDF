@@ -203,60 +203,6 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         ).to_json()
 
 
-@tool
-async def search_web_intent(query: str, config: RunnableConfig = None) -> str:
-    """
-    Lightweight web lookup for intent disambiguation and time-sensitivity checks.
-    Use for query rewriting only; do not cite as evidence.
-
-    Args:
-        query: Concise query aimed at identifying a term or entity.
-    """
-    started = tool_started()
-    tool_name = "search_web_intent"
-    try:
-        conf = config.get("configurable", {}) if config else {}
-        if not conf.get("use_web_search", False):
-            return make_tool_result(
-                tool_name=tool_name,
-                content="Internet search is not enabled for this session. The user has not turned on web search, so no internet results are available.",
-                config=config,
-                started=started,
-                warnings=[ToolWarningCode.WEB_SEARCH_DISABLED],
-            ).to_json()
-
-        logger.info(f"--- INTENT WEB SEARCH INITIATED --- Query: '{query}'")
-        result = await _run_web_search(query, max_results=None)
-        if not result:
-            return make_tool_result(
-                tool_name=tool_name,
-                content="Web search returned no usable text.",
-                config=config,
-                started=started,
-                warnings=[ToolWarningCode.NO_USABLE_WEB_RESULTS],
-            ).to_json()
-
-        payload = _format_web_context(result["texts"], result["urls"], result["titles"])
-        web_sources = payload.get("__web_sources__", [])
-        return make_tool_result(
-            tool_name=tool_name,
-            content=payload.get("content", ""),
-            config=config,
-            started=started,
-            sources=web_sources,
-            artifacts={"web_sources": web_sources},
-        ).to_json(legacy_fields={"__web_sources__": web_sources})
-    except Exception as e:
-        logger.error(f"Intent web search failed: {e}", exc_info=True)
-        return make_tool_error_result(
-            tool_name=tool_name,
-            error=e,
-            config=config,
-            started=started,
-            user_message=f"Web search failed: {str(e)}",
-        ).to_json()
-
-
 def _build_tool(
     display_name: str,
     tool_path: str,

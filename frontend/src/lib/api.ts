@@ -143,8 +143,6 @@ export interface ThreadSettings {
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
-  use_intent_agent: boolean;
-  intent_agent_max_iterations: number;
   use_reranker: boolean;
   agent_pattern?: {
     template_id: 'router_rag_agent' | string;
@@ -166,8 +164,6 @@ export interface PromptDefaults {
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
-  use_intent_agent: boolean;
-  intent_agent_max_iterations: number;
   use_reranker?: boolean;
 }
 
@@ -344,7 +340,7 @@ export async function getPromptPreview(payload: {
   tool_instructions: Record<string, string>;
   custom_instructions: string;
   use_web_search?: boolean;
-  intent_agent_ran?: boolean;
+  agent_pattern_id?: string;
 }): Promise<{ prompt: string }> {
   const res = await fetch(`${API_BASE}/api/threads/prompt-preview`, {
     method: "POST",
@@ -553,10 +549,7 @@ export async function threadChat(
   maxIterations?: number,
   systemRoleOverride?: string,
   toolInstructionsOverride?: Record<string, string>,
-  customInstructionsOverride?: string,
-  useIntentAgent?: boolean,
-  intentAgentMaxIterations?: number,
-  intentAgentSkipClarify?: boolean
+  customInstructionsOverride?: string
 ): Promise<{
   answer: string;
   user_message_id: string | null;
@@ -597,16 +590,6 @@ export async function threadChat(
   if (typeof customInstructionsOverride === "string") {
     payload.custom_instructions_override = customInstructionsOverride;
   }
-  if (typeof useIntentAgent === "boolean") {
-    payload.use_intent_agent = useIntentAgent;
-  }
-  if (typeof intentAgentMaxIterations === "number") {
-    payload.intent_agent_max_iterations = intentAgentMaxIterations;
-  }
-  if (typeof intentAgentSkipClarify === "boolean") {
-    payload.intent_agent_skip_clarify = intentAgentSkipClarify;
-  }
-
   const maxRetries = 2;
   let attempt = 0;
 

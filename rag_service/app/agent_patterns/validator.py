@@ -71,7 +71,7 @@ class TemplateValidator:
         if unknown_keys:
             errors.append(f"unknown config keys: {', '.join(unknown_keys)}")
 
-        for key in ("use_intent_agent", "use_web_search", "use_reranker"):
+        for key in ("use_web_search", "use_reranker"):
             if key in config and not isinstance(config[key], bool):
                 errors.append(f"{key} must be a boolean")
 

@@ -25,10 +25,7 @@ from app.db import (
 )
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
-from app.models.llm_server_client import (
-    INTENT_AGENT_MAX_ITERATIONS,
-    merge_thread_settings,
-)
+from app.models.llm_server_client import merge_thread_settings
 from app.models.requests import ThreadChatRequest
 
 router = APIRouter(tags=["messages"])
@@ -201,13 +198,6 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
             )
         if req.custom_instructions_override is None:
             req.custom_instructions_override = thread_settings["custom_instructions"]
-        if req.use_intent_agent is None:
-            req.use_intent_agent = thread_settings.get("use_intent_agent", True)
-        if req.intent_agent_max_iterations is None:
-            req.intent_agent_max_iterations = thread_settings.get(
-                "intent_agent_max_iterations", INTENT_AGENT_MAX_ITERATIONS
-            )
-
         result = await AgentRunService().run_thread_chat(thread_id, req, thread.embed_model)
         return result
     except HTTPException:

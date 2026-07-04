@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent_patterns.router_runtime import handle_router_rag_chat
 from app.agent_patterns.graph import NodeRegistry, TemplateCompiler
-from app.agent_patterns.graph import normalize_execution_plan
+from app.agent_patterns.graph import build_planner_prompt, infer_required_plan_steps, normalize_execution_plan
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.service import AgentRunService
@@ -151,6 +151,99 @@ class TestRouterRagTemplateValidator:
 
         assert normalized["route"] == "execute"
         assert normalized["execution_plan"] == ["retrieval_worker"]
+
+    @pytest.mark.parametrize(
+        "question, expected_steps",
+        [
+            ("What is the latest document about?", ["timeline_worker", "retrieval_worker"]),
+            ("What did we discuss previously about reranking?", ["memory_worker"]),
+            ("What does the uploaded PDF say about risks?", ["retrieval_worker"]),
+            ("What changed since the first upload?", ["timeline_worker", "retrieval_worker"]),
+        ],
+    )
+    def test_infers_required_plan_steps_from_question_intent(self, question, expected_steps):
+        assert infer_required_plan_steps(question) == expected_steps
+
+    def test_normalize_execution_plan_adds_timeline_for_temporal_questions(self):
+        normalized = normalize_execution_plan(
+            {"route": "execute", "execution_plan": ["retrieval_worker"], "reason": "needs content"},
+            use_web_search=False,
+            question="What changed since the first upload?",
+        )
+
+        assert normalized["route"] == "execute"
+        assert normalized["execution_plan"] == ["retrieval_worker", "timeline_worker"]
+
+    def test_normalize_execution_plan_uses_memory_for_non_temporal_conversation_recall(self):
+        normalized = normalize_execution_plan(
+            {"route": "execute", "execution_plan": [], "reason": "needs prior chat"},
+            use_web_search=False,
+            question="What did we discuss previously about embeddings?",
+        )
+
+        assert normalized["execution_plan"] == ["memory_worker"]
+
+    @pytest.mark.parametrize(
+        "question, expected_steps",
+        [
+            ("What is the latest document about?", ["retrieval_worker", "timeline_worker"]),
+            ("What changed since the first upload?", ["retrieval_worker", "timeline_worker"]),
+            ("What did we discuss previously about reranking?", ["memory_worker"]),
+        ],
+    )
+    def test_normalize_execution_plan_clamps_direct_for_obvious_retrieval_intent(self, question, expected_steps):
+        normalized = normalize_execution_plan(
+            {"route": "direct", "execution_plan": [], "reason": "prefetch is enough"},
+            use_web_search=False,
+            question=question,
+        )
+
+        assert normalized["route"] == "execute"
+        assert normalized["execution_plan"] == expected_steps
+
+    def test_normalize_execution_plan_keeps_direct_for_generic_question_without_intent_cues(self):
+        normalized = normalize_execution_plan(
+            {"route": "direct", "execution_plan": [], "reason": "prefetch is enough"},
+            use_web_search=False,
+            question="Can you answer this briefly?",
+        )
+
+        assert normalized["route"] == "direct"
+        assert normalized["execution_plan"] == []
+
+    def test_normalize_execution_plan_does_not_clamp_clarify_for_temporal_questions(self):
+        normalized = normalize_execution_plan(
+            {"route": "clarify", "execution_plan": [], "reason": "ambiguous"},
+            use_web_search=False,
+            question="Which latest document do you mean?",
+        )
+
+        assert normalized["route"] == "clarify"
+        assert normalized["execution_plan"] == []
+        assert normalized["clarification_options"] == [
+            "Do I want an answer based on the uploaded document evidence?",
+            "Do I want an answer based on what we discussed earlier in this thread?",
+            "Do I want an answer based on the timeline or order of events in this thread?",
+        ]
+        assert all(option.startswith("Do I want") for option in normalized["clarification_options"])
+
+    def test_build_planner_prompt_contains_temporal_memory_document_rules(self):
+        prompt = build_planner_prompt(
+            {
+                "question": "What is the latest document about?",
+                "use_web_search": False,
+                "pre_fetch_bundle": {"documents": [{"file_name": "paper.pdf", "file_hash": "file-1"}]},
+            }
+        )
+
+        assert "latest, first, earliest, oldest, since, before, after" in prompt
+        assert "include `timeline_worker`" in prompt
+        assert "prior conversation recall without time/order wording" in prompt
+        assert "include `memory_worker` rather than `timeline_worker`" in prompt
+        assert "uploaded document/PDF/page/quote/citation/content" in prompt
+        assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
+        assert "Do not choose `direct` for latest, first, since, before, after, or current questions" in prompt
+        assert "`timeline_worker` queries should preserve temporal anchor words" in prompt
 
 
 class TestRouterRagGraphToolConsumers:
@@ -534,7 +627,6 @@ class TestAgentRunService:
             req = SimpleNamespace(
                 question="What is this about?",
                 llm_model="test-llm",
-                use_intent_agent=False,
                 use_web_search=False,
                 use_reranker=True,
                 max_iterations=1,
@@ -591,7 +683,6 @@ class TestAgentRunService:
             req = SimpleNamespace(
                 question="What is this about?",
                 llm_model="test-llm",
-                use_intent_agent=False,
                 use_web_search=False,
                 use_reranker=True,
                 max_iterations=1,
@@ -652,7 +743,6 @@ class TestAgentRunService:
             req = SimpleNamespace(
                 question="What is this about?",
                 llm_model="test-llm",
-                use_intent_agent=False,
                 use_web_search=False,
                 use_reranker=True,
                 max_iterations=1,
@@ -717,7 +807,6 @@ class TestAgentRunService:
             req = SimpleNamespace(
                 question="What is this about?",
                 llm_model="test-llm",
-                use_intent_agent=False,
                 use_web_search=False,
                 use_reranker=True,
                 max_iterations=1,
@@ -780,7 +869,6 @@ class TestAgentRunService:
             req = SimpleNamespace(
                 question="What is this about?",
                 llm_model="test-llm",
-                use_intent_agent=False,
                 use_web_search=False,
                 use_reranker=True,
                 max_iterations=1,

@@ -23,10 +23,11 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 
 from app.agent.prompting import (
-    build_system_prompt,
     get_tool_catalog,
     normalize_tool_instructions,
 )
+from app.agent_patterns.prompting import build_agent_pattern_prompt_preview
+from app.agent_patterns.templates import ROUTER_RAG_AGENT_ID, SUPPORTED_BUILTIN_TEMPLATE_IDS
 from app.time_utils import iso_utc_z
 from app.db import (
     ProcessStatus,
@@ -146,13 +147,17 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
     """Return the fully composed system prompt preview from the backend source of truth."""
     try:
         tool_instructions = normalize_tool_instructions(req.tool_instructions or {})
-        prompt = build_system_prompt(
+        requested_pattern = req.agent_pattern_id
+        if not requested_pattern and isinstance(req.agent_pattern, dict):
+            requested_pattern = req.agent_pattern.get("template_id")
+        pattern_id = requested_pattern if requested_pattern in SUPPORTED_BUILTIN_TEMPLATE_IDS else ROUTER_RAG_AGENT_ID
+        prompt = build_agent_pattern_prompt_preview(
+            pattern_id=pattern_id,
             context_window=req.context_window,
             system_role=req.system_role or "",
             tool_instructions=tool_instructions,
             custom_instructions=req.custom_instructions or "",
             use_web_search=req.use_web_search,
-            intent_agent_ran=req.intent_agent_ran,
             client_timezone=req.client_timezone,
             client_locale=req.client_locale,
             client_now_iso=req.client_now_iso,

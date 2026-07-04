@@ -456,6 +456,41 @@ class TestThreadEndpoints:
         data = response.json()
         assert "prompt" in data
         assert isinstance(data["prompt"], str)
+        assert "# Router Node Prompt" in data["prompt"]
+        assert "# Final Answer Prompt" in data["prompt"]
+
+    def test_prompt_preview_supports_plan_execute_pattern(self, client):
+        """Prompt preview should use selected agent pattern runtime prompts."""
+        response = client.post(
+            "/api/threads/prompt-preview",
+            json={
+                "context_window": 8192,
+                "system_role": "You are a helpful assistant",
+                "tool_instructions": {},
+                "custom_instructions": "Be concise",
+                "agent_pattern_id": "plan_execute_rag_agent",
+            },
+        )
+
+        assert response.status_code == 200
+        prompt = response.json()["prompt"]
+        assert "# Planner Node Prompt" in prompt
+        assert "execution_plan" in prompt
+
+    def test_prompt_preview_unknown_pattern_falls_back_to_router(self, client):
+        """Unknown preview pattern IDs should preserve Router RAG default behavior."""
+        response = client.post(
+            "/api/threads/prompt-preview",
+            json={
+                "context_window": 8192,
+                "agent_pattern_id": "unknown_agent",
+            },
+        )
+
+        assert response.status_code == 200
+        prompt = response.json()["prompt"]
+        assert "# Router Node Prompt" in prompt
+        assert "# Planner Node Prompt" not in prompt
 
     def test_reasoning_mode_removed_from_request_models(self):
         """Reasoning-mode compatibility should not be exposed by API schemas."""
