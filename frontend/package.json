@@ -28,6 +28,7 @@
     "elkjs": "^0.11.1",
     "kokoro-js": "^1.2.1",
     "next": "^15.5.15",
+    "pretty-ms": "^9.3.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-markdown": "^10.1.0",

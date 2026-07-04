@@ -1,5 +1,7 @@
 import React from 'react';
 import { Box, Chip, Divider, Typography } from '@mui/material';
+import { formatSkipReason } from '../../lib/agentDebugLabels';
+import { formatDurationMs } from '../../lib/formatDuration';
 import type { AgentGraphSelection } from './agent-graph-types';
 
 const sectionBg = 'rgba(0,0,0,0.03)';
@@ -67,14 +69,17 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
   }
 
   const { node } = selection;
+  const nodeElapsed = formatDurationMs(node.elapsedMs);
+  const skipReason = formatSkipReason(node.skipReason);
+  const statusLabel = node.status === 'skipped' ? skipReason || 'Skipped' : node.status;
   return (
     <Box sx={{ p: 1, borderRadius: 1, bgcolor: sectionBg }}>
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
         Node: {node.label}
       </Typography>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
-        <Chip size="small" label={node.status} variant="outlined" />
-        {node.elapsedMs && <Chip size="small" label={`${Math.round(node.elapsedMs)}ms`} variant="outlined" />}
+        <Chip size="small" label={statusLabel} variant="outlined" />
+        {nodeElapsed && <Chip size="small" label={nodeElapsed} variant="outlined" />}
         {node.route && <Chip size="small" label={`route ${node.route}`} variant="outlined" />}
         {node.sourceCount > 0 && <Chip size="small" label={`${node.sourceCount} sources`} variant="outlined" />}
         {node.artifactCount > 0 && <Chip size="small" label={`${node.artifactCount} artifacts`} variant="outlined" />}
@@ -82,7 +87,7 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
         {node.errorCount > 0 && <Chip size="small" color="error" label={`${node.errorCount} errors`} />}
       </Box>
       <DetailLine label="Route reason" value={node.routeReason} />
-      <DetailLine label="Skip reason" value={node.skipReason} />
+      {node.status !== 'skipped' && <DetailLine label="Skip reason" value={skipReason} />}
       <DetailLine label="Execution plan" value={node.executionPlan?.length ? node.executionPlan.join(' -> ') : undefined} />
       {node.toolSummaries.length > 0 && (
         <>
@@ -90,15 +95,18 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
           <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
             Tools
           </Typography>
-          {node.toolSummaries.map((tool, index) => (
-            <Typography key={`${tool.toolName}-${index}`} variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-              {tool.displayName || tool.toolName}: {tool.ok ? 'ok' : 'failed'}
-              {tool.elapsedMs ? `, ${Math.round(tool.elapsedMs)}ms` : ''}
-              {tool.sourceCount ? `, sources ${tool.sourceCount}` : ''}
-              {tool.artifactKeys.length ? `, artifacts ${tool.artifactKeys.length}` : ''}
-              {tool.warnings.length ? `, warnings ${tool.warnings.join(', ')}` : ''}
-            </Typography>
-          ))}
+          {node.toolSummaries.map((tool, index) => {
+            const toolElapsed = formatDurationMs(tool.elapsedMs);
+            return (
+              <Typography key={`${tool.toolName}-${index}`} variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                {tool.displayName || tool.toolName}: {tool.ok ? 'ok' : 'failed'}
+                {toolElapsed ? `, ${toolElapsed}` : ''}
+                {tool.sourceCount ? `, sources ${tool.sourceCount}` : ''}
+                {tool.artifactKeys.length ? `, artifacts ${tool.artifactKeys.length}` : ''}
+                {tool.warnings.length ? `, warnings ${tool.warnings.join(', ')}` : ''}
+              </Typography>
+            );
+          })}
         </>
       )}
       {node.rawEvents.length > 0 && (

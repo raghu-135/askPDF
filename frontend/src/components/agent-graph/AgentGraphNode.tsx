@@ -1,6 +1,8 @@
 import React from 'react';
 import { Box, Chip, Tooltip, Typography } from '@mui/material';
 import { Handle, Position } from '@xyflow/react';
+import { formatSkipReason } from '../../lib/agentDebugLabels';
+import { formatDurationMs } from '../../lib/formatDuration';
 import type { AgentGraphNode as AgentGraphNodeModel } from './agent-graph-types';
 
 const statusColor: Record<string, string> = {
@@ -19,22 +21,19 @@ const statusBg: Record<string, string> = {
   error: 'rgba(198, 40, 40, 0.12)',
 };
 
-const formatMs = (value?: number) => {
-  if (!Number.isFinite(value || NaN) || !value) return null;
-  return `${Math.round(value)}ms`;
-};
-
 export default function AgentGraphNode({ data, selected }: { data: AgentGraphNodeModel; selected?: boolean }) {
-  const elapsed = formatMs(data.elapsedMs);
+  const elapsed = formatDurationMs(data.elapsedMs);
   const toolCount = data.toolSummaries.length;
   const isVertical = data.layoutDirection === 'DOWN';
   const targetPosition = isVertical ? Position.Top : Position.Left;
   const sourcePosition = isVertical ? Position.Bottom : Position.Right;
+  const skipReason = formatSkipReason(data.skipReason);
+  const statusLabel = data.status === 'skipped' ? skipReason || 'Skipped' : data.status;
   const tooltip = [
     data.label,
     data.route ? `route: ${data.route}` : null,
     elapsed ? `elapsed: ${elapsed}` : null,
-    data.skipped ? `skipped: ${data.skipReason || 'yes'}` : null,
+    data.skipped ? skipReason || 'Skipped' : null,
     toolCount ? `tools: ${toolCount}` : null,
     data.warningCount ? `warnings: ${data.warningCount}` : null,
     data.errorCount ? `errors: ${data.errorCount}` : null,
@@ -65,7 +64,7 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
           {data.type}
         </Typography>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, mt: 0.8 }}>
-          <Chip size="small" label={data.status} sx={{ height: 22, fontSize: '0.72rem' }} />
+          <Chip size="small" label={statusLabel} sx={{ height: 22, fontSize: '0.72rem' }} />
           {elapsed && <Chip size="small" label={elapsed} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />}
           {data.executionPlan?.length ? <Chip size="small" label={`plan ${data.executionPlan.length}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
           {toolCount ? <Chip size="small" label={`tools ${toolCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}

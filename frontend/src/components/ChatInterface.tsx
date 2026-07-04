@@ -36,6 +36,8 @@ import remarkGfm from 'remark-gfm';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
 import { getChatComposerState } from '../lib/chat-composer-state';
+import { formatSkipReason } from '../lib/agentDebugLabels';
+import { formatDurationMs } from '../lib/formatDuration';
 import {
     Thread,
     Message,
@@ -1580,7 +1582,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     const debug = runDetails.debug;
                                                     const metrics = debug?.metrics || runDetails.metrics_json || {};
                                                     const durationMs = Number(metrics.duration_ms);
-                                                    const hasDuration = Number.isFinite(durationMs) && durationMs > 0;
+                                                    const formattedDuration = formatDurationMs(durationMs);
+                                                    const hasDuration = Boolean(formattedDuration);
                                                     const nodeCount = Number(metrics.node_event_count ?? debug?.node_event_count ?? debug?.node_events?.length ?? 0);
                                                     const toolCount = Number(metrics.tool_event_count ?? debug?.tool_event_count ?? 0);
                                                     const warningCount = Number(metrics.tool_warning_count ?? debug?.tool_warning_count ?? 0);
@@ -1603,7 +1606,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                             {hasDuration && (
                                                                 <Chip
                                                                     size="small"
-                                                                    label={`Run: ${Math.round(durationMs)}ms`}
+                                                                    label={`Run: ${formattedDuration}`}
                                                                     variant="outlined"
                                                                 />
                                                             )}
@@ -1632,7 +1635,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                         </Box>
                                                         {hasDuration && (
                                                             <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                                                                Total time: {Math.round(durationMs)}ms
+                                                                Total time: {formattedDuration}
                                                             </Typography>
                                                         )}
                                                         <AgentGraphCanvas
@@ -1656,9 +1659,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                 <Box sx={{ mt: 0.5 }}>
                                                                     {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).slice(-6).map((event, eventIndex) => {
                                                                         const elapsedMs = Number(event.elapsed_ms);
-                                                                        const hasElapsed = Number.isFinite(elapsedMs) && elapsedMs > 0;
+                                                                        const formattedElapsed = formatDurationMs(elapsedMs);
                                                                         const isSkipped = event.skipped === true;
-                                                                        const hasNodeStatus = isSkipped || hasElapsed;
+                                                                        const hasNodeStatus = isSkipped || Boolean(formattedElapsed);
+                                                                        const skipReason = formatSkipReason(typeof event.skip_reason === 'string' ? event.skip_reason : null);
+                                                                        const skippedLabel = skipReason || 'Skipped';
                                                                         return (
                                                                             <Typography
                                                                                 key={`node-${eventIndex}`}
@@ -1666,9 +1671,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                                 sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
                                                                             >
                                                                                 {event.node || event.name || 'node'}
-                                                                                {isSkipped ? ': skipped' : hasElapsed ? `: ${Math.round(elapsedMs)}ms` : ''}
+                                                                                {isSkipped ? `: ${skippedLabel}` : formattedElapsed ? `: ${formattedElapsed}` : ''}
                                                                                 {event.route ? `${hasNodeStatus ? ', ' : ': '}route ${event.route}` : ''}
-                                                                                {isSkipped && event.skip_reason ? `, ${event.skip_reason}` : ''}
                                                                             </Typography>
                                                                         );
                                                                     })}
@@ -1684,6 +1688,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                     {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).slice(-6).map((event, eventIndex) => {
                                                                         const warnings = Array.isArray(event.warnings) ? event.warnings : [];
                                                                         const artifactKeys = Array.isArray(event.artifact_keys) ? event.artifact_keys : [];
+                                                                        const formattedElapsed = formatDurationMs(event.elapsed_ms, { showZero: true });
                                                                         return (
                                                                             <Box
                                                                                 key={`tool-${eventIndex}`}
@@ -1699,7 +1704,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                                     sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
                                                                                 >
                                                                                     {formatToolEventName(event)} from {event.caller_node || 'node'}:
-                                                                                    {' '}{event.ok === false ? 'failed' : 'ok'}, {Math.round(Number(event.elapsed_ms || 0))}ms
+                                                                                    {' '}{event.ok === false ? 'failed' : 'ok'}
+                                                                                    {formattedElapsed ? `, ${formattedElapsed}` : ''}
                                                                                     {typeof event.source_count === 'number' ? `, sources ${event.source_count}` : ''}
                                                                                 </Typography>
                                                                                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4 }}>
