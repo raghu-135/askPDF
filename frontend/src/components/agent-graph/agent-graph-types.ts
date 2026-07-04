@@ -27,6 +27,7 @@ export interface AgentGraphToolSummary {
   callerNode?: string;
   ok: boolean;
   elapsedMs?: number;
+  sourceCount?: number;
   warnings: string[];
   artifactKeys: string[];
   raw: Record<string, any>;
@@ -49,6 +50,8 @@ export interface AgentGraphNode {
   toolSummaries: AgentGraphToolSummary[];
   warningCount: number;
   errorCount: number;
+  sourceCount: number;
+  artifactCount: number;
   rawEvents: Record<string, any>[];
 }
 

@@ -1630,6 +1630,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                 variant="outlined"
                                                             />
                                                         </Box>
+                                                        {hasDuration && (
+                                                            <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                                                                Total time: {Math.round(durationMs)}ms
+                                                            </Typography>
+                                                        )}
                                                         <AgentGraphCanvas
                                                             resolvedSpec={runDetails.resolved_spec_json}
                                                             templateId={runDetails.template_id}
@@ -1644,68 +1649,75 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                             }}
                                                         />
                                                         {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).length > 0 && (
-                                                            <Box>
-                                                                <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, mb: 0.5 }}>
-                                                                    Nodes
-                                                                </Typography>
-                                                                {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).slice(-6).map((event, eventIndex) => {
-                                                                    const elapsedMs = Number(event.elapsed_ms);
-                                                                    const hasElapsed = Number.isFinite(elapsedMs) && elapsedMs > 0;
-                                                                    return (
-                                                                        <Typography
-                                                                            key={`node-${eventIndex}`}
-                                                                            variant="caption"
-                                                                            sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
-                                                                        >
-                                                                            {event.node || event.name || 'node'}
-                                                                            {hasElapsed ? `: ${Math.round(elapsedMs)}ms` : ''}
-                                                                            {event.route ? `${hasElapsed ? ', ' : ': '}route ${event.route}` : ''}
-                                                                        </Typography>
-                                                                    );
-                                                                })}
-                                                            </Box>
-                                                        )}
-                                                        {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).length > 0 && (
-                                                            <Box>
-                                                                <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, mb: 0.5 }}>
-                                                                    Tools
-                                                                </Typography>
-                                                                {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).slice(-6).map((event, eventIndex) => {
-                                                                    const warnings = Array.isArray(event.warnings) ? event.warnings : [];
-                                                                    const artifactKeys = Array.isArray(event.artifact_keys) ? event.artifact_keys : [];
-                                                                    return (
-                                                                        <Box
-                                                                            key={`tool-${eventIndex}`}
-                                                                            sx={{
-                                                                                display: 'flex',
-                                                                                flexDirection: 'column',
-                                                                                gap: 0.35,
-                                                                                py: 0.35,
-                                                                            }}
-                                                                        >
+                                                            <details open>
+                                                                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                                    Nodes ({(agentRunDetails[msg.agent_run_id].debug?.node_events || []).length})
+                                                                </summary>
+                                                                <Box sx={{ mt: 0.5 }}>
+                                                                    {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).slice(-6).map((event, eventIndex) => {
+                                                                        const elapsedMs = Number(event.elapsed_ms);
+                                                                        const hasElapsed = Number.isFinite(elapsedMs) && elapsedMs > 0;
+                                                                        const isSkipped = event.skipped === true;
+                                                                        const hasNodeStatus = isSkipped || hasElapsed;
+                                                                        return (
                                                                             <Typography
+                                                                                key={`node-${eventIndex}`}
                                                                                 variant="caption"
                                                                                 sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
                                                                             >
-                                                                                {formatToolEventName(event)} from {event.caller_node || 'node'}:
-                                                                                {' '}{event.ok === false ? 'failed' : 'ok'}, {Math.round(Number(event.elapsed_ms || 0))}ms
-                                                                                {typeof event.source_count === 'number' ? `, sources ${event.source_count}` : ''}
+                                                                                {event.node || event.name || 'node'}
+                                                                                {isSkipped ? ': skipped' : hasElapsed ? `: ${Math.round(elapsedMs)}ms` : ''}
+                                                                                {event.route ? `${hasNodeStatus ? ', ' : ': '}route ${event.route}` : ''}
+                                                                                {isSkipped && event.skip_reason ? `, ${event.skip_reason}` : ''}
                                                                             </Typography>
-                                                                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4 }}>
-                                                                                {event.tool_category && (
-                                                                                    <Chip size="small" variant="outlined" label={event.tool_category} sx={{ height: 18, fontSize: '0.65rem' }} />
-                                                                                )}
-                                                                                {artifactKeys.slice(0, 4).map((artifactKey) => (
-                                                                                    <Chip key={artifactKey} size="small" variant="outlined" label={artifactKey} sx={{ height: 18, fontSize: '0.65rem' }} />
-                                                                                ))}
-                                                                                {warnings.map((warning) => (
-                                                                                    <Chip key={warning} size="small" color="warning" variant="outlined" label={warning} sx={{ height: 18, fontSize: '0.65rem' }} />
-                                                                                ))}
+                                                                        );
+                                                                    })}
+                                                                </Box>
+                                                            </details>
+                                                        )}
+                                                        {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).length > 0 && (
+                                                            <details open>
+                                                                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                                    Tools ({(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).length})
+                                                                </summary>
+                                                                <Box sx={{ mt: 0.5 }}>
+                                                                    {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).slice(-6).map((event, eventIndex) => {
+                                                                        const warnings = Array.isArray(event.warnings) ? event.warnings : [];
+                                                                        const artifactKeys = Array.isArray(event.artifact_keys) ? event.artifact_keys : [];
+                                                                        return (
+                                                                            <Box
+                                                                                key={`tool-${eventIndex}`}
+                                                                                sx={{
+                                                                                    display: 'flex',
+                                                                                    flexDirection: 'column',
+                                                                                    gap: 0.35,
+                                                                                    py: 0.35,
+                                                                                }}
+                                                                            >
+                                                                                <Typography
+                                                                                    variant="caption"
+                                                                                    sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
+                                                                                >
+                                                                                    {formatToolEventName(event)} from {event.caller_node || 'node'}:
+                                                                                    {' '}{event.ok === false ? 'failed' : 'ok'}, {Math.round(Number(event.elapsed_ms || 0))}ms
+                                                                                    {typeof event.source_count === 'number' ? `, sources ${event.source_count}` : ''}
+                                                                                </Typography>
+                                                                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4 }}>
+                                                                                    {event.tool_category && (
+                                                                                        <Chip size="small" variant="outlined" label={event.tool_category} sx={{ height: 18, fontSize: '0.65rem' }} />
+                                                                                    )}
+                                                                                    {artifactKeys.slice(0, 4).map((artifactKey) => (
+                                                                                        <Chip key={artifactKey} size="small" variant="outlined" label={artifactKey} sx={{ height: 18, fontSize: '0.65rem' }} />
+                                                                                    ))}
+                                                                                    {warnings.map((warning) => (
+                                                                                        <Chip key={warning} size="small" color="warning" variant="outlined" label={warning} sx={{ height: 18, fontSize: '0.65rem' }} />
+                                                                                    ))}
+                                                                                </Box>
                                                                             </Box>
-                                                                        </Box>
-                                                                    );
-                                                                })}
-                                                            </Box>
+                                                                        );
+                                                                    })}
+                                                                </Box>
+                                                            </details>
                                                         )}
                                                         </Box>
                                                     );

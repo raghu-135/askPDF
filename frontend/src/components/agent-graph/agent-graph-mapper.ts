@@ -121,6 +121,7 @@ const summarizeTool = (event: Record<string, any>): AgentGraphToolSummary => ({
   callerNode: typeof event.caller_node === 'string' ? event.caller_node : undefined,
   ok: event.ok !== false,
   elapsedMs: Number.isFinite(Number(event.elapsed_ms)) ? Number(event.elapsed_ms) : undefined,
+  sourceCount: Number.isFinite(Number(event.source_count)) ? Number(event.source_count) : undefined,
   warnings: Array.isArray(event.warnings) ? event.warnings.map(String) : [],
   artifactKeys: Array.isArray(event.artifact_keys) ? event.artifact_keys.map(String) : [],
   raw: event,
@@ -196,6 +197,8 @@ export const buildAgentGraph = (
         toolSummaries,
         warningCount: toolSummaries.reduce((count, tool) => count + tool.warnings.length, 0),
         errorCount: toolSummaries.filter((tool) => !tool.ok).length + rawEvents.filter((event) => event.error || event.ok === false).length,
+        sourceCount: toolSummaries.reduce((count, tool) => count + (tool.sourceCount || 0), 0),
+        artifactCount: toolSummaries.reduce((count, tool) => count + tool.artifactKeys.length, 0),
         rawEvents,
       };
     });
