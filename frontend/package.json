@@ -24,6 +24,8 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^7.0.0",
     "@mui/material": "^7.0.0",
+    "@xyflow/react": "^12.11.1",
+    "elkjs": "^0.11.1",
     "kokoro-js": "^1.2.1",
     "next": "^15.5.15",
     "react": "^19.2.5",

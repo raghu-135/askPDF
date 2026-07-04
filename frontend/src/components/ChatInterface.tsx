@@ -60,6 +60,8 @@ import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } fro
 import ChatSettingsDialog from './ChatSettingsDialog';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 
+const AgentGraphCanvas = dynamic(() => import('./agent-graph/AgentGraphCanvas'), { ssr: false });
+
 interface ChatMessage extends Message {
     isRecollected?: boolean;
     reasoning?: string;
@@ -1311,6 +1313,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     color: isUser
                                         ? theme.palette.getContrastText(theme.palette.primary.main)
                                         : theme.palette.text.primary,
+                                    width: !isUser && msg.agent_run_id ? `calc(100% - ${theme.spacing(6)})` : 'fit-content',
                                     maxWidth: isUser ? '90%' : `calc(100% - ${theme.spacing(6)})`,
                                     minWidth: 0,
                                     overflowWrap: 'anywhere',
@@ -1627,6 +1630,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                 variant="outlined"
                                                             />
                                                         </Box>
+                                                        <AgentGraphCanvas
+                                                            resolvedSpec={runDetails.resolved_spec_json}
+                                                            templateId={runDetails.template_id}
+                                                            mode="run-debug"
+                                                            overlay={{
+                                                                route: debug?.route || metrics.route,
+                                                                routeReason: debug?.route_reason,
+                                                                nodeEvents: debug?.node_events || [],
+                                                                toolEvents: debug?.tool_events || [],
+                                                                errors: debug?.error ? [debug.error] : [],
+                                                                metrics,
+                                                            }}
+                                                        />
                                                         {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).length > 0 && (
                                                             <Box>
                                                                 <Typography variant="caption" sx={{ display: 'block', fontWeight: 600, mb: 0.5 }}>
