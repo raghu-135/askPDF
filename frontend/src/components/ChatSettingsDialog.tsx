@@ -128,9 +128,10 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     label="Agent pattern"
                     value={agentPatternId}
                     onChange={(e) => onAgentPatternChange(e.target.value)}
-                    helperText="Router RAG uses the compiled agent-pattern graph."
+                    helperText="Router RAG remains the default; Plan-and-Execute is opt-in."
                 >
                     <MenuItem value="router_rag_agent">Router RAG Agent</MenuItem>
+                    <MenuItem value="plan_execute_rag_agent">Plan-and-Execute RAG Agent</MenuItem>
                 </TextField>
                 <Divider />
                 <Box>

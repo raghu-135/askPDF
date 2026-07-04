@@ -34,6 +34,57 @@ async def handle_router_rag_chat(
     agent_run_context: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Execute the compiled Router RAG v2 graph and persist a chat turn."""
+    return await _handle_compiled_rag_chat(
+        thread_id,
+        req,
+        embed_model,
+        resolved_spec=resolved_spec,
+        agent_run_context=agent_run_context,
+        runtime_label="Router RAG",
+        failure_code="router_rag_execution_failed",
+        failure_reason_prefix="Exception during Router RAG execution",
+        success_context="Context retrieved by compiled Router RAG Agent pattern.",
+        failure_context="Compiled Router RAG Agent execution failed gracefully.",
+    )
+
+
+async def handle_plan_execute_rag_chat(
+    thread_id: str,
+    req: Any,
+    embed_model: str,
+    *,
+    resolved_spec: Dict[str, Any],
+    agent_run_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Execute the compiled Plan-and-Execute RAG graph and persist a chat turn."""
+    return await _handle_compiled_rag_chat(
+        thread_id,
+        req,
+        embed_model,
+        resolved_spec=resolved_spec,
+        agent_run_context=agent_run_context,
+        runtime_label="Plan-and-Execute RAG",
+        failure_code="plan_execute_rag_execution_failed",
+        failure_reason_prefix="Exception during Plan-and-Execute RAG execution",
+        success_context="Context retrieved by compiled Plan-and-Execute RAG Agent pattern.",
+        failure_context="Compiled Plan-and-Execute RAG Agent execution failed gracefully.",
+    )
+
+
+async def _handle_compiled_rag_chat(
+    thread_id: str,
+    req: Any,
+    embed_model: str,
+    *,
+    resolved_spec: Dict[str, Any],
+    agent_run_context: Dict[str, Any],
+    runtime_label: str,
+    failure_code: str,
+    failure_reason_prefix: str,
+    success_context: str,
+    failure_context: str,
+) -> Dict[str, Any]:
+    """Execute a compiled RAG graph and persist a chat turn."""
 
     agent_run_id = agent_run_context.get("agent_run_id")
     question = req.question
@@ -65,6 +116,7 @@ async def handle_router_rag_chat(
     }
     state = {
         "agent_run_id": agent_run_id,
+        "pattern_type": resolved_spec.get("pattern_type"),
         "thread_id": thread_id,
         "question": question,
         "llm_model": llm_model,
@@ -89,7 +141,8 @@ async def handle_router_rag_chat(
 
     try:
         logger.info(
-            "Router RAG run started | run_id=%s thread_id=%s pattern=%s version=%s question_chars=%s",
+            "%s run started | run_id=%s thread_id=%s pattern=%s version=%s question_chars=%s",
+            runtime_label,
             agent_run_id,
             thread_id,
             agent_run_context.get("agent_pattern_id"),
@@ -147,7 +200,8 @@ async def handle_router_rag_chat(
 
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         logger.info(
-            "Router RAG run completed | run_id=%s thread_id=%s route=%s status=%s elapsed_ms=%.1f document_sources=%s web_sources=%s used_chat_ids=%s node_events=%s tool_events=%s",
+            "%s run completed | run_id=%s thread_id=%s route=%s status=%s elapsed_ms=%.1f document_sources=%s web_sources=%s used_chat_ids=%s node_events=%s tool_events=%s",
+            runtime_label,
             agent_run_id,
             thread_id,
             result.get("route"),
@@ -173,7 +227,7 @@ async def handle_router_rag_chat(
             "reasoning": result.get("reasoning") or "",
             "reasoning_available": bool(result.get("reasoning_available")),
             "reasoning_format": result.get("reasoning_format") or "none",
-            "context": "Context retrieved by compiled Router RAG Agent pattern.",
+            "context": success_context,
             "route": result.get("route"),
             "route_reason": result.get("route_reason"),
             "node_events": result.get("node_events") or [],
@@ -185,7 +239,8 @@ async def handle_router_rag_chat(
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         partial_result = result if isinstance(locals().get("result"), dict) else state
         logger.exception(
-            "Router RAG run failed | run_id=%s thread_id=%s elapsed_ms=%.1f",
+            "%s run failed | run_id=%s thread_id=%s elapsed_ms=%.1f",
+            runtime_label,
             agent_run_id,
             thread_id,
             duration_ms,
@@ -195,7 +250,7 @@ async def handle_router_rag_chat(
             "Please try again in a moment or try rephrasing your question."
         )
         error_payload = {
-            "code": "router_rag_execution_failed",
+            "code": failure_code,
             "raw_message": str(exc),
             "retryable": True,
         }
@@ -226,7 +281,7 @@ async def handle_router_rag_chat(
             question=req.question,
             answer=fallback_answer,
             status="failed",
-            reasoning=f"Exception during Router RAG execution: {exc}",
+            reasoning=f"{failure_reason_prefix}: {exc}",
             reasoning_available=True,
             reasoning_format="markdown",
             web_sources=[],
@@ -245,10 +300,10 @@ async def handle_router_rag_chat(
             "document_sources": [],
             "web_sources": [],
             "clarification_options": None,
-            "reasoning": f"Exception during Router RAG execution: {exc}",
+            "reasoning": f"{failure_reason_prefix}: {exc}",
             "reasoning_available": True,
             "reasoning_format": "markdown",
-            "context": "Compiled Router RAG Agent execution failed gracefully.",
+            "context": failure_context,
             "route": route,
             "route_reason": route_reason,
             "node_events": node_events,

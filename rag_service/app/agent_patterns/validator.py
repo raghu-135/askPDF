@@ -6,9 +6,13 @@ from typing import Any, Dict, Optional
 from app.agent.tool_registry import known_tool_contract_ids, tool_contracts_by_id
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
+    PLAN_EXECUTE_RAG_AGENT_ID,
+    PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
+    PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS,
     ROUTER_RAG_NODE_TOOL_REQUIREMENTS,
     ROUTER_RAG_AGENT_ID,
     ROUTER_RAG_REQUIRED_TOOL_IDS,
+    SUPPORTED_BUILTIN_TEMPLATE_IDS,
 )
 from app.models.llm_server_client import (
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -26,8 +30,19 @@ def _known_tool_ids() -> set[str]:
     return known_tool_contract_ids()
 
 
+PATTERN_REQUIRED_TOOL_IDS = {
+    ROUTER_RAG_AGENT_ID: ROUTER_RAG_REQUIRED_TOOL_IDS,
+    PLAN_EXECUTE_RAG_AGENT_ID: PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS,
+}
+
+PATTERN_NODE_TOOL_REQUIREMENTS = {
+    ROUTER_RAG_AGENT_ID: ROUTER_RAG_NODE_TOOL_REQUIREMENTS,
+    PLAN_EXECUTE_RAG_AGENT_ID: PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
+}
+
+
 class TemplateValidator:
-    """Validator for the supported built-in Router RAG Agent schema."""
+    """Validator for supported built-in agent pattern schemas."""
 
     def validate(self, spec: Dict[str, Any]) -> Dict[str, Any]:
         errors = self.collect_errors(spec)
@@ -44,8 +59,8 @@ class TemplateValidator:
         if spec.get("schema_version") != 1:
             errors.append("schema_version must be 1")
         pattern_type = spec.get("pattern_type")
-        if pattern_type != ROUTER_RAG_AGENT_ID:
-            errors.append(f"pattern_type must be {ROUTER_RAG_AGENT_ID}")
+        if pattern_type not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            errors.append(f"pattern_type must be one of: {', '.join(sorted(SUPPORTED_BUILTIN_TEMPLATE_IDS))}")
 
         config = spec.get("config")
         if not isinstance(config, dict):
@@ -88,11 +103,12 @@ class TemplateValidator:
             unknown_tool_ids = sorted(set(allowed_tool_ids) - known_tool_ids)
             if unknown_tool_ids:
                 errors.append(f"unknown allowed_tool_ids: {', '.join(unknown_tool_ids)}")
-            if pattern_type == ROUTER_RAG_AGENT_ID:
-                missing_tool_ids = sorted(ROUTER_RAG_REQUIRED_TOOL_IDS - set(allowed_tool_ids))
+            required_tool_ids = PATTERN_REQUIRED_TOOL_IDS.get(pattern_type, set())
+            if required_tool_ids:
+                missing_tool_ids = sorted(required_tool_ids - set(allowed_tool_ids))
                 if missing_tool_ids:
-                    errors.append(f"router_rag_agent missing required allowed_tool_ids: {', '.join(missing_tool_ids)}")
-                errors.extend(self._collect_router_tool_permission_errors(set(allowed_tool_ids)))
+                    errors.append(f"{pattern_type} missing required allowed_tool_ids: {', '.join(missing_tool_ids)}")
+                errors.extend(self._collect_tool_permission_errors(pattern_type, set(allowed_tool_ids)))
 
         prefetch_policy = config.get("prefetch_policy", {})
         if not isinstance(prefetch_policy, dict):
@@ -104,6 +120,8 @@ class TemplateValidator:
 
         if pattern_type == ROUTER_RAG_AGENT_ID:
             errors.extend(self._collect_router_graph_errors(config.get("graph")))
+        elif pattern_type == PLAN_EXECUTE_RAG_AGENT_ID:
+            errors.extend(self._collect_plan_execute_graph_errors(config.get("graph")))
 
         return errors
 
@@ -121,26 +139,29 @@ class TemplateValidator:
             "warnings": [],
             "schema_version": spec.get("schema_version") if isinstance(spec, dict) else None,
             "pattern_type": spec.get("pattern_type") if isinstance(spec, dict) else None,
-            "supported_pattern_types": [ROUTER_RAG_AGENT_ID],
+            "supported_pattern_types": sorted(SUPPORTED_BUILTIN_TEMPLATE_IDS),
             "allowed_tool_ids": allowed_tool_ids,
-            "required_tool_ids": sorted(ROUTER_RAG_REQUIRED_TOOL_IDS),
-            "missing_required_tool_ids": sorted(ROUTER_RAG_REQUIRED_TOOL_IDS - set(allowed_tool_ids)),
+            "required_tool_ids": sorted(PATTERN_REQUIRED_TOOL_IDS.get(spec.get("pattern_type"), ROUTER_RAG_REQUIRED_TOOL_IDS)),
+            "missing_required_tool_ids": sorted(
+                PATTERN_REQUIRED_TOOL_IDS.get(spec.get("pattern_type"), ROUTER_RAG_REQUIRED_TOOL_IDS) - set(allowed_tool_ids)
+            ),
             "unknown_allowed_tool_ids": sorted(set(allowed_tool_ids) - known_tool_ids),
         }
 
-    def _collect_router_tool_permission_errors(self, allowed_tool_ids: set[str]) -> list[str]:
+    def _collect_tool_permission_errors(self, pattern_type: Any, allowed_tool_ids: set[str]) -> list[str]:
         errors: list[str] = []
         contracts_by_id = tool_contracts_by_id()
-        for caller_node, contract_id in sorted(ROUTER_RAG_NODE_TOOL_REQUIREMENTS.items()):
+        node_tool_requirements = PATTERN_NODE_TOOL_REQUIREMENTS.get(pattern_type, {})
+        for caller_node, contract_id in sorted(node_tool_requirements.items()):
             if contract_id not in allowed_tool_ids:
                 continue
             contracts = contracts_by_id.get(contract_id) or []
             if not contracts:
-                errors.append(f"router_rag_agent required tool contract is not registered: {contract_id}")
+                errors.append(f"{pattern_type} required tool contract is not registered: {contract_id}")
                 continue
             if not any(caller_node in (contract.get("allowed_caller_nodes") or []) for contract in contracts):
                 errors.append(
-                    f"router_rag_agent tool contract {contract_id} is not allowed from node {caller_node}"
+                    f"{pattern_type} tool contract {contract_id} is not allowed from node {caller_node}"
                 )
         return errors
 
@@ -203,9 +224,67 @@ class TemplateValidator:
 
         return errors
 
+    def _collect_plan_execute_graph_errors(self, graph: Any) -> list[str]:
+        errors: list[str] = []
+        if not isinstance(graph, dict):
+            return ["graph must be an object for plan_execute_rag_agent"]
+
+        nodes = graph.get("nodes")
+        edges = graph.get("edges")
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            return ["graph.nodes and graph.edges must be lists"]
+
+        expected_nodes = {
+            "context_loader": "context_loader",
+            "planner": "planner",
+            "direct_answer": "direct_answer",
+            "retrieval_worker": "retrieval_worker",
+            "memory_worker": "memory_worker",
+            "timeline_worker": "timeline_worker",
+            "web_worker": "web_worker",
+            "synthesizer": "synthesizer",
+            "finalizer": "finalizer",
+        }
+        actual_nodes: dict[str, str] = {}
+        for node in nodes:
+            if not isinstance(node, dict):
+                errors.append("graph node entries must be objects")
+                continue
+            node_id = node.get("id")
+            node_type = node.get("type")
+            if isinstance(node_id, str) and isinstance(node_type, str):
+                actual_nodes[node_id] = node_type
+        if actual_nodes != expected_nodes:
+            errors.append("plan_execute_rag_agent graph nodes must match the built-in Plan-and-Execute RAG topology")
+
+        expected_edges = [
+            {"from": "START", "to": "context_loader"},
+            {"from": "context_loader", "to": "planner"},
+            {
+                "from": "planner",
+                "conditional": True,
+                "routes": {
+                    "execute": "retrieval_worker",
+                    "direct": "direct_answer",
+                    "clarify": "finalizer",
+                },
+            },
+            {"from": "direct_answer", "to": "finalizer"},
+            {"from": "retrieval_worker", "to": "memory_worker"},
+            {"from": "memory_worker", "to": "timeline_worker"},
+            {"from": "timeline_worker", "to": "web_worker"},
+            {"from": "web_worker", "to": "synthesizer"},
+            {"from": "synthesizer", "to": "finalizer"},
+            {"from": "finalizer", "to": "END"},
+        ]
+        if edges != expected_edges:
+            errors.append("plan_execute_rag_agent graph edges must match the built-in fixed execution topology")
+
+        return errors
+
 
 class TemplateResolver:
-    """Freeze the effective Router RAG config for an agent run."""
+    """Freeze the effective built-in agent pattern config for an agent run."""
 
     def __init__(self, validator: Optional[TemplateValidator] = None):
         self.validator = validator or TemplateValidator()

@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
-from app.agent_patterns.templates import ROUTER_RAG_AGENT_ID
+from app.agent_patterns.templates import PLAN_EXECUTE_RAG_AGENT_ID, ROUTER_RAG_AGENT_ID, SUPPORTED_BUILTIN_TEMPLATE_IDS
 from app.agent_patterns.validator import TemplateResolver
 from app.db import get_thread_settings
 
@@ -30,7 +30,7 @@ class AgentRunService:
         agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
         template_id = agent_settings.get("template_id") or ROUTER_RAG_AGENT_ID
-        if template_id != ROUTER_RAG_AGENT_ID:
+        if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
             logger.warning(
                 "Unsupported agent pattern requested for thread %s | requested_template=%s fallback_template=%s",
                 thread_id,
@@ -84,10 +84,11 @@ class AgentRunService:
         }
 
         try:
-            logger.info("Invoking compiled Router RAG Agent for thread %s", thread_id)
-            from app.agent_patterns.router_runtime import handle_router_rag_chat
+            logger.info("Invoking compiled agent pattern for thread %s | template=%s", thread_id, template.id)
+            from app.agent_patterns.router_runtime import handle_plan_execute_rag_chat, handle_router_rag_chat
 
-            result = await handle_router_rag_chat(
+            handler = handle_plan_execute_rag_chat if template.id == PLAN_EXECUTE_RAG_AGENT_ID else handle_router_rag_chat
+            result = await handler(
                 thread_id,
                 req,
                 embed_model,

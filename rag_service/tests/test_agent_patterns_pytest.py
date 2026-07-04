@@ -10,12 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent_patterns.router_runtime import handle_router_rag_chat
 from app.agent_patterns.graph import NodeRegistry, TemplateCompiler
+from app.agent_patterns.graph import normalize_execution_plan
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
+    PLAN_EXECUTE_RAG_AGENT_ID,
+    PLAN_EXECUTE_RAG_AGENT_VERSION,
     ROUTER_RAG_AGENT_ID,
     ROUTER_RAG_AGENT_VERSION,
+    builtin_plan_execute_rag_spec,
     builtin_router_rag_spec,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
@@ -66,7 +70,7 @@ class TestRouterRagTemplateValidator:
     @pytest.mark.parametrize(
         "mutate, expected",
         [
-            (lambda spec: spec.update({"pattern_type": "simple_rag_agent"}), "pattern_type must be router_rag_agent"),
+            (lambda spec: spec.update({"pattern_type": "simple_rag_agent"}), "pattern_type must be one of:"),
             (lambda spec: spec["config"].update({"surprise": True}), "unknown config keys: surprise"),
             (lambda spec: spec["config"].update({"allowed_tool_ids": ["not_a_tool"]}), "unknown allowed_tool_ids: not_a_tool"),
             (lambda spec: spec["config"].update({"max_iterations": 999}), "max_iterations must be between"),
@@ -97,6 +101,11 @@ class TestRouterRagTemplateValidator:
 
         assert result == {"valid": True, "errors": []}
 
+    def test_accepts_builtin_plan_execute_rag_spec(self):
+        result = TemplateValidator().validate(builtin_plan_execute_rag_spec())
+
+        assert result == {"valid": True, "errors": []}
+
     def test_rejects_router_rag_graph_topology_changes(self):
         spec = builtin_router_rag_spec()
         spec["config"]["graph"]["nodes"].append({"id": "surprise", "type": "retrieval_worker"})
@@ -119,6 +128,29 @@ class TestRouterRagTemplateValidator:
         graph = TemplateCompiler().compile(builtin_router_rag_spec())
 
         assert graph is not None
+
+    def test_compiles_builtin_plan_execute_rag_spec(self):
+        graph = TemplateCompiler().compile(builtin_plan_execute_rag_spec())
+
+        assert graph is not None
+
+    def test_rejects_plan_execute_graph_topology_changes(self):
+        spec = builtin_plan_execute_rag_spec()
+        spec["config"]["graph"]["edges"].append({"from": "planner", "to": "synthesizer"})
+
+        with pytest.raises(TemplateValidationError) as exc:
+            TemplateValidator().validate(spec)
+
+        assert "plan_execute_rag_agent graph edges must match" in str(exc.value)
+
+    def test_normalize_execution_plan_clamps_invalid_plans_to_document_execution(self):
+        normalized = normalize_execution_plan(
+            {"route": "execute", "execution_plan": ["unknown_worker", "web_worker"]},
+            use_web_search=False,
+        )
+
+        assert normalized["route"] == "execute"
+        assert normalized["execution_plan"] == ["retrieval_worker"]
 
 
 class TestRouterRagGraphToolConsumers:
@@ -250,6 +282,35 @@ class TestRouterRagGraphToolConsumers:
         assert web_update["web_sources"] == [{"url": "https://example.com", "title": "Example"}]
         assert web_update["tool_events"][0]["tool_name"] == "search_web"
 
+    @pytest.mark.asyncio
+    async def test_unselected_plan_workers_emit_skipped_event_without_calling_tool(self, monkeypatch):
+        class ExplodingTool:
+            async def ainvoke(self, _args, config=None):
+                raise AssertionError("tool should not be called for unselected plan worker")
+
+        monkeypatch.setattr("app.agent_patterns.graph.search_conversation_history", ExplodingTool())
+
+        registry = NodeRegistry()
+        update = await registry.memory_worker(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "What is this about?",
+                "route": "execute",
+                "execution_plan": ["retrieval_worker"],
+                "used_chat_ids": [],
+                "node_events": [],
+                "tool_events": [],
+                "allowed_tool_ids": builtin_plan_execute_rag_spec()["config"]["allowed_tool_ids"],
+            },
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        assert update["node_events"][-1]["node"] == "memory_worker"
+        assert update["node_events"][-1]["skipped"] is True
+        assert update["node_events"][-1]["skip_reason"] == "not_selected_by_plan"
+        assert "tool_events" not in update
+
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestAgentPatternRepository:
@@ -270,12 +331,16 @@ class TestAgentPatternRepository:
         await repo.seed_builtin_templates()
 
         templates = await repo.list_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        router_template, router_version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        plan_template, plan_version = await repo.get_template_with_current_version(PLAN_EXECUTE_RAG_AGENT_ID)
 
-        assert {template.id for template in templates} == {ROUTER_RAG_AGENT_ID}
-        assert template.current_version_id == version.id
-        assert version.version == ROUTER_RAG_AGENT_VERSION
-        assert version.validation_result_json == {"valid": True, "errors": []}
+        assert {template.id for template in templates} == {ROUTER_RAG_AGENT_ID, PLAN_EXECUTE_RAG_AGENT_ID}
+        assert router_template.current_version_id == router_version.id
+        assert router_version.version == ROUTER_RAG_AGENT_VERSION
+        assert router_version.validation_result_json == {"valid": True, "errors": []}
+        assert plan_template.current_version_id == plan_version.id
+        assert plan_version.version == PLAN_EXECUTE_RAG_AGENT_VERSION
+        assert plan_version.validation_result_json == {"valid": True, "errors": []}
 
     @pytest.mark.asyncio
     async def test_run_lifecycle_persists_resolved_spec(self, repo, sample_thread):
@@ -611,6 +676,72 @@ class TestAgentRunService:
         assert run.metrics_json["node_elapsed_ms"] == {"router": 3.5}
         assert run.metrics_json["tool_event_count"] == 1
         assert run.metrics_json["tool_elapsed_ms"] == 9.25
+
+    @pytest.mark.asyncio
+    async def test_run_thread_chat_uses_plan_execute_rag_when_selected(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        captured_spec = {}
+
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+
+            async def fake_get_thread_settings(_thread_id):
+                return {"agent_pattern": {"template_id": PLAN_EXECUTE_RAG_AGENT_ID}}
+
+            async def fake_handle_plan_execute_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context):
+                captured_spec.update(resolved_spec)
+                return {
+                    "answer": "plan execute ok",
+                    "document_sources": [{"id": "doc"}],
+                    "web_sources": [],
+                    "used_chat_ids": ["turn-1:assistant"],
+                    "clarification_options": None,
+                    "route": "execute",
+                    "node_events": [{"node": "planner", "elapsed_ms": 2.0, "execution_plan": ["retrieval_worker"]}],
+                    "tool_events": [],
+                    **agent_run_context,
+                }
+
+            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr(
+                "app.agent_patterns.router_runtime.handle_plan_execute_rag_chat",
+                fake_handle_plan_execute_rag_chat,
+            )
+
+            req = SimpleNamespace(
+                question="What is this about?",
+                llm_model="test-llm",
+                use_intent_agent=False,
+                use_web_search=False,
+                use_reranker=True,
+                max_iterations=1,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+            )
+            result = await AgentRunService(repository=repo).run_thread_chat(
+                sample_thread.id,
+                req,
+                sample_thread.embed_model,
+            )
+
+            run = await repo.get_run(result["agent_run_id"])
+
+        assert result["agent_pattern_id"] == PLAN_EXECUTE_RAG_AGENT_ID
+        assert result["agent_pattern_version"] == PLAN_EXECUTE_RAG_AGENT_VERSION
+        assert captured_spec["pattern_type"] == PLAN_EXECUTE_RAG_AGENT_ID
+        assert run.status == "completed"
+        assert run.resolved_spec_json["pattern_type"] == PLAN_EXECUTE_RAG_AGENT_ID
+        assert run.metrics_json["route"] == "execute"
+        assert run.metrics_json["node_elapsed_ms"] == {"planner": 2.0}
+        assert run.metrics_json["document_source_count"] == 1
+        assert run.metrics_json["used_chat_id_count"] == 1
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_persists_failed_run_metrics(self, engine, sample_thread, monkeypatch):
@@ -1216,7 +1347,10 @@ class TestAgentPatternApi:
     def test_list_and_get_builtin_agent_pattern(self, api_client):
         listed = api_client.get("/api/agent-patterns")
         assert listed.status_code == 200
-        assert {item["id"] for item in listed.json()["agent_patterns"]} == {ROUTER_RAG_AGENT_ID}
+        assert {item["id"] for item in listed.json()["agent_patterns"]} == {
+            ROUTER_RAG_AGENT_ID,
+            PLAN_EXECUTE_RAG_AGENT_ID,
+        }
 
         detail = api_client.get(f"/api/agent-patterns/{ROUTER_RAG_AGENT_ID}")
         assert detail.status_code == 200
@@ -1226,6 +1360,14 @@ class TestAgentPatternApi:
         assert payload["current_version"]["validation"]["valid"] is True
         assert "document_evidence" in payload["capabilities"]["required_tool_ids"]
         assert payload["capabilities"]["node_tool_requirements"]["retrieval_worker"] == "document_evidence"
+
+        plan_detail = api_client.get(f"/api/agent-patterns/{PLAN_EXECUTE_RAG_AGENT_ID}")
+        assert plan_detail.status_code == 200
+        plan_payload = plan_detail.json()
+        assert plan_payload["agent_pattern"]["id"] == PLAN_EXECUTE_RAG_AGENT_ID
+        assert plan_payload["current_version"]["version"] == PLAN_EXECUTE_RAG_AGENT_VERSION
+        assert plan_payload["current_version"]["validation"]["valid"] is True
+        assert plan_payload["capabilities"]["node_tool_requirements"]["planner"] == "clarify_intent"
 
         stale_detail = api_client.get("/api/agent-patterns/simple_rag_agent")
         assert stale_detail.status_code == 404

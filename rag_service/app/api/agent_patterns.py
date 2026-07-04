@@ -10,10 +10,13 @@ from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
+    PLAN_EXECUTE_RAG_AGENT_ID,
+    PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
+    PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS,
     ROUTER_RAG_AGENT_ID,
-    ROUTER_RAG_AGENT_VERSION,
     ROUTER_RAG_NODE_TOOL_REQUIREMENTS,
     ROUTER_RAG_REQUIRED_TOOL_IDS,
+    SUPPORTED_BUILTIN_TEMPLATE_IDS,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
 from app.db import get_thread, get_thread_settings
@@ -175,6 +178,18 @@ def _run_summary_payload(run) -> Dict[str, Any]:
     }
 
 
+def _capabilities_for_pattern(template_id: str) -> Dict[str, Any]:
+    if template_id == PLAN_EXECUTE_RAG_AGENT_ID:
+        return {
+            "required_tool_ids": sorted(PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS),
+            "node_tool_requirements": dict(sorted(PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS.items())),
+        }
+    return {
+        "required_tool_ids": sorted(ROUTER_RAG_REQUIRED_TOOL_IDS),
+        "node_tool_requirements": dict(sorted(ROUTER_RAG_NODE_TOOL_REQUIREMENTS.items())),
+    }
+
+
 @router.get("/agent-patterns")
 async def list_agent_patterns():
     repo = AgentPatternRepository()
@@ -193,10 +208,7 @@ async def get_agent_pattern(template_id: str):
     return {
         "agent_pattern": _template_payload(template),
         "current_version": _version_payload(version),
-        "capabilities": {
-            "required_tool_ids": sorted(ROUTER_RAG_REQUIRED_TOOL_IDS),
-            "node_tool_requirements": dict(sorted(ROUTER_RAG_NODE_TOOL_REQUIREMENTS.items())),
-        },
+        "capabilities": _capabilities_for_pattern(template.id),
     }
 
 
@@ -218,7 +230,7 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
     agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
     template_id = agent_settings.get("template_id") or ROUTER_RAG_AGENT_ID
-    if template_id != ROUTER_RAG_AGENT_ID:
+    if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
         template_id = ROUTER_RAG_AGENT_ID
 
     template, version = await repo.get_template_with_current_version(template_id)

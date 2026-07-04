@@ -18,6 +18,7 @@ from app.models.retry import invoke_with_retry
 from app.agent.external_research_tools import search_web
 from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
 from app.rag.chat_service import prefetch_context
+from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES
 
 
 RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarify"]
@@ -56,6 +57,8 @@ class RouterRagState(TypedDict, total=False):
     tool_events: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
     allowed_tool_ids: List[str]
+    pattern_type: str
+    execution_plan: List[str]
 
 
 def _append_event(
@@ -172,12 +175,76 @@ def _format_prefetch_summary(bundle: Dict[str, Any]) -> str:
     return "\n\n".join(parts).strip() or "No pre-fetched context is available."
 
 
+def _combine_evidence(existing: Any, addition: Any, *, label: str) -> str:
+    existing_text = str(existing or "").strip()
+    addition_text = str(addition or "").strip()
+    if not addition_text:
+        return existing_text
+    labeled = f"[{label}]\n{addition_text}"
+    return "\n\n".join(part for part in (existing_text, labeled) if part).strip()
+
+
+def _should_skip_worker(state: RouterRagState, worker_node: str) -> bool:
+    plan = state.get("execution_plan")
+    if not isinstance(plan, list):
+        return False
+    return worker_node not in plan
+
+
+def _skipped_worker_update(
+    state: RouterRagState,
+    config: RunnableConfig,
+    worker_node: str,
+    started: float,
+    reason: str,
+) -> Dict[str, Any]:
+    data = {"skipped": True, "skip_reason": reason}
+    _log_node_end(state, worker_node, started, data)
+    return {"node_events": _append_event(state, worker_node, data, started=started, config=config)}
+
+
+def normalize_execution_plan(parsed: Dict[str, Any], *, use_web_search: bool) -> Dict[str, Any]:
+    allowed_routes = {"execute", "direct", "clarify"}
+    route = parsed.get("route") if parsed.get("route") in allowed_routes else "execute"
+    raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
+    steps: List[str] = []
+    if isinstance(raw_steps, list):
+        for step in raw_steps:
+            if isinstance(step, str):
+                node = step
+            elif isinstance(step, dict):
+                node = step.get("node") or step.get("worker") or step.get("id")
+            else:
+                continue
+            if node in PLAN_EXECUTE_WORKER_NODES and node not in steps:
+                steps.append(node)
+    if not use_web_search:
+        steps = [step for step in steps if step != "web_worker"]
+    if route == "execute" and not steps:
+        steps = ["retrieval_worker"]
+    if route != "execute":
+        steps = []
+    clarification_options = parsed.get("clarification_options")
+    if route == "clarify" and not isinstance(clarification_options, list):
+        clarification_options = [
+            "Ask about uploaded document evidence.",
+            "Ask about prior conversation context.",
+        ]
+    return {
+        "route": route,
+        "route_reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),
+        "execution_plan": steps,
+        "clarification_options": clarification_options if route == "clarify" else None,
+    }
+
+
 class NodeRegistry:
     """Registry of safe backend node implementations for compiled v2 patterns."""
 
     def __init__(self):
         self._nodes: Dict[str, Callable[..., Any]] = {
             "context_loader": self.context_loader,
+            "planner": self.planner,
             "router": self.router,
             "retrieval_worker": self.retrieval_worker,
             "memory_worker": self.memory_worker,
@@ -215,6 +282,48 @@ class NodeRegistry:
             "web_sources": list(bundle.get("web_sources", [])),
             "used_chat_ids": list(bundle.get("used_chat_ids", [])),
             "node_events": _append_event(state, "context_loader", data, started=started, config=config),
+        }
+
+    async def planner(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        started = time.perf_counter()
+        llm = get_llm(state["llm_model"])
+        prompt = (
+            "Create a bounded retrieval plan for this askPDF question.\n"
+            "Routes:\n"
+            "- execute: run one or more retrieval workers, then synthesize.\n"
+            "- direct: pre-fetched context is enough for a concise answer.\n"
+            "- clarify: the question is ambiguous and needs 2-4 options.\n\n"
+            "Worker nodes available for execute:\n"
+            "- retrieval_worker: uploaded document or cached web snippet evidence.\n"
+            "- memory_worker: prior conversation memory.\n"
+            "- timeline_worker: chronology, first/latest, before/after, since, event ordering.\n"
+            "- web_worker: live internet evidence, only when live web search is enabled.\n\n"
+            f"Live web search enabled: {bool(state.get('use_web_search', False))}\n"
+            "Do not include web_worker when live web search is disabled.\n"
+            "Return only JSON with keys route, reason, execution_plan, clarification_options.\n"
+            "execution_plan must be an array of worker node IDs and must be empty unless route is execute.\n"
+            "clarification_options must be null unless route is clarify.\n\n"
+            f"Question:\n{state['question']}\n\n"
+            f"Pre-fetched context:\n{_format_prefetch_summary(state.get('pre_fetch_bundle') or {})}"
+        )
+        response = await invoke_with_retry(
+            llm.ainvoke,
+            [
+                SystemMessage(content="You are a strict planner for a scoped RAG workflow."),
+                HumanMessage(content=prompt),
+            ],
+        )
+        parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
+        normalized = normalize_execution_plan(parsed, use_web_search=bool(state.get("use_web_search", False)))
+        data = {
+            "route": normalized["route"],
+            "route_reason": normalized["route_reason"],
+            "execution_plan": normalized["execution_plan"],
+        }
+        _log_node_end(state, "planner", started, data)
+        return {
+            **normalized,
+            "node_events": _append_event(state, "planner", data, started=started, config=config),
         }
 
     async def router(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -266,6 +375,8 @@ class NodeRegistry:
 
     async def retrieval_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        if _should_skip_worker(state, "retrieval_worker"):
+            return _skipped_worker_update(state, config, "retrieval_worker", started, "not_selected_by_plan")
         tool_name = "search_documents"
         tool_config = _tool_config(state, config, caller_node="retrieval_worker", tool_name=tool_name)
         raw = await search_documents.ainvoke(
@@ -276,7 +387,7 @@ class NodeRegistry:
         artifacts = payload.get("artifacts") or {}
         document_sources = [*state.get("document_sources", []), *artifacts.get("document_sources", [])]
         web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
-        evidence = payload.get("content", "")
+        evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Document evidence")
         data = {
             "evidence_chars": len(str(evidence or "")),
             "document_source_count": len(document_sources),
@@ -293,6 +404,8 @@ class NodeRegistry:
 
     async def memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        if _should_skip_worker(state, "memory_worker"):
+            return _skipped_worker_update(state, config, "memory_worker", started, "not_selected_by_plan")
         tool_name = "search_conversation_history"
         tool_config = _tool_config(state, config, caller_node="memory_worker", tool_name=tool_name)
         raw = await search_conversation_history.ainvoke(
@@ -301,7 +414,7 @@ class NodeRegistry:
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
-        evidence = payload.get("content", "")
+        evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Memory evidence")
         used_chat_ids = [*state.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])]
         data = {
             "evidence_chars": len(str(evidence or "")),
@@ -317,6 +430,8 @@ class NodeRegistry:
 
     async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        if _should_skip_worker(state, "timeline_worker"):
+            return _skipped_worker_update(state, config, "timeline_worker", started, "not_selected_by_plan")
         tool_name = "search_thread_timeline"
         tool_config = _tool_config(state, config, caller_node="timeline_worker", tool_name=tool_name)
         raw = await search_thread_timeline.ainvoke(
@@ -325,7 +440,7 @@ class NodeRegistry:
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
-        evidence = payload.get("content", "")
+        evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Timeline evidence")
         data = {
             "evidence_chars": len(str(evidence or "")),
             "timeline_event_count": len(artifacts.get("timeline_events", []) or []),
@@ -339,13 +454,17 @@ class NodeRegistry:
 
     async def web_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        if isinstance(state.get("execution_plan"), list) and not state.get("use_web_search", False):
+            return _skipped_worker_update(state, config, "web_worker", started, "web_search_disabled")
+        if _should_skip_worker(state, "web_worker"):
+            return _skipped_worker_update(state, config, "web_worker", started, "not_selected_by_plan")
         tool_name = "search_web"
         tool_config = _tool_config(state, config, caller_node="web_worker", tool_name=tool_name)
         raw = await search_web.ainvoke(state["question"], config=tool_config)
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
         web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
-        evidence = payload.get("content", "")
+        evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Web evidence")
         data = {
             "evidence_chars": len(str(evidence or "")),
             "web_source_count": len(web_sources),
@@ -428,6 +547,11 @@ def router_route(state: RouterRagState) -> str:
     return state.get("route") or "document"
 
 
+def planner_route(state: RouterRagState) -> str:
+    route = state.get("route")
+    return route if route in {"execute", "direct", "clarify"} else "execute"
+
+
 class TemplateCompiler:
     """Compile validated v2 template specs into LangGraph StateGraph instances."""
 
@@ -447,7 +571,8 @@ class TemplateCompiler:
             source = edge.get("from")
             target = edge.get("to")
             if edge.get("conditional"):
-                workflow.add_conditional_edges(source, router_route, edge["routes"])
+                route_fn = planner_route if source == "planner" else router_route
+                workflow.add_conditional_edges(source, route_fn, edge["routes"])
                 continue
             source_ref = START if source == "START" else source
             target_ref = END if target == "END" else target

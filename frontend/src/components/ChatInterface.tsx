@@ -80,7 +80,7 @@ type ClarificationChoice = {
 };
 
 const normalizeAgentPatternForUi = (templateId?: string | null) => (
-    templateId === 'router_rag_agent' ? templateId : 'router_rag_agent'
+    templateId === 'router_rag_agent' || templateId === 'plan_execute_rag_agent' ? templateId : 'router_rag_agent'
 );
 
 interface ChatInterfaceProps {
@@ -174,10 +174,29 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
     const lastClarificationIdsRef = useRef<{ userId: string | null; assistantId: string | null } | null>(null);
     const chatRootRef = useRef<HTMLDivElement | null>(null);
+    const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
+    activeThreadIdRef.current = activeThread?.id ?? null;
     const clarificationResizeRef = useRef({
         startY: 0,
         startRatio: 0.3,
     });
+
+    const applyThreadSettingsToState = useCallback((settings?: Thread['settings']) => {
+        setMaxIterations(settings?.max_iterations ?? defaultMaxIterations);
+        setSystemRole(settings?.system_role ?? defaultSystemRole);
+        setToolInstructions(settings?.tool_instructions ?? {});
+        setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
+        setUseIntentAgent(settings?.use_intent_agent ?? true);
+        setIntentAgentMaxIterations(settings?.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
+        setUseReranker(settings?.use_reranker ?? defaultUseReranker);
+        setAgentPatternId(normalizeAgentPatternForUi(settings?.agent_pattern?.template_id));
+    }, [
+        defaultCustomInstructions,
+        defaultIntentAgentMaxIterations,
+        defaultMaxIterations,
+        defaultSystemRole,
+        defaultUseReranker,
+    ]);
 
     const clampClarificationRatio = (ratio: number) => Math.max(0.16, Math.min(0.58, ratio));
 
@@ -249,6 +268,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     // Load messages when thread changes
     useEffect(() => {
         if (activeThread) {
+            applyThreadSettingsToState(activeThread.settings);
             loadMessages();
             checkIndexStatus();
             loadThreadSettings();
@@ -258,16 +278,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setClarificationOptions(null);
             lastClarificationIdsRef.current = null;
             setIndexingStatus('ready');
-            setMaxIterations(defaultMaxIterations);
-            setSystemRole(defaultSystemRole);
-            setToolInstructions({});
-            setCustomInstructions(defaultCustomInstructions);
-            setUseIntentAgent(true);
-            setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
+            applyThreadSettingsToState(undefined);
             setIsEmbedModelValid(null);
             setIsLlmToolsSupported(null);
         }
-    }, [activeThread?.id, activeThread?.file_count, defaultMaxIterations, defaultSystemRole, defaultCustomInstructions, defaultIntentAgentMaxIterations]);
+    }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState]);
 
     useEffect(() => {
         if (activeThread) {
@@ -345,26 +360,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }, [activeThread]);
 
     const loadThreadSettings = async () => {
-        if (!activeThread) return;
+        const threadId = activeThread?.id;
+        if (!threadId) return;
         try {
-            const settings = await getThreadSettings(activeThread.id);
-            setMaxIterations(settings.max_iterations ?? defaultMaxIterations);
-            setSystemRole(settings.system_role ?? defaultSystemRole);
-            setToolInstructions(settings.tool_instructions ?? {});
-            setCustomInstructions(settings.custom_instructions ?? defaultCustomInstructions);
-            setUseIntentAgent(settings.use_intent_agent ?? true);
-            setIntentAgentMaxIterations(settings.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
-            setUseReranker(settings.use_reranker ?? defaultUseReranker);
-            setAgentPatternId(normalizeAgentPatternForUi(settings.agent_pattern?.template_id));
+            const settings = await getThreadSettings(threadId);
+            if (activeThreadIdRef.current !== threadId) return;
+            applyThreadSettingsToState(settings);
         } catch (error) {
+            if (activeThreadIdRef.current !== threadId) return;
             console.error('Failed to load thread settings:', error);
-            setMaxIterations(defaultMaxIterations);
-            setSystemRole(defaultSystemRole);
-            setToolInstructions({});
-            setCustomInstructions(defaultCustomInstructions);
-            setUseIntentAgent(true);
-            setIntentAgentMaxIterations(defaultIntentAgentMaxIterations);
-            setUseReranker(defaultUseReranker);
+            applyThreadSettingsToState(undefined);
         }
     };
 
@@ -1012,20 +1017,26 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 use_reranker: useReranker,
                 agent_pattern: { template_id: normalizeAgentPatternForUi(agentPatternId) },
             });
-            setMaxIterations(saved.max_iterations);
-            setSystemRole(saved.system_role);
-            setToolInstructions(saved.tool_instructions || {});
-            setCustomInstructions(saved.custom_instructions);
-            setUseIntentAgent(saved.use_intent_agent ?? true);
-            setIntentAgentMaxIterations(saved.intent_agent_max_iterations ?? defaultIntentAgentMaxIterations);
-            setUseReranker(saved.use_reranker ?? defaultUseReranker);
-            setAgentPatternId(normalizeAgentPatternForUi(saved.agent_pattern?.template_id));
+            applyThreadSettingsToState(saved);
             setSettingsDialogOpen(false);
         } catch (error) {
             console.error('Failed to save thread settings:', error);
         } finally {
             setSavingSettings(false);
         }
+    };
+
+    const handleOpenThreadSettings = () => {
+        if (activeThread?.settings) {
+            applyThreadSettingsToState(activeThread.settings);
+        }
+        loadThreadSettings();
+        setSettingsDialogOpen(true);
+    };
+
+    const handleCloseThreadSettings = () => {
+        setSettingsDialogOpen(false);
+        loadThreadSettings();
     };
 
     const handleCopy = (text: string, messageId: string) => {
@@ -1951,7 +1962,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         <Tooltip title="AI prompt settings for this thread" placement="top">
                             <IconButton
                                 size="medium"
-                                onClick={() => setSettingsDialogOpen(true)}
+                                onClick={handleOpenThreadSettings}
                                 sx={{
                                     color: 'text.secondary',
                                     '&:hover': {
@@ -1969,7 +1980,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
             <ChatSettingsDialog
                 open={settingsDialogOpen}
-                onClose={() => setSettingsDialogOpen(false)}
+                onClose={handleCloseThreadSettings}
                 onSave={handleSaveThreadSettings}
                 saving={savingSettings}
                 maxIterations={maxIterations}

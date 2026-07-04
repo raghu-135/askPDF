@@ -135,7 +135,7 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
     "ask_for_clarification": {
         "id": "clarify_intent",
         "category": "control",
-        "allowed_caller_nodes": ["router", "finalizer"],
+        "allowed_caller_nodes": ["router", "planner", "finalizer"],
         "artifact_keys": [],
         "warning_codes": [],
     },
