@@ -36,7 +36,6 @@ import remarkGfm from 'remark-gfm';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
 import { getChatComposerState } from '../lib/chat-composer-state';
-import { formatSkipReason } from '../lib/agentDebugLabels';
 import { formatDurationMs } from '../lib/formatDuration';
 import {
     Thread,
@@ -1084,10 +1083,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         return version ? `${pattern} v${version}` : pattern;
     };
 
-    const formatToolEventName = (event: Record<string, any>) => (
-        event.tool_display_name || event.tool || event.tool_name || 'tool'
-    );
-
     if (!activeThread) {
         return (
             <Paper elevation={0} sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 3, bgcolor: theme.palette.background.default, color: theme.palette.text.primary }}>
@@ -1568,60 +1563,83 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     const durationMs = Number(metrics.duration_ms);
                                                     const formattedDuration = formatDurationMs(durationMs);
                                                     const hasDuration = Boolean(formattedDuration);
-                                                    const nodeCount = Number(metrics.node_event_count ?? debug?.node_event_count ?? debug?.node_events?.length ?? 0);
-                                                    const toolCount = Number(metrics.tool_event_count ?? debug?.tool_event_count ?? 0);
+                                                    const nodeEvents = Array.isArray(debug?.node_events) ? debug.node_events : [];
+                                                    const toolEvents = Array.isArray(debug?.tool_events) ? debug.tool_events : [];
+                                                    const usedNodeCount = new Set(nodeEvents.map((event) => event?.node || event?.name).filter(Boolean)).size;
+                                                    const availableNodeCount = Array.isArray(runDetails.resolved_spec_json?.config?.graph?.nodes)
+                                                        ? runDetails.resolved_spec_json.config.graph.nodes.length
+                                                        : undefined;
+                                                    const usedToolCount = Number(metrics.tool_event_count ?? debug?.tool_event_count ?? toolEvents.length ?? 0);
+                                                    const availableToolCount = Array.isArray(runDetails.resolved_spec_json?.config?.allowed_tool_ids)
+                                                        ? new Set(runDetails.resolved_spec_json.config.allowed_tool_ids.filter(Boolean)).size
+                                                        : undefined;
+                                                    const nodeCountLabel = availableNodeCount
+                                                        ? `${usedNodeCount}/${availableNodeCount}`
+                                                        : `${Number(metrics.node_event_count ?? debug?.node_event_count ?? nodeEvents.length ?? 0)}`;
+                                                    const toolCountLabel = availableToolCount
+                                                        ? `${usedToolCount}/${availableToolCount}`
+                                                        : `${usedToolCount}`;
                                                     const warningCount = Number(metrics.tool_warning_count ?? debug?.tool_warning_count ?? 0);
                                                     const errorCount = Number(metrics.error_count ?? debug?.error_count ?? metrics.tool_error_count ?? debug?.tool_error_count ?? 0);
                                                     return (
                                                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
                                                         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                                                            <Chip
-                                                                size="small"
-                                                                label={`Status: ${runDetails.status}`}
-                                                                variant="outlined"
-                                                            />
-                                                            {metrics.route && (
+                                                            <Tooltip title="Final persisted status for this agent run." placement="top" arrow>
                                                                 <Chip
                                                                     size="small"
-                                                                    label={`Route: ${metrics.route}`}
+                                                                    label={`Status: ${runDetails.status}`}
                                                                     variant="outlined"
                                                                 />
+                                                            </Tooltip>
+                                                            {metrics.route && (
+                                                                <Tooltip title="Route selected by the router or planner for this run." placement="top" arrow>
+                                                                    <Chip
+                                                                        size="small"
+                                                                        label={`Route: ${metrics.route}`}
+                                                                        variant="outlined"
+                                                                    />
+                                                                </Tooltip>
                                                             )}
                                                             {hasDuration && (
+                                                                <Tooltip title="Total elapsed runtime for the agent run." placement="top" arrow>
+                                                                    <Chip
+                                                                        size="small"
+                                                                        label={`Run: ${formattedDuration}`}
+                                                                        variant="outlined"
+                                                                    />
+                                                                </Tooltip>
+                                                            )}
+                                                            <Tooltip title={availableNodeCount ? 'Executed graph nodes over total nodes in this pattern.' : 'Recorded node events for this run.'} placement="top" arrow>
                                                                 <Chip
                                                                     size="small"
-                                                                    label={`Run: ${formattedDuration}`}
+                                                                    label={`Nodes: ${nodeCountLabel}`}
                                                                     variant="outlined"
                                                                 />
-                                                            )}
-                                                            <Chip
-                                                                size="small"
-                                                                label={`Nodes: ${Number.isFinite(nodeCount) ? nodeCount : 0}`}
-                                                                variant="outlined"
-                                                            />
-                                                            <Chip
-                                                                size="small"
-                                                                label={`Tools: ${Number.isFinite(toolCount) ? toolCount : 0}`}
-                                                                variant="outlined"
-                                                            />
-                                                            <Chip
-                                                                size="small"
-                                                                color={Number.isFinite(warningCount) && warningCount > 0 ? 'warning' : 'default'}
-                                                                label={`Warnings: ${Number.isFinite(warningCount) ? warningCount : 0}`}
-                                                                variant="outlined"
-                                                            />
-                                                            <Chip
-                                                                size="small"
-                                                                color={Number.isFinite(errorCount) && errorCount > 0 ? 'error' : 'default'}
-                                                                label={`Errors: ${Number.isFinite(errorCount) ? errorCount : 0}`}
-                                                                variant="outlined"
-                                                            />
+                                                            </Tooltip>
+                                                            <Tooltip title={availableToolCount ? 'Tool calls made over first-party tool contracts enabled for this pattern.' : 'Tool calls recorded for this run.'} placement="top" arrow>
+                                                                <Chip
+                                                                    size="small"
+                                                                    label={`Tools: ${toolCountLabel}`}
+                                                                    variant="outlined"
+                                                                />
+                                                            </Tooltip>
+                                                            <Tooltip title="Real warning codes emitted by tool/runtime contracts." placement="top" arrow>
+                                                                <Chip
+                                                                    size="small"
+                                                                    color={Number.isFinite(warningCount) && warningCount > 0 ? 'warning' : 'default'}
+                                                                    label={`Warnings: ${Number.isFinite(warningCount) ? warningCount : 0}`}
+                                                                    variant="outlined"
+                                                                />
+                                                            </Tooltip>
+                                                            <Tooltip title="Run, node, or tool errors recorded for this run." placement="top" arrow>
+                                                                <Chip
+                                                                    size="small"
+                                                                    color={Number.isFinite(errorCount) && errorCount > 0 ? 'error' : 'default'}
+                                                                    label={`Errors: ${Number.isFinite(errorCount) ? errorCount : 0}`}
+                                                                    variant="outlined"
+                                                                />
+                                                            </Tooltip>
                                                         </Box>
-                                                        {hasDuration && (
-                                                            <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                                                                Total time: {formattedDuration}
-                                                            </Typography>
-                                                        )}
                                                         <AgentGraphCanvas
                                                             resolvedSpec={runDetails.resolved_spec_json}
                                                             templateId={runDetails.template_id}
@@ -1635,80 +1653,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                                 metrics,
                                                             }}
                                                         />
-                                                        {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).length > 0 && (
-                                                            <details open>
-                                                                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                                    Nodes ({(agentRunDetails[msg.agent_run_id].debug?.node_events || []).length})
-                                                                </summary>
-                                                                <Box sx={{ mt: 0.5 }}>
-                                                                    {(agentRunDetails[msg.agent_run_id].debug?.node_events || []).slice(-6).map((event, eventIndex) => {
-                                                                        const elapsedMs = Number(event.elapsed_ms);
-                                                                        const formattedElapsed = formatDurationMs(elapsedMs);
-                                                                        const isSkipped = event.skipped === true;
-                                                                        const hasNodeStatus = isSkipped || Boolean(formattedElapsed);
-                                                                        const skipReason = formatSkipReason(typeof event.skip_reason === 'string' ? event.skip_reason : null);
-                                                                        const skippedLabel = skipReason || 'Skipped';
-                                                                        return (
-                                                                            <Typography
-                                                                                key={`node-${eventIndex}`}
-                                                                                variant="caption"
-                                                                                sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
-                                                                            >
-                                                                                {event.node || event.name || 'node'}
-                                                                                {isSkipped ? `: ${skippedLabel}` : formattedElapsed ? `: ${formattedElapsed}` : ''}
-                                                                                {event.route ? `${hasNodeStatus ? ', ' : ': '}route ${event.route}` : ''}
-                                                                            </Typography>
-                                                                        );
-                                                                    })}
-                                                                </Box>
-                                                            </details>
-                                                        )}
-                                                        {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).length > 0 && (
-                                                            <details open>
-                                                                <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                                    Tools ({(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).length})
-                                                                </summary>
-                                                                <Box sx={{ mt: 0.5 }}>
-                                                                    {(agentRunDetails[msg.agent_run_id].debug?.tool_events || []).slice(-6).map((event, eventIndex) => {
-                                                                        const warnings = Array.isArray(event.warnings) ? event.warnings : [];
-                                                                        const artifactKeys = Array.isArray(event.artifact_keys) ? event.artifact_keys : [];
-                                                                        const formattedElapsed = formatDurationMs(event.elapsed_ms, { showZero: true });
-                                                                        return (
-                                                                            <Box
-                                                                                key={`tool-${eventIndex}`}
-                                                                                sx={{
-                                                                                    display: 'flex',
-                                                                                    flexDirection: 'column',
-                                                                                    gap: 0.35,
-                                                                                    py: 0.35,
-                                                                                }}
-                                                                            >
-                                                                                <Typography
-                                                                                    variant="caption"
-                                                                                    sx={{ display: 'block', color: 'text.secondary', wordBreak: 'break-word' }}
-                                                                                >
-                                                                                    {formatToolEventName(event)} from {event.caller_node || 'node'}:
-                                                                                    {' '}{event.ok === false ? 'failed' : 'ok'}
-                                                                                    {formattedElapsed ? `, ${formattedElapsed}` : ''}
-                                                                                    {typeof event.source_count === 'number' ? `, sources ${event.source_count}` : ''}
-                                                                                </Typography>
-                                                                                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4 }}>
-                                                                                    {event.tool_category && (
-                                                                                        <Chip size="small" variant="outlined" label={event.tool_category} sx={{ height: 18, fontSize: '0.65rem' }} />
-                                                                                    )}
-                                                                                    {artifactKeys.slice(0, 4).map((artifactKey) => (
-                                                                                        <Chip key={artifactKey} size="small" variant="outlined" label={artifactKey} sx={{ height: 18, fontSize: '0.65rem' }} />
-                                                                                    ))}
-                                                                                    {warnings.map((warning) => (
-                                                                                        <Chip key={warning} size="small" color="warning" variant="outlined" label={warning} sx={{ height: 18, fontSize: '0.65rem' }} />
-                                                                                    ))}
-                                                                                </Box>
-                                                                            </Box>
-                                                                        );
-                                                                    })}
-                                                                </Box>
-                                                            </details>
-                                                        )}
                                                         </Box>
                                                     );
                                                 })()}
