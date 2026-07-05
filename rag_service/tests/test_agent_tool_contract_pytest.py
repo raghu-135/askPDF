@@ -79,6 +79,35 @@ class TestAskPdfToolContract:
         assert event["caller_node"] == "web_worker"
         assert event["ok"] is False
 
+    def test_compact_tool_event_keeps_input_preview_and_artifact_refs(self):
+        config = {"configurable": {"caller_node": "retrieval_worker"}}
+        raw = make_tool_result(
+            tool_name="search_documents",
+            content="Document evidence body",
+            config=config,
+            sources=[{"file_hash": "file-1"}],
+            artifacts={
+                "document_sources": [
+                    {
+                        "file_hash": "file-1",
+                        "file_name": "paper.pdf",
+                        "chunk_id": 7,
+                        "pages": "2-3",
+                        "text": "Relevant passage",
+                    }
+                ]
+            },
+        )
+        payload = normalize_tool_result(raw)
+
+        event = compact_tool_event(payload, tool_input={"query": "paper", "max_results": 10})
+
+        assert event["tool_input"] == {"query": "paper", "max_results": 10}
+        assert event["result_preview"] == "Document evidence body"
+        assert event["artifact_summary"] == {"document_sources": 1}
+        assert event["artifact_refs"]["document_matches"][0]["file_hash"] == "file-1"
+        assert event["artifact_refs"]["document_matches"][0]["chunk_id"] == 7
+
     @pytest.mark.asyncio
     async def test_contract_protocol_matches_langchain_style_ainvoke(self):
         class FakeTool:

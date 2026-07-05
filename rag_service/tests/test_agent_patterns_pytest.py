@@ -402,6 +402,7 @@ class TestRouterRagGraphToolConsumers:
         assert update["node_events"][-1]["node"] == "memory_worker"
         assert update["node_events"][-1]["skipped"] is True
         assert update["node_events"][-1]["skip_reason"] == "not_selected_by_plan"
+        assert "warnings" not in update["node_events"][-1]
         assert "tool_events" not in update
 
 
@@ -1079,6 +1080,16 @@ class TestRouterRagRuntime:
             "direct_answer",
             "finalizer",
         ]
+        context_event = result["node_events"][0]
+        router_event = result["node_events"][1]
+        answer_event = result["node_events"][2]
+        assert context_event["status"] == "completed"
+        assert context_event["output_refs"]["document_matches"][0]["file_hash"] == "file-1"
+        assert context_event["output_refs"]["available_documents"][0]["file_hash"] == "file-1"
+        assert router_event["prompt_summary"]["section"] == "Router Node Prompt"
+        assert router_event["llm_result_summary"]["route"] == "direct"
+        assert answer_event["prompt_summary"]["section"] == "Final Answer Prompt"
+        assert answer_event["output_preview"]["answer"] == result["answer"]
         assert all(isinstance(event.get("elapsed_ms"), (int, float)) for event in result["node_events"])
         assert result["agent_run_id"] == "run-1"
         assert turn is not None
@@ -1279,20 +1290,25 @@ class TestRouterRagRuntime:
             assert len(result["tool_events"]) == 1
             assert result["tool_events"][0]["caller_node"] == expected_nodes[2]
             assert result["tool_events"][0]["ok"] is True
+            assert result["tool_events"][0]["result_preview"].endswith("worker evidence.")
             assert turn.payload["metadata"]["agent_tool_events"] == result["tool_events"]
         if route == "document":
             assert result["tool_events"][0]["tool_name"] == "search_documents"
+            assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
             assert result["document_sources"] == [{"file_hash": "file-1", "file_name": "diffusionblocks.pdf"}]
             assert result["answer"] == "Final answer from document route."
         elif route == "memory":
             assert result["tool_events"][0]["tool_name"] == "search_conversation_history"
+            assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
             assert result["used_chat_ids"] == ["turn-1"]
             assert result["answer"] == "Final answer from memory route."
         elif route == "timeline":
             assert result["tool_events"][0]["tool_name"] == "search_thread_timeline"
+            assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
             assert result["answer"] == "Final answer from timeline route."
         elif route == "web":
             assert result["tool_events"][0]["tool_name"] == "search_web"
+            assert result["tool_events"][0]["tool_input"] == "Route coverage?"
             assert result["web_sources"] == [{"url": "https://example.com", "title": "Example"}]
             assert result["answer"] == "Final answer from web route."
         else:

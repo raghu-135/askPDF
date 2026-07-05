@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional, Protocol
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
+from app.agent_patterns.trace import artifact_summary, compact_preview, refs_from_artifacts
+
 
 logger = logging.getLogger(__name__)
 
@@ -278,10 +280,11 @@ def normalize_tool_result(raw: Any, *, tool_name: str = "unknown_tool", config: 
     return normalized
 
 
-def compact_tool_event(payload: Dict[str, Any]) -> Dict[str, Any]:
+def compact_tool_event(payload: Dict[str, Any], *, tool_input: Any = None) -> Dict[str, Any]:
     trace = payload.get("trace") if isinstance(payload.get("trace"), dict) else {}
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
-    return {
+    artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+    event = {
         "tool_name": trace.get("tool_name"),
         "caller_node": trace.get("caller_node"),
         "ok": bool(payload.get("ok", True)),
@@ -291,6 +294,17 @@ def compact_tool_event(payload: Dict[str, Any]) -> Dict[str, Any]:
         "warnings": list(payload.get("warnings") or []),
         "error": payload.get("error"),
     }
+    if tool_input is not None:
+        event["tool_input"] = tool_input
+    if payload.get("content"):
+        event["result_preview"] = compact_preview(payload.get("content"))
+    refs = refs_from_artifacts(artifacts)
+    if refs:
+        event["artifact_refs"] = refs
+    summary = artifact_summary(artifacts)
+    if summary:
+        event["artifact_summary"] = summary
+    return event
 
 
 def collect_tool_sources(

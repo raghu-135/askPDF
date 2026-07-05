@@ -20,6 +20,19 @@ from app.rag.agent_tools import search_conversation_history, search_documents, s
 from app.rag.chat_service import prefetch_context
 from app.agent_patterns.prompting import build_final_answer_messages, build_planner_prompt, build_router_prompt
 from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES
+from app.agent_patterns.trace import (
+    available_document_refs,
+    compact_preview,
+    compact_refs,
+    normalize_warnings,
+    prompt_summary,
+    refs_from_artifacts,
+    refs_from_documents,
+    refs_from_messages,
+    refs_from_timeline,
+    refs_from_web,
+    selected_and_skipped_workers,
+)
 
 
 RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarify"]
@@ -109,9 +122,10 @@ def _append_tool_event(
     state: RouterRagState,
     payload: Dict[str, Any],
     *,
+    tool_input: Any = None,
     config: Optional[RunnableConfig] = None,
 ) -> List[Dict[str, Any]]:
-    event = compact_tool_event(payload)
+    event = compact_tool_event(payload, tool_input=tool_input)
     telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
     if isinstance(telemetry_sink, dict):
         telemetry_sink.setdefault("tool_events", []).append(dict(event))
@@ -225,7 +239,14 @@ def _skipped_worker_update(
     started: float,
     reason: str,
 ) -> Dict[str, Any]:
-    data = {"skipped": True, "skip_reason": reason}
+    data = {
+        "status": "skipped",
+        "skipped": True,
+        "skip_reason": reason,
+        "input_preview": {"question": compact_preview(state.get("question"))},
+        "input_refs": _state_evidence_refs(state),
+        "output_refs": _state_evidence_refs(state),
+    }
     _log_node_end(state, worker_node, started, data)
     return {"node_events": _append_event(state, worker_node, data, started=started, config=config)}
 
@@ -256,6 +277,28 @@ def _fallback_clarification_options() -> List[str]:
     ]
 
 
+def _prefetch_refs(bundle: Dict[str, Any]) -> Dict[str, Any]:
+    return compact_refs(
+        {
+            "recent_messages": refs_from_messages(bundle.get("recent_message_refs")),
+            "semantic_matches": refs_from_messages(bundle.get("semantic_memory_refs") or bundle.get("used_chat_ids")),
+            "document_matches": refs_from_documents(bundle.get("document_sources")),
+            "web_sources": refs_from_web(bundle.get("web_sources")),
+            "available_documents": available_document_refs(bundle.get("documents")),
+        }
+    )
+
+
+def _state_evidence_refs(state: RouterRagState) -> Dict[str, Any]:
+    return compact_refs(
+        {
+            "document_matches": refs_from_documents(state.get("document_sources")),
+            "web_sources": refs_from_web(state.get("web_sources")),
+            "messages": refs_from_messages(state.get("used_chat_ids")),
+        }
+    )
+
+
 def normalize_execution_plan(
     parsed: Dict[str, Any],
     *,
@@ -265,8 +308,10 @@ def normalize_execution_plan(
     allowed_routes = {"execute", "direct", "clarify"}
     route = parsed.get("route") if parsed.get("route") in allowed_routes else "execute"
     required_steps = infer_required_plan_steps(question)
+    normalization_notes: List[str] = []
     if route == "direct" and required_steps:
         route = "execute"
+        normalization_notes.append("direct_route_clamped_to_execute")
     raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
     steps: List[str] = []
     if isinstance(raw_steps, list):
@@ -279,14 +324,16 @@ def normalize_execution_plan(
                 continue
             if node in PLAN_EXECUTE_WORKER_NODES and node not in steps:
                 steps.append(node)
-    if not use_web_search:
+    if not use_web_search and "web_worker" in steps:
         steps = [step for step in steps if step != "web_worker"]
+        normalization_notes.append("web_worker_removed_when_web_search_disabled")
     if route == "execute":
         for required_step in required_steps:
             if required_step not in steps:
                 steps.append(required_step)
     if route == "execute" and not steps:
         steps = ["retrieval_worker"]
+        normalization_notes.append("empty_execute_plan_defaulted_to_retrieval_worker")
     steps = _ordered_plan_steps(steps)
     if route != "execute":
         steps = []
@@ -298,6 +345,7 @@ def normalize_execution_plan(
         "route_reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),
         "execution_plan": steps,
         "clarification_options": clarification_options if route == "clarify" else None,
+        "normalization_notes": normalization_notes,
     }
 
 
@@ -334,9 +382,24 @@ class NodeRegistry:
             use_reranker=state.get("use_reranker", True),
         )
         data = {
+            "status": "completed",
             "document_source_count": len(bundle.get("document_sources", [])),
             "web_source_count": len(bundle.get("web_sources", [])),
             "used_chat_id_count": len(bundle.get("used_chat_ids", [])),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "settings": {
+                    "context_window": state.get("context_window"),
+                    "use_web_search": state.get("use_web_search"),
+                    "use_reranker": state.get("use_reranker"),
+                },
+            },
+            "output_refs": _prefetch_refs(bundle),
+            "output_preview": {
+                "recent_history": compact_preview(bundle.get("recent_history_text")),
+                "semantic_history": compact_preview(bundle.get("semantic_history_text")),
+                "document_evidence": compact_preview(bundle.get("document_evidence_text")),
+            },
         }
         _log_node_end(state, "context_loader", started, data)
         return {
@@ -364,10 +427,36 @@ class NodeRegistry:
             use_web_search=bool(state.get("use_web_search", False)),
             question=state.get("question"),
         )
+        worker_summary = selected_and_skipped_workers(
+            normalized["execution_plan"],
+            PLAN_EXECUTE_WORKER_NODES,
+        )
         data = {
+            "status": "completed",
             "route": normalized["route"],
             "route_reason": normalized["route_reason"],
             "execution_plan": normalized["execution_plan"],
+            "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
+            },
+            "prompt_summary": prompt_summary(
+                "Planner Node Prompt",
+                "You are a strict planner for a scoped RAG workflow.",
+                prompt,
+            ),
+            "llm_result_summary": {
+                "parsed": bool(parsed),
+                "route": normalized["route"],
+                "route_reason": normalized["route_reason"],
+                "execution_plan": normalized["execution_plan"],
+                "clarification_option_count": len(normalized.get("clarification_options") or []),
+                "normalization_notes": normalized.get("normalization_notes") or [],
+                **worker_summary,
+            },
+            "output_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+            "output_preview": worker_summary,
         }
         _log_node_end(state, "planner", started, data)
         return {
@@ -395,7 +484,28 @@ class NodeRegistry:
         if route == "clarify" and not isinstance(clarification_options, list):
             clarification_options = _fallback_clarification_options()
         route_reason = str(parsed.get("reason") or "")
-        data = {"route": route, "route_reason": route_reason}
+        data = {
+            "status": "completed",
+            "route": route,
+            "route_reason": route_reason,
+            "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
+            },
+            "prompt_summary": prompt_summary(
+                "Router Node Prompt",
+                "You are a strict router for a RAG workflow.",
+                prompt,
+            ),
+            "llm_result_summary": {
+                "parsed": bool(parsed),
+                "route": route,
+                "route_reason": route_reason,
+                "clarification_option_count": len(clarification_options or []) if route == "clarify" else 0,
+            },
+            "output_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+        }
         _log_node_end(state, "router", started, data)
         return {
             "route": route,
@@ -410,8 +520,9 @@ class NodeRegistry:
             return _skipped_worker_update(state, config, "retrieval_worker", started, "not_selected_by_plan")
         tool_name = "search_documents"
         tool_config = _tool_config(state, config, caller_node="retrieval_worker", tool_name=tool_name)
+        tool_input = {"query": state["question"], "max_results": 10}
         raw = await search_documents.ainvoke(
-            {"query": state["question"], "max_results": 10},
+            tool_input,
             config=tool_config,
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
@@ -420,9 +531,29 @@ class NodeRegistry:
         web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
         evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Document evidence")
         data = {
+            "status": "completed" if payload.get("ok", True) else "failed",
+            "warnings": normalize_warnings(payload.get("warnings")),
+            "input_refs": _state_evidence_refs(state),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "previous_evidence": compact_preview(state.get("evidence")),
+            },
             "evidence_chars": len(str(evidence or "")),
             "document_source_count": len(document_sources),
             "web_source_count": len(web_sources),
+            "output_refs": compact_refs(
+                {
+                    **_state_evidence_refs(
+                        {
+                            **state,
+                            "document_sources": document_sources,
+                            "web_sources": web_sources,
+                        }
+                    ),
+                    **refs_from_artifacts(artifacts),
+                }
+            ),
+            "output_preview": {"evidence": compact_preview(evidence)},
         }
         _log_node_end(state, "retrieval_worker", started, data)
         return {
@@ -430,7 +561,7 @@ class NodeRegistry:
             "document_sources": document_sources,
             "web_sources": web_sources,
             "node_events": _append_event(state, "retrieval_worker", data, started=started, config=config),
-            "tool_events": _append_tool_event(state, payload, config=config),
+            "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
         }
 
     async def memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -439,8 +570,9 @@ class NodeRegistry:
             return _skipped_worker_update(state, config, "memory_worker", started, "not_selected_by_plan")
         tool_name = "search_conversation_history"
         tool_config = _tool_config(state, config, caller_node="memory_worker", tool_name=tool_name)
+        tool_input = {"query": state["question"], "max_results": 10}
         raw = await search_conversation_history.ainvoke(
-            {"query": state["question"], "max_results": 10},
+            tool_input,
             config=tool_config,
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
@@ -448,15 +580,29 @@ class NodeRegistry:
         evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Memory evidence")
         used_chat_ids = [*state.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])]
         data = {
+            "status": "completed" if payload.get("ok", True) else "failed",
+            "warnings": normalize_warnings(payload.get("warnings")),
+            "input_refs": _state_evidence_refs(state),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "previous_evidence": compact_preview(state.get("evidence")),
+            },
             "evidence_chars": len(str(evidence or "")),
             "used_chat_id_count": len(used_chat_ids),
+            "output_refs": compact_refs(
+                {
+                    **_state_evidence_refs({**state, "used_chat_ids": used_chat_ids}),
+                    **refs_from_artifacts(artifacts),
+                }
+            ),
+            "output_preview": {"evidence": compact_preview(evidence)},
         }
         _log_node_end(state, "memory_worker", started, data)
         return {
             "evidence": evidence,
             "used_chat_ids": used_chat_ids,
             "node_events": _append_event(state, "memory_worker", data, started=started, config=config),
-            "tool_events": _append_tool_event(state, payload, config=config),
+            "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
         }
 
     async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -465,22 +611,37 @@ class NodeRegistry:
             return _skipped_worker_update(state, config, "timeline_worker", started, "not_selected_by_plan")
         tool_name = "search_thread_timeline"
         tool_config = _tool_config(state, config, caller_node="timeline_worker", tool_name=tool_name)
+        tool_input = {"query": state["question"], "sources": "all", "order": "relevance", "max_results": 10}
         raw = await search_thread_timeline.ainvoke(
-            {"query": state["question"], "sources": "all", "order": "relevance", "max_results": 10},
+            tool_input,
             config=tool_config,
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
         evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Timeline evidence")
         data = {
+            "status": "completed" if payload.get("ok", True) else "failed",
+            "warnings": normalize_warnings(payload.get("warnings")),
+            "input_refs": _state_evidence_refs(state),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "previous_evidence": compact_preview(state.get("evidence")),
+            },
             "evidence_chars": len(str(evidence or "")),
             "timeline_event_count": len(artifacts.get("timeline_events", []) or []),
+            "output_refs": compact_refs(
+                {
+                    **_state_evidence_refs(state),
+                    "timeline_events": refs_from_timeline(artifacts.get("timeline_events")),
+                }
+            ),
+            "output_preview": {"evidence": compact_preview(evidence)},
         }
         _log_node_end(state, "timeline_worker", started, data)
         return {
             "evidence": evidence,
             "node_events": _append_event(state, "timeline_worker", data, started=started, config=config),
-            "tool_events": _append_tool_event(state, payload, config=config),
+            "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
         }
 
     async def web_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -491,21 +652,36 @@ class NodeRegistry:
             return _skipped_worker_update(state, config, "web_worker", started, "not_selected_by_plan")
         tool_name = "search_web"
         tool_config = _tool_config(state, config, caller_node="web_worker", tool_name=tool_name)
-        raw = await search_web.ainvoke(state["question"], config=tool_config)
+        tool_input = state["question"]
+        raw = await search_web.ainvoke(tool_input, config=tool_config)
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
         web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
         evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Web evidence")
         data = {
+            "status": "completed" if payload.get("ok", True) else "failed",
+            "warnings": normalize_warnings(payload.get("warnings")),
+            "input_refs": _state_evidence_refs(state),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "previous_evidence": compact_preview(state.get("evidence")),
+            },
             "evidence_chars": len(str(evidence or "")),
             "web_source_count": len(web_sources),
+            "output_refs": compact_refs(
+                {
+                    **_state_evidence_refs({**state, "web_sources": web_sources}),
+                    **refs_from_artifacts(artifacts),
+                }
+            ),
+            "output_preview": {"evidence": compact_preview(evidence)},
         }
         _log_node_end(state, "web_worker", started, data)
         return {
             "evidence": evidence,
             "web_sources": web_sources,
             "node_events": _append_event(state, "web_worker", data, started=started, config=config),
-            "tool_events": _append_tool_event(state, payload, config=config),
+            "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
         }
 
     async def direct_answer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -518,6 +694,7 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         context = state.get("evidence") or _format_prefetch_summary(state.get("pre_fetch_bundle") or {})
+        context_source = "worker_evidence" if state.get("evidence") else "prefetch"
         messages = build_final_answer_messages(state, context)
         response = await invoke_with_retry(
             llm.ainvoke,
@@ -528,8 +705,27 @@ class NodeRegistry:
         )
         normalized = normalize_ai_response(response)
         data = {
+            "status": "completed",
+            "input_refs": _state_evidence_refs(state) or _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "context_source": context_source,
+                "context": compact_preview(context),
+            },
+            "prompt_summary": prompt_summary(
+                "Final Answer Prompt",
+                messages["system"],
+                messages["human"],
+            ),
+            "llm_result_summary": {
+                "answer_chars": len(normalized["answer"] or ""),
+                "reasoning_available": bool(normalized["reasoning_available"]),
+                "reasoning_format": normalized["reasoning_format"],
+            },
             "answer_chars": len(normalized["answer"] or ""),
             "evidence_chars": len(str(context or "")),
+            "output_refs": _state_evidence_refs(state) or _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+            "output_preview": {"answer": compact_preview(normalized["answer"])},
         }
         _log_node_end(state, node_name, started, data)
         return {
@@ -546,7 +742,17 @@ class NodeRegistry:
             answer = "I need a bit more clarification. Did you mean:\n" + "\n".join(
                 f"- {option}" for option in state["clarification_options"]
             )
-            data = {"answer_chars": len(answer)}
+            data = {
+                "status": "completed",
+                "answer_chars": len(answer),
+                "output_preview": {
+                    "answer": compact_preview(answer),
+                    "clarification_options": state.get("clarification_options"),
+                },
+                "llm_result_summary": {
+                    "clarification_option_count": len(state.get("clarification_options") or []),
+                },
+            }
             _log_node_end(state, "finalizer", started, data)
             return {
                 "final_answer": answer,
@@ -555,7 +761,12 @@ class NodeRegistry:
                 "reasoning_format": "none",
                 "node_events": _append_event(state, "finalizer", data, started=started, config=config),
             }
-        data = {"answer_chars": len(state.get("final_answer") or "")}
+        data = {
+            "status": "completed",
+            "answer_chars": len(state.get("final_answer") or ""),
+            "output_refs": _state_evidence_refs(state),
+            "output_preview": {"answer": compact_preview(state.get("final_answer"))},
+        }
         _log_node_end(state, "finalizer", started, data)
         return {"node_events": _append_event(state, "finalizer", data, started=started, config=config)}
 

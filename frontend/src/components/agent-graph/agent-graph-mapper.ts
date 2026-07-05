@@ -124,6 +124,10 @@ const summarizeTool = (event: Record<string, any>): AgentGraphToolSummary => ({
   sourceCount: Number.isFinite(Number(event.source_count)) ? Number(event.source_count) : undefined,
   warnings: Array.isArray(event.warnings) ? event.warnings.map(String) : [],
   artifactKeys: Array.isArray(event.artifact_keys) ? event.artifact_keys.map(String) : [],
+  toolInput: event.tool_input,
+  resultPreview: typeof event.result_preview === 'string' ? event.result_preview : undefined,
+  artifactRefs: event.artifact_refs && typeof event.artifact_refs === 'object' ? event.artifact_refs : undefined,
+  artifactSummary: event.artifact_summary && typeof event.artifact_summary === 'object' ? event.artifact_summary : undefined,
   raw: event,
 });
 
@@ -194,8 +198,16 @@ export const buildAgentGraph = (
         skipped: latestEvent.skipped === true,
         skipReason: typeof latestEvent.skip_reason === 'string' ? latestEvent.skip_reason : undefined,
         executionPlan: node.id === 'planner' ? executionPlan : undefined,
+        warnings: rawEvents.flatMap((event) => (Array.isArray(event.warnings) ? event.warnings.map(String) : [])),
+        inputRefs: latestEvent.input_refs && typeof latestEvent.input_refs === 'object' ? latestEvent.input_refs : undefined,
+        outputRefs: latestEvent.output_refs && typeof latestEvent.output_refs === 'object' ? latestEvent.output_refs : undefined,
+        inputPreview: latestEvent.input_preview,
+        outputPreview: latestEvent.output_preview,
+        promptSummary: latestEvent.prompt_summary && typeof latestEvent.prompt_summary === 'object' ? latestEvent.prompt_summary : undefined,
+        llmResultSummary: latestEvent.llm_result_summary && typeof latestEvent.llm_result_summary === 'object' ? latestEvent.llm_result_summary : undefined,
         toolSummaries,
-        warningCount: toolSummaries.reduce((count, tool) => count + tool.warnings.length, 0),
+        warningCount: toolSummaries.reduce((count, tool) => count + tool.warnings.length, 0)
+          + rawEvents.reduce((count, event) => count + (Array.isArray(event.warnings) ? event.warnings.length : 0), 0),
         errorCount: toolSummaries.filter((tool) => !tool.ok).length + rawEvents.filter((event) => event.error || event.ok === false).length,
         sourceCount: toolSummaries.reduce((count, tool) => count + (tool.sourceCount || 0), 0),
         artifactCount: toolSummaries.reduce((count, tool) => count + tool.artifactKeys.length, 0),

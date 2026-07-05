@@ -30,6 +30,10 @@ export interface AgentGraphToolSummary {
   sourceCount?: number;
   warnings: string[];
   artifactKeys: string[];
+  toolInput?: unknown;
+  resultPreview?: string;
+  artifactRefs?: Record<string, any>;
+  artifactSummary?: Record<string, any>;
   raw: Record<string, any>;
 }
 
@@ -46,6 +50,13 @@ export interface AgentGraphNode {
   skipped?: boolean;
   skipReason?: string;
   executionPlan?: string[];
+  warnings?: string[];
+  inputRefs?: Record<string, any>;
+  outputRefs?: Record<string, any>;
+  inputPreview?: unknown;
+  outputPreview?: unknown;
+  promptSummary?: Record<string, any>;
+  llmResultSummary?: Record<string, any>;
   layoutDirection?: 'RIGHT' | 'DOWN';
   toolSummaries: AgentGraphToolSummary[];
   warningCount: number;

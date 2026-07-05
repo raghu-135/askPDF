@@ -36,6 +36,30 @@ const DetailLine = ({ label, value }: { label: string; value?: React.ReactNode }
   );
 };
 
+const Section = ({ title, children }: { title: string; children: React.ReactNode }) => {
+  if (!children) return null;
+  return (
+    <>
+      <Divider sx={{ my: 1 }} />
+      <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+        {title}
+      </Typography>
+      {children}
+    </>
+  );
+};
+
+const hasValue = (value: unknown) => {
+  if (!value) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0;
+  return true;
+};
+
+const TraceObject = ({ value }: { value: unknown }) => (
+  hasValue(value) ? <JsonPreview value={value} /> : null
+);
+
 export default function AgentGraphInspector({ selection }: { selection: AgentGraphSelection }) {
   if (!selection) {
     return (
@@ -89,34 +113,71 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
       <DetailLine label="Route reason" value={node.routeReason} />
       {node.status !== 'skipped' && <DetailLine label="Skip reason" value={skipReason} />}
       <DetailLine label="Execution plan" value={node.executionPlan?.length ? node.executionPlan.join(' -> ') : undefined} />
+      {(node.route || node.routeReason || node.executionPlan?.length || hasValue(node.llmResultSummary)) && (
+        <Section title="Decision">
+          <DetailLine label="Route" value={node.route} />
+          <DetailLine label="Reason" value={node.routeReason} />
+          <DetailLine label="Execution plan" value={node.executionPlan?.length ? node.executionPlan.join(' -> ') : undefined} />
+          <TraceObject value={node.llmResultSummary} />
+        </Section>
+      )}
+      {(hasValue(node.inputPreview) || hasValue(node.inputRefs)) && (
+        <Section title="Input">
+          <TraceObject value={node.inputPreview} />
+          <TraceObject value={node.inputRefs} />
+        </Section>
+      )}
+      {hasValue(node.promptSummary) && (
+        <Section title="Prompt">
+          <DetailLine label="Section" value={typeof node.promptSummary?.section === 'string' ? node.promptSummary.section : undefined} />
+          <DetailLine label="Prompt chars" value={typeof node.promptSummary?.prompt_chars === 'number' ? node.promptSummary.prompt_chars : undefined} />
+          <TraceObject value={node.promptSummary} />
+        </Section>
+      )}
       {node.toolSummaries.length > 0 && (
-        <>
-          <Divider sx={{ my: 1 }} />
-          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-            Tools
-          </Typography>
+        <Section title="Tools">
           {node.toolSummaries.map((tool, index) => {
             const toolElapsed = formatDurationMs(tool.elapsedMs);
             return (
-              <Typography key={`${tool.toolName}-${index}`} variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                {tool.displayName || tool.toolName}: {tool.ok ? 'ok' : 'failed'}
-                {toolElapsed ? `, ${toolElapsed}` : ''}
-                {tool.sourceCount ? `, sources ${tool.sourceCount}` : ''}
-                {tool.artifactKeys.length ? `, artifacts ${tool.artifactKeys.length}` : ''}
-                {tool.warnings.length ? `, warnings ${tool.warnings.join(', ')}` : ''}
-              </Typography>
+              <Box key={`${tool.toolName}-${index}`} sx={{ mt: 0.75 }}>
+                <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                  {tool.displayName || tool.toolName}: {tool.ok ? 'ok' : 'failed'}
+                  {toolElapsed ? `, ${toolElapsed}` : ''}
+                  {tool.sourceCount ? `, sources ${tool.sourceCount}` : ''}
+                  {tool.artifactKeys.length ? `, artifacts ${tool.artifactKeys.length}` : ''}
+                  {tool.warnings.length ? `, warnings ${tool.warnings.join(', ')}` : ''}
+                </Typography>
+                {hasValue(tool.toolInput) && <DetailLine label="Input" value={<JsonPreview value={tool.toolInput} />} />}
+                {tool.resultPreview && <DetailLine label="Result preview" value={tool.resultPreview} />}
+                {hasValue(tool.artifactSummary) && <DetailLine label="Artifacts" value={<JsonPreview value={tool.artifactSummary} />} />}
+                {hasValue(tool.artifactRefs) && <TraceObject value={tool.artifactRefs} />}
+              </Box>
             );
           })}
-        </>
+        </Section>
+      )}
+      {(hasValue(node.outputPreview) || hasValue(node.outputRefs)) && (
+        <Section title="Output">
+          <TraceObject value={node.outputPreview} />
+          <TraceObject value={node.outputRefs} />
+        </Section>
+      )}
+      {(node.warnings?.length || node.toolSummaries.some((tool) => tool.warnings.length > 0)) && (
+        <Section title="Warnings">
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+            {(node.warnings || []).map((warning, index) => (
+              <Chip key={`node-warning-${index}`} size="small" color="warning" label={warning} />
+            ))}
+            {node.toolSummaries.flatMap((tool) => tool.warnings).map((warning, index) => (
+              <Chip key={`tool-warning-${index}`} size="small" color="warning" label={warning} variant="outlined" />
+            ))}
+          </Box>
+        </Section>
       )}
       {node.rawEvents.length > 0 && (
-        <>
-          <Divider sx={{ my: 1 }} />
-          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-            Node Events
-          </Typography>
+        <Section title="Raw">
           <JsonPreview value={node.rawEvents} />
-        </>
+        </Section>
       )}
     </Box>
   );

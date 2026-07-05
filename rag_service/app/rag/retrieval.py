@@ -170,6 +170,7 @@ def group_document_chunks(
         source_entry: Dict[str, Any] = {
             "text": short_text,
             "file_hash": chunk.get("file_hash"),
+            "chunk_id": chunk.get("chunk_id"),
             "file_name": fallback_name,
             "title": title or None,
             "url": url or None,
@@ -236,7 +237,8 @@ async def fetch_semantic_history(
     char_budget: Optional[int] = None,
     use_reranker: bool = True,
     embedding_model_name: str = None,
-) -> Tuple[str, List[str]]:
+    include_refs: bool = False,
+) -> tuple:
     """Fetch semantic chat memory text plus the list of used message IDs."""
 
     db = get_vector_db()
@@ -250,6 +252,7 @@ async def fetch_semantic_history(
         recalled = await rerank_document_chunks(query_text, recalled)
 
     used_ids: List[str] = []
+    refs: List[Dict[str, Any]] = []
     parts: List[str] = []
     used_chars = 0
 
@@ -269,5 +272,22 @@ async def fetch_semantic_history(
             parts.append(text)
         if mem.get("message_id"):
             used_ids.append(mem["message_id"])
+        ref: Dict[str, Any] = {
+            key: mem.get(key)
+            for key in (
+                "message_id",
+                "message_created_at",
+                "score",
+                "rerank_score",
+            )
+            if mem.get(key) not in (None, "")
+        }
+        if text:
+            ref["preview"] = text if len(text) <= 260 else text[:260].rstrip() + "..."
+        if ref:
+            refs.append(ref)
 
-    return "\n\n---\n\n".join(parts), used_ids
+    result = ("\n\n---\n\n".join(parts), used_ids)
+    if include_refs:
+        return result[0], result[1], refs
+    return result

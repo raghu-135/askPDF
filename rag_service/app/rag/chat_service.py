@@ -70,9 +70,23 @@ async def prefetch_context(
     embed_model = get_embedding_model(embed_model_name)
     shared_query_vector = await invoke_with_retry(embed_model.aembed_query, raw_question)
 
-    async def _fetch_recent() -> str:
+    def _message_ref(msg: Any) -> Dict[str, Any]:
+        text = (getattr(msg, "context_compact", None) or getattr(msg, "content", None) or "").strip()
+        preview = " ".join(text.split())
+        if len(preview) > 260:
+            preview = preview[:260].rstrip() + "..."
+        return {
+            "message_id": getattr(msg, "id", None),
+            "turn_id": getattr(msg, "turn_id", None),
+            "role": getattr(getattr(msg, "role", None), "value", None) or str(getattr(msg, "role", "")),
+            "created_at": maybe_iso_utc_z(getattr(msg, "created_at", None)),
+            "preview": preview,
+        }
+
+    async def _fetch_recent() -> tuple:
         msgs = await get_recent_messages(thread_id, limit=budget["recent_turn_limit"] * 2)
         lines: List[str] = []
+        refs: List[Dict[str, Any]] = []
         used_chars = 0
         budget_chars = budget["recent_history_chars"]
         for msg in reversed(msgs):
@@ -85,9 +99,11 @@ async def prefetch_context(
             if used_chars + len(entry) > budget_chars:
                 break
             lines.append(entry)
+            refs.append(_message_ref(msg))
             used_chars += len(entry)
         lines.reverse()
-        return "\n\n".join(lines)
+        refs.reverse()
+        return "\n\n".join(lines), refs
 
     async def _fetch_stats_and_docs() -> Dict[str, Any]:
         """
@@ -129,10 +145,11 @@ async def prefetch_context(
                 char_budget=budget["semantic_history_chars"],
                 use_reranker=use_reranker,
                 embedding_model_name=embed_model_name,
+                include_refs=True,
             )
         except Exception as exc:
             logger.warning(f"Prefetch semantic history failed: {exc}")
-            return "", []
+            return "", [], []
 
     async def _fetch_documents() -> tuple:
         try:
@@ -181,19 +198,28 @@ async def prefetch_context(
         return_exceptions=True,
     )
 
-    recent_text = cast(str, results[0]) if not isinstance(results[0], Exception) else ""
+    recent_result = results[0] if not isinstance(results[0], Exception) else ("", [])
+    recent_text, recent_message_refs = recent_result if isinstance(recent_result, tuple) else ("", [])
     meta = cast(Dict[str, Any], results[1]) if not isinstance(results[1], Exception) else {"stats": {}, "documents": []}
     semantic_result = results[2] if not isinstance(results[2], Exception) else ("", [])
     document_result = results[3] if not isinstance(results[3], Exception) else ("", [])
     web_result = ("", [])
 
-    semantic_text, used_chat_ids = semantic_result if isinstance(semantic_result, tuple) else ("", [])
+    if isinstance(semantic_result, tuple) and len(semantic_result) >= 3:
+        semantic_text, used_chat_ids, semantic_memory_refs = semantic_result[:3]
+    elif isinstance(semantic_result, tuple):
+        semantic_text, used_chat_ids = semantic_result
+        semantic_memory_refs = []
+    else:
+        semantic_text, used_chat_ids, semantic_memory_refs = "", [], []
     document_text, document_sources = document_result if isinstance(document_result, tuple) else ("", [])
     web_text, web_sources = web_result if isinstance(web_result, tuple) else ("", [])
 
     return {
         "recent_history_text":   recent_text,
+        "recent_message_refs":   recent_message_refs,
         "semantic_history_text": semantic_text,
+        "semantic_memory_refs":  semantic_memory_refs,
         "document_evidence_text":     document_text,
         "web_evidence_text":     web_text,
         "stats":                 meta.get("stats", {}),
