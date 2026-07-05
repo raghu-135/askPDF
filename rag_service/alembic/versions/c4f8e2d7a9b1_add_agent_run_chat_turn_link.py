@@ -7,6 +7,7 @@ Create Date: 2026-07-03
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision = "c4f8e2d7a9b1"
@@ -17,6 +18,10 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column("agent_runs", sa.Column("chat_turn_id", sa.String(), nullable=True))
+    op.add_column(
+        "agent_runs",
+        sa.Column("debug_trace_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    )
     op.create_foreign_key(
         "fk_agent_runs_chat_turn_id_chat_turns",
         "agent_runs",
@@ -31,4 +36,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(op.f("ix_agent_runs_chat_turn_id"), table_name="agent_runs")
     op.drop_constraint("fk_agent_runs_chat_turn_id_chat_turns", "agent_runs", type_="foreignkey")
+    op.drop_column("agent_runs", "debug_trace_json")
     op.drop_column("agent_runs", "chat_turn_id")
