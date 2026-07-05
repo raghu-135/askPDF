@@ -59,10 +59,13 @@ def _tool_kind(event: Mapping[str, Any]) -> str:
     return "TOOL"
 
 
-def _event_time(started_at: Any, elapsed_ms: Any) -> Optional[str]:
-    # Current persisted raw events carry durations but not per-node start/end timestamps.
-    # Keep timestamp optional rather than inventing misleading values.
-    return None
+def _event_time(value: Any) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        return iso_utc_z(value)
+    except Exception:
+        return None
 
 
 def _warning_events(warnings: Any) -> List[Dict[str, Any]]:
@@ -196,8 +199,8 @@ def _node_span(
         "name": _node_display_name(node),
         "kind": _node_kind(node),
         "status": _span_status(event),
-        "start_time": None,
-        "end_time": _event_time(None, event.get("elapsed_ms")),
+        "start_time": _event_time(event.get("start_time")),
+        "end_time": _event_time(event.get("end_time")),
         "duration_ms": event.get("elapsed_ms"),
         "attributes": _clean_dict(
             {
@@ -278,8 +281,8 @@ def _tool_span(
         "name": str(event.get("tool_display_name") or tool_name),
         "kind": _tool_kind(event),
         "status": "error" if event.get("ok") is False or event.get("error") else "completed",
-        "start_time": None,
-        "end_time": _event_time(None, event.get("elapsed_ms")),
+        "start_time": _event_time(event.get("start_time")),
+        "end_time": _event_time(event.get("end_time")),
         "duration_ms": event.get("elapsed_ms"),
         "attributes": _clean_dict(
             {

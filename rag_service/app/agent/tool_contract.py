@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import timedelta
 from typing import Any, Dict, List, Optional, Protocol
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from app.agent_patterns.trace import artifact_summary, compact_preview, refs_from_artifacts
+from app.time_utils import iso_utc_z, utc_now
 
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,8 @@ class ToolTrace(BaseModel):
     thread_id: Optional[str] = None
     route: Optional[str] = None
     tool_call_id: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
 
 
 class ToolResult(BaseModel):
@@ -121,6 +125,11 @@ def make_tool_result(
     source_items = [item for item in (sources or []) if isinstance(item, dict)]
     warning_items = [str(item) for item in (warnings or []) if item]
     elapsed_ms = (time.perf_counter() - started) * 1000 if started is not None else 0.0
+    completed_at = utc_now()
+    trace = tool_trace(tool_name, config)
+    if started is not None:
+        trace.start_time = iso_utc_z(completed_at - timedelta(milliseconds=elapsed_ms))
+        trace.end_time = iso_utc_z(completed_at)
     result = ToolResult(
         ok=ok,
         content=str(content or ""),
@@ -134,7 +143,7 @@ def make_tool_result(
             source_count=len(source_items),
             warning_count=len(warning_items),
         ),
-        trace=tool_trace(tool_name, config),
+        trace=trace,
     )
     logger.info(
         "Tool completed | tool=%s caller_node=%s run_id=%s thread_id=%s ok=%s elapsed_ms=%.1f result_chars=%s sources=%s warnings=%s",
@@ -294,6 +303,10 @@ def compact_tool_event(payload: Dict[str, Any], *, tool_input: Any = None) -> Di
         "warnings": list(payload.get("warnings") or []),
         "error": payload.get("error"),
     }
+    if trace.get("start_time"):
+        event["start_time"] = trace.get("start_time")
+    if trace.get("end_time"):
+        event["end_time"] = trace.get("end_time")
     if tool_input is not None:
         event["tool_input"] = tool_input
     if payload.get("content"):

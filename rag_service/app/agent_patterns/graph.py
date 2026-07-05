@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from datetime import timedelta
 from typing import Any, Callable, Dict, List, Literal, Optional, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -33,6 +34,7 @@ from app.agent_patterns.trace import (
     refs_from_web,
     selected_and_skipped_workers,
 )
+from app.time_utils import iso_utc_z, utc_now
 
 
 RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarify"]
@@ -111,7 +113,11 @@ def _append_event(
 ) -> List[Dict[str, Any]]:
     event = {"node": node, **(data or {})}
     if started is not None:
-        event["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 2)
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        completed_at = utc_now()
+        event["elapsed_ms"] = elapsed_ms
+        event.setdefault("start_time", iso_utc_z(completed_at - timedelta(milliseconds=elapsed_ms)))
+        event.setdefault("end_time", iso_utc_z(completed_at))
     telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
     if isinstance(telemetry_sink, dict):
         telemetry_sink.setdefault("node_events", []).append(dict(event))

@@ -46,8 +46,9 @@ Every span uses this neutral shape:
   where practical. V1 node/tool spans currently use `AGENT`, `CHAIN`,
   `RETRIEVER`, and `TOOL`.
 - `status`: `completed`, `skipped`, `error`, or the run status for the root span.
-- `start_time`, `end_time`, `duration_ms`: optional timing. Raw node/tool events
-  currently carry duration but not exact per-node timestamps.
+- `start_time`, `end_time`, `duration_ms`: optional timing. New runtime events
+  include node/tool wall-clock timestamps when elapsed timing is available; older
+  runs may only have `duration_ms`.
 - `attributes`: standard-ish and askPDF namespaced metadata.
 - `input`: bounded input preview/refs.
 - `output`: bounded output preview/refs/summary.

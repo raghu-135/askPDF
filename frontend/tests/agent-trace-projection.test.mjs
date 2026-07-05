@@ -26,15 +26,15 @@ const traceBackedRun = {
   template_id: 'plan_execute_rag_agent',
   resolved_spec_json: resolvedSpec,
   debug: {
-    route: 'legacy-route',
+    route: 'raw-fallback-route',
     metrics: {
       duration_ms: 25,
       tool_event_count: 1,
       tool_warning_count: 0,
       error_count: 0,
     },
-    node_events: [{ node: 'legacy_router', elapsed_ms: 99 }],
-    tool_events: [{ tool_name: 'legacy_tool', caller_node: 'legacy_router' }],
+    node_events: [{ node: 'raw_fallback_router', elapsed_ms: 99 }],
+    tool_events: [{ tool_name: 'raw_fallback_tool', caller_node: 'raw_fallback_router' }],
     trace: {
       schema_version: 1,
       trace_id: 'run-1',
@@ -209,7 +209,7 @@ const traceBackedRun = {
   },
 };
 
-test('trace projection prefers debug.trace over legacy node and tool events', () => {
+test('trace projection prefers debug.trace spans over raw debug events', () => {
   const view = buildRunTraceView(traceBackedRun);
   const overlay = buildRunGraphOverlay(view);
 
@@ -236,9 +236,9 @@ test('trace summary counts non-skipped nodes and available graph nodes', () => {
   assert.equal(view.errorCount, 0);
 });
 
-test('legacy debug projection still works without debug.trace', () => {
-  const legacyRun = {
-    id: 'run-legacy',
+test('raw debug fallback still works without debug.trace', () => {
+  const rawFallbackRun = {
+    id: 'run-raw-fallback',
     template_id: 'router_rag_agent',
     resolved_spec_json: resolvedSpec,
     debug: {
@@ -256,7 +256,7 @@ test('legacy debug projection still works without debug.trace', () => {
     },
   };
 
-  const view = buildRunTraceView(legacyRun);
+  const view = buildRunTraceView(rawFallbackRun);
   const overlay = buildRunGraphOverlay(view);
 
   assert.equal(view.route, 'document');

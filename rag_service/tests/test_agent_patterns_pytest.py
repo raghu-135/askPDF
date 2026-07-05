@@ -89,9 +89,20 @@ class TestAgentRunMetrics:
                     "skipped": True,
                     "skip_reason": "not_selected_by_plan",
                     "elapsed_ms": 0.5,
+                    "start_time": "2026-07-04T02:30:08.000Z",
+                    "end_time": "2026-07-04T02:30:08.001Z",
                 }
             ],
-            tool_events=[],
+            tool_events=[
+                {
+                    "tool_name": "search_documents",
+                    "caller_node": "retrieval_worker",
+                    "ok": True,
+                    "elapsed_ms": 2.25,
+                    "start_time": "2026-07-04T02:30:09.000Z",
+                    "end_time": "2026-07-04T02:30:09.002Z",
+                }
+            ],
             metrics={"duration_ms": 3.0, "route": "execute", "tool_warning_count": 0, "error_count": 0},
             route="execute",
             route_reason="Document evidence is enough.",
@@ -99,9 +110,14 @@ class TestAgentRunMetrics:
 
         skipped_span = next(span for span in trace["spans"] if span["span_id"] == "node:memory_worker:0")
         assert skipped_span["status"] == "skipped"
+        assert skipped_span["start_time"] == "2026-07-04T02:30:08Z"
+        assert skipped_span["end_time"] == "2026-07-04T02:30:08.001000Z"
         assert skipped_span["attributes"]["askpdf.skip_reason"] == "not_selected_by_plan"
         assert any(event["name"] == "skipped" for event in skipped_span["events"])
         assert not any(event["name"] == "warning" for event in skipped_span["events"])
+        tool_span = next(span for span in trace["spans"] if span["span_id"] == "tool:search_documents:0")
+        assert tool_span["start_time"] == "2026-07-04T02:30:09Z"
+        assert tool_span["end_time"] == "2026-07-04T02:30:09.002000Z"
 
 
 class TestRouterRagTemplateValidator:

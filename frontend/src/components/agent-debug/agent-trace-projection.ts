@@ -53,8 +53,8 @@ const asArray = (value: any): Record<string, any>[] => (
   Array.isArray(value) ? value.filter((item): item is Record<string, any> => item && typeof item === 'object') : []
 );
 
-const isSkippedNodeEvent = (event: Record<string, any>) => (
-  event?.skipped === true || event?.status === 'skipped'
+const isSkippedNodeRow = (row: Record<string, any>) => (
+  row?.skipped === true || row?.status === 'skipped'
 );
 
 const asStringArray = (value: any): string[] => (
@@ -97,14 +97,12 @@ const llmResultFromSpan = (span: AgentTraceSpan) => {
   };
 };
 
-const eventFromNodeSpan = (span: AgentTraceSpan): Record<string, any> => {
+const graphNodeRowFromSpan = (span: AgentTraceSpan): Record<string, any> => {
   const raw = asObject(span.raw);
   if (raw.node || raw.name) {
     return {
       ...raw,
       __trace_span: span,
-      __trace_span_id: span.span_id,
-      __trace_kind: span.kind,
     };
   }
   const attributes = asObject(span.attributes);
@@ -134,19 +132,15 @@ const eventFromNodeSpan = (span: AgentTraceSpan): Record<string, any> => {
       .filter(Boolean),
     error: asArray(span.events).find((event) => event.name === 'exception')?.attributes,
     __trace_span: span,
-    __trace_span_id: span.span_id,
-    __trace_kind: span.kind,
   };
 };
 
-const eventFromToolSpan = (span: AgentTraceSpan): Record<string, any> => {
+const graphToolRowFromSpan = (span: AgentTraceSpan): Record<string, any> => {
   const raw = asObject(span.raw);
   if (raw.tool_name) {
     return {
       ...raw,
       __trace_span: span,
-      __trace_span_id: span.span_id,
-      __trace_kind: span.kind,
     };
   }
   const attributes = asObject(span.attributes);
@@ -172,8 +166,6 @@ const eventFromToolSpan = (span: AgentTraceSpan): Record<string, any> => {
     artifact_refs: output.refs,
     artifact_summary: output.summary,
     __trace_span: span,
-    __trace_span_id: span.span_id,
-    __trace_kind: span.kind,
   };
 };
 
@@ -185,46 +177,46 @@ const getTraceToolSpans = (trace?: AgentDebugTrace): AgentTraceSpan[] => (
   (trace?.spans || []).filter((span) => span.kind === 'TOOL' || Boolean(asObject(span.attributes)['tool.name']))
 );
 
-const getRunNodeEventRows = (runDetails: AgentRunDetails): Record<string, any>[] => {
+const getRunNodeRows = (runDetails: AgentRunDetails): Record<string, any>[] => {
   const trace = getRunTrace(runDetails);
-  const traceEvents = getTraceNodeSpans(trace).map(eventFromNodeSpan);
-  if (traceEvents.length > 0) return traceEvents;
+  const traceRows = getTraceNodeSpans(trace).map(graphNodeRowFromSpan);
+  if (traceRows.length > 0) return traceRows;
   return asArray(runDetails.debug?.node_events);
 };
 
-const getRunToolEventRows = (runDetails: AgentRunDetails): Record<string, any>[] => {
+const getRunToolRows = (runDetails: AgentRunDetails): Record<string, any>[] => {
   const trace = getRunTrace(runDetails);
-  const traceEvents = getTraceToolSpans(trace).map(eventFromToolSpan);
-  if (traceEvents.length > 0) return traceEvents;
+  const traceRows = getTraceToolSpans(trace).map(graphToolRowFromSpan);
+  if (traceRows.length > 0) return traceRows;
   return asArray(runDetails.debug?.tool_events);
 };
 
-const nodeViewFromRow = (event: Record<string, any>): TraceNodeView => ({
-  id: String(event.node || event.name || 'unknown_node'),
-  status: typeof event.status === 'string' ? event.status : undefined,
-  skipped: isSkippedNodeEvent(event),
-  durationMs: Number.isFinite(Number(event.elapsed_ms)) ? Number(event.elapsed_ms) : undefined,
-  route: typeof event.route === 'string' ? event.route : undefined,
-  routeReason: typeof event.route_reason === 'string' ? event.route_reason : undefined,
-  executionPlan: asStringArray(event.execution_plan),
-  warningCodes: asStringArray(event.warnings),
-  error: event.error && typeof event.error === 'object' ? event.error : undefined,
-  span: event.__trace_span && typeof event.__trace_span === 'object' ? event.__trace_span : undefined,
-  raw: event,
+const nodeViewFromRow = (row: Record<string, any>): TraceNodeView => ({
+  id: String(row.node || row.name || 'unknown_node'),
+  status: typeof row.status === 'string' ? row.status : undefined,
+  skipped: isSkippedNodeRow(row),
+  durationMs: Number.isFinite(Number(row.elapsed_ms)) ? Number(row.elapsed_ms) : undefined,
+  route: typeof row.route === 'string' ? row.route : undefined,
+  routeReason: typeof row.route_reason === 'string' ? row.route_reason : undefined,
+  executionPlan: asStringArray(row.execution_plan),
+  warningCodes: asStringArray(row.warnings),
+  error: row.error && typeof row.error === 'object' ? row.error : undefined,
+  span: row.__trace_span && typeof row.__trace_span === 'object' ? row.__trace_span : undefined,
+  raw: row,
 });
 
-const toolViewFromRow = (event: Record<string, any>): TraceToolView => ({
-  name: String(event.tool_name || 'tool'),
-  id: typeof event.tool_id === 'string' ? event.tool_id : undefined,
-  category: typeof event.tool_category === 'string' ? event.tool_category : undefined,
-  displayName: typeof event.tool_display_name === 'string' ? event.tool_display_name : undefined,
-  callerNode: typeof event.caller_node === 'string' ? event.caller_node : undefined,
-  ok: event.ok !== false,
-  durationMs: Number.isFinite(Number(event.elapsed_ms)) ? Number(event.elapsed_ms) : undefined,
-  sourceCount: Number.isFinite(Number(event.source_count)) ? Number(event.source_count) : undefined,
-  warningCodes: asStringArray(event.warnings),
-  span: event.__trace_span && typeof event.__trace_span === 'object' ? event.__trace_span : undefined,
-  raw: event,
+const toolViewFromRow = (row: Record<string, any>): TraceToolView => ({
+  name: String(row.tool_name || 'tool'),
+  id: typeof row.tool_id === 'string' ? row.tool_id : undefined,
+  category: typeof row.tool_category === 'string' ? row.tool_category : undefined,
+  displayName: typeof row.tool_display_name === 'string' ? row.tool_display_name : undefined,
+  callerNode: typeof row.caller_node === 'string' ? row.caller_node : undefined,
+  ok: row.ok !== false,
+  durationMs: Number.isFinite(Number(row.elapsed_ms)) ? Number(row.elapsed_ms) : undefined,
+  sourceCount: Number.isFinite(Number(row.source_count)) ? Number(row.source_count) : undefined,
+  warningCodes: asStringArray(row.warnings),
+  span: row.__trace_span && typeof row.__trace_span === 'object' ? row.__trace_span : undefined,
+  raw: row,
 });
 
 export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView => {
@@ -232,8 +224,8 @@ export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView => 
   const metrics = getRunDebugMetrics(runDetails);
   const attributes = asObject(trace?.attributes);
   const debug = runDetails.debug;
-  const nodes = getRunNodeEventRows(runDetails).map(nodeViewFromRow);
-  const tools = getRunToolEventRows(runDetails).map(toolViewFromRow);
+  const nodes = getRunNodeRows(runDetails).map(nodeViewFromRow);
+  const tools = getRunToolRows(runDetails).map(toolViewFromRow);
   const availableNodeCount = Array.isArray(runDetails.resolved_spec_json?.config?.graph?.nodes)
     ? runDetails.resolved_spec_json.config.graph.nodes.length
     : undefined;

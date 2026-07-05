@@ -14,7 +14,7 @@ import {
 const sectionBg = 'rgba(0,0,0,0.03)';
 
 const withoutInternalTraceFields = (value: Record<string, any>) => {
-  const { __trace_span, __trace_span_id, __trace_kind, ...rest } = value;
+  const { __trace_span, ...rest } = value;
   return rest;
 };
 
@@ -64,8 +64,8 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
     ? {
       trace_spans: node.traceSpans || [],
       tool_trace_spans: toolTraceSpans,
-      projected_node_events: node.rawEvents.map(withoutInternalTraceFields),
-      projected_tool_events: node.toolSummaries.map((tool) => withoutInternalTraceFields(tool.raw)),
+      graph_node_rows: node.rawEvents.map(withoutInternalTraceFields),
+      graph_tool_rows: node.toolSummaries.map((tool) => withoutInternalTraceFields(tool.raw)),
     }
     : {
       node_events: node.rawEvents,
