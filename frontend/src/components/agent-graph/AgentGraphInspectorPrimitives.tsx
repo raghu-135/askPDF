@@ -33,7 +33,7 @@ const SECTION_HELP: Record<string, string> = {
   Tools: 'Tool calls made by this worker node, including inputs, results, refs, and warnings.',
   Output: 'State, refs, and bounded previews produced by this node.',
   Warnings: 'Real warning codes from tool/runtime contracts. Skips and planner notes are not warnings.',
-  'Raw JSON': 'Persisted node and tool event payloads used to render this inspector.',
+  'Raw JSON': 'Normalized trace spans and compatibility event rows used to render this inspector.',
 };
 
 const shouldExpandJsonNode = (level: number) => level < 4;

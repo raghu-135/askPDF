@@ -225,6 +225,55 @@ export interface AgentToolEvent {
   [key: string]: any;
 }
 
+export interface AgentTraceEvent {
+  name: string;
+  attributes?: Record<string, any>;
+  input?: Record<string, any>;
+  output?: Record<string, any>;
+  [key: string]: any;
+}
+
+export interface AgentTraceSpan {
+  span_id: string;
+  parent_span_id?: string | null;
+  name: string;
+  kind: 'AGENT' | 'CHAIN' | 'LLM' | 'RETRIEVER' | 'TOOL' | 'PROMPT' | string;
+  status?: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  duration_ms?: number | null;
+  attributes?: Record<string, any>;
+  input?: Record<string, any>;
+  output?: Record<string, any>;
+  events?: AgentTraceEvent[];
+  links?: Record<string, any>[];
+  raw?: Record<string, any>;
+  [key: string]: any;
+}
+
+export interface AgentDebugTrace {
+  schema_version: number;
+  trace_id: string;
+  run_id: string;
+  thread_id?: string;
+  chat_turn_id?: string | null;
+  user_id?: string | null;
+  template_id?: string;
+  template_version_id?: string;
+  pattern_type?: string;
+  status?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  attributes?: Record<string, any>;
+  metrics?: Record<string, any>;
+  spans?: AgentTraceSpan[];
+  links?: Record<string, any>[];
+  artifacts?: Record<string, any>[];
+  raw?: Record<string, any>;
+  [key: string]: any;
+}
+
 export interface AgentRunDebug {
   chat_turn_id?: string;
   chat_turn_status?: string;
@@ -232,7 +281,7 @@ export interface AgentRunDebug {
   route_reason?: string;
   error?: Record<string, any> | null;
   metrics?: Record<string, any>;
-  trace?: Record<string, any>;
+  trace?: AgentDebugTrace;
   node_events?: Record<string, any>[];
   tool_events?: AgentToolEvent[];
   node_event_count?: number;

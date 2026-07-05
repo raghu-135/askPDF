@@ -34,6 +34,7 @@ export interface AgentGraphToolSummary {
   resultPreview?: string;
   artifactRefs?: Record<string, any>;
   artifactSummary?: Record<string, any>;
+  traceSpan?: Record<string, any>;
   raw: Record<string, any>;
 }
 
@@ -63,6 +64,7 @@ export interface AgentGraphNode {
   errorCount: number;
   sourceCount: number;
   artifactCount: number;
+  traceSpans?: Record<string, any>[];
   rawEvents: Record<string, any>[];
 }
 

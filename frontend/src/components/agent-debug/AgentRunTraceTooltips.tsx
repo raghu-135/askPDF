@@ -2,12 +2,8 @@ import React from 'react';
 import { Box, Typography } from '@mui/material';
 import { formatSkipReason } from '../../lib/agentDebugLabels';
 import { formatDurationMs } from '../../lib/formatDuration';
-import {
-  formatTraceError,
-  getNodeEventName,
-  getToolEventName,
-  isSkippedNodeEvent,
-} from './agent-debug-utils';
+import { formatTraceError } from './agent-debug-utils';
+import type { TraceNodeView, TraceToolView } from './agent-trace-projection';
 
 const TraceTooltipList = ({
   title,
@@ -30,40 +26,40 @@ const TraceTooltipList = ({
   </Box>
 );
 
-export const NodeEventsTooltip = ({
-  events,
+export const TraceNodesTooltip = ({
+  nodes,
   usedCount,
   availableCount,
 }: {
-  events: Record<string, any>[];
+  nodes: TraceNodeView[];
   usedCount: number;
   availableCount?: number;
 }) => {
-  const skippedCount = events.filter(isSkippedNodeEvent).length;
+  const skippedCount = nodes.filter((node) => node.skipped).length;
   const title = [
-    `Node events: ${events.length}`,
+    `Node spans: ${nodes.length}`,
     `used: ${usedCount}${availableCount ? `/${availableCount}` : ''}`,
     skippedCount ? `skipped: ${skippedCount}` : null,
   ].filter(Boolean).join(' · ');
 
   return (
-    <TraceTooltipList title={title} emptyText="No node events recorded.">
-      {events.map((event, index) => {
-        const elapsed = formatDurationMs(Number(event?.elapsed_ms));
-        const status = event?.status || (event?.skipped ? 'skipped' : 'completed');
-        const skipReason = formatSkipReason(event?.skip_reason);
-        const error = formatTraceError(event?.error);
+    <TraceTooltipList title={title} emptyText="No node spans recorded.">
+      {nodes.map((node, index) => {
+        const elapsed = formatDurationMs(node.durationMs);
+        const status = node.status || (node.skipped ? 'skipped' : 'completed');
+        const skipReason = formatSkipReason(node.raw?.skip_reason);
+        const error = formatTraceError(node.error);
         return (
-          <Box key={`${getNodeEventName(event)}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
+          <Box key={`${node.id}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
             <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-              {index + 1}. {getNodeEventName(event)}
+              {index + 1}. {node.id}
             </Typography>
             <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
-              {[status, elapsed, event?.route ? `route ${event.route}` : null, skipReason].filter(Boolean).join(' · ')}
+              {[status, elapsed, node.route ? `route ${node.route}` : null, skipReason].filter(Boolean).join(' · ')}
             </Typography>
-            {event?.route_reason && (
+            {node.routeReason && (
               <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
-                {String(event.route_reason)}
+                {node.routeReason}
               </Typography>
             )}
             {error && (
@@ -78,35 +74,36 @@ export const NodeEventsTooltip = ({
   );
 };
 
-export const ToolEventsTooltip = ({ events }: { events: Record<string, any>[] }) => (
-  <TraceTooltipList title="Tool events" emptyText="No tool calls recorded.">
-    {events.map((event, index) => {
-      const elapsed = formatDurationMs(Number(event?.elapsed_ms));
-      const artifactCount = Array.isArray(event?.artifact_keys)
-        ? event.artifact_keys.length
-        : event?.artifact_summary && typeof event.artifact_summary === 'object'
-          ? Object.keys(event.artifact_summary).length
+export const TraceToolsTooltip = ({ tools }: { tools: TraceToolView[] }) => (
+  <TraceTooltipList title="Tool spans" emptyText="No tool calls recorded.">
+    {tools.map((tool, index) => {
+      const elapsed = formatDurationMs(tool.durationMs);
+      const raw = tool.raw || {};
+      const artifactCount = Array.isArray(raw.artifact_keys)
+        ? raw.artifact_keys.length
+        : raw.artifact_summary && typeof raw.artifact_summary === 'object'
+          ? Object.keys(raw.artifact_summary).length
           : 0;
-      const warningCount = Array.isArray(event?.warnings) ? event.warnings.length : 0;
-      const error = formatTraceError(event?.error);
+      const warningCount = tool.warningCodes.length;
+      const error = formatTraceError(raw.error);
       return (
-        <Box key={`${getToolEventName(event)}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
+        <Box key={`${tool.name}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
           <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-            {index + 1}. {getToolEventName(event)}
+            {index + 1}. {tool.displayName || tool.name}
           </Typography>
           <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
             {[
-              event?.caller_node ? `from ${event.caller_node}` : null,
-              event?.ok === false ? 'failed' : 'ok',
+              tool.callerNode ? `from ${tool.callerNode}` : null,
+              tool.ok ? 'ok' : 'failed',
               elapsed,
-              Number.isFinite(Number(event?.source_count)) ? `${Number(event.source_count)} sources` : null,
+              Number.isFinite(Number(tool.sourceCount)) ? `${Number(tool.sourceCount)} sources` : null,
               artifactCount ? `${artifactCount} artifacts` : null,
               warningCount ? `${warningCount} warnings` : null,
             ].filter(Boolean).join(' · ')}
           </Typography>
-          {event?.result_preview && (
+          {raw.result_preview && (
             <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
-              {String(event.result_preview)}
+              {String(raw.result_preview)}
             </Typography>
           )}
           {error && (

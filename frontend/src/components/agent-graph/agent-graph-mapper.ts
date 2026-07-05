@@ -128,6 +128,7 @@ const summarizeTool = (event: Record<string, any>): AgentGraphToolSummary => ({
   resultPreview: typeof event.result_preview === 'string' ? event.result_preview : undefined,
   artifactRefs: event.artifact_refs && typeof event.artifact_refs === 'object' ? event.artifact_refs : undefined,
   artifactSummary: event.artifact_summary && typeof event.artifact_summary === 'object' ? event.artifact_summary : undefined,
+  traceSpan: event.__trace_span && typeof event.__trace_span === 'object' ? event.__trace_span : undefined,
   raw: event,
 });
 
@@ -186,6 +187,9 @@ export const buildAgentGraph = (
       const elapsedMs = rawEvents.reduce((total, event) => total + (Number(event.elapsed_ms) || 0), 0);
       const latestEvent = rawEvents[rawEvents.length - 1] || {};
       const status = deriveStatus(node.id, rawEvents, toolSummaries, executionPlan);
+      const traceSpans = rawEvents
+        .map((event) => event.__trace_span)
+        .filter((span): span is Record<string, any> => span && typeof span === 'object');
       return {
         id: node.id,
         type: node.type,
@@ -211,6 +215,7 @@ export const buildAgentGraph = (
         errorCount: toolSummaries.filter((tool) => !tool.ok).length + rawEvents.filter((event) => event.error || event.ok === false).length,
         sourceCount: toolSummaries.reduce((count, tool) => count + (tool.sourceCount || 0), 0),
         artifactCount: toolSummaries.reduce((count, tool) => count + tool.artifactKeys.length, 0),
+        traceSpans: traceSpans.length > 0 ? traceSpans : undefined,
         rawEvents,
       };
     });

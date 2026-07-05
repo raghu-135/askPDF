@@ -13,6 +13,11 @@ import {
 
 const sectionBg = 'rgba(0,0,0,0.03)';
 
+const withoutInternalTraceFields = (value: Record<string, any>) => {
+  const { __trace_span, __trace_span_id, __trace_kind, ...rest } = value;
+  return rest;
+};
+
 export default function AgentGraphInspector({ selection }: { selection: AgentGraphSelection }) {
   const [tab, setTab] = useState<'details' | 'raw'>('details');
 
@@ -51,10 +56,21 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
   const nodeElapsed = formatDurationMs(node.elapsedMs);
   const skipReason = formatSkipReason(node.skipReason);
   const statusLabel = node.status === 'skipped' ? skipReason || 'Skipped' : node.status;
-  const rawPayload = {
-    node_events: node.rawEvents,
-    tool_events: node.toolSummaries.map((tool) => tool.raw),
-  };
+  const toolTraceSpans = node.toolSummaries
+    .map((tool) => tool.traceSpan)
+    .filter((span): span is Record<string, any> => Boolean(span));
+  const hasTracePayload = Boolean(node.traceSpans?.length || toolTraceSpans.length);
+  const rawPayload = hasTracePayload
+    ? {
+      trace_spans: node.traceSpans || [],
+      tool_trace_spans: toolTraceSpans,
+      projected_node_events: node.rawEvents.map(withoutInternalTraceFields),
+      projected_tool_events: node.toolSummaries.map((tool) => withoutInternalTraceFields(tool.raw)),
+    }
+    : {
+      node_events: node.rawEvents,
+      tool_events: node.toolSummaries.map((tool) => tool.raw),
+    };
   return (
     <Box sx={{ p: 1, borderRadius: 1, bgcolor: sectionBg }}>
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>

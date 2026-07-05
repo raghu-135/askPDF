@@ -2,9 +2,8 @@ import React from 'react';
 import dynamic from 'next/dynamic';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import type { AgentRunDetails } from '../../lib/api';
-import type { AgentGraphRuntimeOverlay } from '../agent-graph/agent-graph-types';
 import AgentRunHeaderChips from './AgentRunHeaderChips';
-import { getRunDebugMetrics, getRunNodeEvents, getRunToolEvents, getRunTrace } from './agent-debug-utils';
+import { buildRunGraphOverlay, buildRunTraceView } from './agent-trace-projection';
 
 const AgentGraphCanvas = dynamic(() => import('../agent-graph/AgentGraphCanvas'), { ssr: false });
 
@@ -22,16 +21,8 @@ export default function AgentRunDebugPanel({
   error?: string;
 }) {
   const debug = runDetails?.debug;
-  const trace = runDetails ? getRunTrace(runDetails) : undefined;
-  const metrics = runDetails ? getRunDebugMetrics(runDetails) : {};
-  const overlay: AgentGraphRuntimeOverlay = {
-    route: trace?.attributes?.['askpdf.route'] || debug?.route || metrics.route,
-    routeReason: trace?.attributes?.['askpdf.route_reason'] || debug?.route_reason,
-    nodeEvents: runDetails ? getRunNodeEvents(runDetails) : [],
-    toolEvents: runDetails ? getRunToolEvents(runDetails) : [],
-    errors: debug?.error ? [debug.error] : [],
-    metrics,
-  };
+  const traceView = runDetails ? buildRunTraceView(runDetails) : undefined;
+  const overlay = traceView ? buildRunGraphOverlay(traceView) : undefined;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
@@ -54,10 +45,10 @@ export default function AgentRunDebugPanel({
           {error}
         </Typography>
       )}
-      {debug && runDetails && (
+      {debug && runDetails && traceView && (
         <>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-            <AgentRunHeaderChips runDetails={runDetails} />
+            <AgentRunHeaderChips runDetails={runDetails} traceView={traceView} />
           </Box>
           <AgentGraphCanvas
             resolvedSpec={runDetails.resolved_spec_json}
