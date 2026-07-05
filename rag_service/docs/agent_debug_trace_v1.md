@@ -8,6 +8,11 @@ debugging.
 The v1 trace is inspired by OpenTelemetry spans, LangSmith runs, and
 OpenInference AI span conventions, but it is not an OTLP export format.
 
+The machine-readable contract lives next to this document in
+`agent_debug_trace_v1.schema.json`. The schema is intentionally permissive about
+additional properties so v1 can stay additive while preserving a stable required
+shape for consumers.
+
 ## Goals
 
 - Give the UI one generic trace shape for Router RAG and Plan-and-Execute RAG.

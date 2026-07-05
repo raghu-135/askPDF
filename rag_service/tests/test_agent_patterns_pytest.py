@@ -2,6 +2,8 @@ import os
 import uuid
 import logging
 import asyncio
+import json
+from pathlib import Path
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -31,6 +33,7 @@ from app.time_utils import utc_now
 
 
 SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
+TRACE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "docs" / "agent_debug_trace_v1.schema.json"
 
 
 class TestModelRetry:
@@ -293,6 +296,44 @@ class TestAgentRunMetrics:
         assert any(event["name"] == "skipped" for event in span_ids["node:memory_worker:2"]["events"])
         assert span_ids["tool:search_documents:0"]["status"] == "error"
         assert span_ids["tool:search_documents:0"]["attributes"]["tool.id"] == "document_evidence"
+
+    def test_debug_trace_schema_contract_matches_generated_shape(self):
+        schema = json.loads(TRACE_SCHEMA_PATH.read_text())
+        span_schema = schema["$defs"]["span"]
+        run = SimpleNamespace(
+            id="run-contract",
+            thread_id="thread-1",
+            user_id="user-1",
+            template_id=ROUTER_RAG_AGENT_ID,
+            template_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
+            resolved_spec_json=builtin_router_rag_spec(),
+            status="completed",
+            started_at=utc_now(),
+            completed_at=utc_now(),
+        )
+
+        trace = build_debug_trace(
+            run=run,
+            chat_turn=SimpleNamespace(id="turn-1"),
+            node_events=[{"node": "router", "status": "completed", "route": "direct"}],
+            tool_events=[],
+            metrics={"duration_ms": 1.0, "route": "direct", "tool_warning_count": 0, "error_count": 0},
+            route="direct",
+        )
+
+        assert schema["properties"]["schema_version"]["const"] == 1
+        for field in schema["required"]:
+            assert field in trace
+        assert trace["schema_version"] == 1
+        assert trace["raw"]["node_events"][0]["node"] == "router"
+        assert trace["raw"]["tool_events"] == []
+
+        for span in trace["spans"]:
+            for field in span_schema["required"]:
+                assert field in span
+            assert span["kind"] in span_schema["properties"]["kind"]["enum"]
+            for event in span["events"]:
+                assert "name" in event
 
 
 class TestRouterRagTemplateValidator:

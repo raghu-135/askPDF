@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://askpdf.local/schemas/agent_debug_trace_v1.schema.json",
+  "title": "askPDF Agent Debug Trace v1",
+  "description": "Normalized debug trace document returned as debug.trace by GET /api/agent-runs/{id}. Raw node/tool events remain available separately and under raw for compatibility.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "trace_id",
+    "run_id",
+    "template_id",
+    "status",
+    "attributes",
+    "metrics",
+    "spans",
+    "links",
+    "artifacts",
+    "raw"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "trace_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": ["string", "number"]
+    },
+    "thread_id": {
+      "type": ["string", "number", "null"]
+    },
+    "chat_turn_id": {
+      "type": ["string", "number", "null"]
+    },
+    "user_id": {
+      "type": ["string", "number", "null"]
+    },
+    "template_id": {
+      "type": ["string", "null"]
+    },
+    "template_version_id": {
+      "type": ["string", "null"]
+    },
+    "pattern_type": {
+      "type": ["string", "null"]
+    },
+    "status": {
+      "type": ["string", "null"]
+    },
+    "started_at": {
+      "type": ["string", "null"]
+    },
+    "completed_at": {
+      "type": ["string", "null"]
+    },
+    "duration_ms": {
+      "type": ["number", "null"]
+    },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "spans": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/span"
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "raw": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["node_events", "tool_events"],
+      "properties": {
+        "node_events": {
+          "type": "array"
+        },
+        "tool_events": {
+          "type": "array"
+        },
+        "error": {}
+      }
+    }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "span_id",
+        "parent_span_id",
+        "name",
+        "kind",
+        "status",
+        "attributes",
+        "input",
+        "output",
+        "events",
+        "links",
+        "raw"
+      ],
+      "properties": {
+        "span_id": {
+          "type": "string"
+        },
+        "parent_span_id": {
+          "type": ["string", "null"]
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": ["AGENT", "CHAIN", "LLM", "RETRIEVER", "TOOL", "PROMPT"]
+        },
+        "status": {
+          "type": ["string", "null"]
+        },
+        "start_time": {
+          "type": ["string", "null"]
+        },
+        "end_time": {
+          "type": ["string", "null"]
+        },
+        "duration_ms": {
+          "type": ["number", "null"]
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "input": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "output": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "attributes": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "input": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "output": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "raw": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}
