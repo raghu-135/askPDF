@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
+import CheckIcon from '@mui/icons-material/Check';
+import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
-import { Box, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
-import type { AgentRunDetails, AgentTraceRefs } from '../../lib/api';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import { Box, Button, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
+import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import AgentRunHeaderChips from './AgentRunHeaderChips';
 import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
 
@@ -16,6 +19,7 @@ export default function AgentRunDebugPanel({
   runDetails,
   loading,
   error,
+  onRunDetailsChange,
 }: {
   runId: string;
   routeReason?: string;
@@ -23,9 +27,18 @@ export default function AgentRunDebugPanel({
   runDetails?: AgentRunDetails;
   loading?: boolean;
   error?: string;
+  onRunDetailsChange?: (runDetails: AgentRunDetails) => void;
 }) {
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [resumeSubmitting, setResumeSubmitting] = useState<AgentRunResumeAction | null>(null);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  const [resumeMessage, setResumeMessage] = useState<string | null>(null);
   const debug = runDetails?.debug;
+  const pendingInterrupt = runDetails?.pending_interrupt;
+  const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? 'pending' : undefined);
+  const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
+    ? pendingInterrupt.allowed_actions.map(String)
+    : [];
   const traceView = runDetails ? buildRunTraceView(runDetails) : undefined;
   const trace = traceView?.trace;
   const traceJson = buildTraceExportJson(traceView);
@@ -53,6 +66,51 @@ export default function AgentRunDebugPanel({
     URL.revokeObjectURL(url);
   };
 
+  const handleResume = async (action: AgentRunResumeAction) => {
+    if (!runDetails || !pendingInterrupt?.interrupt_id) return;
+    setResumeSubmitting(action);
+    setResumeError(null);
+    setResumeMessage(null);
+    try {
+      const response = await resumeAgentRun(runId, {
+        action,
+        interrupt_id: pendingInterrupt.interrupt_id,
+        resume_token: pendingInterrupt.resume_token || undefined,
+        resume_version: pendingInterrupt.resume_version || undefined,
+        thread_id: runDetails.thread_id,
+        client_metadata: { source: 'agent_run_debug_panel' },
+      });
+      onRunDetailsChange?.(response.agent_run);
+      setResumeMessage(response.duplicate ? 'Decision already recorded.' : 'Decision recorded.');
+    } catch (err: any) {
+      setResumeError(err?.message || 'Unable to submit decision.');
+    } finally {
+      setResumeSubmitting(null);
+    }
+  };
+
+  const renderInterruptAction = (
+    action: AgentRunResumeAction,
+    label: string,
+    icon: React.ReactNode,
+    color: 'primary' | 'error' | 'inherit' = 'primary',
+  ) => {
+    if (!allowedActions.includes(action)) return null;
+    return (
+      <Button
+        key={action}
+        size="small"
+        variant={action === 'reject' ? 'outlined' : 'contained'}
+        color={color === 'inherit' ? undefined : color}
+        startIcon={icon}
+        disabled={Boolean(resumeSubmitting)}
+        onClick={() => handleResume(action)}
+      >
+        {resumeSubmitting === action ? 'Submitting...' : label}
+      </Button>
+    );
+  };
+
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
       <Typography variant="caption" sx={{ display: 'block', wordBreak: 'break-all' }}>
@@ -73,6 +131,44 @@ export default function AgentRunDebugPanel({
         <Typography variant="caption" color="error">
           {error}
         </Typography>
+      )}
+      {pendingInterrupt && (
+        <Box
+          sx={{
+            p: 1,
+            borderRadius: 1,
+            bgcolor: 'rgba(25, 118, 210, 0.08)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 0.75,
+          }}
+        >
+          <Typography variant="caption" sx={{ fontWeight: 600 }}>
+            Human review: {interruptStatus}
+          </Typography>
+          {(pendingInterrupt.title || pendingInterrupt.prompt || pendingInterrupt.body) && (
+            <Typography variant="caption" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {pendingInterrupt.title || pendingInterrupt.prompt || pendingInterrupt.body}
+            </Typography>
+          )}
+          {interruptStatus === 'pending' && (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+              {renderInterruptAction('approve', 'Approve', <CheckIcon fontSize="inherit" />)}
+              {renderInterruptAction('continue_without', 'Continue', <PlayArrowIcon fontSize="inherit" />)}
+              {renderInterruptAction('reject', 'Reject', <CloseIcon fontSize="inherit" />, 'error')}
+            </Box>
+          )}
+          {resumeMessage && (
+            <Typography variant="caption" color="text.secondary">
+              {resumeMessage}
+            </Typography>
+          )}
+          {resumeError && (
+            <Typography variant="caption" color="error">
+              {resumeError}
+            </Typography>
+          )}
+        </Box>
       )}
       {!loading && !error && runDetails && !debug && (
         <Typography variant="caption" color="text.secondary">

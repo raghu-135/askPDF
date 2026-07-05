@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -8,6 +10,7 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
+from app.agent_patterns.debug_trace import append_interrupt_event_to_debug_payload
 from app.agent_patterns.templates import SUPPORTED_BUILTIN_TEMPLATE_IDS, builtin_templates
 from app.agent_patterns.validator import TemplateValidator
 from app.db.connection_sqlmodel import async_session_maker
@@ -18,7 +21,119 @@ from app.db.models_sqlmodel import (
     AgentRun,
     ChatTurn,
 )
-from app.time_utils import utc_now
+from app.time_utils import iso_utc_z, parse_datetime_utc, utc_now
+
+
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_AWAITING_HUMAN = "awaiting_human"
+RUN_STATUS_REJECTED = "rejected"
+RUN_STATUS_EXPIRED = "expired"
+
+INTERRUPT_STATUS_PENDING = "pending"
+INTERRUPT_STATUS_RESUMED = "resumed"
+INTERRUPT_STATUS_REJECTED = "rejected"
+INTERRUPT_STATUS_EXPIRED = "expired"
+
+RESUME_ACTIONS = {"approve", "edit", "continue_without"}
+TERMINAL_INTERRUPT_STATUSES = {
+    INTERRUPT_STATUS_RESUMED,
+    INTERRUPT_STATUS_REJECTED,
+    INTERRUPT_STATUS_EXPIRED,
+}
+
+PENDING_INTERRUPT_MAX_BYTES = 16_000
+PENDING_INTERRUPT_STRING_LIMIT = 2_000
+PENDING_INTERRUPT_LIST_LIMIT = 20
+PENDING_INTERRUPT_DICT_LIMIT = 50
+
+
+class AgentRunInterruptError(ValueError):
+    """Raised when an interrupt transition request is invalid."""
+
+    def __init__(self, code: str, message: str, *, http_status: int = 409):
+        super().__init__(message)
+        self.code = code
+        self.http_status = http_status
+
+
+@dataclass
+class InterruptResolutionResult:
+    run: AgentRun
+    outcome: str
+    interrupt: Dict[str, Any]
+    duplicate: bool = False
+
+
+def _compact_interrupt_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > 4:
+        return "[truncated]"
+    if isinstance(value, str):
+        text = " ".join(value.split())
+        if len(text) <= PENDING_INTERRUPT_STRING_LIMIT:
+            return text
+        return text[:PENDING_INTERRUPT_STRING_LIMIT].rstrip() + "..."
+    if isinstance(value, list):
+        return [_compact_interrupt_value(item, depth=depth + 1) for item in value[:PENDING_INTERRUPT_LIST_LIMIT]]
+    if isinstance(value, dict):
+        compacted: Dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= PENDING_INTERRUPT_DICT_LIMIT:
+                compacted["_truncated"] = True
+                break
+            compacted[str(key)] = _compact_interrupt_value(item, depth=depth + 1)
+        return compacted
+    return value
+
+
+def normalize_pending_interrupt_payload(payload: Dict[str, Any], *, requested_at: Optional[datetime] = None) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("pending interrupt payload must be an object")
+
+    now = requested_at or utc_now()
+    normalized = _compact_interrupt_value(dict(payload))
+    if not isinstance(normalized, dict):
+        normalized = {}
+
+    interrupt_id = str(normalized.get("interrupt_id") or uuid.uuid4())
+    normalized["interrupt_id"] = interrupt_id
+    normalized["status"] = str(normalized.get("status") or INTERRUPT_STATUS_PENDING)
+    normalized["requested_at"] = str(normalized.get("requested_at") or iso_utc_z(now))
+
+    allowed_actions = normalized.get("allowed_actions")
+    if not isinstance(allowed_actions, list) or not all(isinstance(action, str) for action in allowed_actions):
+        allowed_actions = ["approve", "reject"]
+    normalized["allowed_actions"] = allowed_actions
+
+    resume_version = normalized.get("resume_version")
+    try:
+        resume_version = int(resume_version)
+    except (TypeError, ValueError):
+        resume_version = 1
+    normalized["resume_version"] = max(1, resume_version)
+
+    encoded = json.dumps(normalized, ensure_ascii=True, sort_keys=True, default=str)
+    if len(encoded.encode("utf-8")) > PENDING_INTERRUPT_MAX_BYTES:
+        raise ValueError("pending interrupt payload is too large")
+    return normalized
+
+
+def _pending_interrupt_from_run(run: AgentRun) -> Dict[str, Any]:
+    pending = run.pending_interrupt_json if isinstance(run.pending_interrupt_json, dict) else {}
+    return dict(pending)
+
+
+def _interrupt_expired(interrupt: Dict[str, Any], now: datetime) -> bool:
+    expires_at = parse_datetime_utc(interrupt.get("expires_at"))
+    return bool(expires_at and expires_at <= now)
+
+
+def _terminal_decision_matches(interrupt: Dict[str, Any], *, action: str, interrupt_id: str) -> bool:
+    decision = interrupt.get("decision")
+    if not isinstance(decision, dict):
+        return False
+    if decision.get("interrupt_id") != interrupt_id:
+        return False
+    return decision.get("action") == action or decision.get("requested_action") == action
 
 
 class AgentPatternRepository:
@@ -124,15 +239,21 @@ class AgentPatternRepository:
         async with session.begin():
             return await session.get(AgentRun, run_id)
 
-    async def list_runs_for_thread(self, thread_id: str, *, limit: int = 20) -> list[AgentRun]:
+    async def list_runs_for_thread(
+        self,
+        thread_id: str,
+        *,
+        limit: int = 20,
+        status: Optional[str] = None,
+    ) -> list[AgentRun]:
         session = await self._get_session()
         bounded_limit = max(1, min(int(limit), 100))
         async with session.begin():
+            query = select(AgentRun).where(AgentRun.thread_id == thread_id)
+            if status:
+                query = query.where(AgentRun.status == status)
             result = await session.execute(
-                select(AgentRun)
-                .where(AgentRun.thread_id == thread_id)
-                .order_by(AgentRun.started_at.desc(), AgentRun.id.desc())
-                .limit(bounded_limit)
+                query.order_by(AgentRun.started_at.desc(), AgentRun.id.desc()).limit(bounded_limit)
             )
             return list(result.scalars().all())
 
@@ -181,7 +302,7 @@ class AgentPatternRepository:
             query = (
                 select(AgentRun)
                 .where(AgentRun.started_at < cutoff)
-                .where(AgentRun.status == "running")
+                .where(AgentRun.status == RUN_STATUS_RUNNING)
             )
             if thread_id is not None:
                 query = query.where(AgentRun.thread_id == thread_id)
@@ -236,7 +357,7 @@ class AgentPatternRepository:
             template_id=template_id,
             run_metadata_json=run_metadata_json,
             resolved_spec_json=resolved_spec_json,
-            status="running",
+            status=RUN_STATUS_RUNNING,
             started_at=utc_now(),
         )
         session = await self._get_session()
@@ -245,6 +366,308 @@ class AgentPatternRepository:
             await session.flush()
             await session.refresh(run)
         return run
+
+    async def mark_run_awaiting_human(
+        self,
+        run_id: str,
+        pending_interrupt_json: Dict[str, Any],
+        *,
+        metrics_json: Optional[Dict[str, Any]] = None,
+        debug_trace_json: Optional[Dict[str, Any]] = None,
+        requested_at: Optional[datetime] = None,
+    ) -> Optional[AgentRun]:
+        """Pause a run on a bounded pending-interrupt payload."""
+
+        pending_interrupt = normalize_pending_interrupt_payload(
+            pending_interrupt_json,
+            requested_at=requested_at,
+        )
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id)
+            if not run:
+                return None
+            run.status = RUN_STATUS_AWAITING_HUMAN
+            run.completed_at = None
+            replace_jsonb_field(run, "pending_interrupt_json", pending_interrupt)
+            if metrics_json is not None:
+                replace_jsonb_field(run, "metrics_json", metrics_json)
+            trace_payload = debug_trace_json if debug_trace_json is not None else run.debug_trace_json
+            if isinstance(trace_payload, dict):
+                replace_jsonb_field(
+                    run,
+                    "debug_trace_json",
+                    append_interrupt_event_to_debug_payload(
+                        trace_payload,
+                        pending_interrupt,
+                        event_name="interrupt.requested",
+                        run_status=RUN_STATUS_AWAITING_HUMAN,
+                    ),
+                )
+            await session.flush()
+            await session.refresh(run)
+            return run
+
+    def _build_interrupt_decision(
+        self,
+        *,
+        interrupt_id: str,
+        action: str,
+        decided_at: datetime,
+        edited_payload: Optional[Dict[str, Any]],
+        client_metadata: Optional[Dict[str, Any]],
+        resume_version: Optional[int],
+    ) -> Dict[str, Any]:
+        decision = {
+            "interrupt_id": interrupt_id,
+            "action": action,
+            "decided_at": iso_utc_z(decided_at),
+        }
+        if resume_version is not None:
+            decision["resume_version"] = resume_version
+        if edited_payload is not None:
+            decision["edited_payload"] = _compact_interrupt_value(edited_payload)
+        if client_metadata is not None:
+            decision["client_metadata"] = _compact_interrupt_value(client_metadata)
+        return decision
+
+    def _validate_pending_interrupt_request(
+        self,
+        interrupt: Dict[str, Any],
+        *,
+        interrupt_id: str,
+        action: str,
+        resume_token: Optional[str],
+        resume_version: Optional[int],
+    ) -> None:
+        if interrupt.get("interrupt_id") != interrupt_id:
+            raise AgentRunInterruptError(
+                "interrupt_mismatch",
+                "The requested interrupt does not match the run's current interrupt.",
+            )
+
+        allowed_actions = interrupt.get("allowed_actions") if isinstance(interrupt.get("allowed_actions"), list) else []
+        if action not in allowed_actions:
+            raise AgentRunInterruptError(
+                "interrupt_action_not_allowed",
+                f"Action {action!r} is not allowed for this interrupt.",
+                http_status=400,
+            )
+
+        expected_token = interrupt.get("resume_token")
+        if resume_token is not None and expected_token is not None and resume_token != expected_token:
+            raise AgentRunInterruptError(
+                "resume_token_mismatch",
+                "The resume token does not match the current interrupt.",
+            )
+
+        if resume_version is not None and int(interrupt.get("resume_version") or 1) != resume_version:
+            raise AgentRunInterruptError(
+                "resume_version_mismatch",
+                "The resume version does not match the current interrupt.",
+            )
+
+    async def resolve_pending_interrupt(
+        self,
+        run_id: str,
+        *,
+        interrupt_id: str,
+        action: str,
+        edited_payload: Optional[Dict[str, Any]] = None,
+        client_metadata: Optional[Dict[str, Any]] = None,
+        resume_token: Optional[str] = None,
+        resume_version: Optional[int] = None,
+        expected_thread_id: Optional[str] = None,
+        decided_at: Optional[datetime] = None,
+    ) -> Optional[InterruptResolutionResult]:
+        """Resolve one pending interrupt atomically and idempotently."""
+
+        if action not in RESUME_ACTIONS and action != "reject":
+            raise AgentRunInterruptError(
+                "invalid_interrupt_action",
+                f"Unsupported interrupt action: {action}",
+                http_status=400,
+            )
+
+        now = decided_at or utc_now()
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(select(AgentRun).where(AgentRun.id == run_id).with_for_update())
+            run = result.scalar_one_or_none()
+            if not run:
+                return None
+            if expected_thread_id is not None and run.thread_id != expected_thread_id:
+                raise AgentRunInterruptError(
+                    "run_thread_mismatch",
+                    "The agent run does not belong to the requested thread.",
+                    http_status=404,
+                )
+
+            interrupt = _pending_interrupt_from_run(run)
+            if not interrupt:
+                raise AgentRunInterruptError(
+                    "no_pending_interrupt",
+                    "This agent run does not have an interrupt to resolve.",
+                    http_status=404,
+                )
+            current_status = str(interrupt.get("status") or INTERRUPT_STATUS_PENDING)
+            if current_status in TERMINAL_INTERRUPT_STATUSES:
+                if _terminal_decision_matches(interrupt, action=action, interrupt_id=interrupt_id):
+                    return InterruptResolutionResult(
+                        run=run,
+                        outcome=current_status,
+                        interrupt=interrupt,
+                        duplicate=True,
+                    )
+                raise AgentRunInterruptError(
+                    "interrupt_already_resolved",
+                    "This interrupt has already been resolved.",
+                )
+            if run.status != RUN_STATUS_AWAITING_HUMAN or current_status != INTERRUPT_STATUS_PENDING:
+                raise AgentRunInterruptError(
+                    "interrupt_not_pending",
+                    "This agent run is not awaiting a human decision.",
+                )
+
+            self._validate_pending_interrupt_request(
+                interrupt,
+                interrupt_id=interrupt_id,
+                action=action,
+                resume_token=resume_token,
+                resume_version=resume_version,
+            )
+
+            decision = self._build_interrupt_decision(
+                interrupt_id=interrupt_id,
+                action=action,
+                decided_at=now,
+                edited_payload=edited_payload,
+                client_metadata=client_metadata,
+                resume_version=resume_version,
+            )
+
+            if _interrupt_expired(interrupt, now):
+                interrupt["status"] = INTERRUPT_STATUS_EXPIRED
+                interrupt["decision"] = {
+                    **decision,
+                    "action": "expire",
+                    "requested_action": action,
+                }
+                run.status = RUN_STATUS_EXPIRED
+                run.completed_at = now
+                replace_jsonb_field(
+                    run,
+                    "error_json",
+                    {
+                        "code": "agent_run_interrupt_expired",
+                        "raw_message": "Agent run interrupt expired before a human decision was accepted.",
+                        "retryable": False,
+                    },
+                )
+                outcome = INTERRUPT_STATUS_EXPIRED
+            elif action == "reject":
+                interrupt["status"] = INTERRUPT_STATUS_REJECTED
+                interrupt["decision"] = decision
+                run.status = RUN_STATUS_REJECTED
+                run.completed_at = now
+                replace_jsonb_field(
+                    run,
+                    "error_json",
+                    {
+                        "code": "agent_run_rejected_by_human",
+                        "raw_message": "Agent run was rejected by a human reviewer.",
+                        "retryable": False,
+                    },
+                )
+                outcome = INTERRUPT_STATUS_REJECTED
+            else:
+                interrupt["status"] = INTERRUPT_STATUS_RESUMED
+                interrupt["decision"] = decision
+                run.status = RUN_STATUS_RUNNING
+                run.completed_at = None
+                outcome = INTERRUPT_STATUS_RESUMED
+
+            metrics = dict(run.metrics_json or {})
+            metrics["interrupt_resolution_count"] = int(metrics.get("interrupt_resolution_count") or 0) + 1
+            metrics["last_interrupt_action"] = interrupt["decision"].get("action")
+            replace_jsonb_field(run, "metrics_json", metrics)
+            replace_jsonb_field(run, "pending_interrupt_json", interrupt)
+            if isinstance(run.debug_trace_json, dict):
+                replace_jsonb_field(
+                    run,
+                    "debug_trace_json",
+                    append_interrupt_event_to_debug_payload(
+                        run.debug_trace_json,
+                        interrupt,
+                        run_status=run.status,
+                        completed_at=run.completed_at,
+                    ),
+                )
+            await session.flush()
+            await session.refresh(run)
+            return InterruptResolutionResult(run=run, outcome=outcome, interrupt=interrupt)
+
+    async def expire_pending_interrupts(
+        self,
+        *,
+        now: Optional[datetime] = None,
+        thread_id: Optional[str] = None,
+        limit: int = 1000,
+    ) -> list[str]:
+        """Mark expired awaiting-human runs independently from stale running runs."""
+
+        cutoff = now or utc_now()
+        bounded_limit = max(1, min(int(limit), 1000))
+        session = await self._get_session()
+        async with session.begin():
+            query = select(AgentRun).where(AgentRun.status == RUN_STATUS_AWAITING_HUMAN)
+            if thread_id is not None:
+                query = query.where(AgentRun.thread_id == thread_id)
+            result = await session.execute(
+                query.order_by(AgentRun.started_at.asc(), AgentRun.id.asc()).limit(bounded_limit).with_for_update()
+            )
+            runs = list(result.scalars().all())
+            expired_ids: list[str] = []
+            for run in runs:
+                interrupt = _pending_interrupt_from_run(run)
+                if not interrupt or str(interrupt.get("status") or INTERRUPT_STATUS_PENDING) != INTERRUPT_STATUS_PENDING:
+                    continue
+                if not _interrupt_expired(interrupt, cutoff):
+                    continue
+                interrupt["status"] = INTERRUPT_STATUS_EXPIRED
+                interrupt["decision"] = {
+                    "interrupt_id": interrupt.get("interrupt_id"),
+                    "action": "expire",
+                    "decided_at": iso_utc_z(cutoff),
+                }
+                run.status = RUN_STATUS_EXPIRED
+                run.completed_at = cutoff
+                replace_jsonb_field(run, "pending_interrupt_json", interrupt)
+                replace_jsonb_field(
+                    run,
+                    "error_json",
+                    {
+                        "code": "agent_run_interrupt_expired",
+                        "raw_message": "Agent run interrupt expired before a human decision was accepted.",
+                        "retryable": False,
+                    },
+                )
+                metrics = dict(run.metrics_json or {})
+                metrics["interrupt_expired_count"] = int(metrics.get("interrupt_expired_count") or 0) + 1
+                replace_jsonb_field(run, "metrics_json", metrics)
+                if isinstance(run.debug_trace_json, dict):
+                    replace_jsonb_field(
+                        run,
+                        "debug_trace_json",
+                        append_interrupt_event_to_debug_payload(
+                            run.debug_trace_json,
+                            interrupt,
+                            run_status=run.status,
+                            completed_at=run.completed_at,
+                        ),
+                    )
+                expired_ids.append(run.id)
+            return expired_ids
 
     async def complete_run(
         self,

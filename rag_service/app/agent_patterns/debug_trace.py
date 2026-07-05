@@ -20,6 +20,14 @@ DEBUG_PAYLOAD_VERSION = 1
 TRACE_SCHEMA_VERSION = 1
 TRACE_PREVIEW_LIMIT = 900
 
+INTERRUPT_EVENT_NAMES = {
+    "pending": "interrupt.requested",
+    "requested": "interrupt.requested",
+    "resumed": "interrupt.resumed",
+    "rejected": "interrupt.rejected",
+    "expired": "interrupt.expired",
+}
+
 
 class _BufferedSpanExporter(SpanExporter):
     """Local OpenTelemetry exporter used to normalize one agent run."""
@@ -372,6 +380,168 @@ def _as_string_list(value: Any) -> List[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
 
 
+def _interrupt_event_name(interrupt: Mapping[str, Any], event_name: Optional[str] = None) -> str:
+    if event_name:
+        return event_name
+    status = str(interrupt.get("status") or "").lower()
+    return INTERRUPT_EVENT_NAMES.get(status, "interrupt.requested")
+
+
+def _interrupt_decision(interrupt: Mapping[str, Any]) -> Dict[str, Any]:
+    return _as_dict(interrupt.get("decision"))
+
+
+def _interrupt_action(interrupt: Mapping[str, Any]) -> Any:
+    decision = _interrupt_decision(interrupt)
+    return decision.get("action") or decision.get("requested_action") or interrupt.get("action") or interrupt.get("default_action")
+
+
+def build_interrupt_trace_event(
+    interrupt: Mapping[str, Any],
+    *,
+    event_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build a bounded root-span event for a HITL interrupt lifecycle change."""
+
+    data = _as_dict(interrupt)
+    decision = _interrupt_decision(data)
+    attrs = _clean_dict(
+        {
+            "askpdf.interrupt.id": data.get("interrupt_id"),
+            "askpdf.interrupt.gate_id": data.get("gate_id"),
+            "askpdf.node.id": data.get("node_id"),
+            "askpdf.interrupt.type": data.get("type"),
+            "askpdf.interrupt.status": data.get("status"),
+            "askpdf.interrupt.action": _interrupt_action(data),
+            "askpdf.interrupt.requested_at": data.get("requested_at"),
+            "askpdf.interrupt.expires_at": data.get("expires_at"),
+            "askpdf.interrupt.resume_version": data.get("resume_version"),
+        }
+    )
+    event = {
+        "name": _interrupt_event_name(data, event_name),
+        "attributes": attrs,
+        "input": _clean_dict(
+            {
+                "title": _bounded_value(data.get("title")),
+                "prompt": _bounded_value(data.get("prompt")),
+                "body": _bounded_value(data.get("body")),
+                "input_summary": _bounded_value(data.get("input_summary")),
+            }
+        ),
+        "output": _clean_dict(
+            {
+                "proposed_action": _bounded_value(data.get("proposed_action")),
+                "proposed_tool": _bounded_value(data.get("proposed_tool")),
+                "proposed_memory": _bounded_value(data.get("proposed_memory")),
+                "proposed_final_answer": _bounded_value(data.get("proposed_final_answer")),
+                "decision": _bounded_value(decision),
+            }
+        ),
+    }
+    return {key: value for key, value in event.items() if value not in (None, "", [], {})}
+
+
+def _is_interrupt_event(event: Any) -> bool:
+    return isinstance(event, dict) and str(event.get("name") or "").startswith("interrupt.")
+
+
+def _interrupt_event_key(event: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+    attrs = _as_dict(event.get("attributes"))
+    return (
+        event.get("name"),
+        attrs.get("askpdf.interrupt.id"),
+        attrs.get("askpdf.interrupt.action"),
+    )
+
+
+def _interrupt_events_from_trace(trace: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    return [
+        dict(event)
+        for span in _as_list(trace.get("spans"))
+        for event in _as_list(_as_dict(span).get("events"))
+        if _is_interrupt_event(event)
+    ]
+
+
+def _interrupt_summary(trace: Mapping[str, Any]) -> Dict[str, Any]:
+    events = _interrupt_events_from_trace(trace)
+    compact_events = [
+        {
+            "name": event.get("name"),
+            "attributes": _as_dict(event.get("attributes")),
+            "input": _as_dict(event.get("input")),
+            "output": _as_dict(event.get("output")),
+        }
+        for event in events
+    ]
+    last_attrs = _as_dict(compact_events[-1].get("attributes")) if compact_events else {}
+    return {
+        "interruptCount": len(compact_events),
+        "interrupts": compact_events,
+        "lastInterruptStatus": last_attrs.get("askpdf.interrupt.status"),
+        "lastInterruptAction": last_attrs.get("askpdf.interrupt.action"),
+    }
+
+
+def append_interrupt_event_to_debug_payload(
+    debug_payload: Any,
+    interrupt: Mapping[str, Any],
+    *,
+    event_name: Optional[str] = None,
+    run_status: Optional[str] = None,
+    completed_at: Any = None,
+) -> Any:
+    """Append a HITL event to an already-stored debug payload, preserving v1 shape."""
+
+    if not isinstance(debug_payload, dict) or debug_payload.get("version") != DEBUG_PAYLOAD_VERSION:
+        return debug_payload
+    trace = debug_payload.get("trace") if isinstance(debug_payload.get("trace"), dict) else None
+    if trace is None:
+        return debug_payload
+    spans = trace.get("spans") if isinstance(trace.get("spans"), list) else []
+    if not spans:
+        return debug_payload
+
+    event = build_interrupt_trace_event(interrupt, event_name=event_name)
+    event_key = _interrupt_event_key(event)
+    root_span = next(
+        (
+            span
+            for span in spans
+            if isinstance(span, dict)
+            and (span.get("parent_span_id") is None or str(span.get("span_id") or "").startswith("run:"))
+        ),
+        spans[0] if isinstance(spans[0], dict) else None,
+    )
+    if root_span is None:
+        return debug_payload
+
+    existing = _as_list(root_span.get("events"))
+    if not any(_interrupt_event_key(item) == event_key for item in existing if isinstance(item, dict)):
+        root_span["events"] = [*existing, event]
+
+    if run_status:
+        trace["status"] = run_status
+        root_span["status"] = run_status
+        root_attrs = dict(root_span.get("attributes") or {})
+        root_attrs["askpdf.status"] = run_status
+        root_span["attributes"] = root_attrs
+        trace_attrs = dict(trace.get("attributes") or {})
+        trace_attrs["askpdf.status"] = run_status
+        trace["attributes"] = trace_attrs
+    if completed_at is not None or run_status == "running":
+        value = iso_utc_z(completed_at) if completed_at is not None else None
+        trace["completed_at"] = value
+        root_span["end_time"] = value
+
+    summary = dict(debug_payload.get("summary") or {})
+    if run_status:
+        summary["status"] = run_status
+    summary.update(_interrupt_summary(trace))
+    return {**debug_payload, "trace": trace, "summary": summary}
+
+
 class AgentTraceRecorder:
     """Small local OpenTelemetry wrapper for one agent run."""
 
@@ -707,6 +877,21 @@ class AgentTraceRecorder:
             order=1000 + index,
         )
 
+    def record_interrupt_event(self, interrupt: Mapping[str, Any], *, event_name: Optional[str] = None) -> None:
+        event = build_interrupt_trace_event(interrupt, event_name=event_name)
+        root_sidecar = self._sidecars.get(self.run_span_id)
+        if root_sidecar is None:
+            return
+        existing = _as_list(root_sidecar.get("events"))
+        if not any(_interrupt_event_key(item) == _interrupt_event_key(event) for item in existing if isinstance(item, dict)):
+            root_sidecar["events"] = [*existing, event]
+            if not self._finalized:
+                attrs = _as_dict(event.get("attributes"))
+                self._root_span.add_event(
+                    event.get("name") or "interrupt",
+                    attributes={k: v for k, v in ((_key, _otel_attr_value(_value)) for _key, _value in attrs.items()) if v is not None},
+                )
+
     def finalize(
         self,
         *,
@@ -842,6 +1027,7 @@ class AgentTraceRecorder:
             "warningCount": int(metrics.get("tool_warning_count") or warning_count),
             "errorCount": error_count,
             "errors": [error for error in errors if error],
+            **_interrupt_summary(trace),
         }
 
 

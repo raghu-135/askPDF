@@ -297,6 +297,10 @@ class AgentRun(SQLModel, table=True):
     )
     status: str = Field(default="running", index=True)
     checkpoint_thread_id: Optional[str] = None
+    pending_interrupt_json: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB)
+    )
     started_at: datetime = Field(
         default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())

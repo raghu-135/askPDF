@@ -16,7 +16,7 @@ from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result
 from app.agent_patterns.graph import build_planner_prompt, infer_required_plan_steps, normalize_execution_plan
 from app.agent_patterns.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace
 from app.agent_patterns.metrics import build_run_metrics
-from app.agent_patterns.repository import AgentPatternRepository
+from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
     PLAN_EXECUTE_RAG_AGENT_ID,
@@ -29,7 +29,7 @@ from app.agent_patterns.templates import (
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
 from app.db.models_sqlmodel import AgentRun, ChatTurn
 from app.models.retry import invoke_with_retry
-from app.time_utils import utc_now
+from app.time_utils import iso_utc_z, utc_now
 
 
 SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
@@ -401,6 +401,55 @@ class TestAgentRunMetrics:
             assert span["kind"] in span_schema["properties"]["kind"]["enum"]
             for event in span["events"]:
                 assert "name" in event
+
+    def test_interrupt_trace_events_live_on_root_span_and_are_summarized(self):
+        run = SimpleNamespace(
+            id="run-hitl",
+            thread_id="thread-1",
+            user_id="user-1",
+            template_id=ROUTER_RAG_AGENT_ID,
+            template_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
+            resolved_spec_json=builtin_router_rag_spec(),
+            status="awaiting_human",
+            started_at=utc_now(),
+            completed_at=None,
+        )
+        recorder = AgentTraceRecorder(run)
+        recorder.record_interrupt_event(
+            {
+                "interrupt_id": "interrupt-trace-1",
+                "gate_id": "before_web",
+                "node_id": "web_worker",
+                "type": "tool_approval",
+                "status": "pending",
+                "requested_at": "2026-07-05T12:00:00Z",
+                "expires_at": "2026-07-05T12:05:00Z",
+                "resume_token": "not-for-trace",
+                "resume_version": 1,
+                "allowed_actions": ["approve", "reject"],
+                "title": "Approve web search?",
+                "input_summary": {"query": "latest evidence"},
+                "proposed_tool": {"name": "search_web"},
+            }
+        )
+
+        payload = recorder.finalize(
+            run=run,
+            chat_turn_id=None,
+            metrics={"duration_ms": 1.0, "tool_warning_count": 0, "error_count": 0},
+        )
+        trace = payload["trace"]
+        root_span = next(span for span in trace["spans"] if span["span_id"] == "run:run-hitl")
+        event = next(item for item in root_span["events"] if item["name"] == "interrupt.requested")
+
+        assert event["attributes"]["askpdf.interrupt.id"] == "interrupt-trace-1"
+        assert event["attributes"]["askpdf.interrupt.gate_id"] == "before_web"
+        assert event["attributes"]["askpdf.node.id"] == "web_worker"
+        assert event["input"]["title"] == "Approve web search?"
+        assert event["output"]["proposed_tool"] == {"name": "search_web"}
+        assert "resume_token" not in json.dumps(event)
+        assert payload["summary"]["interruptCount"] == 1
+        assert payload["summary"]["lastInterruptStatus"] == "pending"
 
 
 class TestRouterRagTemplateValidator:
@@ -797,6 +846,138 @@ class TestAgentPatternRepository:
         assert completed.template_version_id == version.id
 
     @pytest.mark.asyncio
+    async def test_mark_run_awaiting_human_persists_bounded_pending_interrupt(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        run = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+        )
+
+        paused = await repo.mark_run_awaiting_human(
+            run.id,
+            {
+                "interrupt_id": "interrupt-1",
+                "gate_id": "before_web",
+                "node_id": "web_worker",
+                "type": "tool_approval",
+                "allowed_actions": ["approve", "reject", "continue_without"],
+                "prompt": "x" * 3000,
+                "input_summary": {"source_text": "body " * 1200},
+            },
+        )
+
+        assert paused.status == "awaiting_human"
+        assert paused.completed_at is None
+        assert paused.pending_interrupt_json["interrupt_id"] == "interrupt-1"
+        assert paused.pending_interrupt_json["status"] == "pending"
+        assert len(paused.pending_interrupt_json["prompt"]) <= 2003
+        assert len(paused.pending_interrupt_json["input_summary"]["source_text"]) <= 2003
+
+        awaiting_runs = await repo.list_runs_for_thread(sample_thread.id, status="awaiting_human")
+        assert [item.id for item in awaiting_runs] == [run.id]
+
+    @pytest.mark.asyncio
+    async def test_resolve_pending_interrupt_resumes_atomically_and_idempotently(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        run = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+        )
+        debug_payload = build_debug_payload(
+            run=run,
+            node_events=[],
+            tool_events=[],
+            metrics={"duration_ms": 1.0, "tool_warning_count": 0, "error_count": 0},
+        )
+        await repo.mark_run_awaiting_human(
+            run.id,
+            {
+                "interrupt_id": "interrupt-approve",
+                "allowed_actions": ["approve", "reject"],
+                "resume_token": "resume-token",
+                "resume_version": 3,
+            },
+            debug_trace_json=debug_payload,
+        )
+
+        first = await repo.resolve_pending_interrupt(
+            run.id,
+            interrupt_id="interrupt-approve",
+            action="approve",
+            resume_token="resume-token",
+            resume_version=3,
+            client_metadata={"button": "approve"},
+        )
+        second = await repo.resolve_pending_interrupt(
+            run.id,
+            interrupt_id="interrupt-approve",
+            action="approve",
+            resume_token="resume-token",
+            resume_version=3,
+        )
+
+        assert first.outcome == "resumed"
+        assert first.duplicate is False
+        assert first.run.status == "running"
+        assert first.run.completed_at is None
+        assert first.interrupt["status"] == "resumed"
+        assert first.interrupt["decision"]["action"] == "approve"
+        assert first.run.metrics_json["interrupt_resolution_count"] == 1
+        assert second.outcome == "resumed"
+        assert second.duplicate is True
+        assert second.run.metrics_json["interrupt_resolution_count"] == 1
+        root_events = [
+            event
+            for span in second.run.debug_trace_json["trace"]["spans"]
+            if span["span_id"] == f"run:{run.id}"
+            for event in span["events"]
+        ]
+        interrupt_events = [event for event in root_events if event["name"].startswith("interrupt.")]
+        assert [event["name"] for event in interrupt_events] == ["interrupt.requested", "interrupt.resumed"]
+        assert second.run.debug_trace_json["summary"]["interruptCount"] == 2
+        assert second.run.debug_trace_json["summary"]["lastInterruptStatus"] == "resumed"
+
+        with pytest.raises(AgentRunInterruptError, match="already been resolved"):
+            await repo.resolve_pending_interrupt(
+                run.id,
+                interrupt_id="interrupt-approve",
+                action="reject",
+            )
+
+    @pytest.mark.asyncio
+    async def test_reject_pending_interrupt_marks_run_terminal(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        run = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+        )
+        await repo.mark_run_awaiting_human(
+            run.id,
+            {"interrupt_id": "interrupt-reject", "allowed_actions": ["approve", "reject"]},
+        )
+
+        result = await repo.resolve_pending_interrupt(
+            run.id,
+            interrupt_id="interrupt-reject",
+            action="reject",
+        )
+
+        assert result.outcome == "rejected"
+        assert result.run.status == "rejected"
+        assert result.run.completed_at is not None
+        assert result.run.error_json["code"] == "agent_run_rejected_by_human"
+        assert result.interrupt["status"] == "rejected"
+
+    @pytest.mark.asyncio
     async def test_chat_turns_can_share_one_agent_run_and_null_on_delete(self, repo, sample_thread):
         await repo.seed_builtin_templates()
         template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
@@ -972,6 +1153,46 @@ class TestAgentPatternRepository:
         assert stale_running_after.metrics_json["error_count"] == 1
         assert recent_running_after.status == "running"
         assert stale_completed_after.status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_expire_pending_interrupts_is_separate_from_stale_running_cleanup(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        awaiting = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "awaiting"},
+        )
+        running = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "running"},
+        )
+        now = utc_now()
+        await repo.mark_run_awaiting_human(
+            awaiting.id,
+            {
+                "interrupt_id": "interrupt-expired",
+                "allowed_actions": ["approve", "reject"],
+                "expires_at": iso_utc_z(now - timedelta(minutes=1)),
+            },
+        )
+
+        expired_ids = await repo.expire_pending_interrupts(now=now, thread_id=sample_thread.id)
+        expired_run = await repo.get_run(awaiting.id)
+        running_after_expire = await repo.get_run(running.id)
+
+        assert expired_ids == [awaiting.id]
+        assert expired_run.status == "expired"
+        assert expired_run.completed_at is not None
+        assert expired_run.pending_interrupt_json["status"] == "expired"
+        assert running_after_expire.status == "running"
+
+        failed_ids = await repo.fail_stale_running_runs(now + timedelta(seconds=1), thread_id=sample_thread.id)
+        assert failed_ids == [running.id]
+        assert (await repo.get_run(awaiting.id)).status == "expired"
 
     @pytest.mark.asyncio
     async def test_unsupported_simple_rag_template_is_not_exposed(self, repo):
@@ -2086,10 +2307,112 @@ class TestAgentPatternApi:
         assert summary["error"]["code"] == "router_rag_execution_failed"
         assert "resolved_spec_json" not in summary
 
+    @pytest.mark.asyncio
+    async def test_list_thread_agent_runs_can_filter_awaiting_human(self, api_client, engine, sample_thread):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            running = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            awaiting = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            await repo.mark_run_awaiting_human(
+                awaiting.id,
+                {
+                    "interrupt_id": "api-list-interrupt",
+                    "allowed_actions": ["approve", "reject"],
+                    "title": "Approve web search?",
+                },
+            )
+
+        response = api_client.get(f"/api/threads/{sample_thread.id}/agent-runs?status=awaiting_human")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["status"] == "awaiting_human"
+        assert [run["id"] for run in payload["agent_runs"]] == [awaiting.id]
+        assert running.id not in [run["id"] for run in payload["agent_runs"]]
+        assert payload["agent_runs"][0]["pending_interrupt"]["interrupt_id"] == "api-list-interrupt"
+
     def test_list_thread_agent_runs_returns_404_for_missing_thread(self, api_client):
         response = api_client.get(f"/api/threads/{uuid.uuid4()}/agent-runs")
 
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_agent_run_includes_pending_interrupt_and_resume_is_idempotent(self, api_client, engine, sample_thread):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            run = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            await repo.mark_run_awaiting_human(
+                run.id,
+                {
+                    "interrupt_id": "api-resume-interrupt",
+                    "allowed_actions": ["approve", "reject"],
+                    "resume_token": "api-token",
+                    "resume_version": 2,
+                    "title": "Approve final answer?",
+                },
+            )
+
+        get_response = api_client.get(f"/api/agent-runs/{run.id}")
+        assert get_response.status_code == 200
+        get_payload = get_response.json()["agent_run"]
+        assert get_payload["status"] == "awaiting_human"
+        assert get_payload["completed_at"] is None
+        assert get_payload["pending_interrupt"]["interrupt_id"] == "api-resume-interrupt"
+
+        request_payload = {
+            "action": "approve",
+            "interrupt_id": "api-resume-interrupt",
+            "resume_token": "api-token",
+            "resume_version": 2,
+            "thread_id": sample_thread.id,
+            "client_metadata": {"test": "resume"},
+        }
+        first = api_client.post(f"/api/agent-runs/{run.id}/resume", json=request_payload)
+        second = api_client.post(f"/api/agent-runs/{run.id}/resume", json=request_payload)
+
+        assert first.status_code == 200
+        first_payload = first.json()
+        assert first_payload["outcome"] == "resumed"
+        assert first_payload["duplicate"] is False
+        assert first_payload["agent_run"]["status"] == "running"
+        assert first_payload["agent_run"]["pending_interrupt"]["status"] == "resumed"
+        assert first_payload["agent_run"]["metrics_json"]["interrupt_resolution_count"] == 1
+        assert second.status_code == 200
+        second_payload = second.json()
+        assert second_payload["outcome"] == "resumed"
+        assert second_payload["duplicate"] is True
+        assert second_payload["agent_run"]["metrics_json"]["interrupt_resolution_count"] == 1
 
     @pytest.mark.asyncio
     async def test_get_agent_run_includes_debug_telemetry(self, api_client, engine, sample_thread):

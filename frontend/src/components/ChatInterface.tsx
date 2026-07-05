@@ -1560,6 +1560,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     runDetails={agentRunDetails[msg.agent_run_id]}
                                                     loading={agentRunLoading[msg.agent_run_id]}
                                                     error={agentRunErrors[msg.agent_run_id]}
+                                                    onRunDetailsChange={(run) => {
+                                                        setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
+                                                    }}
                                                 />
                                             </Box>
                                         </details>

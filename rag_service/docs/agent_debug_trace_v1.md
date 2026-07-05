@@ -138,6 +138,18 @@ Tool span attributes:
 - `askpdf.artifact_keys`
 - `askpdf.known_warning_codes`
 
+Interrupt event attributes:
+
+- `askpdf.interrupt.id`
+- `askpdf.interrupt.gate_id`
+- `askpdf.node.id`
+- `askpdf.interrupt.type`
+- `askpdf.interrupt.status`
+- `askpdf.interrupt.action`
+- `askpdf.interrupt.requested_at`
+- `askpdf.interrupt.expires_at`
+- `askpdf.interrupt.resume_version`
+
 ## Span Events
 
 Generic event names:
@@ -156,9 +168,22 @@ Generic event names:
 - `warning`: real runtime/tool warning codes.
 - `skipped`: skipped node status and `askpdf.skip_reason`.
 - `exception`: failed runtime/tool information.
+- `interrupt.requested`: a HITL gate paused the run and requested a human
+  decision.
+- `interrupt.resumed`: a human decision allowed execution to continue.
+- `interrupt.rejected`: a human decision rejected the proposed action and ended
+  the run.
+- `interrupt.expired`: the pending interrupt expired before an accepted resume
+  decision.
 
 Skips are not warnings. A skipped Plan-and-Execute worker should have
 `status: "skipped"` and a `skipped` span event.
+
+Interrupt events are attached to the root run span so a paused/resumed run keeps
+one continuous trace. Event `input` may include bounded `title`, `prompt`,
+`body`, and `input_summary`. Event `output` may include bounded proposed action,
+tool, memory, final-answer previews, and decision metadata. Resume tokens are
+not stored in trace events.
 
 ## Retrieval Data
 

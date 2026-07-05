@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.agent_patterns.debug_trace import build_debug_graph
-from app.agent_patterns.repository import AgentPatternRepository
+from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
     PLAN_EXECUTE_RAG_AGENT_ID,
@@ -31,6 +31,16 @@ class TemplateValidationRequest(BaseModel):
 
 class ThreadAgentConfigValidationRequest(BaseModel):
     overrides: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRunResumeRequest(BaseModel):
+    action: str = Field(..., min_length=1)
+    interrupt_id: str = Field(..., min_length=1)
+    edited_payload: Optional[Dict[str, Any]] = None
+    client_metadata: Optional[Dict[str, Any]] = None
+    resume_token: Optional[str] = None
+    resume_version: Optional[int] = None
+    thread_id: Optional[str] = None
 
 
 def _template_payload(template) -> Dict[str, Any]:
@@ -91,6 +101,11 @@ def _turn_summary_payload(turn) -> Dict[str, Any]:
     }
 
 
+def _pending_interrupt_payload(run) -> Dict[str, Any] | None:
+    pending = run.pending_interrupt_json if isinstance(run.pending_interrupt_json, dict) else None
+    return dict(pending) if pending else None
+
+
 def _run_payload(run, turns=None) -> Dict[str, Any]:
     turns = turns or []
     payload = {
@@ -103,6 +118,7 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "resolved_spec_json": run.resolved_spec_json,
         "status": run.status,
         "checkpoint_thread_id": run.checkpoint_thread_id,
+        "pending_interrupt": _pending_interrupt_payload(run),
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
         "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,
         "error_json": run.error_json,
@@ -121,6 +137,7 @@ def _run_summary_payload(run) -> Dict[str, Any]:
         "template_id": run.template_id,
         "template_version_id": run.template_version_id,
         "status": run.status,
+        "pending_interrupt": _pending_interrupt_payload(run),
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
         "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,
         "metrics": {
@@ -237,16 +254,21 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
 
 
 @router.get("/threads/{thread_id}/agent-runs")
-async def list_thread_agent_runs(thread_id: str, limit: int = Query(20, ge=1, le=100)):
+async def list_thread_agent_runs(
+    thread_id: str,
+    limit: int = Query(20, ge=1, le=100),
+    status: Optional[str] = Query(None),
+):
     thread = await get_thread(thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
     repo = AgentPatternRepository()
-    runs = await repo.list_runs_for_thread(thread_id, limit=limit)
+    runs = await repo.list_runs_for_thread(thread_id, limit=limit, status=status)
     return {
         "thread_id": thread_id,
         "limit": limit,
+        "status": status,
         "agent_runs": [_run_summary_payload(run) for run in runs],
     }
 
@@ -259,3 +281,33 @@ async def get_agent_run(run_id: str):
         raise HTTPException(status_code=404, detail="Agent run not found")
     turns = await repo.list_chat_turns_for_run(run.id)
     return {"agent_run": _run_payload(run, turns)}
+
+
+@router.post("/agent-runs/{run_id}/resume")
+async def resume_agent_run(run_id: str, req: AgentRunResumeRequest):
+    repo = AgentPatternRepository()
+    try:
+        result = await repo.resolve_pending_interrupt(
+            run_id,
+            interrupt_id=req.interrupt_id,
+            action=req.action,
+            edited_payload=req.edited_payload,
+            client_metadata=req.client_metadata,
+            resume_token=req.resume_token,
+            resume_version=req.resume_version,
+            expected_thread_id=req.thread_id,
+        )
+    except AgentRunInterruptError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    turns = await repo.list_chat_turns_for_run(result.run.id)
+    return {
+        "agent_run": _run_payload(result.run, turns),
+        "interrupt": result.interrupt,
+        "outcome": result.outcome,
+        "duplicate": result.duplicate,
+    }

@@ -297,6 +297,32 @@ export interface AgentRunDebug {
   };
 }
 
+export type AgentRunResumeAction = 'approve' | 'reject' | 'edit' | 'continue_without';
+
+export interface AgentRunPendingInterrupt {
+  interrupt_id: string;
+  gate_id?: string | null;
+  node_id?: string | null;
+  type?: string | null;
+  status?: 'pending' | 'resumed' | 'rejected' | 'expired' | string;
+  requested_at?: string | null;
+  expires_at?: string | null;
+  default_action?: AgentRunResumeAction | string | null;
+  allowed_actions?: AgentRunResumeAction[] | string[];
+  prompt?: string | null;
+  title?: string | null;
+  body?: string | null;
+  input_summary?: Record<string, any> | string | null;
+  proposed_action?: Record<string, any> | string | null;
+  proposed_tool?: Record<string, any> | string | null;
+  proposed_memory?: Record<string, any> | string | null;
+  proposed_final_answer?: string | null;
+  resume_token?: string | null;
+  resume_version?: number | null;
+  decision?: Record<string, any> | null;
+  [key: string]: any;
+}
+
 export interface AgentRunDetails {
   id: string;
   thread_id: string;
@@ -308,6 +334,7 @@ export interface AgentRunDetails {
   error_json?: Record<string, any> | null;
   started_at?: string;
   completed_at?: string | null;
+  pending_interrupt?: AgentRunPendingInterrupt | null;
   debug?: AgentRunDebug | null;
   turns?: {
     id: string;
@@ -601,6 +628,32 @@ export async function getAgentRun(runId: string): Promise<AgentRunDetails> {
   return data.agent_run;
 }
 
+export async function resumeAgentRun(
+  runId: string,
+  payload: {
+    action: AgentRunResumeAction;
+    interrupt_id: string;
+    edited_payload?: Record<string, any>;
+    client_metadata?: Record<string, any>;
+    resume_token?: string;
+    resume_version?: number;
+    thread_id?: string;
+  }
+): Promise<{
+  agent_run: AgentRunDetails;
+  interrupt: AgentRunPendingInterrupt;
+  outcome: string;
+  duplicate: boolean;
+}> {
+  const res = await fetch(`${API_BASE}/api/agent-runs/${runId}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function threadChat(
   threadId: string,
   question: string,
@@ -628,6 +681,7 @@ export async function threadChat(
   agent_run_turn_kind?: string;
   agent_run_sequence?: number | null;
   agent_trace_refs?: AgentTraceRefs | null;
+  pending_interrupt?: AgentRunPendingInterrupt | null;
   agent_pattern_id?: string;
   agent_pattern_version?: number | string;
   route?: string;
