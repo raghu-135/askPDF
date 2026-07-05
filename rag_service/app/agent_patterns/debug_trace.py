@@ -158,6 +158,11 @@ def _llm_completed_event(summary: Any) -> Optional[Dict[str, Any]]:
                 "llm.reasoning_chars": llm.get("reasoning_chars"),
             }
         ),
+        "output": _clean_dict(
+            {
+                "reasoning_preview": _bounded_value(llm.get("reasoning_preview")),
+            }
+        ),
     }
 
 
@@ -235,6 +240,68 @@ def _artifacts_from_refs(refs: Any) -> List[Dict[str, Any]]:
         }
         artifacts.append(artifact)
     return artifacts
+
+
+def _first_number(*values: Any) -> int:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _llm_usage_metrics(spans: List[Dict[str, Any]]) -> Dict[str, int]:
+    metrics = {
+        "llm_span_count": 0,
+        "llm_token_count_prompt": 0,
+        "llm_token_count_completion": 0,
+        "llm_token_count_total": 0,
+        "llm_token_count_reasoning": 0,
+        "llm_token_count_cached": 0,
+        "llm_retry_count": 0,
+    }
+    for span in spans:
+        attributes = _as_dict(span.get("attributes"))
+        completed_events = [
+            event
+            for event in _as_list(span.get("events"))
+            if event.get("name") == "llm.completed"
+        ]
+        retry_events = [
+            event
+            for event in _as_list(span.get("events"))
+            if event.get("name") == "llm.retry"
+        ]
+        if not completed_events and not retry_events and "llm.model_name" not in attributes:
+            continue
+        metrics["llm_span_count"] += 1
+        metrics["llm_retry_count"] += _first_number(attributes.get("llm.retry_count"), len(retry_events))
+        for event in completed_events:
+            event_attributes = _as_dict(event.get("attributes"))
+            metrics["llm_token_count_prompt"] += _first_number(
+                event_attributes.get("llm.token_count.prompt"),
+                attributes.get("llm.token_count.prompt"),
+            )
+            metrics["llm_token_count_completion"] += _first_number(
+                event_attributes.get("llm.token_count.completion"),
+                attributes.get("llm.token_count.completion"),
+            )
+            metrics["llm_token_count_total"] += _first_number(
+                event_attributes.get("llm.token_count.total"),
+                attributes.get("llm.token_count.total"),
+            )
+            metrics["llm_token_count_reasoning"] += _first_number(
+                event_attributes.get("llm.token_count.reasoning"),
+                attributes.get("llm.token_count.reasoning"),
+            )
+            metrics["llm_token_count_cached"] += _first_number(
+                event_attributes.get("llm.token_count.cached"),
+                attributes.get("llm.token_count.cached"),
+            )
+    return {key: value for key, value in metrics.items() if value}
 
 
 def _node_span(
@@ -478,6 +545,7 @@ def build_debug_trace(
             if isinstance(link, dict):
                 links.append({"span_id": span.get("span_id"), **link})
         artifacts.extend(_artifacts_from_refs(_as_dict(span.get("output")).get("refs")))
+    trace_metrics = {**metrics, **_llm_usage_metrics(spans)}
 
     return {
         "schema_version": TRACE_SCHEMA_VERSION,
@@ -494,13 +562,8 @@ def build_debug_trace(
         "completed_at": completed_at,
         "duration_ms": metrics.get("duration_ms"),
         "attributes": spans[0]["attributes"],
-        "metrics": metrics,
+        "metrics": trace_metrics,
         "spans": spans,
         "links": links,
         "artifacts": artifacts,
-        "raw": {
-            "node_events": node_events,
-            "tool_events": tool_events,
-            "error": error,
-        },
     }

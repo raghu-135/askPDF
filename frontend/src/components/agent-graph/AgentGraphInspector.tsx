@@ -18,6 +18,14 @@ const withoutInternalTraceFields = (value: Record<string, any>) => {
   return rest;
 };
 
+const tokenValue = (value: unknown) => (
+  typeof value === 'number' || typeof value === 'string' ? String(value) : undefined
+);
+
+const booleanLabel = (value: unknown) => (
+  typeof value === 'boolean' ? (value ? 'yes' : 'no') : undefined
+);
+
 export default function AgentGraphInspector({ selection }: { selection: AgentGraphSelection }) {
   const [tab, setTab] = useState<'details' | 'raw'>('details');
 
@@ -56,21 +64,22 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
   const nodeElapsed = formatDurationMs(node.elapsedMs);
   const skipReason = formatSkipReason(node.skipReason);
   const statusLabel = node.status === 'skipped' ? skipReason || 'Skipped' : node.status;
+  const llmSummary = node.llmSummary || {};
+  const tokenCounts = llmSummary.token_counts && typeof llmSummary.token_counts === 'object'
+    ? llmSummary.token_counts as Record<string, unknown>
+    : {};
+  const retryAttempts = Array.isArray(llmSummary.retry_attempts)
+    ? llmSummary.retry_attempts.filter((attempt): attempt is Record<string, any> => attempt && typeof attempt === 'object')
+    : [];
   const toolTraceSpans = node.toolSummaries
     .map((tool) => tool.traceSpan)
     .filter((span): span is Record<string, any> => Boolean(span));
-  const hasTracePayload = Boolean(node.traceSpans?.length || toolTraceSpans.length);
-  const rawPayload = hasTracePayload
-    ? {
-      trace_spans: node.traceSpans || [],
-      tool_trace_spans: toolTraceSpans,
-      graph_node_rows: node.rawEvents.map(withoutInternalTraceFields),
-      graph_tool_rows: node.toolSummaries.map((tool) => withoutInternalTraceFields(tool.raw)),
-    }
-    : {
-      node_events: node.rawEvents,
-      tool_events: node.toolSummaries.map((tool) => tool.raw),
-    };
+  const rawPayload = {
+    trace_spans: node.traceSpans || [],
+    tool_trace_spans: toolTraceSpans,
+    node_rows: node.rawEvents.map(withoutInternalTraceFields),
+    tool_rows: node.toolSummaries.map((tool) => withoutInternalTraceFields(tool.raw)),
+  };
   return (
     <Box sx={{ p: 1, borderRadius: 1, bgcolor: sectionBg }}>
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
@@ -117,6 +126,58 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
               <DetailLine label="Section" value={typeof node.promptSummary?.section === 'string' ? node.promptSummary.section : undefined} />
               <DetailLine label="Prompt chars" value={typeof node.promptSummary?.prompt_chars === 'number' ? node.promptSummary.prompt_chars : undefined} />
               <TraceObject value={node.promptSummary} />
+            </InspectorSection>
+          )}
+          {hasValue(node.llmSummary) && (
+            <InspectorSection title="LLM">
+              <DetailLine label="Model" value={typeof llmSummary.model_name === 'string' ? llmSummary.model_name : undefined} />
+              <DetailLine label="Response chars" value={tokenValue(llmSummary.response_chars)} />
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
+                {tokenValue(tokenCounts.prompt) && <Chip size="small" variant="outlined" label={`prompt ${tokenValue(tokenCounts.prompt)}`} />}
+                {tokenValue(tokenCounts.completion) && <Chip size="small" variant="outlined" label={`completion ${tokenValue(tokenCounts.completion)}`} />}
+                {tokenValue(tokenCounts.total) && <Chip size="small" color="primary" variant="outlined" label={`total ${tokenValue(tokenCounts.total)}`} />}
+                {tokenValue(tokenCounts.reasoning) && <Chip size="small" variant="outlined" label={`reasoning ${tokenValue(tokenCounts.reasoning)}`} />}
+                {tokenValue(tokenCounts.cached) && <Chip size="small" variant="outlined" label={`cached ${tokenValue(tokenCounts.cached)}`} />}
+                {tokenValue(llmSummary.retry_count) && <Chip size="small" color={Number(llmSummary.retry_count) > 0 ? 'warning' : 'default'} variant="outlined" label={`retries ${tokenValue(llmSummary.retry_count)}`} />}
+              </Box>
+              <DetailLine label="Reasoning available" value={booleanLabel(llmSummary.reasoning_available)} />
+              <DetailLine label="Reasoning format" value={typeof llmSummary.reasoning_format === 'string' ? llmSummary.reasoning_format : undefined} />
+              <DetailLine label="Reasoning chars" value={tokenValue(llmSummary.reasoning_chars)} />
+              {typeof llmSummary.reasoning_preview === 'string' && (
+                <DetailLine
+                  label="Reasoning preview"
+                  value={(
+                    <Box
+                      component="span"
+                      sx={{
+                        display: 'block',
+                        mt: 0.5,
+                        p: 0.75,
+                        borderRadius: 1,
+                        bgcolor: 'rgba(0,0,0,0.04)',
+                        color: 'text.primary',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {llmSummary.reasoning_preview}
+                    </Box>
+                  )}
+                />
+              )}
+              {retryAttempts.length > 0 && (
+                <Box sx={{ mt: 0.75 }}>
+                  {retryAttempts.map((attempt, index) => (
+                    <Typography key={`llm-retry-${index}`} variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                      Retry {attempt.attempt ?? index + 1}
+                      {attempt.delay_ms ? `, delay ${attempt.delay_ms}ms` : ''}
+                      {attempt.http_status_code ? `, HTTP ${attempt.http_status_code}` : ''}
+                      {attempt.reason ? `, ${attempt.reason}` : ''}
+                      {attempt.exception_type ? `, ${attempt.exception_type}` : ''}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
             </InspectorSection>
           )}
           {node.toolSummaries.length > 0 && (

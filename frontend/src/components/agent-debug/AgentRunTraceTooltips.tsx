@@ -116,3 +116,26 @@ export const TraceToolsTooltip = ({ tools }: { tools: TraceToolView[] }) => (
     })}
   </TraceTooltipList>
 );
+
+export const TraceLlmUsageTooltip = ({ metrics }: { metrics: Record<string, any> }) => {
+  const rows = [
+    ['LLM spans', metrics.llm_span_count],
+    ['Prompt tokens', metrics.llm_token_count_prompt],
+    ['Completion tokens', metrics.llm_token_count_completion],
+    ['Reasoning tokens', metrics.llm_token_count_reasoning],
+    ['Cached tokens', metrics.llm_token_count_cached],
+    ['Total tokens', metrics.llm_token_count_total],
+    ['Retries', metrics.llm_retry_count],
+  ].filter(([, value]) => Number.isFinite(Number(value)) && Number(value) > 0);
+
+  return (
+    <TraceTooltipList title="LLM token usage" emptyText="No LLM token usage recorded.">
+      {rows.map(([label, value]) => (
+        <Typography key={String(label)} variant="caption" sx={{ display: 'block', opacity: 0.9 }}>
+          <Box component="span" sx={{ fontWeight: 700 }}>{label}: </Box>
+          {Number(value).toLocaleString()}
+        </Typography>
+      ))}
+    </TraceTooltipList>
+  );
+};

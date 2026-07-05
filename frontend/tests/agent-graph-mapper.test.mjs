@@ -8,14 +8,14 @@ test('router graph maps conditional route edges and highlights selected route', 
     getAgentGraphSpec({ pattern_type: 'router_rag_agent' }),
     {
       route: 'document',
-      nodeEvents: [
+      nodeRows: [
         { node: 'context_loader', elapsed_ms: 2 },
         { node: 'router', elapsed_ms: 5, route: 'document' },
         { node: 'retrieval_worker', elapsed_ms: 9 },
         { node: 'synthesizer', elapsed_ms: 11 },
         { node: 'finalizer', elapsed_ms: 1 },
       ],
-      toolEvents: [
+      toolRows: [
         { tool_name: 'search_documents', caller_node: 'retrieval_worker', ok: true, elapsed_ms: 8 },
       ],
     },
@@ -37,7 +37,7 @@ test('plan execute graph marks planner plan and skipped workers', () => {
     getAgentGraphSpec({ pattern_type: 'plan_execute_rag_agent' }),
     {
       route: 'execute',
-      nodeEvents: [
+      nodeRows: [
         { node: 'context_loader', elapsed_ms: 2 },
         { node: 'planner', elapsed_ms: 4, route: 'execute', execution_plan: ['retrieval_worker'] },
         { node: 'retrieval_worker', elapsed_ms: 8 },
@@ -45,7 +45,7 @@ test('plan execute graph marks planner plan and skipped workers', () => {
         { node: 'timeline_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
         { node: 'web_worker', elapsed_ms: 1, skipped: true, skip_reason: 'web_search_disabled' },
       ],
-      toolEvents: [],
+      toolRows: [],
     },
   );
 
@@ -66,11 +66,21 @@ test('graph mapper accepts trace-native graph rows', () => {
     getAgentGraphSpec({ pattern_type: 'router_rag_agent' }),
     {
       route: 'document',
-      graphNodeRows: [
-        { node: 'router', route: 'document', elapsed_ms: 4 },
+      nodeRows: [
+        {
+          node: 'router',
+          route: 'document',
+          elapsed_ms: 4,
+          llm_summary: {
+            model_name: 'gpt-test',
+            token_counts: { total: 42 },
+            reasoning_available: true,
+            retry_count: 1,
+          },
+        },
         { node: 'retrieval_worker', elapsed_ms: 9 },
       ],
-      graphToolRows: [
+      toolRows: [
         { tool_name: 'search_documents', caller_node: 'retrieval_worker', ok: true, source_count: 2 },
       ],
     },
@@ -83,4 +93,6 @@ test('graph mapper accepts trace-native graph rows', () => {
   assert.equal(retrievalNode?.status, 'active');
   assert.equal(retrievalNode?.sourceCount, 2);
   assert.equal(retrievalNode?.toolSummaries.length, 1);
+  assert.equal(graph.nodes.find((node) => node.id === 'router')?.llmSummary?.model_name, 'gpt-test');
+  assert.equal(graph.nodes.find((node) => node.id === 'router')?.llmSummary?.token_counts.total, 42);
 });

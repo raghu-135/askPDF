@@ -96,11 +96,58 @@ const llmResultFromSpan = (span: AgentTraceSpan) => {
   };
 };
 
+const llmSummaryFromSpan = (span: AgentTraceSpan) => {
+  const attributes = asObject(span.attributes);
+  const completed = asArray(span.events).find((event) => event.name === 'llm.completed');
+  const completedAttributes = asObject(completed?.attributes);
+  const completedOutput = asObject(completed?.output);
+  const retryAttempts = asArray(span.events)
+    .filter((event) => event.name === 'llm.retry')
+    .map((event) => {
+      const retryAttributes = asObject(event.attributes);
+      return {
+        attempt: retryAttributes['llm.retry.attempt'],
+        delay_ms: retryAttributes['llm.retry.delay_ms'],
+        reason: retryAttributes['llm.retry.reason'],
+        http_status_code: retryAttributes['http.status_code'],
+        exception_type: retryAttributes['exception.type'],
+        exception_message: retryAttributes['exception.message'],
+      };
+    });
+  const tokenCounts = {
+    prompt: completedAttributes['llm.token_count.prompt'] ?? attributes['llm.token_count.prompt'],
+    completion: completedAttributes['llm.token_count.completion'] ?? attributes['llm.token_count.completion'],
+    total: completedAttributes['llm.token_count.total'] ?? attributes['llm.token_count.total'],
+    reasoning: completedAttributes['llm.token_count.reasoning'] ?? attributes['llm.token_count.reasoning'],
+    cached: completedAttributes['llm.token_count.cached'] ?? attributes['llm.token_count.cached'],
+  };
+  const retryCount = attributes['llm.retry_count'] ?? (retryAttempts.length > 0 ? retryAttempts.length : undefined);
+  const summary = {
+    model_name: completedAttributes['llm.model_name'] ?? attributes['llm.model_name'],
+    response_chars: completedAttributes['llm.response_chars'] ?? attributes['llm.response_chars'],
+    token_counts: Object.fromEntries(Object.entries(tokenCounts).filter(([, value]) => value !== undefined && value !== null)),
+    reasoning_available: completedAttributes['llm.reasoning_available'],
+    reasoning_format: completedAttributes['llm.reasoning_format'],
+    reasoning_chars: completedAttributes['llm.reasoning_chars'],
+    reasoning_preview: completedOutput.reasoning_preview,
+    retry_count: retryCount,
+    retry_attempts: retryAttempts,
+  };
+  const hasCompleted = Boolean(completed);
+  const hasAttributes = Object.values(summary).some((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    if (value && typeof value === 'object') return Object.keys(value).length > 0;
+    return value !== undefined && value !== null && value !== '';
+  });
+  return hasCompleted || retryAttempts.length > 0 || hasAttributes ? summary : undefined;
+};
+
 const graphNodeRowFromSpan = (span: AgentTraceSpan): Record<string, any> => {
   const raw = asObject(span.raw);
   if (raw.node || raw.name) {
     return {
       ...raw,
+      llm_summary: llmSummaryFromSpan(span),
       __trace_span: span,
     };
   }
@@ -125,6 +172,7 @@ const graphNodeRowFromSpan = (span: AgentTraceSpan): Record<string, any> => {
     output_preview: output.value,
     prompt_summary: promptSummaryFromSpan(span),
     llm_result_summary: llmResultFromSpan(span),
+    llm_summary: llmSummaryFromSpan(span),
     warnings: asArray(span.events)
       .filter((event) => event.name === 'warning')
       .map((event) => asObject(event.attributes)['warning.code'])
@@ -178,16 +226,12 @@ const getTraceToolSpans = (trace?: AgentDebugTrace): AgentTraceSpan[] => (
 
 const getRunNodeRows = (runDetails: AgentRunDetails): Record<string, any>[] => {
   const trace = getRunTrace(runDetails);
-  const traceRows = getTraceNodeSpans(trace).map(graphNodeRowFromSpan);
-  if (traceRows.length > 0) return traceRows;
-  return asArray(runDetails.debug?.node_events);
+  return getTraceNodeSpans(trace).map(graphNodeRowFromSpan);
 };
 
 const getRunToolRows = (runDetails: AgentRunDetails): Record<string, any>[] => {
   const trace = getRunTrace(runDetails);
-  const traceRows = getTraceToolSpans(trace).map(graphToolRowFromSpan);
-  if (traceRows.length > 0) return traceRows;
-  return asArray(runDetails.debug?.tool_events);
+  return getTraceToolSpans(trace).map(graphToolRowFromSpan);
 };
 
 const nodeViewFromRow = (row: Record<string, any>): TraceNodeView => ({
@@ -232,15 +276,15 @@ export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView => 
     ? new Set(runDetails.resolved_spec_json.config.allowed_tool_ids.filter(Boolean)).size
     : undefined;
   const usedNodeCount = nodes.filter((node) => !node.skipped).length;
-  const usedToolCount = Number(metrics.tool_event_count ?? runDetails.debug?.tool_event_count ?? tools.length ?? 0);
-  const warningCount = Number(metrics.tool_warning_count ?? runDetails.debug?.tool_warning_count ?? 0);
-  const errorCount = Number(metrics.error_count ?? runDetails.debug?.error_count ?? metrics.tool_error_count ?? runDetails.debug?.tool_error_count ?? 0);
+  const usedToolCount = Number(metrics.tool_event_count ?? tools.length ?? 0);
+  const warningCount = Number(metrics.tool_warning_count ?? 0);
+  const errorCount = Number(metrics.error_count ?? metrics.tool_error_count ?? 0);
   const error = debug?.error;
 
   return {
     trace,
-    route: attributes['askpdf.route'] || debug?.route || metrics.route,
-    routeReason: attributes['askpdf.route_reason'] || debug?.route_reason,
+    route: attributes['askpdf.route'] || metrics.route,
+    routeReason: attributes['askpdf.route_reason'],
     metrics,
     nodes,
     tools,

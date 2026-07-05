@@ -12,7 +12,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent_patterns.router_runtime import handle_router_rag_chat
-from app.agent_patterns.graph import NodeRegistry, TemplateCompiler
+from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result_metadata
 from app.agent_patterns.graph import build_planner_prompt, infer_required_plan_steps, normalize_execution_plan
 from app.agent_patterns.debug_trace import build_debug_trace
 from app.agent_patterns.metrics import build_run_metrics
@@ -147,6 +147,7 @@ class TestAgentRunMetrics:
                             "reasoning_available": True,
                             "reasoning_format": "structured",
                             "reasoning_chars": 12,
+                            "reasoning_preview": "Short reasoning",
                             "retry_count": 1,
                             "retry_attempts": [
                                 {
@@ -188,6 +189,13 @@ class TestAgentRunMetrics:
         assert router_span["attributes"]["llm.model_name"] == "test-llm"
         assert router_span["attributes"]["llm.token_count.total"] == 18
         assert router_span["attributes"]["llm.retry_count"] == 1
+        assert trace["metrics"]["llm_span_count"] == 1
+        assert trace["metrics"]["llm_token_count_prompt"] == 11
+        assert trace["metrics"]["llm_token_count_completion"] == 7
+        assert trace["metrics"]["llm_token_count_total"] == 18
+        assert trace["metrics"]["llm_token_count_reasoning"] == 3
+        assert trace["metrics"]["llm_token_count_cached"] == 2
+        assert trace["metrics"]["llm_retry_count"] == 1
         retry_event = next(event for event in router_span["events"] if event["name"] == "llm.retry")
         assert retry_event["attributes"]["llm.retry.attempt"] == 1
         assert retry_event["attributes"]["llm.retry.delay_ms"] == 2000
@@ -196,9 +204,27 @@ class TestAgentRunMetrics:
         assert llm_event["attributes"]["llm.response_chars"] == 42
         assert llm_event["attributes"]["llm.token_count.reasoning"] == 3
         assert llm_event["attributes"]["llm.reasoning_format"] == "structured"
+        assert llm_event["output"]["reasoning_preview"] == "Short reasoning"
         tool_span = next(span for span in trace["spans"] if span["span_id"] == "tool:search_documents:0")
         assert tool_span["start_time"] == "2026-07-04T02:30:09Z"
         assert tool_span["end_time"] == "2026-07-04T02:30:09.002000Z"
+
+    def test_llm_result_metadata_includes_bounded_reasoning_preview(self):
+        reasoning = "Reasoning detail. " * 200
+        summary = _llm_result_metadata(
+            SimpleNamespace(content="answer", usage_metadata={}, response_metadata={}),
+            normalized_response={
+                "reasoning": reasoning,
+                "reasoning_available": True,
+                "reasoning_format": "structured",
+            },
+        )
+
+        assert summary["reasoning_available"] is True
+        assert summary["reasoning_format"] == "structured"
+        assert summary["reasoning_chars"] == len(reasoning)
+        assert summary["reasoning_preview"].startswith("Reasoning detail.")
+        assert len(summary["reasoning_preview"]) <= 1803
 
     def test_build_debug_trace_bounds_preview_values_but_preserves_raw_events(self):
         long_text = "A" * 5000
@@ -246,7 +272,7 @@ class TestAgentRunMetrics:
         ref = node_span["output"]["refs"]["document_matches"][0]
         assert len(ref["preview"]) <= 903
         assert len(ref["text"]) <= 903
-        assert trace["raw"]["node_events"][0]["output_refs"]["document_matches"][0]["text"] == long_text
+        assert node_span["raw"]["output_refs"]["document_matches"][0]["text"] == long_text
 
     def test_build_debug_trace_v1_shape_for_direct_tool_plan_and_failed_runs(self):
         run = SimpleNamespace(
@@ -285,8 +311,8 @@ class TestAgentRunMetrics:
         )
 
         assert trace["schema_version"] == 1
-        assert trace["raw"]["node_events"][0]["node"] == "planner"
         span_ids = {span["span_id"]: span for span in trace["spans"]}
+        assert span_ids["node:planner:0"]["raw"]["node"] == "planner"
         assert span_ids["run:run-shape"]["events"][0]["name"] == "exception"
         assert span_ids["run:run-shape"]["events"][0]["attributes"]["askpdf.error.retryable"] is True
         assert span_ids["node:planner:0"]["events"][0]["name"] == "decision.made"
@@ -325,8 +351,7 @@ class TestAgentRunMetrics:
         for field in schema["required"]:
             assert field in trace
         assert trace["schema_version"] == 1
-        assert trace["raw"]["node_events"][0]["node"] == "router"
-        assert trace["raw"]["tool_events"] == []
+        assert "raw" not in trace
 
         for span in trace["spans"]:
             for field in span_schema["required"]:
@@ -1967,16 +1992,9 @@ class TestAgentPatternApi:
         assert payload["debug"]["metrics"]["node_event_count"] == 1
         assert payload["debug"]["metrics"]["node_elapsed_ms"] == {"router": 4.5}
         assert payload["debug"]["metrics"]["tool_elapsed_ms"] == 12.3
-        assert payload["debug"]["node_events"] == [{"node": "router", "route": "web", "elapsed_ms": 4.5}]
-        assert payload["debug"]["tool_events"][0]["tool_name"] == "search_web"
-        assert payload["debug"]["tool_events"][0]["tool_id"] == "live_web_recon"
-        assert payload["debug"]["tool_events"][0]["tool_category"] == "web"
-        assert payload["debug"]["tool_events"][0]["tool_display_name"] == "Internet Search"
-        assert payload["debug"]["tool_events"][0]["artifact_keys"] == ["web_sources"]
-        assert "web_search_disabled" in payload["debug"]["tool_events"][0]["known_warning_codes"]
-        assert payload["debug"]["tool_event_count"] == 1
-        assert payload["debug"]["tool_warning_count"] == 0
-        assert payload["debug"]["tool_error_count"] == 0
+        assert "node_events" not in payload["debug"]
+        assert "tool_events" not in payload["debug"]
+        assert "tool_event_count" not in payload["debug"]
         trace = payload["debug"]["trace"]
         assert trace["schema_version"] == 1
         assert trace["trace_id"] == run.id
@@ -1988,16 +2006,21 @@ class TestAgentPatternApi:
         assert trace["attributes"]["session.id"] == sample_thread.id
         assert trace["attributes"]["askpdf.route"] == "web"
         assert trace["attributes"]["askpdf.route_reason"] == "Needs live evidence."
-        assert trace["raw"]["node_events"] == [{"node": "router", "route": "web", "elapsed_ms": 4.5}]
-        assert trace["raw"]["tool_events"][0]["tool_name"] == "search_web"
         span_ids = {span["span_id"]: span for span in trace["spans"]}
         assert span_ids[f"run:{run.id}"]["kind"] == "AGENT"
         assert span_ids["node:router:0"]["kind"] == "AGENT"
+        assert span_ids["node:router:0"]["raw"] == {"node": "router", "route": "web", "elapsed_ms": 4.5}
         assert span_ids["node:router:0"]["parent_span_id"] == f"run:{run.id}"
         assert span_ids["node:router:0"]["attributes"]["askpdf.route"] == "web"
         assert any(event["name"] == "decision.made" for event in span_ids["node:router:0"]["events"])
         assert span_ids["tool:search_web:0"]["parent_span_id"] == f"run:{run.id}"
         assert span_ids["tool:search_web:0"]["attributes"]["tool.id"] == "live_web_recon"
+        assert span_ids["tool:search_web:0"]["raw"]["tool_name"] == "search_web"
+        assert span_ids["tool:search_web:0"]["raw"]["tool_id"] == "live_web_recon"
+        assert span_ids["tool:search_web:0"]["raw"]["tool_category"] == "web"
+        assert span_ids["tool:search_web:0"]["raw"]["tool_display_name"] == "Internet Search"
+        assert span_ids["tool:search_web:0"]["raw"]["artifact_keys"] == ["web_sources"]
+        assert "web_search_disabled" in span_ids["tool:search_web:0"]["raw"]["known_warning_codes"]
         assert any(event["name"] == "tool.completed" for event in span_ids["tool:search_web:0"]["events"])
 
     @pytest.mark.asyncio
@@ -2041,12 +2064,11 @@ class TestAgentPatternApi:
         assert payload["debug"]["chat_turn_id"] is None
         assert payload["debug"]["error"]["code"] == "agent_run_failed"
         assert payload["debug"]["metrics"]["error_count"] == 1
-        assert payload["debug"]["error_count"] == 1
+        assert "error_count" not in payload["debug"]
         trace = payload["debug"]["trace"]
         assert trace["schema_version"] == 1
         assert trace["status"] == "failed"
-        assert trace["raw"]["node_events"] == []
-        assert trace["raw"]["tool_events"] == []
+        assert "raw" not in trace
         root_span = trace["spans"][0]
         assert root_span["span_id"] == f"run:{run.id}"
         assert root_span["status"] == "failed"

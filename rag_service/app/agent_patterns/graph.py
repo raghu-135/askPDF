@@ -263,6 +263,7 @@ def _llm_result_metadata(
         "reasoning_available": normalized.get("reasoning_available"),
         "reasoning_format": normalized.get("reasoning_format"),
         "reasoning_chars": len(reasoning) if reasoning else None,
+        "reasoning_preview": compact_preview(reasoning, limit=1800) if reasoning else None,
     }
     return {key: value for key, value in summary.items() if value not in (None, "", {}, [])}
 

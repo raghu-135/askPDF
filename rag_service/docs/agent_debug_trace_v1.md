@@ -1,9 +1,9 @@
 # Agent Debug Trace v1
 
 `debug.trace` is the backend-owned normalized debug document returned by
-`GET /api/agent-runs/{id}`. It is additive: existing `debug.node_events` and
-`debug.tool_events` remain available for older clients and for raw escape-hatch
-debugging.
+`GET /api/agent-runs/{id}`. The debug UI renders this normalized trace directly.
+Each span preserves the original runtime event for that unit of work under
+`span.raw` for escape-hatch debugging and trace reconstruction.
 
 The v1 trace is inspired by OpenTelemetry spans, LangSmith runs, and
 OpenInference AI span conventions, but it is not an OTLP export format.
@@ -37,7 +37,6 @@ Top-level fields:
 - `spans`: root, node, and tool spans.
 - `links`: flattened span links to refs/artifacts.
 - `artifacts`: flattened artifact refs derived from span outputs.
-- `raw`: preserved raw `node_events`, `tool_events`, and run error.
 
 ## Span Shape
 
@@ -175,6 +174,20 @@ Supported `llm.completed` attributes:
 - `llm.reasoning_chars`
 - `llm.retry_count`
 
+The `llm.completed` event may also include `output.reasoning_preview`, a bounded
+preview of provider-supplied reasoning text when the model/server exposes it.
+The full reasoning body is not stored in the normalized trace.
+
+Trace `metrics` also includes aggregate LLM usage when available:
+
+- `llm_span_count`
+- `llm_token_count_prompt`
+- `llm_token_count_completion`
+- `llm_token_count_total`
+- `llm_token_count_reasoning`
+- `llm_token_count_cached`
+- `llm_retry_count`
+
 Supported `llm.retry` attributes:
 
 - `llm.retry.attempt`
@@ -187,15 +200,12 @@ Supported `llm.retry` attributes:
 ## Size Guardrails
 
 Generated trace `input.value`, `output.value`, `input.refs`, `output.refs`, and
-tool output refs are compacted recursively. Raw escape-hatch payloads under
-`debug.trace.raw` preserve the original node/tool event bodies for compatibility
-and deeper debugging.
+tool output refs are compacted recursively. Span-level `raw` payloads preserve
+the original runtime event for deeper debugging.
 
 ## Compatibility Rules
 
-- `debug.trace` is preferred by new UI code.
-- `debug.node_events` and `debug.tool_events` remain unchanged.
-- `debug.trace.raw.node_events` and `debug.trace.raw.tool_events` preserve the
-  raw events used to build the normalized trace.
-- Unknown or missing `debug.trace` should fall back to legacy debug fields.
+- `debug.trace` is the public debug rendering contract.
+- Each span may include `raw`, the original runtime event used to build that
+  normalized span.
 - New trace fields should be additive within `schema_version: 1`.

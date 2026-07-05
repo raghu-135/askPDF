@@ -106,10 +106,10 @@ const getNodeIdFromEvent = (event: Record<string, any>) => (
   typeof event.node === 'string' ? event.node : typeof event.name === 'string' ? event.name : ''
 );
 
-const getExecutionPlan = (overlay: AgentGraphRuntimeOverlay, nodeEvents: Record<string, any>[]) => {
+const getExecutionPlan = (overlay: AgentGraphRuntimeOverlay, nodeRows: Record<string, any>[]) => {
   if (Array.isArray(overlay.executionPlan)) return overlay.executionPlan.filter((item): item is string => typeof item === 'string');
-  for (let index = nodeEvents.length - 1; index >= 0; index -= 1) {
-    const plan = nodeEvents[index]?.execution_plan;
+  for (let index = nodeRows.length - 1; index >= 0; index -= 1) {
+    const plan = nodeRows[index]?.execution_plan;
     if (Array.isArray(plan)) return plan.filter((item): item is string => typeof item === 'string');
   }
   return [];
@@ -160,8 +160,8 @@ export const buildAgentGraph = (
   graphSpec: AgentPatternGraphSpec,
   overlay: AgentGraphRuntimeOverlay = {},
 ) => {
-  const nodeRows = asArray(overlay.graphNodeRows || overlay.nodeEvents);
-  const toolRows = asArray(overlay.graphToolRows || overlay.toolEvents);
+  const nodeRows = asArray(overlay.nodeRows);
+  const toolRows = asArray(overlay.toolRows);
   const executionPlan = getExecutionPlan(overlay, nodeRows);
   const selectedRoute = overlay.route || overlay.metrics?.route;
 
@@ -209,6 +209,7 @@ export const buildAgentGraph = (
         outputPreview: latestEvent.output_preview,
         promptSummary: latestEvent.prompt_summary && typeof latestEvent.prompt_summary === 'object' ? latestEvent.prompt_summary : undefined,
         llmResultSummary: latestEvent.llm_result_summary && typeof latestEvent.llm_result_summary === 'object' ? latestEvent.llm_result_summary : undefined,
+        llmSummary: latestEvent.llm_summary && typeof latestEvent.llm_summary === 'object' ? latestEvent.llm_summary : undefined,
         toolSummaries,
         warningCount: toolSummaries.reduce((count, tool) => count + tool.warnings.length, 0)
           + rawEvents.reduce((count, event) => count + (Array.isArray(event.warnings) ? event.warnings.length : 0), 0),

@@ -20,7 +20,6 @@ import type { TraceRunView } from '../agent-debug/agent-trace-projection';
 import type {
   AgentGraphMode,
   AgentGraphNode as AgentGraphNodeModel,
-  AgentGraphRuntimeOverlay,
   AgentGraphSelection,
 } from './agent-graph-types';
 
@@ -33,13 +32,13 @@ const nodeTypes = {
 const NODE_WIDTH = 230;
 const NODE_HEIGHT = 118;
 
-const overlayFromTraceView = (traceView?: TraceRunView): AgentGraphRuntimeOverlay | undefined => (
+const overlayFromTraceView = (traceView?: TraceRunView) => (
   traceView
     ? {
       route: traceView.route,
       routeReason: traceView.routeReason,
-      graphNodeRows: traceView.nodes.map((node) => node.raw),
-      graphToolRows: traceView.tools.map((tool) => tool.raw),
+      nodeRows: traceView.nodes.map((node) => node.raw),
+      toolRows: traceView.tools.map((tool) => tool.raw),
       errors: traceView.errors,
       metrics: traceView.metrics,
     }
@@ -92,13 +91,11 @@ const layoutGraph = async (
 function AgentGraphCanvasInner({
   resolvedSpec,
   templateId,
-  overlay,
   traceView,
   mode,
 }: {
   resolvedSpec?: Record<string, any>;
   templateId?: string;
-  overlay?: AgentGraphRuntimeOverlay;
   traceView?: TraceRunView;
   mode: AgentGraphMode;
 }) {
@@ -109,8 +106,8 @@ function AgentGraphCanvasInner({
 
   const graph = useMemo(() => {
     const graphSpec = getAgentGraphSpec(resolvedSpec, templateId);
-    return buildAgentGraph(graphSpec, overlayFromTraceView(traceView) || overlay || {});
-  }, [overlay, resolvedSpec, templateId, traceView]);
+    return buildAgentGraph(graphSpec, overlayFromTraceView(traceView) || {});
+  }, [resolvedSpec, templateId, traceView]);
   const layoutDirection = mode === 'run-debug' ? 'DOWN' : 'RIGHT';
 
   const flowEdges = useMemo((): Edge[] => graph.edges.map((edge) => {
@@ -263,7 +260,6 @@ function AgentGraphCanvasInner({
 export default function AgentGraphCanvas(props: {
   resolvedSpec?: Record<string, any>;
   templateId?: string;
-  overlay?: AgentGraphRuntimeOverlay;
   traceView?: TraceRunView;
   mode?: AgentGraphMode;
 }) {

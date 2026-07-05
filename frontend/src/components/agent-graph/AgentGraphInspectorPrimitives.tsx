@@ -30,6 +30,7 @@ const SECTION_HELP: Record<string, string> = {
   Decision: 'Route, execution plan, and LLM decision data produced by router or planner nodes.',
   Input: 'State, refs, and bounded previews available before this node ran.',
   Prompt: 'Rendered LLM prompt summary for nodes that call the model.',
+  LLM: 'Model usage, reasoning metadata, token counts, and retry attempts captured for this node.',
   Tools: 'Tool calls made by this worker node, including inputs, results, refs, and warnings.',
   Output: 'State, refs, and bounded previews produced by this node.',
   Warnings: 'Real warning codes from tool/runtime contracts. Skips and planner notes are not warnings.',

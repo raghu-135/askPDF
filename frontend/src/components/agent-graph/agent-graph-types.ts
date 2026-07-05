@@ -58,6 +58,7 @@ export interface AgentGraphNode {
   outputPreview?: unknown;
   promptSummary?: Record<string, any>;
   llmResultSummary?: Record<string, any>;
+  llmSummary?: Record<string, any>;
   layoutDirection?: 'RIGHT' | 'DOWN';
   toolSummaries: AgentGraphToolSummary[];
   warningCount: number;
@@ -85,10 +86,8 @@ export interface AgentGraphRuntimeOverlay {
   route?: string;
   routeReason?: string;
   executionPlan?: string[];
-  graphNodeRows?: Record<string, any>[];
-  graphToolRows?: Record<string, any>[];
-  nodeEvents?: Record<string, any>[];
-  toolEvents?: Record<string, any>[];
+  nodeRows?: Record<string, any>[];
+  toolRows?: Record<string, any>[];
   errors?: Record<string, any>[];
   metrics?: Record<string, any>;
 }

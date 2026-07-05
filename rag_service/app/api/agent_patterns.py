@@ -123,13 +123,6 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
             "route_reason": metadata.get("agent_route_reason"),
             "error": error,
             "metrics": debug_metrics,
-            "node_events": node_events,
-            "tool_events": enriched_tool_events,
-            "node_event_count": debug_metrics.get("node_event_count", 0),
-            "tool_event_count": debug_metrics.get("tool_event_count", 0),
-            "tool_warning_count": debug_metrics.get("tool_warning_count", 0),
-            "tool_error_count": debug_metrics.get("tool_error_count", 0),
-            "error_count": debug_metrics.get("error_count", 0),
         }
         payload["debug"]["trace"] = build_debug_trace(
             run=run,
@@ -150,13 +143,6 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
             "route_reason": None,
             "error": run.error_json,
             "metrics": metrics,
-            "node_events": [],
-            "tool_events": [],
-            "node_event_count": metrics.get("node_event_count", 0),
-            "tool_event_count": metrics.get("tool_event_count", 0),
-            "tool_warning_count": metrics.get("tool_warning_count", 0),
-            "tool_error_count": metrics.get("tool_error_count", 0),
-            "error_count": metrics.get("error_count", 1),
         }
         payload["debug"]["trace"] = build_debug_trace(
             run=run,

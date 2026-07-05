@@ -208,23 +208,6 @@ export interface Message {
   agent_route_reason?: string;
 }
 
-export interface AgentToolEvent {
-  tool_name?: string;
-  tool_id?: string;
-  tool_category?: string;
-  tool_display_name?: string;
-  artifact_keys?: string[];
-  known_warning_codes?: string[];
-  caller_node?: string;
-  ok?: boolean;
-  elapsed_ms?: number;
-  result_chars?: number;
-  source_count?: number;
-  warnings?: string[];
-  error?: Record<string, any> | null;
-  [key: string]: any;
-}
-
 export interface AgentTraceEvent {
   name: string;
   attributes?: Record<string, any>;
@@ -282,13 +265,6 @@ export interface AgentRunDebug {
   error?: Record<string, any> | null;
   metrics?: Record<string, any>;
   trace?: AgentDebugTrace;
-  node_events?: Record<string, any>[];
-  tool_events?: AgentToolEvent[];
-  node_event_count?: number;
-  tool_event_count?: number;
-  tool_warning_count?: number;
-  tool_error_count?: number;
-  error_count?: number;
 }
 
 export interface AgentRunDetails {

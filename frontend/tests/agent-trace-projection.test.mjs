@@ -26,15 +26,6 @@ const traceBackedRun = {
   template_id: 'plan_execute_rag_agent',
   resolved_spec_json: resolvedSpec,
   debug: {
-    route: 'raw-fallback-route',
-    metrics: {
-      duration_ms: 25,
-      tool_event_count: 1,
-      tool_warning_count: 0,
-      error_count: 0,
-    },
-    node_events: [{ node: 'raw_fallback_router', elapsed_ms: 99 }],
-    tool_events: [{ tool_name: 'raw_fallback_tool', caller_node: 'raw_fallback_router' }],
     trace: {
       schema_version: 1,
       trace_id: 'run-1',
@@ -51,6 +42,13 @@ const traceBackedRun = {
         tool_event_count: 1,
         tool_warning_count: 0,
         error_count: 0,
+        llm_span_count: 1,
+        llm_token_count_prompt: 100,
+        llm_token_count_completion: 25,
+        llm_token_count_total: 125,
+        llm_token_count_reasoning: 9,
+        llm_token_count_cached: 11,
+        llm_retry_count: 1,
       },
       spans: [
         {
@@ -94,6 +92,34 @@ const traceBackedRun = {
               output: {
                 system_message: 'You are a strict planner.',
                 preview: 'Plan safely.',
+              },
+            },
+            {
+              name: 'llm.retry',
+              attributes: {
+                'llm.retry.attempt': 1,
+                'llm.retry.delay_ms': 2000,
+                'llm.retry.reason': 'Retryable OpenAI-compatible API error (429)',
+                'http.status_code': 429,
+                'exception.type': 'RuntimeError',
+              },
+            },
+            {
+              name: 'llm.completed',
+              attributes: {
+                'llm.model_name': 'gpt-test',
+                'llm.response_chars': 42,
+                'llm.token_count.prompt': 100,
+                'llm.token_count.completion': 25,
+                'llm.token_count.total': 125,
+                'llm.token_count.reasoning': 9,
+                'llm.token_count.cached': 11,
+                'llm.reasoning_available': true,
+                'llm.reasoning_format': 'structured',
+                'llm.reasoning_chars': 300,
+              },
+              output: {
+                reasoning_preview: 'I inspected the retrieved evidence and selected the document path.',
               },
             },
           ],
@@ -201,15 +227,11 @@ const traceBackedRun = {
           },
         },
       ],
-      raw: {
-        node_events: [],
-        tool_events: [],
-      },
     },
   },
 };
 
-test('trace projection prefers debug.trace spans over raw debug events', () => {
+test('trace projection builds run view from debug.trace spans', () => {
   const view = buildRunTraceView(traceBackedRun);
 
   assert.equal(view.route, 'execute');
@@ -218,6 +240,25 @@ test('trace projection prefers debug.trace spans over raw debug events', () => {
   assert.deepEqual(view.tools.map((tool) => tool.name), ['search_documents']);
   assert.equal(view.nodes[0].span?.span_id, 'node:planner:0');
   assert.equal(view.tools[0].span?.span_id, 'tool:search_documents:0');
+});
+
+test('trace projection exposes llm usage and retry metadata on node rows', () => {
+  const view = buildRunTraceView(traceBackedRun);
+  const planner = view.nodes.find((node) => node.id === 'planner');
+
+  assert.equal(planner?.raw.llm_summary.model_name, 'gpt-test');
+  assert.equal(planner?.raw.llm_summary.response_chars, 42);
+  assert.equal(planner?.raw.llm_summary.token_counts.prompt, 100);
+  assert.equal(planner?.raw.llm_summary.token_counts.completion, 25);
+  assert.equal(planner?.raw.llm_summary.token_counts.total, 125);
+  assert.equal(planner?.raw.llm_summary.token_counts.reasoning, 9);
+  assert.equal(planner?.raw.llm_summary.token_counts.cached, 11);
+  assert.equal(planner?.raw.llm_summary.reasoning_available, true);
+  assert.equal(planner?.raw.llm_summary.reasoning_format, 'structured');
+  assert.equal(planner?.raw.llm_summary.reasoning_chars, 300);
+  assert.equal(planner?.raw.llm_summary.reasoning_preview, 'I inspected the retrieved evidence and selected the document path.');
+  assert.equal(planner?.raw.llm_summary.retry_attempts.length, 1);
+  assert.equal(planner?.raw.llm_summary.retry_attempts[0].http_status_code, 429);
 });
 
 test('trace summary counts non-skipped nodes and available graph nodes', () => {
@@ -229,6 +270,8 @@ test('trace summary counts non-skipped nodes and available graph nodes', () => {
   assert.equal(view.availableToolCount, 2);
   assert.equal(view.warningCount, 0);
   assert.equal(view.errorCount, 0);
+  assert.equal(view.metrics.llm_token_count_total, 125);
+  assert.equal(view.metrics.llm_retry_count, 1);
 });
 
 test('trace export returns only normalized trace json', () => {
@@ -240,34 +283,4 @@ test('trace export returns only normalized trace json', () => {
   assert.equal(exported.spans.length, traceBackedRun.debug.trace.spans.length);
   assert.equal(exported.node_events, undefined);
   assert.equal(exported.tool_events, undefined);
-});
-
-test('raw debug fallback still works without debug.trace', () => {
-  const rawFallbackRun = {
-    id: 'run-raw-fallback',
-    template_id: 'router_rag_agent',
-    resolved_spec_json: resolvedSpec,
-    debug: {
-      route: 'document',
-      node_events: [
-        { node: 'router', route: 'document', elapsed_ms: 3 },
-        { node: 'retrieval_worker', elapsed_ms: 8 },
-      ],
-      tool_events: [
-        { tool_name: 'search_documents', caller_node: 'retrieval_worker', ok: true },
-      ],
-      tool_event_count: 1,
-      tool_warning_count: 0,
-      tool_error_count: 0,
-    },
-  };
-
-  const view = buildRunTraceView(rawFallbackRun);
-
-  assert.equal(view.route, 'document');
-  assert.deepEqual(view.nodes.map((node) => node.id), ['router', 'retrieval_worker']);
-  assert.deepEqual(view.tools.map((tool) => tool.name), ['search_documents']);
-  assert.equal(view.usedNodeCount, 2);
-  assert.equal(view.usedToolCount, 1);
-  assert.equal(buildTraceExportJson(view), '');
 });
