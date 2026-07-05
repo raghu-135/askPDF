@@ -68,8 +68,7 @@ export const getRunTrace = (runDetails: AgentRunDetails): AgentDebugTrace | unde
 export const getRunDebugMetrics = (runDetails: AgentRunDetails) => {
   const trace = getRunTrace(runDetails);
   if (trace?.metrics && typeof trace.metrics === 'object') return trace.metrics;
-  const debug = runDetails.debug;
-  return debug?.metrics || runDetails.metrics_json || {};
+  return runDetails.metrics_json || {};
 };
 
 const promptSummaryFromSpan = (span: AgentTraceSpan) => {
@@ -143,14 +142,6 @@ const llmSummaryFromSpan = (span: AgentTraceSpan) => {
 };
 
 const graphNodeRowFromSpan = (span: AgentTraceSpan): Record<string, any> => {
-  const raw = asObject(span.raw);
-  if (raw.node || raw.name) {
-    return {
-      ...raw,
-      llm_summary: llmSummaryFromSpan(span),
-      __trace_span: span,
-    };
-  }
   const attributes = asObject(span.attributes);
   const input = asObject(span.input);
   const output = asObject(span.output);
@@ -183,13 +174,6 @@ const graphNodeRowFromSpan = (span: AgentTraceSpan): Record<string, any> => {
 };
 
 const graphToolRowFromSpan = (span: AgentTraceSpan): Record<string, any> => {
-  const raw = asObject(span.raw);
-  if (raw.tool_name) {
-    return {
-      ...raw,
-      __trace_span: span,
-    };
-  }
   const attributes = asObject(span.attributes);
   const input = asObject(span.input);
   const output = asObject(span.output);
@@ -234,6 +218,14 @@ const getRunToolRows = (runDetails: AgentRunDetails): Record<string, any>[] => {
   return getTraceToolSpans(trace).map(graphToolRowFromSpan);
 };
 
+const getTraceErrors = (trace?: AgentDebugTrace): Record<string, any>[] => (
+  asArray(trace?.spans)
+    .flatMap((span) => asArray(span.events))
+    .filter((event) => event.name === 'exception')
+    .map((event) => asObject(event.attributes))
+    .filter((attributes) => Object.keys(attributes).length > 0)
+);
+
 const nodeViewFromRow = (row: Record<string, any>): TraceNodeView => ({
   id: String(row.node || row.name || 'unknown_node'),
   status: typeof row.status === 'string' ? row.status : undefined,
@@ -266,7 +258,6 @@ export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView => 
   const trace = getRunTrace(runDetails);
   const metrics = getRunDebugMetrics(runDetails);
   const attributes = asObject(trace?.attributes);
-  const debug = runDetails.debug;
   const nodes = getRunNodeRows(runDetails).map(nodeViewFromRow);
   const tools = getRunToolRows(runDetails).map(toolViewFromRow);
   const availableNodeCount = Array.isArray(runDetails.resolved_spec_json?.config?.graph?.nodes)
@@ -279,7 +270,6 @@ export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView => 
   const usedToolCount = Number(metrics.tool_event_count ?? tools.length ?? 0);
   const warningCount = Number(metrics.tool_warning_count ?? 0);
   const errorCount = Number(metrics.error_count ?? metrics.tool_error_count ?? 0);
-  const error = debug?.error;
 
   return {
     trace,
@@ -294,7 +284,7 @@ export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView => 
     availableToolCount,
     warningCount: Number.isFinite(warningCount) ? warningCount : 0,
     errorCount: Number.isFinite(errorCount) ? errorCount : 0,
-    errors: error && typeof error === 'object' ? [error] : [],
+    errors: getTraceErrors(trace),
   };
 };
 

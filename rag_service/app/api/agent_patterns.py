@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Query
@@ -62,6 +63,30 @@ def _version_payload(version) -> Dict[str, Any]:
     }
 
 
+def _trace_for_response(
+    trace: Dict[str, Any],
+    *,
+    chat_turn_id: str | None,
+    metrics: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    response_trace = deepcopy(trace)
+    trace_metrics = response_trace.get("metrics") if isinstance(response_trace.get("metrics"), dict) else {}
+    response_trace["metrics"] = {**trace_metrics, **(metrics or {})}
+    response_trace["chat_turn_id"] = chat_turn_id
+
+    attributes = dict(response_trace.get("attributes") or {})
+    attributes["askpdf.chat_turn.id"] = chat_turn_id
+    response_trace["attributes"] = attributes
+
+    for span in response_trace.get("spans") or []:
+        if isinstance(span, dict) and span.get("parent_span_id") is None:
+            span_attributes = dict(span.get("attributes") or {})
+            span_attributes["askpdf.chat_turn.id"] = chat_turn_id
+            span["attributes"] = span_attributes
+            break
+    return response_trace
+
+
 def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
     payload = {
         "id": run.id,
@@ -83,42 +108,13 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
         metadata = turn_payload.get("metadata") if isinstance(turn_payload.get("metadata"), dict) else {}
         metrics = run.metrics_json if isinstance(run.metrics_json, dict) else {}
         trace = metadata.get("agent_debug_trace") if isinstance(metadata.get("agent_debug_trace"), dict) else None
-        trace_metrics = trace.get("metrics") if isinstance(trace, dict) and isinstance(trace.get("metrics"), dict) else {}
-        debug_metrics = {**trace_metrics, **metrics}
         if trace is not None:
-            trace = {**trace, "metrics": debug_metrics}
-            trace["chat_turn_id"] = chat_turn.id
-            trace_attributes = dict(trace.get("attributes") or {})
-            trace_attributes["askpdf.chat_turn.id"] = chat_turn.id
-            trace["attributes"] = trace_attributes
-            for span in trace.get("spans") or []:
-                if isinstance(span, dict) and span.get("parent_span_id") is None:
-                    attributes = dict(span.get("attributes") or {})
-                    attributes["askpdf.chat_turn.id"] = chat_turn.id
-                    span["attributes"] = attributes
-                    break
-        error = metadata.get("agent_error") or run.error_json
-        payload["debug"] = {
-            "chat_turn_id": chat_turn.id,
-            "chat_turn_status": chat_turn.status,
-            "route": metadata.get("agent_route"),
-            "route_reason": metadata.get("agent_route_reason"),
-            "error": error,
-            "metrics": debug_metrics,
-        }
-        if trace is not None:
-            payload["debug"]["trace"] = trace
+            payload["debug"] = {
+                "trace": _trace_for_response(trace, chat_turn_id=chat_turn.id, metrics=metrics),
+            }
     elif run.status == "failed":
         metrics = run.metrics_json if isinstance(run.metrics_json, dict) else {}
-        payload["debug"] = {
-            "chat_turn_id": None,
-            "chat_turn_status": None,
-            "route": metrics.get("route"),
-            "route_reason": None,
-            "error": run.error_json,
-            "metrics": metrics,
-        }
-        payload["debug"]["trace"] = build_debug_trace(
+        trace = build_debug_trace(
             run=run,
             chat_turn=None,
             node_events=[],
@@ -128,6 +124,9 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
             route_reason=None,
             error=run.error_json,
         )
+        payload["debug"] = {
+            "trace": _trace_for_response(trace, chat_turn_id=None, metrics=metrics),
+        }
     return payload
 
 

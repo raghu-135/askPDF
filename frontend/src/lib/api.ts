@@ -253,17 +253,10 @@ export interface AgentDebugTrace {
   spans?: AgentTraceSpan[];
   links?: Record<string, any>[];
   artifacts?: Record<string, any>[];
-  raw?: Record<string, any>;
   [key: string]: any;
 }
 
 export interface AgentRunDebug {
-  chat_turn_id?: string;
-  chat_turn_status?: string;
-  route?: string;
-  route_reason?: string;
-  error?: Record<string, any> | null;
-  metrics?: Record<string, any>;
   trace?: AgentDebugTrace;
 }
 

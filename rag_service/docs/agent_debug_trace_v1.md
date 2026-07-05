@@ -16,8 +16,10 @@ shape for consumers.
 ## Goals
 
 - Give the UI one generic trace shape for Router RAG and Plan-and-Execute RAG.
-- Preserve raw runtime events while exposing stable spans, events, attributes,
-  inputs, outputs, links, and artifacts.
+- Expose stable spans, events, attributes, inputs, outputs, links, and
+  artifacts for UI/debug consumers.
+- Preserve per-span raw runtime payloads only as an escape hatch for deeper
+  debugging.
 - Represent skipped graph nodes as skipped work, not warnings.
 - Store refs and bounded previews instead of full source bodies.
 - Surface retry telemetry without changing retry behavior.
@@ -60,7 +62,8 @@ Every span uses this neutral shape:
 - `events`: decisions, prompts, tool lifecycle events, warnings, skips, and
   exceptions.
 - `links`: refs extracted from output refs.
-- `raw`: original node/tool event payload for compatibility.
+- `raw`: original node/tool event payload for deeper debugging. Consumers should
+  prefer normalized span fields for rendering and automation.
 
 ## Span Kinds
 
@@ -203,7 +206,7 @@ Generated trace `input.value`, `output.value`, `input.refs`, `output.refs`, and
 tool output refs are compacted recursively. Span-level `raw` payloads preserve
 the original runtime event for deeper debugging.
 
-## Compatibility Rules
+## Evolution Rules
 
 - `debug.trace` is the public debug rendering contract.
 - Each span may include `raw`, the original runtime event used to build that

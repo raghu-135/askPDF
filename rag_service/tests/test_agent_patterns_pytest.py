@@ -2011,18 +2011,15 @@ class TestAgentPatternApi:
         assert payload["id"] == run.id
         assert payload["chat_turn_id"] == turn.id
         assert payload["metrics_json"]["tool_event_count"] == 1
-        assert payload["debug"]["chat_turn_id"] == turn.id
-        assert payload["debug"]["route"] == "web"
-        assert payload["debug"]["route_reason"] == "Needs live evidence."
-        assert payload["debug"]["metrics"]["duration_ms"] == 42.0
-        assert payload["debug"]["metrics"]["route"] == "web"
-        assert payload["debug"]["metrics"]["node_event_count"] == 1
-        assert payload["debug"]["metrics"]["node_elapsed_ms"] == {"router": 4.5}
-        assert payload["debug"]["metrics"]["tool_elapsed_ms"] == 12.3
+        assert set(payload["debug"]) == {"trace"}
         assert "node_events" not in payload["debug"]
         assert "tool_events" not in payload["debug"]
-        assert "tool_event_count" not in payload["debug"]
         trace = payload["debug"]["trace"]
+        assert trace["metrics"]["duration_ms"] == 42.0
+        assert trace["metrics"]["route"] == "web"
+        assert trace["metrics"]["node_event_count"] == 1
+        assert trace["metrics"]["node_elapsed_ms"] == {"router": 4.5}
+        assert trace["metrics"]["tool_elapsed_ms"] == 12.3
         assert trace["schema_version"] == 1
         assert trace["trace_id"] == run.id
         assert trace["run_id"] == run.id
@@ -2088,13 +2085,12 @@ class TestAgentPatternApi:
         assert response.status_code == 200
         payload = response.json()["agent_run"]
         assert payload["status"] == "failed"
-        assert payload["debug"]["chat_turn_id"] is None
-        assert payload["debug"]["error"]["code"] == "agent_run_failed"
-        assert payload["debug"]["metrics"]["error_count"] == 1
-        assert "error_count" not in payload["debug"]
+        assert set(payload["debug"]) == {"trace"}
         trace = payload["debug"]["trace"]
         assert trace["schema_version"] == 1
         assert trace["status"] == "failed"
+        assert trace["chat_turn_id"] is None
+        assert trace["metrics"]["error_count"] == 1
         assert "raw" not in trace
         root_span = trace["spans"][0]
         assert root_span["span_id"] == f"run:{run.id}"
