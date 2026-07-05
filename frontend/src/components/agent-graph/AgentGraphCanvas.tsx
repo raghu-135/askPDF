@@ -222,6 +222,9 @@ function AgentGraphCanvasInner({
           fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
           minZoom={0.55}
           maxZoom={1.8}
+          zoomOnScroll={false}
+          zoomOnPinch
+          preventScrolling={false}
           onNodeClick={(_, node) => setSelection({ kind: 'node', node: node.data as AgentGraphNodeModel })}
           onEdgeClick={(_, edge) => setSelection({ kind: 'edge', edge: edge.data as any })}
           onPaneClick={() => setSelection(null)}
