@@ -68,7 +68,7 @@ async def create_agent_run_record(
             id=run_id,
             thread_id=thread_id,
             template_id=template.id,
-            template_version_id=version.id,
+            metadata_json={"template_version_id": version.id, "template_version": version.version},
             resolved_spec_json=spec,
             status="running",
             started_at=utc_now(),
@@ -793,6 +793,8 @@ class TestAgentPatternRepository:
         assert completed.status == "completed"
         assert completed.metrics_json == {"duration_ms": 12.5}
         assert completed.resolved_spec_json == {"pattern_type": ROUTER_RAG_AGENT_ID}
+        assert completed.metadata_json == {"template_version_id": version.id}
+        assert completed.template_version_id == version.id
 
     @pytest.mark.asyncio
     async def test_chat_turns_can_share_one_agent_run_and_null_on_delete(self, repo, sample_thread):

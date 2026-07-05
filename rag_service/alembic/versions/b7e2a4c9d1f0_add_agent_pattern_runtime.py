@@ -69,7 +69,12 @@ def upgrade() -> None:
         sa.Column("thread_id", sa.String(), nullable=False),
         sa.Column("user_id", sa.String(), nullable=True),
         sa.Column("template_id", sa.String(), nullable=False),
-        sa.Column("template_version_id", sa.String(), nullable=False),
+        sa.Column(
+            "metadata_json",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
         sa.Column(
             "resolved_spec_json",
             postgresql.JSONB(astext_type=sa.Text()),
@@ -89,14 +94,12 @@ def upgrade() -> None:
         ),
         sa.Column("debug_trace_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(["template_id"], ["agent_pattern_templates.id"], ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(["template_version_id"], ["agent_pattern_template_versions.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["thread_id"], ["threads.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("idx_agent_run_thread_started", "agent_runs", ["thread_id", "started_at"], unique=False)
     op.create_index(op.f("ix_agent_runs_status"), "agent_runs", ["status"], unique=False)
     op.create_index(op.f("ix_agent_runs_template_id"), "agent_runs", ["template_id"], unique=False)
-    op.create_index(op.f("ix_agent_runs_template_version_id"), "agent_runs", ["template_version_id"], unique=False)
     op.create_index(op.f("ix_agent_runs_thread_id"), "agent_runs", ["thread_id"], unique=False)
     op.create_index(op.f("ix_agent_runs_user_id"), "agent_runs", ["user_id"], unique=False)
 
@@ -130,7 +133,6 @@ def downgrade() -> None:
 
     op.drop_index(op.f("ix_agent_runs_user_id"), table_name="agent_runs")
     op.drop_index(op.f("ix_agent_runs_thread_id"), table_name="agent_runs")
-    op.drop_index(op.f("ix_agent_runs_template_version_id"), table_name="agent_runs")
     op.drop_index(op.f("ix_agent_runs_template_id"), table_name="agent_runs")
     op.drop_index(op.f("ix_agent_runs_status"), table_name="agent_runs")
     op.drop_index("idx_agent_run_thread_started", table_name="agent_runs")

@@ -72,6 +72,7 @@ class AgentRunService:
             thread_id=thread_id,
             template_id=template.id,
             template_version_id=version.id,
+            template_version=version.version,
             resolved_spec_json=resolved_spec,
         )
 
