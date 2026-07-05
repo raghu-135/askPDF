@@ -226,15 +226,15 @@ class AgentPatternRepository:
         resolved_spec_json: Dict[str, Any],
         user_id: Optional[str] = None,
     ) -> AgentRun:
-        metadata_json: Dict[str, Any] = {"template_version_id": template_version_id}
+        run_metadata_json: Dict[str, Any] = {"template_version_id": template_version_id}
         if template_version is not None:
-            metadata_json["template_version"] = template_version
+            run_metadata_json["template_version"] = template_version
         run = AgentRun(
             id=str(uuid.uuid4()),
             thread_id=thread_id,
             user_id=user_id,
             template_id=template_id,
-            metadata_json=metadata_json,
+            run_metadata_json=run_metadata_json,
             resolved_spec_json=resolved_spec_json,
             status="running",
             started_at=utc_now(),

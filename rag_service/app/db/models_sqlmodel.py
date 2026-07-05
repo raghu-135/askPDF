@@ -287,7 +287,7 @@ class AgentRun(SQLModel, table=True):
     template_id: str = Field(
         sa_column=Column(String, ForeignKey("agent_pattern_templates.id", ondelete="RESTRICT"), index=True)
     )
-    metadata_json: Dict[str, Any] = Field(
+    run_metadata_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
     )
@@ -324,12 +324,12 @@ class AgentRun(SQLModel, table=True):
 
     @property
     def template_version_id(self) -> Optional[str]:
-        metadata = self.metadata_json if isinstance(self.metadata_json, dict) else {}
+        metadata = self.run_metadata_json if isinstance(self.run_metadata_json, dict) else {}
         value = metadata.get("template_version_id")
         return str(value) if value else None
 
     @property
     def template_version(self) -> Optional[int]:
-        metadata = self.metadata_json if isinstance(self.metadata_json, dict) else {}
+        metadata = self.run_metadata_json if isinstance(self.run_metadata_json, dict) else {}
         value = metadata.get("template_version")
         return int(value) if isinstance(value, int) else None

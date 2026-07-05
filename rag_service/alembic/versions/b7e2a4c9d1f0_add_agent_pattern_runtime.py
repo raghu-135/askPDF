@@ -70,7 +70,7 @@ def upgrade() -> None:
         sa.Column("user_id", sa.String(), nullable=True),
         sa.Column("template_id", sa.String(), nullable=False),
         sa.Column(
-            "metadata_json",
+            "run_metadata_json",
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=False,
             server_default=sa.text("'{}'::jsonb"),
