@@ -232,6 +232,7 @@ export interface AgentRunDebug {
   route_reason?: string;
   error?: Record<string, any> | null;
   metrics?: Record<string, any>;
+  trace?: Record<string, any>;
   node_events?: Record<string, any>[];
   tool_events?: AgentToolEvent[];
   node_event_count?: number;

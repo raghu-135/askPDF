@@ -1,0 +1,422 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Mapping, Optional
+
+from app.time_utils import iso_utc_z
+
+
+TRACE_SCHEMA_VERSION = 1
+
+
+def _as_dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> List[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _clean_dict(value: Mapping[str, Any]) -> Dict[str, Any]:
+    return {key: item for key, item in value.items() if item not in (None, "", [], {})}
+
+
+def _span_status(event: Mapping[str, Any]) -> str:
+    if event.get("error") or event.get("ok") is False:
+        return "error"
+    if event.get("status") == "skipped" or event.get("skipped") is True:
+        return "skipped"
+    return str(event.get("status") or "completed")
+
+
+def _node_kind(node: str) -> str:
+    if node in {"router", "planner"}:
+        return "AGENT"
+    if node in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker"}:
+        return "RETRIEVER"
+    return "CHAIN"
+
+
+def _node_display_name(node: str) -> str:
+    labels = {
+        "context_loader": "Context Loader",
+        "router": "Router",
+        "planner": "Planner",
+        "retrieval_worker": "Document Retrieval",
+        "memory_worker": "Memory Retrieval",
+        "timeline_worker": "Timeline Retrieval",
+        "web_worker": "Web Retrieval",
+        "direct_answer": "Direct Answer",
+        "synthesizer": "Synthesizer",
+        "finalizer": "Finalizer",
+    }
+    return labels.get(node, node.replace("_", " ").title())
+
+
+def _tool_kind(event: Mapping[str, Any]) -> str:
+    category = event.get("tool_category")
+    if category in {"document", "memory", "timeline", "web"}:
+        return "RETRIEVER"
+    return "TOOL"
+
+
+def _event_time(started_at: Any, elapsed_ms: Any) -> Optional[str]:
+    # Current persisted raw events carry durations but not per-node start/end timestamps.
+    # Keep timestamp optional rather than inventing misleading values.
+    return None
+
+
+def _warning_events(warnings: Any) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    for warning in _as_list(warnings):
+        if not warning:
+            continue
+        result.append(
+            {
+                "name": "warning",
+                "attributes": {"warning.code": str(warning)},
+            }
+        )
+    return result
+
+
+def _exception_event(error: Any) -> Optional[Dict[str, Any]]:
+    if not error:
+        return None
+    if isinstance(error, dict):
+        attributes = {
+            "exception.type": error.get("type") or error.get("code"),
+            "exception.message": error.get("message") or error.get("raw_message"),
+            "askpdf.error.code": error.get("code"),
+            "askpdf.error.retryable": error.get("retryable"),
+        }
+    else:
+        attributes = {"exception.message": str(error)}
+    return {"name": "exception", "attributes": _clean_dict(attributes)}
+
+
+def _prompt_event(summary: Any) -> Optional[Dict[str, Any]]:
+    data = _as_dict(summary)
+    if not data:
+        return None
+    return {
+        "name": "prompt.rendered",
+        "attributes": _clean_dict(
+            {
+                "prompt.name": data.get("section"),
+                "prompt.chars": data.get("prompt_chars"),
+            }
+        ),
+        "output": _clean_dict(
+            {
+                "system_message": data.get("system_message"),
+                "preview": data.get("preview"),
+            }
+        ),
+    }
+
+
+def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    if event.get("route") or event.get("route_reason") or event.get("execution_plan"):
+        result.append(
+            {
+                "name": "decision.made",
+                "attributes": _clean_dict(
+                    {
+                        "askpdf.route": event.get("route"),
+                        "askpdf.route_reason": event.get("route_reason"),
+                        "askpdf.execution_plan": event.get("execution_plan"),
+                    }
+                ),
+            }
+        )
+    llm_result = _as_dict(event.get("llm_result_summary"))
+    for note in _as_list(llm_result.get("normalization_notes")):
+        result.append(
+            {
+                "name": "normalization.applied",
+                "attributes": {"askpdf.normalization.note": str(note)},
+            }
+        )
+    return result
+
+
+def _span_links_from_refs(refs: Any) -> List[Dict[str, Any]]:
+    data = _as_dict(refs)
+    links: List[Dict[str, Any]] = []
+    for key, value in data.items():
+        if isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, dict):
+                    links.append({"type": key, "ref": item, "index": index})
+        elif isinstance(value, dict):
+            links.append({"type": key, "ref": value})
+    return links
+
+
+def _artifacts_from_refs(refs: Any) -> List[Dict[str, Any]]:
+    artifacts: List[Dict[str, Any]] = []
+    for link in _span_links_from_refs(refs):
+        artifact = {
+            "artifact_id": f"{link['type']}:{len(artifacts)}",
+            "type": link["type"],
+            "ref": link["ref"],
+        }
+        artifacts.append(artifact)
+    return artifacts
+
+
+def _node_span(
+    event: Mapping[str, Any],
+    *,
+    index: int,
+    run_span_id: str,
+) -> Dict[str, Any]:
+    node = str(event.get("node") or event.get("name") or f"node_{index}")
+    span_id = f"node:{node}:{index}"
+    prompt = _prompt_event(event.get("prompt_summary"))
+    exception = _exception_event(event.get("error"))
+    events = [
+        *_decision_events(event),
+        *([prompt] if prompt else []),
+        *_warning_events(event.get("warnings")),
+        *([exception] if exception else []),
+    ]
+    if _span_status(event) == "skipped":
+        events.append(
+            {
+                "name": "skipped",
+                "attributes": _clean_dict({"askpdf.skip_reason": event.get("skip_reason")}),
+            }
+        )
+
+    return {
+        "span_id": span_id,
+        "parent_span_id": run_span_id,
+        "name": _node_display_name(node),
+        "kind": _node_kind(node),
+        "status": _span_status(event),
+        "start_time": None,
+        "end_time": _event_time(None, event.get("elapsed_ms")),
+        "duration_ms": event.get("elapsed_ms"),
+        "attributes": _clean_dict(
+            {
+                "askpdf.node.id": node,
+                "askpdf.node.name": _node_display_name(node),
+                "askpdf.route": event.get("route"),
+                "askpdf.route_reason": event.get("route_reason"),
+                "askpdf.skip_reason": event.get("skip_reason"),
+                "askpdf.execution_plan": event.get("execution_plan"),
+                "askpdf.evidence_chars": event.get("evidence_chars"),
+                "askpdf.answer_chars": event.get("answer_chars"),
+                "askpdf.document_source_count": event.get("document_source_count"),
+                "askpdf.web_source_count": event.get("web_source_count"),
+                "askpdf.used_chat_id_count": event.get("used_chat_id_count"),
+                "askpdf.timeline_event_count": event.get("timeline_event_count"),
+            }
+        ),
+        "input": _clean_dict(
+            {
+                "value": event.get("input_preview"),
+                "refs": event.get("input_refs"),
+                "mime_type": "application/json",
+            }
+        ),
+        "output": _clean_dict(
+            {
+                "value": event.get("output_preview"),
+                "refs": event.get("output_refs"),
+                "mime_type": "application/json",
+            }
+        ),
+        "events": events,
+        "links": _span_links_from_refs(event.get("output_refs")),
+        "raw": dict(event),
+    }
+
+
+def _tool_span(
+    event: Mapping[str, Any],
+    *,
+    index: int,
+    caller_span_by_node: Mapping[str, str],
+    run_span_id: str,
+) -> Dict[str, Any]:
+    tool_name = str(event.get("tool_name") or f"tool_{index}")
+    caller_node = event.get("caller_node")
+    parent_span_id = caller_span_by_node.get(str(caller_node)) or run_span_id
+    span_id = f"tool:{tool_name}:{index}"
+    exception = _exception_event(event.get("error"))
+    events = [
+        {
+            "name": "tool.called",
+            "attributes": _clean_dict(
+                {
+                    "tool.name": tool_name,
+                    "tool.id": event.get("tool_id"),
+                    "askpdf.tool.category": event.get("tool_category"),
+                }
+            ),
+        },
+        {
+            "name": "tool.completed",
+            "attributes": _clean_dict(
+                {
+                    "tool.name": tool_name,
+                    "askpdf.result_chars": event.get("result_chars"),
+                    "askpdf.source_count": event.get("source_count"),
+                    "askpdf.warning_count": len(_as_list(event.get("warnings"))),
+                }
+            ),
+        },
+        *_warning_events(event.get("warnings")),
+        *([exception] if exception else []),
+    ]
+    return {
+        "span_id": span_id,
+        "parent_span_id": parent_span_id,
+        "name": str(event.get("tool_display_name") or tool_name),
+        "kind": _tool_kind(event),
+        "status": "error" if event.get("ok") is False or event.get("error") else "completed",
+        "start_time": None,
+        "end_time": _event_time(None, event.get("elapsed_ms")),
+        "duration_ms": event.get("elapsed_ms"),
+        "attributes": _clean_dict(
+            {
+                "tool.name": tool_name,
+                "tool.id": event.get("tool_id"),
+                "tool.description": event.get("tool_display_name"),
+                "askpdf.tool.category": event.get("tool_category"),
+                "askpdf.caller_node": caller_node,
+                "askpdf.result_chars": event.get("result_chars"),
+                "askpdf.source_count": event.get("source_count"),
+                "askpdf.artifact_keys": event.get("artifact_keys"),
+                "askpdf.known_warning_codes": event.get("known_warning_codes"),
+            }
+        ),
+        "input": _clean_dict(
+            {
+                "value": event.get("tool_input"),
+                "mime_type": "application/json",
+            }
+        ),
+        "output": _clean_dict(
+            {
+                "value": event.get("result_preview"),
+                "refs": event.get("artifact_refs"),
+                "summary": event.get("artifact_summary"),
+                "mime_type": "application/json",
+            }
+        ),
+        "events": events,
+        "links": _span_links_from_refs(event.get("artifact_refs")),
+        "raw": dict(event),
+    }
+
+
+def build_debug_trace(
+    *,
+    run: Any,
+    chat_turn: Any = None,
+    node_events: List[Dict[str, Any]],
+    tool_events: List[Dict[str, Any]],
+    metrics: Dict[str, Any],
+    route: Any = None,
+    route_reason: Any = None,
+    error: Any = None,
+) -> Dict[str, Any]:
+    resolved_spec = _as_dict(getattr(run, "resolved_spec_json", None))
+    config = _as_dict(resolved_spec.get("config"))
+    run_span_id = f"run:{run.id}"
+    trace_id = str(run.id)
+    started_at = iso_utc_z(run.started_at) if getattr(run, "started_at", None) else None
+    completed_at = iso_utc_z(run.completed_at) if getattr(run, "completed_at", None) else None
+
+    spans: List[Dict[str, Any]] = [
+        {
+            "span_id": run_span_id,
+            "parent_span_id": None,
+            "name": "Agent Run",
+            "kind": "AGENT",
+            "status": getattr(run, "status", None),
+            "start_time": started_at,
+            "end_time": completed_at,
+            "duration_ms": metrics.get("duration_ms"),
+            "attributes": _clean_dict(
+                {
+                    "session.id": getattr(run, "thread_id", None),
+                    "user.id": getattr(run, "user_id", None),
+                    "askpdf.run.id": getattr(run, "id", None),
+                    "askpdf.thread.id": getattr(run, "thread_id", None),
+                    "askpdf.chat_turn.id": getattr(chat_turn, "id", None),
+                    "askpdf.template.id": getattr(run, "template_id", None),
+                    "askpdf.template_version.id": getattr(run, "template_version_id", None),
+                    "askpdf.pattern_type": resolved_spec.get("pattern_type"),
+                    "askpdf.route": route or metrics.get("route"),
+                    "askpdf.route_reason": route_reason,
+                    "askpdf.use_web_search": config.get("use_web_search"),
+                    "askpdf.use_reranker": config.get("use_reranker"),
+                    "askpdf.context_window": config.get("context_window"),
+                    "askpdf.warning_count": metrics.get("tool_warning_count"),
+                    "askpdf.error_count": metrics.get("error_count"),
+                }
+            ),
+            "input": {},
+            "output": {},
+            "events": [event for event in [_exception_event(error)] if event],
+            "links": [],
+            "raw": {},
+        }
+    ]
+
+    caller_span_by_node: Dict[str, str] = {}
+    for index, event in enumerate(node_events):
+        span = _node_span(event, index=index, run_span_id=run_span_id)
+        spans.append(span)
+        node = span["attributes"].get("askpdf.node.id")
+        if isinstance(node, str) and node not in caller_span_by_node:
+            caller_span_by_node[node] = span["span_id"]
+
+    for index, event in enumerate(tool_events):
+        spans.append(
+            _tool_span(
+                event,
+                index=index,
+                caller_span_by_node=caller_span_by_node,
+                run_span_id=run_span_id,
+            )
+        )
+
+    links: List[Dict[str, Any]] = []
+    artifacts: List[Dict[str, Any]] = []
+    for span in spans:
+        for link in _as_list(span.get("links")):
+            if isinstance(link, dict):
+                links.append({"span_id": span.get("span_id"), **link})
+        artifacts.extend(_artifacts_from_refs(_as_dict(span.get("output")).get("refs")))
+
+    return {
+        "schema_version": TRACE_SCHEMA_VERSION,
+        "trace_id": trace_id,
+        "run_id": getattr(run, "id", None),
+        "thread_id": getattr(run, "thread_id", None),
+        "chat_turn_id": getattr(chat_turn, "id", None),
+        "user_id": getattr(run, "user_id", None),
+        "template_id": getattr(run, "template_id", None),
+        "template_version_id": getattr(run, "template_version_id", None),
+        "pattern_type": resolved_spec.get("pattern_type"),
+        "status": getattr(run, "status", None),
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "duration_ms": metrics.get("duration_ms"),
+        "attributes": spans[0]["attributes"],
+        "metrics": metrics,
+        "spans": spans,
+        "links": links,
+        "artifacts": artifacts,
+        "raw": {
+            "node_events": node_events,
+            "tool_events": tool_events,
+            "error": error,
+        },
+    }

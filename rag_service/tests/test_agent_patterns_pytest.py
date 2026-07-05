@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent_patterns.router_runtime import handle_router_rag_chat
 from app.agent_patterns.graph import NodeRegistry, TemplateCompiler
 from app.agent_patterns.graph import build_planner_prompt, infer_required_plan_steps, normalize_execution_plan
+from app.agent_patterns.debug_trace import build_debug_trace
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.service import AgentRunService
@@ -64,6 +65,43 @@ class TestAgentRunMetrics:
         assert metrics["error_count"] == 1
         assert metrics["document_source_count"] == 1
         assert metrics["used_chat_id_count"] == 1
+
+    def test_build_debug_trace_represents_skipped_nodes_without_warnings(self):
+        run = SimpleNamespace(
+            id="run-1",
+            thread_id="thread-1",
+            user_id="user-1",
+            template_id=PLAN_EXECUTE_RAG_AGENT_ID,
+            template_version_id=f"{PLAN_EXECUTE_RAG_AGENT_ID}:v1",
+            resolved_spec_json=builtin_plan_execute_rag_spec(),
+            status="completed",
+            started_at=utc_now(),
+            completed_at=utc_now(),
+        )
+
+        trace = build_debug_trace(
+            run=run,
+            chat_turn=SimpleNamespace(id="turn-1"),
+            node_events=[
+                {
+                    "node": "memory_worker",
+                    "status": "skipped",
+                    "skipped": True,
+                    "skip_reason": "not_selected_by_plan",
+                    "elapsed_ms": 0.5,
+                }
+            ],
+            tool_events=[],
+            metrics={"duration_ms": 3.0, "route": "execute", "tool_warning_count": 0, "error_count": 0},
+            route="execute",
+            route_reason="Document evidence is enough.",
+        )
+
+        skipped_span = next(span for span in trace["spans"] if span["span_id"] == "node:memory_worker:0")
+        assert skipped_span["status"] == "skipped"
+        assert skipped_span["attributes"]["askpdf.skip_reason"] == "not_selected_by_plan"
+        assert any(event["name"] == "skipped" for event in skipped_span["events"])
+        assert not any(event["name"] == "warning" for event in skipped_span["events"])
 
 
 class TestRouterRagTemplateValidator:
@@ -1682,6 +1720,28 @@ class TestAgentPatternApi:
         assert payload["debug"]["tool_event_count"] == 1
         assert payload["debug"]["tool_warning_count"] == 0
         assert payload["debug"]["tool_error_count"] == 0
+        trace = payload["debug"]["trace"]
+        assert trace["schema_version"] == 1
+        assert trace["trace_id"] == run.id
+        assert trace["run_id"] == run.id
+        assert trace["thread_id"] == sample_thread.id
+        assert trace["chat_turn_id"] == turn.id
+        assert trace["template_id"] == ROUTER_RAG_AGENT_ID
+        assert trace["pattern_type"] == ROUTER_RAG_AGENT_ID
+        assert trace["attributes"]["session.id"] == sample_thread.id
+        assert trace["attributes"]["askpdf.route"] == "web"
+        assert trace["attributes"]["askpdf.route_reason"] == "Needs live evidence."
+        assert trace["raw"]["node_events"] == [{"node": "router", "route": "web", "elapsed_ms": 4.5}]
+        assert trace["raw"]["tool_events"][0]["tool_name"] == "search_web"
+        span_ids = {span["span_id"]: span for span in trace["spans"]}
+        assert span_ids[f"run:{run.id}"]["kind"] == "AGENT"
+        assert span_ids["node:router:0"]["kind"] == "AGENT"
+        assert span_ids["node:router:0"]["parent_span_id"] == f"run:{run.id}"
+        assert span_ids["node:router:0"]["attributes"]["askpdf.route"] == "web"
+        assert any(event["name"] == "decision.made" for event in span_ids["node:router:0"]["events"])
+        assert span_ids["tool:search_web:0"]["parent_span_id"] == f"run:{run.id}"
+        assert span_ids["tool:search_web:0"]["attributes"]["tool.id"] == "live_web_recon"
+        assert any(event["name"] == "tool.completed" for event in span_ids["tool:search_web:0"]["events"])
 
     @pytest.mark.asyncio
     async def test_get_failed_agent_run_without_turn_includes_error_debug(self, api_client, engine, sample_thread):
@@ -1725,3 +1785,13 @@ class TestAgentPatternApi:
         assert payload["debug"]["error"]["code"] == "agent_run_failed"
         assert payload["debug"]["metrics"]["error_count"] == 1
         assert payload["debug"]["error_count"] == 1
+        trace = payload["debug"]["trace"]
+        assert trace["schema_version"] == 1
+        assert trace["status"] == "failed"
+        assert trace["raw"]["node_events"] == []
+        assert trace["raw"]["tool_events"] == []
+        root_span = trace["spans"][0]
+        assert root_span["span_id"] == f"run:{run.id}"
+        assert root_span["status"] == "failed"
+        assert root_span["events"][0]["name"] == "exception"
+        assert root_span["events"][0]["attributes"]["askpdf.error.code"] == "agent_run_failed"

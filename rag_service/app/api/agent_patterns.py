@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.agent.tool_registry import get_tool_contract_metadata
+from app.agent_patterns.debug_trace import build_debug_trace
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.templates import (
@@ -114,12 +115,13 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
             duration_ms=metrics.get("duration_ms") or 0,
         )
         debug_metrics = {**event_metrics, **metrics}
+        error = metadata.get("agent_error") or run.error_json
         payload["debug"] = {
             "chat_turn_id": chat_turn.id,
             "chat_turn_status": chat_turn.status,
             "route": metadata.get("agent_route"),
             "route_reason": metadata.get("agent_route_reason"),
-            "error": metadata.get("agent_error") or run.error_json,
+            "error": error,
             "metrics": debug_metrics,
             "node_events": node_events,
             "tool_events": enriched_tool_events,
@@ -129,6 +131,16 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
             "tool_error_count": debug_metrics.get("tool_error_count", 0),
             "error_count": debug_metrics.get("error_count", 0),
         }
+        payload["debug"]["trace"] = build_debug_trace(
+            run=run,
+            chat_turn=chat_turn,
+            node_events=node_events,
+            tool_events=enriched_tool_events,
+            metrics=debug_metrics,
+            route=metadata.get("agent_route"),
+            route_reason=metadata.get("agent_route_reason"),
+            error=error,
+        )
     elif run.status == "failed":
         metrics = run.metrics_json if isinstance(run.metrics_json, dict) else {}
         payload["debug"] = {
@@ -146,6 +158,16 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
             "tool_error_count": metrics.get("tool_error_count", 0),
             "error_count": metrics.get("error_count", 1),
         }
+        payload["debug"]["trace"] = build_debug_trace(
+            run=run,
+            chat_turn=None,
+            node_events=[],
+            tool_events=[],
+            metrics=metrics,
+            route=metrics.get("route"),
+            route_reason=None,
+            error=run.error_json,
+        )
     return payload
 
 

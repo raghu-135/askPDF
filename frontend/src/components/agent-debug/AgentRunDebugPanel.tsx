@@ -4,7 +4,7 @@ import { Box, CircularProgress, Typography } from '@mui/material';
 import type { AgentRunDetails } from '../../lib/api';
 import type { AgentGraphRuntimeOverlay } from '../agent-graph/agent-graph-types';
 import AgentRunHeaderChips from './AgentRunHeaderChips';
-import { getRunDebugMetrics } from './agent-debug-utils';
+import { getRunDebugMetrics, getRunNodeEvents, getRunToolEvents, getRunTrace } from './agent-debug-utils';
 
 const AgentGraphCanvas = dynamic(() => import('../agent-graph/AgentGraphCanvas'), { ssr: false });
 
@@ -22,12 +22,13 @@ export default function AgentRunDebugPanel({
   error?: string;
 }) {
   const debug = runDetails?.debug;
+  const trace = runDetails ? getRunTrace(runDetails) : undefined;
   const metrics = runDetails ? getRunDebugMetrics(runDetails) : {};
   const overlay: AgentGraphRuntimeOverlay = {
-    route: debug?.route || metrics.route,
-    routeReason: debug?.route_reason,
-    nodeEvents: debug?.node_events || [],
-    toolEvents: debug?.tool_events || [],
+    route: trace?.attributes?.['askpdf.route'] || debug?.route || metrics.route,
+    routeReason: trace?.attributes?.['askpdf.route_reason'] || debug?.route_reason,
+    nodeEvents: runDetails ? getRunNodeEvents(runDetails) : [],
+    toolEvents: runDetails ? getRunToolEvents(runDetails) : [],
     errors: debug?.error ? [debug.error] : [],
     metrics,
   };
