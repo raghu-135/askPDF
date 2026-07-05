@@ -207,6 +207,63 @@ def _safe_json_object(raw: str) -> Dict[str, Any]:
     return {}
 
 
+def _first_int(*values: Any) -> Optional[int]:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _llm_result_metadata(
+    response: Any,
+    *,
+    model_name: Optional[str] = None,
+    normalized_response: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    usage = getattr(response, "usage_metadata", None)
+    usage = usage if isinstance(usage, dict) else {}
+    response_metadata = getattr(response, "response_metadata", None)
+    response_metadata = response_metadata if isinstance(response_metadata, dict) else {}
+    token_usage = response_metadata.get("token_usage") if isinstance(response_metadata.get("token_usage"), dict) else {}
+    output_tokens_details = token_usage.get("completion_tokens_details") if isinstance(token_usage.get("completion_tokens_details"), dict) else {}
+    input_tokens_details = token_usage.get("prompt_tokens_details") if isinstance(token_usage.get("prompt_tokens_details"), dict) else {}
+    content = getattr(response, "content", "")
+    content_text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=True) if content else ""
+    normalized = normalized_response if isinstance(normalized_response, dict) else {}
+    reasoning = str(normalized.get("reasoning") or "")
+
+    token_counts = {
+        "prompt": _first_int(usage.get("input_tokens"), token_usage.get("prompt_tokens")),
+        "completion": _first_int(usage.get("output_tokens"), token_usage.get("completion_tokens")),
+        "total": _first_int(usage.get("total_tokens"), token_usage.get("total_tokens")),
+        "reasoning": _first_int(
+            usage.get("reasoning_tokens"),
+            token_usage.get("reasoning_tokens"),
+            output_tokens_details.get("reasoning_tokens"),
+        ),
+        "cached": _first_int(
+            usage.get("cached_tokens"),
+            token_usage.get("cached_tokens"),
+            input_tokens_details.get("cached_tokens"),
+        ),
+    }
+    token_counts = {key: value for key, value in token_counts.items() if value is not None}
+
+    summary = {
+        "model_name": model_name or response_metadata.get("model_name") or response_metadata.get("model"),
+        "response_chars": len(content_text),
+        "token_counts": token_counts,
+        "reasoning_available": normalized.get("reasoning_available"),
+        "reasoning_format": normalized.get("reasoning_format"),
+        "reasoning_chars": len(reasoning) if reasoning else None,
+    }
+    return {key: value for key, value in summary.items() if value not in (None, "", {}, [])}
+
+
 def _format_prefetch_summary(bundle: Dict[str, Any]) -> str:
     parts = []
     if bundle.get("recent_history_text"):
@@ -459,6 +516,7 @@ class NodeRegistry:
                 "execution_plan": normalized["execution_plan"],
                 "clarification_option_count": len(normalized.get("clarification_options") or []),
                 "normalization_notes": normalized.get("normalization_notes") or [],
+                "llm": _llm_result_metadata(response, model_name=state.get("llm_model")),
                 **worker_summary,
             },
             "output_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
@@ -509,6 +567,7 @@ class NodeRegistry:
                 "route": route,
                 "route_reason": route_reason,
                 "clarification_option_count": len(clarification_options or []) if route == "clarify" else 0,
+                "llm": _llm_result_metadata(response, model_name=state.get("llm_model")),
             },
             "output_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
         }
@@ -727,6 +786,11 @@ class NodeRegistry:
                 "answer_chars": len(normalized["answer"] or ""),
                 "reasoning_available": bool(normalized["reasoning_available"]),
                 "reasoning_format": normalized["reasoning_format"],
+                "llm": _llm_result_metadata(
+                    response,
+                    model_name=state.get("llm_model"),
+                    normalized_response=normalized,
+                ),
             },
             "answer_chars": len(normalized["answer"] or ""),
             "evidence_chars": len(str(context or "")),

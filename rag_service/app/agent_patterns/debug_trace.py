@@ -118,6 +118,31 @@ def _prompt_event(summary: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _llm_completed_event(summary: Any) -> Optional[Dict[str, Any]]:
+    data = _as_dict(summary)
+    llm = _as_dict(data.get("llm"))
+    if not llm:
+        return None
+    token_counts = _as_dict(llm.get("token_counts"))
+    return {
+        "name": "llm.completed",
+        "attributes": _clean_dict(
+            {
+                "llm.model_name": llm.get("model_name"),
+                "llm.response_chars": llm.get("response_chars"),
+                "llm.token_count.prompt": token_counts.get("prompt"),
+                "llm.token_count.completion": token_counts.get("completion"),
+                "llm.token_count.total": token_counts.get("total"),
+                "llm.token_count.reasoning": token_counts.get("reasoning"),
+                "llm.token_count.cached": token_counts.get("cached"),
+                "llm.reasoning_available": llm.get("reasoning_available"),
+                "llm.reasoning_format": llm.get("reasoning_format"),
+                "llm.reasoning_chars": llm.get("reasoning_chars"),
+            }
+        ),
+    }
+
+
 def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     if event.get("route") or event.get("route_reason") or event.get("execution_plan"):
@@ -178,13 +203,17 @@ def _node_span(
     node = str(event.get("node") or event.get("name") or f"node_{index}")
     span_id = f"node:{node}:{index}"
     prompt = _prompt_event(event.get("prompt_summary"))
+    llm_completed = _llm_completed_event(event.get("llm_result_summary"))
     exception = _exception_event(event.get("error"))
     events = [
         *_decision_events(event),
         *([prompt] if prompt else []),
+        *([llm_completed] if llm_completed else []),
         *_warning_events(event.get("warnings")),
         *([exception] if exception else []),
     ]
+    llm_summary = _as_dict(_as_dict(event.get("llm_result_summary")).get("llm"))
+    token_counts = _as_dict(llm_summary.get("token_counts"))
     if _span_status(event) == "skipped":
         events.append(
             {
@@ -216,6 +245,13 @@ def _node_span(
                 "askpdf.web_source_count": event.get("web_source_count"),
                 "askpdf.used_chat_id_count": event.get("used_chat_id_count"),
                 "askpdf.timeline_event_count": event.get("timeline_event_count"),
+                "llm.model_name": llm_summary.get("model_name"),
+                "llm.response_chars": llm_summary.get("response_chars"),
+                "llm.token_count.prompt": token_counts.get("prompt"),
+                "llm.token_count.completion": token_counts.get("completion"),
+                "llm.token_count.total": token_counts.get("total"),
+                "llm.token_count.reasoning": token_counts.get("reasoning"),
+                "llm.token_count.cached": token_counts.get("cached"),
             }
         ),
         "input": _clean_dict(

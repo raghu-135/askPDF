@@ -123,6 +123,8 @@ Generic event names:
 - `prompt.rendered`: prompt section/name, prompt character count, system message
   preview, and prompt preview.
 - `normalization.applied`: planner normalization/clamp notes.
+- `llm.completed`: model name, response character count, token counts, and
+  reasoning availability when provider metadata exposes them.
 - `tool.called`: tool name, contract ID, and category.
 - `tool.completed`: result character count, source count, and warning count.
 - `warning`: real runtime/tool warning codes.
@@ -145,6 +147,24 @@ Retrieval and tool refs belong in span `input.refs`, `output.refs`, `links`, and
 - Web sources: URL, title, search query, score, searched timestamp.
 
 The trace should not store full source bodies.
+
+## LLM Usage Data
+
+LLM usage fields are optional. They are captured only when the provider response
+or LangChain message exposes them.
+
+Supported `llm.completed` attributes:
+
+- `llm.model_name`
+- `llm.response_chars`
+- `llm.token_count.prompt`
+- `llm.token_count.completion`
+- `llm.token_count.total`
+- `llm.token_count.reasoning`
+- `llm.token_count.cached`
+- `llm.reasoning_available`
+- `llm.reasoning_format`
+- `llm.reasoning_chars`
 
 ## Compatibility Rules
 

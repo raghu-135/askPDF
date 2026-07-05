@@ -91,6 +91,28 @@ class TestAgentRunMetrics:
                     "elapsed_ms": 0.5,
                     "start_time": "2026-07-04T02:30:08.000Z",
                     "end_time": "2026-07-04T02:30:08.001Z",
+                },
+                {
+                    "node": "router",
+                    "status": "completed",
+                    "route": "direct",
+                    "elapsed_ms": 4.0,
+                    "llm_result_summary": {
+                        "llm": {
+                            "model_name": "test-llm",
+                            "response_chars": 42,
+                            "token_counts": {
+                                "prompt": 11,
+                                "completion": 7,
+                                "total": 18,
+                                "reasoning": 3,
+                                "cached": 2,
+                            },
+                            "reasoning_available": True,
+                            "reasoning_format": "structured",
+                            "reasoning_chars": 12,
+                        }
+                    },
                 }
             ],
             tool_events=[
@@ -115,6 +137,13 @@ class TestAgentRunMetrics:
         assert skipped_span["attributes"]["askpdf.skip_reason"] == "not_selected_by_plan"
         assert any(event["name"] == "skipped" for event in skipped_span["events"])
         assert not any(event["name"] == "warning" for event in skipped_span["events"])
+        router_span = next(span for span in trace["spans"] if span["span_id"] == "node:router:1")
+        assert router_span["attributes"]["llm.model_name"] == "test-llm"
+        assert router_span["attributes"]["llm.token_count.total"] == 18
+        llm_event = next(event for event in router_span["events"] if event["name"] == "llm.completed")
+        assert llm_event["attributes"]["llm.response_chars"] == 42
+        assert llm_event["attributes"]["llm.token_count.reasoning"] == 3
+        assert llm_event["attributes"]["llm.reasoning_format"] == "structured"
         tool_span = next(span for span in trace["spans"] if span["span_id"] == "tool:search_documents:0")
         assert tool_span["start_time"] == "2026-07-04T02:30:09Z"
         assert tool_span["end_time"] == "2026-07-04T02:30:09.002000Z"
@@ -986,9 +1015,21 @@ class TestRouterRagRuntime:
                 self.calls += 1
                 if self.calls == 1:
                     return SimpleNamespace(
-                        content='{"route":"direct","reason":"prefetched context is sufficient","clarification_options":null}'
+                        content='{"route":"direct","reason":"prefetched context is sufficient","clarification_options":null}',
+                        usage_metadata={"input_tokens": 12, "output_tokens": 5, "total_tokens": 17},
+                        response_metadata={"model_name": "test-llm"},
                     )
-                return SimpleNamespace(content="DiffusionBlocks focuses on modular diffusion model research.")
+                return SimpleNamespace(
+                    content="DiffusionBlocks focuses on modular diffusion model research.",
+                    usage_metadata={"input_tokens": 20, "output_tokens": 8, "total_tokens": 28},
+                    response_metadata={
+                        "model_name": "test-llm",
+                        "token_usage": {
+                            "completion_tokens_details": {"reasoning_tokens": 2},
+                            "prompt_tokens_details": {"cached_tokens": 4},
+                        },
+                    },
+                )
 
         fake_llm = FakeLlm()
 
@@ -1142,7 +1183,20 @@ class TestRouterRagRuntime:
         assert context_event["output_refs"]["available_documents"][0]["file_hash"] == "file-1"
         assert router_event["prompt_summary"]["section"] == "Router Node Prompt"
         assert router_event["llm_result_summary"]["route"] == "direct"
+        assert router_event["llm_result_summary"]["llm"]["model_name"] == "test-llm"
+        assert router_event["llm_result_summary"]["llm"]["token_counts"] == {
+            "prompt": 12,
+            "completion": 5,
+            "total": 17,
+        }
         assert answer_event["prompt_summary"]["section"] == "Final Answer Prompt"
+        assert answer_event["llm_result_summary"]["llm"]["token_counts"] == {
+            "prompt": 20,
+            "completion": 8,
+            "total": 28,
+            "reasoning": 2,
+            "cached": 4,
+        }
         assert answer_event["output_preview"]["answer"] == result["answer"]
         assert all(isinstance(event.get("elapsed_ms"), (int, float)) for event in result["node_events"])
         assert result["agent_run_id"] == "run-1"
