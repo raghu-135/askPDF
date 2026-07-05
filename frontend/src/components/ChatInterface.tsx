@@ -36,8 +36,6 @@ import remarkGfm from 'remark-gfm';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
 import { getChatComposerState } from '../lib/chat-composer-state';
-import { formatDurationMs } from '../lib/formatDuration';
-import { formatSkipReason } from '../lib/agentDebugLabels';
 import {
     Thread,
     Message,
@@ -61,8 +59,7 @@ import { isRetryableError } from '../lib/error-utils';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/models-api';
 import ChatSettingsDialog from './ChatSettingsDialog';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
-
-const AgentGraphCanvas = dynamic(() => import('./agent-graph/AgentGraphCanvas'), { ssr: false });
+import AgentRunDebugPanel from './agent-debug/AgentRunDebugPanel';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -85,135 +82,6 @@ type ClarificationChoice = {
 
 const normalizeAgentPatternForUi = (templateId?: string | null) => (
     templateId === 'router_rag_agent' || templateId === 'plan_execute_rag_agent' ? templateId : 'router_rag_agent'
-);
-
-const getNodeEventName = (event: Record<string, any>) => String(event?.node || event?.name || 'unknown_node');
-
-const getToolEventName = (event: Record<string, any>) => String(
-    event?.tool_display_name || event?.tool_name || event?.tool_id || 'unknown_tool'
-);
-
-const isSkippedNodeEvent = (event: Record<string, any>) => event?.status === 'skipped' || event?.skipped === true;
-
-const formatTraceError = (error: unknown) => {
-    if (!error) return null;
-    if (typeof error === 'string') return error;
-    if (typeof error === 'object') {
-        const err = error as Record<string, any>;
-        return String(err.message || err.code || err.type || JSON.stringify(err));
-    }
-    return String(error);
-};
-
-const TraceTooltipList = ({
-    title,
-    emptyText,
-    children,
-}: {
-    title: string;
-    emptyText: string;
-    children: React.ReactNode;
-}) => (
-    <Box sx={{ maxWidth: 560, maxHeight: 340, overflow: 'auto', p: 0.25 }}>
-        <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mb: 0.5 }}>
-            {title}
-        </Typography>
-        {children || (
-            <Typography variant="caption" sx={{ display: 'block', opacity: 0.8 }}>
-                {emptyText}
-            </Typography>
-        )}
-    </Box>
-);
-
-const NodeEventsTooltip = ({
-    events,
-    usedCount,
-    availableCount,
-}: {
-    events: Record<string, any>[];
-    usedCount: number;
-    availableCount?: number;
-}) => {
-    const skippedCount = events.filter(isSkippedNodeEvent).length;
-    const title = [
-        `Node events: ${events.length}`,
-        `used: ${usedCount}${availableCount ? `/${availableCount}` : ''}`,
-        skippedCount ? `skipped: ${skippedCount}` : null,
-    ].filter(Boolean).join(' · ');
-
-    return (
-        <TraceTooltipList title={title} emptyText="No node events recorded.">
-            {events.map((event, index) => {
-                const elapsed = formatDurationMs(Number(event?.elapsed_ms));
-                const status = event?.status || (event?.skipped ? 'skipped' : 'completed');
-                const skipReason = formatSkipReason(event?.skip_reason);
-                const error = formatTraceError(event?.error);
-                return (
-                    <Box key={`${getNodeEventName(event)}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
-                        <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-                            {index + 1}. {getNodeEventName(event)}
-                        </Typography>
-                        <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
-                            {[status, elapsed, event?.route ? `route ${event.route}` : null, skipReason].filter(Boolean).join(' · ')}
-                        </Typography>
-                        {event?.route_reason && (
-                            <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
-                                {String(event.route_reason)}
-                            </Typography>
-                        )}
-                        {error && (
-                            <Typography variant="caption" sx={{ display: 'block', color: 'error.light' }}>
-                                {error}
-                            </Typography>
-                        )}
-                    </Box>
-                );
-            })}
-        </TraceTooltipList>
-    );
-};
-
-const ToolEventsTooltip = ({ events }: { events: Record<string, any>[] }) => (
-    <TraceTooltipList title="Tool events" emptyText="No tool calls recorded.">
-        {events.map((event, index) => {
-            const elapsed = formatDurationMs(Number(event?.elapsed_ms));
-            const artifactCount = Array.isArray(event?.artifact_keys)
-                ? event.artifact_keys.length
-                : event?.artifact_summary && typeof event.artifact_summary === 'object'
-                    ? Object.keys(event.artifact_summary).length
-                    : 0;
-            const warningCount = Array.isArray(event?.warnings) ? event.warnings.length : 0;
-            const error = formatTraceError(event?.error);
-            return (
-                <Box key={`${getToolEventName(event)}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
-                    <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-                        {index + 1}. {getToolEventName(event)}
-                    </Typography>
-                    <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
-                        {[
-                            event?.caller_node ? `from ${event.caller_node}` : null,
-                            event?.ok === false ? 'failed' : 'ok',
-                            elapsed,
-                            Number.isFinite(Number(event?.source_count)) ? `${Number(event.source_count)} sources` : null,
-                            artifactCount ? `${artifactCount} artifacts` : null,
-                            warningCount ? `${warningCount} warnings` : null,
-                        ].filter(Boolean).join(' · ')}
-                    </Typography>
-                    {event?.result_preview && (
-                        <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
-                            {String(event.result_preview)}
-                        </Typography>
-                    )}
-                    {error && (
-                        <Typography variant="caption" sx={{ display: 'block', color: 'error.light' }}>
-                            {error}
-                        </Typography>
-                    )}
-                </Box>
-            );
-        })}
-    </TraceTooltipList>
 );
 
 interface ChatInterfaceProps {
@@ -1667,115 +1535,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     gap: 0.75,
                                                 }}
                                             >
-                                                <Typography variant="caption" sx={{ display: 'block', wordBreak: 'break-all' }}>
-                                                    Run ID: {msg.agent_run_id}
-                                                </Typography>
-                                                {msg.agent_route_reason && (
-                                                    <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                                                        Route reason: {msg.agent_route_reason}
-                                                    </Typography>
-                                                )}
-                                                {agentRunLoading[msg.agent_run_id] && (
-                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                                        <CircularProgress size={14} />
-                                                        <Typography variant="caption" color="text.secondary">Loading run details...</Typography>
-                                                    </Box>
-                                                )}
-                                                {agentRunErrors[msg.agent_run_id] && (
-                                                    <Typography variant="caption" color="error">
-                                                        {agentRunErrors[msg.agent_run_id]}
-                                                    </Typography>
-                                                )}
-                                                {agentRunDetails[msg.agent_run_id]?.debug && (() => {
-                                                    const runDetails = agentRunDetails[msg.agent_run_id];
-                                                    const debug = runDetails.debug;
-                                                    const metrics = debug?.metrics || runDetails.metrics_json || {};
-                                                    const durationMs = Number(metrics.duration_ms);
-                                                    const formattedDuration = formatDurationMs(durationMs);
-                                                    const hasDuration = Boolean(formattedDuration);
-                                                    const nodeEvents = Array.isArray(debug?.node_events) ? debug.node_events : [];
-                                                    const toolEvents = Array.isArray(debug?.tool_events) ? debug.tool_events : [];
-                                                    const usedNodeCount = nodeEvents.filter((event) => !isSkippedNodeEvent(event)).length;
-                                                    const availableNodeCount = Array.isArray(runDetails.resolved_spec_json?.config?.graph?.nodes)
-                                                        ? runDetails.resolved_spec_json.config.graph.nodes.length
-                                                        : undefined;
-                                                    const usedToolCount = Number(metrics.tool_event_count ?? debug?.tool_event_count ?? toolEvents.length ?? 0);
-                                                    const availableToolCount = Array.isArray(runDetails.resolved_spec_json?.config?.allowed_tool_ids)
-                                                        ? new Set(runDetails.resolved_spec_json.config.allowed_tool_ids.filter(Boolean)).size
-                                                        : undefined;
-                                                    const nodeCountLabel = availableNodeCount
-                                                        ? `${usedNodeCount}/${availableNodeCount}`
-                                                        : `${usedNodeCount}`;
-                                                    const toolCountLabel = availableToolCount
-                                                        ? `${usedToolCount}/${availableToolCount}`
-                                                        : `${usedToolCount}`;
-                                                    const warningCount = Number(metrics.tool_warning_count ?? debug?.tool_warning_count ?? 0);
-                                                    const errorCount = Number(metrics.error_count ?? debug?.error_count ?? metrics.tool_error_count ?? debug?.tool_error_count ?? 0);
-                                                    return (
-                                                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-                                                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                                                            <Chip
-                                                                size="small"
-                                                                label={`Status: ${runDetails.status}`}
-                                                                variant="outlined"
-                                                            />
-                                                            {metrics.route && (
-                                                                <Chip
-                                                                    size="small"
-                                                                    label={`Route: ${metrics.route}`}
-                                                                    variant="outlined"
-                                                                />
-                                                            )}
-                                                            {hasDuration && (
-                                                                <Chip
-                                                                    size="small"
-                                                                    label={`Run: ${formattedDuration}`}
-                                                                    variant="outlined"
-                                                                />
-                                                            )}
-                                                            <Tooltip title={<NodeEventsTooltip events={nodeEvents} usedCount={usedNodeCount} availableCount={availableNodeCount} />} placement="top" arrow>
-                                                                <Chip
-                                                                    size="small"
-                                                                    label={`Nodes: ${nodeCountLabel}`}
-                                                                    variant="outlined"
-                                                                />
-                                                            </Tooltip>
-                                                            <Tooltip title={<ToolEventsTooltip events={toolEvents} />} placement="top" arrow>
-                                                                <Chip
-                                                                    size="small"
-                                                                    label={`Tools: ${toolCountLabel}`}
-                                                                    variant="outlined"
-                                                                />
-                                                            </Tooltip>
-                                                            <Chip
-                                                                size="small"
-                                                                color={Number.isFinite(warningCount) && warningCount > 0 ? 'warning' : 'default'}
-                                                                label={`Warnings: ${Number.isFinite(warningCount) ? warningCount : 0}`}
-                                                                variant="outlined"
-                                                            />
-                                                            <Chip
-                                                                size="small"
-                                                                color={Number.isFinite(errorCount) && errorCount > 0 ? 'error' : 'default'}
-                                                                label={`Errors: ${Number.isFinite(errorCount) ? errorCount : 0}`}
-                                                                variant="outlined"
-                                                            />
-                                                        </Box>
-                                                        <AgentGraphCanvas
-                                                            resolvedSpec={runDetails.resolved_spec_json}
-                                                            templateId={runDetails.template_id}
-                                                            mode="run-debug"
-                                                            overlay={{
-                                                                route: debug?.route || metrics.route,
-                                                                routeReason: debug?.route_reason,
-                                                                nodeEvents: debug?.node_events || [],
-                                                                toolEvents: debug?.tool_events || [],
-                                                                errors: debug?.error ? [debug.error] : [],
-                                                                metrics,
-                                                            }}
-                                                        />
-                                                        </Box>
-                                                    );
-                                                })()}
+                                                <AgentRunDebugPanel
+                                                    runId={msg.agent_run_id}
+                                                    routeReason={msg.agent_route_reason}
+                                                    runDetails={agentRunDetails[msg.agent_run_id]}
+                                                    loading={agentRunLoading[msg.agent_run_id]}
+                                                    error={agentRunErrors[msg.agent_run_id]}
+                                                />
                                             </Box>
                                         </details>
                                     </Box>
