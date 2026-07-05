@@ -305,6 +305,10 @@ class AgentRun(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
     )
+    debug_trace_json: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB)
+    )
 
     __table_args__ = (
         Index("idx_agent_run_thread_started", "thread_id", "started_at"),

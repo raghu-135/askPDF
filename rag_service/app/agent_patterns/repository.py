@@ -258,6 +258,7 @@ class AgentPatternRepository:
         metrics_json: Optional[Dict[str, Any]] = None,
         error_json: Optional[Dict[str, Any]] = None,
         chat_turn_id: Optional[str] = None,
+        debug_trace_json: Optional[Dict[str, Any]] = None,
         completed_at: Optional[datetime] = None,
     ) -> Optional[AgentRun]:
         session = await self._get_session()
@@ -272,6 +273,23 @@ class AgentPatternRepository:
                 replace_jsonb_field(run, "error_json", error_json)
             if chat_turn_id is not None:
                 run.chat_turn_id = chat_turn_id
+            if debug_trace_json is not None:
+                replace_jsonb_field(run, "debug_trace_json", debug_trace_json)
+            await session.flush()
+            await session.refresh(run)
+            return run
+
+    async def set_run_debug_trace(
+        self,
+        run_id: str,
+        debug_trace_json: Dict[str, Any],
+    ) -> Optional[AgentRun]:
+        session = await self._get_session()
+        async with session.begin():
+            run = await session.get(AgentRun, run_id)
+            if not run:
+                return None
+            replace_jsonb_field(run, "debug_trace_json", debug_trace_json)
             await session.flush()
             await session.refresh(run)
             return run

@@ -256,8 +256,35 @@ export interface AgentDebugTrace {
   [key: string]: any;
 }
 
+export interface AgentDebugSummary {
+  status?: string;
+  route?: string;
+  routeReason?: string;
+  durationMs?: number | null;
+  metrics?: Record<string, any>;
+  nodes?: Record<string, any>[];
+  tools?: Record<string, any>[];
+  usedNodeCount?: number;
+  availableNodeCount?: number | null;
+  usedToolCount?: number;
+  availableToolCount?: number | null;
+  warningCount?: number;
+  errorCount?: number;
+  errors?: Record<string, any>[];
+  [key: string]: any;
+}
+
 export interface AgentRunDebug {
+  version?: number;
   trace?: AgentDebugTrace;
+  summary?: AgentDebugSummary;
+  graph?: {
+    nodes?: Record<string, any>[];
+    edges?: Record<string, any>[];
+    executionPlan?: string[];
+    selectedRoute?: string;
+    [key: string]: any;
+  };
 }
 
 export interface AgentRunDetails {
@@ -271,7 +298,7 @@ export interface AgentRunDetails {
   error_json?: Record<string, any> | null;
   started_at?: string;
   completed_at?: string | null;
-  debug?: AgentRunDebug;
+  debug?: AgentRunDebug | null;
   [key: string]: any;
 }
 

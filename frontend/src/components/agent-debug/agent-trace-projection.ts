@@ -1,4 +1,5 @@
-import type { AgentDebugTrace, AgentRunDetails, AgentTraceSpan } from '../../lib/api';
+import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails } from '../../lib/api';
+import type { AgentGraphEdge, AgentGraphNode } from '../agent-graph/agent-graph-types';
 
 export interface TraceNodeView {
   id: string;
@@ -10,7 +11,7 @@ export interface TraceNodeView {
   executionPlan?: string[];
   warningCodes: string[];
   error?: Record<string, any>;
-  span?: AgentTraceSpan;
+  span?: Record<string, any>;
   raw: Record<string, any>;
 }
 
@@ -24,12 +25,21 @@ export interface TraceToolView {
   durationMs?: number;
   sourceCount?: number;
   warningCodes: string[];
-  span?: AgentTraceSpan;
+  span?: Record<string, any>;
   raw: Record<string, any>;
 }
 
+export interface TraceGraphView {
+  nodes: AgentGraphNode[];
+  edges: AgentGraphEdge[];
+  executionPlan: string[];
+  selectedRoute?: string;
+}
+
 export interface TraceRunView {
+  debug?: AgentRunDebug;
   trace?: AgentDebugTrace;
+  graph?: TraceGraphView;
   route?: string;
   routeReason?: string;
   metrics: Record<string, any>;
@@ -52,242 +62,103 @@ const asArray = (value: any): Record<string, any>[] => (
   Array.isArray(value) ? value.filter((item): item is Record<string, any> => item && typeof item === 'object') : []
 );
 
-const isSkippedNodeRow = (row: Record<string, any>) => (
-  row?.skipped === true || row?.status === 'skipped'
-);
-
 const asStringArray = (value: any): string[] => (
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 );
 
+const asNumber = (value: any): number | undefined => {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+};
+
+export const getRunDebug = (runDetails: AgentRunDetails): AgentRunDebug | undefined => {
+  const debug = runDetails.debug;
+  return debug && typeof debug === 'object' && !Array.isArray(debug) ? debug : undefined;
+};
+
 export const getRunTrace = (runDetails: AgentRunDetails): AgentDebugTrace | undefined => {
-  const trace = runDetails.debug?.trace;
+  const trace = getRunDebug(runDetails)?.trace;
   return trace && typeof trace === 'object' && !Array.isArray(trace) ? trace : undefined;
 };
 
 export const getRunDebugMetrics = (runDetails: AgentRunDetails) => {
-  const trace = getRunTrace(runDetails);
-  if (trace?.metrics && typeof trace.metrics === 'object') return trace.metrics;
+  const debug = getRunDebug(runDetails);
+  const summaryMetrics = asObject(debug?.summary?.metrics);
+  if (Object.keys(summaryMetrics).length > 0) return summaryMetrics;
+  const traceMetrics = asObject(debug?.trace?.metrics);
+  if (Object.keys(traceMetrics).length > 0) return traceMetrics;
   return runDetails.metrics_json || {};
 };
 
-const promptSummaryFromSpan = (span: AgentTraceSpan) => {
-  const promptEvent = asArray(span.events).find((event) => event.name === 'prompt.rendered');
-  if (!promptEvent) return undefined;
-  const attributes = asObject(promptEvent.attributes);
-  const output = asObject(promptEvent.output);
-  return {
-    section: attributes['prompt.name'],
-    prompt_chars: attributes['prompt.chars'],
-    system_message: output.system_message,
-    preview: output.preview,
-  };
-};
-
-const llmResultFromSpan = (span: AgentTraceSpan) => {
-  const decision = asArray(span.events).find((event) => event.name === 'decision.made');
-  if (!decision) return undefined;
-  const attributes = asObject(decision.attributes);
-  return {
-    route: attributes['askpdf.route'],
-    route_reason: attributes['askpdf.route_reason'],
-    execution_plan: attributes['askpdf.execution_plan'],
-  };
-};
-
-const llmSummaryFromSpan = (span: AgentTraceSpan) => {
-  const attributes = asObject(span.attributes);
-  const completed = asArray(span.events).find((event) => event.name === 'llm.completed');
-  const completedAttributes = asObject(completed?.attributes);
-  const completedOutput = asObject(completed?.output);
-  const retryAttempts = asArray(span.events)
-    .filter((event) => event.name === 'llm.retry')
-    .map((event) => {
-      const retryAttributes = asObject(event.attributes);
-      return {
-        attempt: retryAttributes['llm.retry.attempt'],
-        delay_ms: retryAttributes['llm.retry.delay_ms'],
-        reason: retryAttributes['llm.retry.reason'],
-        http_status_code: retryAttributes['http.status_code'],
-        exception_type: retryAttributes['exception.type'],
-        exception_message: retryAttributes['exception.message'],
-      };
-    });
-  const tokenCounts = {
-    prompt: completedAttributes['llm.token_count.prompt'] ?? attributes['llm.token_count.prompt'],
-    completion: completedAttributes['llm.token_count.completion'] ?? attributes['llm.token_count.completion'],
-    total: completedAttributes['llm.token_count.total'] ?? attributes['llm.token_count.total'],
-    reasoning: completedAttributes['llm.token_count.reasoning'] ?? attributes['llm.token_count.reasoning'],
-    cached: completedAttributes['llm.token_count.cached'] ?? attributes['llm.token_count.cached'],
-  };
-  const retryCount = attributes['llm.retry_count'] ?? (retryAttempts.length > 0 ? retryAttempts.length : undefined);
-  const summary = {
-    model_name: completedAttributes['llm.model_name'] ?? attributes['llm.model_name'],
-    response_chars: completedAttributes['llm.response_chars'] ?? attributes['llm.response_chars'],
-    token_counts: Object.fromEntries(Object.entries(tokenCounts).filter(([, value]) => value !== undefined && value !== null)),
-    reasoning_available: completedAttributes['llm.reasoning_available'],
-    reasoning_format: completedAttributes['llm.reasoning_format'],
-    reasoning_chars: completedAttributes['llm.reasoning_chars'],
-    reasoning_preview: completedOutput.reasoning_preview,
-    retry_count: retryCount,
-    retry_attempts: retryAttempts,
-  };
-  const hasCompleted = Boolean(completed);
-  const hasAttributes = Object.values(summary).some((value) => {
-    if (Array.isArray(value)) return value.length > 0;
-    if (value && typeof value === 'object') return Object.keys(value).length > 0;
-    return value !== undefined && value !== null && value !== '';
-  });
-  return hasCompleted || retryAttempts.length > 0 || hasAttributes ? summary : undefined;
-};
-
-const graphNodeRowFromSpan = (span: AgentTraceSpan): Record<string, any> => {
-  const attributes = asObject(span.attributes);
-  const input = asObject(span.input);
-  const output = asObject(span.output);
-  const nodeId = String(attributes['askpdf.node.id'] || span.name || 'unknown_node');
-  return {
-    node: nodeId,
-    status: span.status,
-    skipped: span.status === 'skipped',
-    skip_reason: attributes['askpdf.skip_reason'],
-    elapsed_ms: span.duration_ms,
-    route: attributes['askpdf.route'],
-    route_reason: attributes['askpdf.route_reason'],
-    execution_plan: attributes['askpdf.execution_plan'],
-    evidence_chars: attributes['askpdf.evidence_chars'],
-    answer_chars: attributes['askpdf.answer_chars'],
-    input_refs: input.refs,
-    input_preview: input.value,
-    output_refs: output.refs,
-    output_preview: output.value,
-    prompt_summary: promptSummaryFromSpan(span),
-    llm_result_summary: llmResultFromSpan(span),
-    llm_summary: llmSummaryFromSpan(span),
-    warnings: asArray(span.events)
-      .filter((event) => event.name === 'warning')
-      .map((event) => asObject(event.attributes)['warning.code'])
-      .filter(Boolean),
-    error: asArray(span.events).find((event) => event.name === 'exception')?.attributes,
-    __trace_span: span,
-  };
-};
-
-const graphToolRowFromSpan = (span: AgentTraceSpan): Record<string, any> => {
-  const attributes = asObject(span.attributes);
-  const input = asObject(span.input);
-  const output = asObject(span.output);
-  const warningEvents = asArray(span.events).filter((event) => event.name === 'warning');
-  return {
-    tool_name: attributes['tool.name'] || span.name,
-    tool_id: attributes['tool.id'],
-    tool_category: attributes['askpdf.tool.category'],
-    tool_display_name: attributes['tool.description'] || span.name,
-    caller_node: attributes['askpdf.caller_node'],
-    ok: span.status !== 'error',
-    elapsed_ms: span.duration_ms,
-    result_chars: attributes['askpdf.result_chars'],
-    source_count: attributes['askpdf.source_count'],
-    warnings: warningEvents.map((event) => asObject(event.attributes)['warning.code']).filter(Boolean),
-    error: asArray(span.events).find((event) => event.name === 'exception')?.attributes,
-    artifact_keys: attributes['askpdf.artifact_keys'],
-    known_warning_codes: attributes['askpdf.known_warning_codes'],
-    tool_input: input.value,
-    result_preview: output.value,
-    artifact_refs: output.refs,
-    artifact_summary: output.summary,
-    __trace_span: span,
-  };
-};
-
-const getTraceNodeSpans = (trace?: AgentDebugTrace): AgentTraceSpan[] => (
-  (trace?.spans || []).filter((span) => Boolean(asObject(span.attributes)['askpdf.node.id']))
-);
-
-const getTraceToolSpans = (trace?: AgentDebugTrace): AgentTraceSpan[] => (
-  (trace?.spans || []).filter((span) => span.kind === 'TOOL' || Boolean(asObject(span.attributes)['tool.name']))
-);
-
-const getRunNodeRows = (runDetails: AgentRunDetails): Record<string, any>[] => {
-  const trace = getRunTrace(runDetails);
-  return getTraceNodeSpans(trace).map(graphNodeRowFromSpan);
-};
-
-const getRunToolRows = (runDetails: AgentRunDetails): Record<string, any>[] => {
-  const trace = getRunTrace(runDetails);
-  return getTraceToolSpans(trace).map(graphToolRowFromSpan);
-};
-
-const getTraceErrors = (trace?: AgentDebugTrace): Record<string, any>[] => (
-  asArray(trace?.spans)
-    .flatMap((span) => asArray(span.events))
-    .filter((event) => event.name === 'exception')
-    .map((event) => asObject(event.attributes))
-    .filter((attributes) => Object.keys(attributes).length > 0)
-);
-
-const nodeViewFromRow = (row: Record<string, any>): TraceNodeView => ({
-  id: String(row.node || row.name || 'unknown_node'),
+const nodeViewFromSummary = (row: Record<string, any>): TraceNodeView => ({
+  id: String(row.id || row.node || row.name || 'unknown_node'),
   status: typeof row.status === 'string' ? row.status : undefined,
-  skipped: isSkippedNodeRow(row),
-  durationMs: Number.isFinite(Number(row.elapsed_ms)) ? Number(row.elapsed_ms) : undefined,
+  skipped: row.skipped === true || row.status === 'skipped',
+  durationMs: asNumber(row.durationMs ?? row.duration_ms),
   route: typeof row.route === 'string' ? row.route : undefined,
-  routeReason: typeof row.route_reason === 'string' ? row.route_reason : undefined,
-  executionPlan: asStringArray(row.execution_plan),
-  warningCodes: asStringArray(row.warnings),
+  routeReason: typeof row.routeReason === 'string' ? row.routeReason : typeof row.route_reason === 'string' ? row.route_reason : undefined,
+  executionPlan: asStringArray(row.executionPlan ?? row.execution_plan),
+  warningCodes: asStringArray(row.warningCodes ?? row.warnings),
   error: row.error && typeof row.error === 'object' ? row.error : undefined,
-  span: row.__trace_span && typeof row.__trace_span === 'object' ? row.__trace_span : undefined,
-  raw: row,
+  span: row.span && typeof row.span === 'object' ? row.span : undefined,
+  raw: asObject(row.raw),
 });
 
-const toolViewFromRow = (row: Record<string, any>): TraceToolView => ({
-  name: String(row.tool_name || 'tool'),
-  id: typeof row.tool_id === 'string' ? row.tool_id : undefined,
-  category: typeof row.tool_category === 'string' ? row.tool_category : undefined,
-  displayName: typeof row.tool_display_name === 'string' ? row.tool_display_name : undefined,
-  callerNode: typeof row.caller_node === 'string' ? row.caller_node : undefined,
+const toolViewFromSummary = (row: Record<string, any>): TraceToolView => ({
+  name: String(row.name || row.tool_name || 'tool'),
+  id: typeof row.id === 'string' ? row.id : typeof row.tool_id === 'string' ? row.tool_id : undefined,
+  category: typeof row.category === 'string' ? row.category : typeof row.tool_category === 'string' ? row.tool_category : undefined,
+  displayName: typeof row.displayName === 'string' ? row.displayName : typeof row.tool_display_name === 'string' ? row.tool_display_name : undefined,
+  callerNode: typeof row.callerNode === 'string' ? row.callerNode : typeof row.caller_node === 'string' ? row.caller_node : undefined,
   ok: row.ok !== false,
-  durationMs: Number.isFinite(Number(row.elapsed_ms)) ? Number(row.elapsed_ms) : undefined,
-  sourceCount: Number.isFinite(Number(row.source_count)) ? Number(row.source_count) : undefined,
-  warningCodes: asStringArray(row.warnings),
-  span: row.__trace_span && typeof row.__trace_span === 'object' ? row.__trace_span : undefined,
-  raw: row,
+  durationMs: asNumber(row.durationMs ?? row.elapsed_ms),
+  sourceCount: asNumber(row.sourceCount ?? row.source_count),
+  warningCodes: asStringArray(row.warningCodes ?? row.warnings),
+  span: row.span && typeof row.span === 'object' ? row.span : undefined,
+  raw: asObject(row.raw),
 });
 
-export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView => {
-  const trace = getRunTrace(runDetails);
-  const metrics = getRunDebugMetrics(runDetails);
-  const attributes = asObject(trace?.attributes);
-  const nodes = getRunNodeRows(runDetails).map(nodeViewFromRow);
-  const tools = getRunToolRows(runDetails).map(toolViewFromRow);
-  const availableNodeCount = Array.isArray(runDetails.resolved_spec_json?.config?.graph?.nodes)
-    ? runDetails.resolved_spec_json.config.graph.nodes.length
-    : undefined;
-  const availableToolCount = Array.isArray(runDetails.resolved_spec_json?.config?.allowed_tool_ids)
-    ? new Set(runDetails.resolved_spec_json.config.allowed_tool_ids.filter(Boolean)).size
-    : undefined;
-  const usedNodeCount = nodes.filter((node) => !node.skipped).length;
-  const usedToolCount = Number(metrics.tool_event_count ?? tools.length ?? 0);
-  const warningCount = Number(metrics.tool_warning_count ?? 0);
-  const errorCount = Number(metrics.error_count ?? metrics.tool_error_count ?? 0);
-
+const getRunGraph = (debug?: AgentRunDebug): TraceGraphView | undefined => {
+  const graph = asObject(debug?.graph);
+  const nodes = asArray(graph.nodes) as AgentGraphNode[];
+  const edges = asArray(graph.edges) as AgentGraphEdge[];
+  if (nodes.length === 0 && edges.length === 0) return undefined;
   return {
-    trace,
-    route: attributes['askpdf.route'] || metrics.route,
-    routeReason: attributes['askpdf.route_reason'],
+    nodes,
+    edges,
+    executionPlan: asStringArray(graph.executionPlan),
+    selectedRoute: typeof graph.selectedRoute === 'string' ? graph.selectedRoute : undefined,
+  };
+};
+
+export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView | undefined => {
+  const debug = getRunDebug(runDetails);
+  if (!debug) return undefined;
+  const summary = asObject(debug.summary);
+  const metrics = getRunDebugMetrics(runDetails);
+  const nodes = asArray(summary.nodes).map(nodeViewFromSummary);
+  const tools = asArray(summary.tools).map(toolViewFromSummary);
+  const usedNodeCount = asNumber(summary.usedNodeCount) ?? nodes.filter((node) => !node.skipped).length;
+  const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
+  return {
+    debug,
+    trace: getRunTrace(runDetails),
+    graph: getRunGraph(debug),
+    route: typeof summary.route === 'string' ? summary.route : typeof metrics.route === 'string' ? metrics.route : undefined,
+    routeReason: typeof summary.routeReason === 'string' ? summary.routeReason : undefined,
     metrics,
     nodes,
     tools,
     usedNodeCount,
-    availableNodeCount,
+    availableNodeCount: asNumber(summary.availableNodeCount),
     usedToolCount,
-    availableToolCount,
-    warningCount: Number.isFinite(warningCount) ? warningCount : 0,
-    errorCount: Number.isFinite(errorCount) ? errorCount : 0,
-    errors: getTraceErrors(trace),
+    availableToolCount: asNumber(summary.availableToolCount),
+    warningCount: asNumber(summary.warningCount) ?? Number(metrics.tool_warning_count ?? 0),
+    errorCount: asNumber(summary.errorCount) ?? Number(metrics.error_count ?? metrics.tool_error_count ?? 0),
+    errors: asArray(summary.errors),
   };
 };
 
 export const buildTraceExportJson = (view?: TraceRunView): string => (
-  view?.trace ? JSON.stringify(view.trace, null, 2) : ''
+  view?.debug ? JSON.stringify(view.debug, null, 2) : ''
 );

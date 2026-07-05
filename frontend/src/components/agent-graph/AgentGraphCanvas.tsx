@@ -18,6 +18,7 @@ import AgentGraphNode from './AgentGraphNode';
 import { buildAgentGraph, getAgentGraphSpec } from './agent-graph-mapper';
 import type { TraceRunView } from '../agent-debug/agent-trace-projection';
 import type {
+  AgentGraphEdge,
   AgentGraphMode,
   AgentGraphNode as AgentGraphNodeModel,
   AgentGraphSelection,
@@ -31,19 +32,6 @@ const nodeTypes = {
 
 const NODE_WIDTH = 230;
 const NODE_HEIGHT = 118;
-
-const overlayFromTraceView = (traceView?: TraceRunView) => (
-  traceView
-    ? {
-      route: traceView.route,
-      routeReason: traceView.routeReason,
-      nodeRows: traceView.nodes.map((node) => node.raw),
-      toolRows: traceView.tools.map((tool) => tool.raw),
-      errors: traceView.errors,
-      metrics: traceView.metrics,
-    }
-    : undefined
-);
 
 const getStatusEdgeColor = (edge: { selected?: boolean; active?: boolean }) => {
   if (edge.selected) return '#1976d2';
@@ -105,12 +93,15 @@ function AgentGraphCanvasInner({
   const [selection, setSelection] = useState<AgentGraphSelection>(null);
 
   const graph = useMemo(() => {
+    if (mode === 'run-debug' && traceView?.graph) {
+      return traceView.graph;
+    }
     const graphSpec = getAgentGraphSpec(resolvedSpec, templateId);
-    return buildAgentGraph(graphSpec, overlayFromTraceView(traceView) || {});
-  }, [resolvedSpec, templateId, traceView]);
+    return buildAgentGraph(graphSpec);
+  }, [mode, resolvedSpec, templateId, traceView]);
   const layoutDirection = mode === 'run-debug' ? 'DOWN' : 'RIGHT';
 
-  const flowEdges = useMemo((): Edge[] => graph.edges.map((edge) => {
+  const flowEdges = useMemo((): Edge[] => graph.edges.map((edge: AgentGraphEdge) => {
     const color = getStatusEdgeColor(edge);
     return {
       id: edge.id,

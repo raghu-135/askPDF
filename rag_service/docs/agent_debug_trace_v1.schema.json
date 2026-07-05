@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://askpdf.local/schemas/agent_debug_trace_v1.schema.json",
   "title": "askPDF Agent Debug Trace v1",
-  "description": "Normalized debug trace document returned as debug.trace by GET /api/agent-runs/{id}. Span-level raw payloads preserve the original runtime event for the selected span.",
+  "description": "Normalized trace document stored inside debug.trace by GET /api/agent-runs/{id}. Span-level raw payloads preserve the original runtime event for the selected span.",
   "type": "object",
   "additionalProperties": true,
   "required": [

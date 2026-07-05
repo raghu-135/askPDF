@@ -121,6 +121,9 @@ def _append_event(
     telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
     if isinstance(telemetry_sink, dict):
         telemetry_sink.setdefault("node_events", []).append(dict(event))
+    trace_recorder = ((config or {}).get("configurable") or {}).get("trace_recorder")
+    if trace_recorder is not None and hasattr(trace_recorder, "record_node_event"):
+        trace_recorder.record_node_event(dict(event))
     return [*state.get("node_events", []), event]
 
 
@@ -135,7 +138,97 @@ def _append_tool_event(
     telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
     if isinstance(telemetry_sink, dict):
         telemetry_sink.setdefault("tool_events", []).append(dict(event))
+    trace_recorder = ((config or {}).get("configurable") or {}).get("trace_recorder")
+    if trace_recorder is not None and hasattr(trace_recorder, "record_tool_event"):
+        trace_recorder.record_tool_event(dict(event))
     return [*state.get("tool_events", []), event]
+
+
+def _error_summary(exc: Exception, *, code: str) -> Dict[str, Any]:
+    return {
+        "code": code,
+        "type": type(exc).__name__,
+        "message": compact_preview(str(exc), limit=700),
+        "raw_message": compact_preview(str(exc), limit=700),
+        "retryable": True,
+    }
+
+
+def _append_failed_node_event(
+    state: RouterRagState,
+    config: RunnableConfig,
+    node: str,
+    started: float,
+    exc: Exception,
+    *,
+    data: Optional[Dict[str, Any]] = None,
+) -> None:
+    payload = {
+        "status": "failed",
+        "error": _error_summary(exc, code=f"{node}_failed"),
+        "input_preview": {"question": compact_preview(state.get("question"))},
+        **(data or {}),
+    }
+    _append_event(state, node, payload, started=started, config=config)
+
+
+async def _invoke_llm_for_node(
+    func: Callable[..., Any],
+    messages: List[Any],
+    *,
+    state: RouterRagState,
+    config: RunnableConfig,
+    node: str,
+    started: float,
+    retry_observer: Callable[[Dict[str, Any]], None],
+    retry_attempts: List[Dict[str, Any]],
+    model_name: Optional[str],
+    failure_data: Optional[Dict[str, Any]] = None,
+) -> Any:
+    try:
+        return await invoke_with_retry(func, messages, retry_observer=retry_observer)
+    except Exception as exc:
+        llm_failure = {
+            "llm_result_summary": {
+                "llm": {
+                    "model_name": model_name,
+                    "retry_count": len(retry_attempts),
+                    "retry_attempts": retry_attempts,
+                }
+            }
+        }
+        _append_failed_node_event(
+            state,
+            config,
+            node,
+            started,
+            exc,
+            data={**(failure_data or {}), **llm_failure},
+        )
+        raise
+
+
+async def _invoke_tool_for_node(
+    tool: Any,
+    tool_input: Any,
+    *,
+    state: RouterRagState,
+    config: RunnableConfig,
+    node: str,
+    started: float,
+) -> Any:
+    try:
+        return await tool.ainvoke(tool_input, config=config)
+    except Exception as exc:
+        _append_failed_node_event(
+            state,
+            config,
+            node,
+            started,
+            exc,
+            data={"input_preview": {"tool_input": tool_input}},
+        )
+        raise
 
 
 def _tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: str, tool_name: str) -> RunnableConfig:
@@ -168,6 +261,28 @@ def _tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: 
     )
     updated["metadata"] = metadata
     return updated
+
+
+def _tool_config_for_node(
+    state: RouterRagState,
+    config: RunnableConfig,
+    *,
+    caller_node: str,
+    tool_name: str,
+    started: float,
+) -> RunnableConfig:
+    try:
+        return _tool_config(state, config, caller_node=caller_node, tool_name=tool_name)
+    except Exception as exc:
+        _append_failed_node_event(
+            state,
+            config,
+            caller_node,
+            started,
+            exc,
+            data={"input_preview": {"tool_name": tool_name}},
+        )
+        raise
 
 
 def _log_node_end(
@@ -449,14 +564,18 @@ class NodeRegistry:
 
     async def context_loader(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        bundle = await prefetch_context(
-            thread_id=state["thread_id"],
-            raw_question=state["question"],
-            embed_model_name=state["embedding_model"],
-            context_window=state.get("context_window", DEFAULT_TOKEN_BUDGET),
-            use_web_search=state.get("use_web_search", False),
-            use_reranker=state.get("use_reranker", True),
-        )
+        try:
+            bundle = await prefetch_context(
+                thread_id=state["thread_id"],
+                raw_question=state["question"],
+                embed_model_name=state["embedding_model"],
+                context_window=state.get("context_window", DEFAULT_TOKEN_BUDGET),
+                use_web_search=state.get("use_web_search", False),
+                use_reranker=state.get("use_reranker", True),
+            )
+        except Exception as exc:
+            _append_failed_node_event(state, config, "context_loader", started, exc)
+            raise
         data = {
             "status": "completed",
             "document_source_count": len(bundle.get("document_sources", [])),
@@ -491,13 +610,32 @@ class NodeRegistry:
         llm = get_llm(state["llm_model"])
         prompt = build_planner_prompt(state)
         retry_attempts, retry_observer = _llm_retry_observer()
-        response = await invoke_with_retry(
+        prompt_details = prompt_summary(
+            "Planner Node Prompt",
+            "You are a strict planner for a scoped RAG workflow.",
+            prompt,
+        )
+        response = await _invoke_llm_for_node(
             llm.ainvoke,
             [
                 SystemMessage(content="You are a strict planner for a scoped RAG workflow."),
                 HumanMessage(content=prompt),
             ],
+            state=state,
+            config=config,
+            node="planner",
+            started=started,
             retry_observer=retry_observer,
+            retry_attempts=retry_attempts,
+            model_name=state.get("llm_model"),
+            failure_data={
+                "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+                "input_preview": {
+                    "question": compact_preview(state.get("question")),
+                    "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
+                },
+                "prompt_summary": prompt_details,
+            },
         )
         parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
         normalized = normalize_execution_plan(
@@ -519,11 +657,7 @@ class NodeRegistry:
                 "question": compact_preview(state.get("question")),
                 "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
             },
-            "prompt_summary": prompt_summary(
-                "Planner Node Prompt",
-                "You are a strict planner for a scoped RAG workflow.",
-                prompt,
-            ),
+            "prompt_summary": prompt_details,
             "llm_result_summary": {
                 "parsed": bool(parsed),
                 "route": normalized["route"],
@@ -552,13 +686,32 @@ class NodeRegistry:
         llm = get_llm(state["llm_model"])
         prompt = build_router_prompt(state)
         retry_attempts, retry_observer = _llm_retry_observer()
-        response = await invoke_with_retry(
+        prompt_details = prompt_summary(
+            "Router Node Prompt",
+            "You are a strict router for a RAG workflow.",
+            prompt,
+        )
+        response = await _invoke_llm_for_node(
             llm.ainvoke,
             [
                 SystemMessage(content="You are a strict router for a RAG workflow."),
                 HumanMessage(content=prompt),
             ],
+            state=state,
+            config=config,
+            node="router",
+            started=started,
             retry_observer=retry_observer,
+            retry_attempts=retry_attempts,
+            model_name=state.get("llm_model"),
+            failure_data={
+                "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+                "input_preview": {
+                    "question": compact_preview(state.get("question")),
+                    "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
+                },
+                "prompt_summary": prompt_details,
+            },
         )
         parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
         allowed_routes = {"document", "memory", "timeline", "direct", "clarify"}
@@ -578,11 +731,7 @@ class NodeRegistry:
                 "question": compact_preview(state.get("question")),
                 "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
             },
-            "prompt_summary": prompt_summary(
-                "Router Node Prompt",
-                "You are a strict router for a RAG workflow.",
-                prompt,
-            ),
+            "prompt_summary": prompt_details,
             "llm_result_summary": {
                 "parsed": bool(parsed),
                 "route": route,
@@ -609,11 +758,21 @@ class NodeRegistry:
         if _should_skip_worker(state, "retrieval_worker"):
             return _skipped_worker_update(state, config, "retrieval_worker", started, "not_selected_by_plan")
         tool_name = "search_documents"
-        tool_config = _tool_config(state, config, caller_node="retrieval_worker", tool_name=tool_name)
         tool_input = {"query": state["question"], "max_results": 10}
-        raw = await search_documents.ainvoke(
+        tool_config = _tool_config_for_node(
+            state,
+            config,
+            caller_node="retrieval_worker",
+            tool_name=tool_name,
+            started=started,
+        )
+        raw = await _invoke_tool_for_node(
+            search_documents,
             tool_input,
+            state=state,
             config=tool_config,
+            node="retrieval_worker",
+            started=started,
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
@@ -659,11 +818,21 @@ class NodeRegistry:
         if _should_skip_worker(state, "memory_worker"):
             return _skipped_worker_update(state, config, "memory_worker", started, "not_selected_by_plan")
         tool_name = "search_conversation_history"
-        tool_config = _tool_config(state, config, caller_node="memory_worker", tool_name=tool_name)
         tool_input = {"query": state["question"], "max_results": 10}
-        raw = await search_conversation_history.ainvoke(
+        tool_config = _tool_config_for_node(
+            state,
+            config,
+            caller_node="memory_worker",
+            tool_name=tool_name,
+            started=started,
+        )
+        raw = await _invoke_tool_for_node(
+            search_conversation_history,
             tool_input,
+            state=state,
             config=tool_config,
+            node="memory_worker",
+            started=started,
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
@@ -700,11 +869,21 @@ class NodeRegistry:
         if _should_skip_worker(state, "timeline_worker"):
             return _skipped_worker_update(state, config, "timeline_worker", started, "not_selected_by_plan")
         tool_name = "search_thread_timeline"
-        tool_config = _tool_config(state, config, caller_node="timeline_worker", tool_name=tool_name)
         tool_input = {"query": state["question"], "sources": "all", "order": "relevance", "max_results": 10}
-        raw = await search_thread_timeline.ainvoke(
+        tool_config = _tool_config_for_node(
+            state,
+            config,
+            caller_node="timeline_worker",
+            tool_name=tool_name,
+            started=started,
+        )
+        raw = await _invoke_tool_for_node(
+            search_thread_timeline,
             tool_input,
+            state=state,
             config=tool_config,
+            node="timeline_worker",
+            started=started,
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
@@ -741,9 +920,22 @@ class NodeRegistry:
         if _should_skip_worker(state, "web_worker"):
             return _skipped_worker_update(state, config, "web_worker", started, "not_selected_by_plan")
         tool_name = "search_web"
-        tool_config = _tool_config(state, config, caller_node="web_worker", tool_name=tool_name)
+        tool_config = _tool_config_for_node(
+            state,
+            config,
+            caller_node="web_worker",
+            tool_name=tool_name,
+            started=started,
+        )
         tool_input = state["question"]
-        raw = await search_web.ainvoke(tool_input, config=tool_config)
+        raw = await _invoke_tool_for_node(
+            search_web,
+            tool_input,
+            state=state,
+            config=tool_config,
+            node="web_worker",
+            started=started,
+        )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
         web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
@@ -787,13 +979,33 @@ class NodeRegistry:
         context_source = "worker_evidence" if state.get("evidence") else "prefetch"
         messages = build_final_answer_messages(state, context)
         retry_attempts, retry_observer = _llm_retry_observer()
-        response = await invoke_with_retry(
+        prompt_details = prompt_summary(
+            "Final Answer Prompt",
+            messages["system"],
+            messages["human"],
+        )
+        response = await _invoke_llm_for_node(
             llm.ainvoke,
             [
                 SystemMessage(content=messages["system"]),
                 HumanMessage(content=messages["human"]),
             ],
+            state=state,
+            config=config,
+            node=node_name,
+            started=started,
             retry_observer=retry_observer,
+            retry_attempts=retry_attempts,
+            model_name=state.get("llm_model"),
+            failure_data={
+                "input_refs": _state_evidence_refs(state) or _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+                "input_preview": {
+                    "question": compact_preview(state.get("question")),
+                    "context_source": context_source,
+                    "context": compact_preview(context),
+                },
+                "prompt_summary": prompt_details,
+            },
         )
         normalized = normalize_ai_response(response)
         data = {
@@ -804,11 +1016,7 @@ class NodeRegistry:
                 "context_source": context_source,
                 "context": compact_preview(context),
             },
-            "prompt_summary": prompt_summary(
-                "Final Answer Prompt",
-                messages["system"],
-                messages["human"],
-            ),
+            "prompt_summary": prompt_details,
             "llm_result_summary": {
                 "answer_chars": len(normalized["answer"] or ""),
                 "reasoning_available": bool(normalized["reasoning_available"]),

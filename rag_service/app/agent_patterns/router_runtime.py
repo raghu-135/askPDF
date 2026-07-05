@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import time
 import logging
-from types import SimpleNamespace
 from typing import Any, Dict
 
-from app.agent_patterns.debug_trace import build_debug_trace
-from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.graph import TemplateCompiler
 from app.db import (
     create_chat_turn,
@@ -35,6 +32,7 @@ async def handle_router_rag_chat(
     *,
     resolved_spec: Dict[str, Any],
     agent_run_context: Dict[str, Any],
+    trace_recorder: Any,
 ) -> Dict[str, Any]:
     """Execute the compiled Router RAG v2 graph and persist a chat turn."""
     return await _handle_compiled_rag_chat(
@@ -43,6 +41,7 @@ async def handle_router_rag_chat(
         embed_model,
         resolved_spec=resolved_spec,
         agent_run_context=agent_run_context,
+        trace_recorder=trace_recorder,
         runtime_label="Router RAG",
         failure_code="router_rag_execution_failed",
         failure_reason_prefix="Exception during Router RAG execution",
@@ -58,6 +57,7 @@ async def handle_plan_execute_rag_chat(
     *,
     resolved_spec: Dict[str, Any],
     agent_run_context: Dict[str, Any],
+    trace_recorder: Any,
 ) -> Dict[str, Any]:
     """Execute the compiled Plan-and-Execute RAG graph and persist a chat turn."""
     return await _handle_compiled_rag_chat(
@@ -66,63 +66,12 @@ async def handle_plan_execute_rag_chat(
         embed_model,
         resolved_spec=resolved_spec,
         agent_run_context=agent_run_context,
+        trace_recorder=trace_recorder,
         runtime_label="Plan-and-Execute RAG",
         failure_code="plan_execute_rag_execution_failed",
         failure_reason_prefix="Exception during Plan-and-Execute RAG execution",
         success_context="Context retrieved by compiled Plan-and-Execute RAG Agent pattern.",
         failure_context="Compiled Plan-and-Execute RAG Agent execution failed gracefully.",
-    )
-
-
-def _agent_run_stub(
-    *,
-    agent_run_id: str,
-    thread_id: str,
-    resolved_spec: Dict[str, Any],
-    agent_run_context: Dict[str, Any],
-    status: str,
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        id=agent_run_id,
-        thread_id=thread_id,
-        user_id=None,
-        template_id=agent_run_context.get("agent_pattern_id"),
-        template_version_id=agent_run_context.get("agent_pattern_template_version_id"),
-        resolved_spec_json=resolved_spec,
-        status=status,
-        started_at=None,
-        completed_at=None,
-    )
-
-
-def _build_agent_debug_trace(
-    *,
-    agent_run_id: str,
-    thread_id: str,
-    resolved_spec: Dict[str, Any],
-    agent_run_context: Dict[str, Any],
-    chat_turn_id: str | None,
-    result: Dict[str, Any],
-    duration_ms: float,
-    status: str,
-    error: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    metrics = build_run_metrics(result, duration_ms=duration_ms)
-    return build_debug_trace(
-        run=_agent_run_stub(
-            agent_run_id=agent_run_id,
-            thread_id=thread_id,
-            resolved_spec=resolved_spec,
-            agent_run_context=agent_run_context,
-            status=status,
-        ),
-        chat_turn=SimpleNamespace(id=chat_turn_id) if chat_turn_id else None,
-        node_events=result.get("node_events") or [],
-        tool_events=result.get("tool_events") or [],
-        metrics=metrics,
-        route=result.get("route"),
-        route_reason=result.get("route_reason"),
-        error=error,
     )
 
 
@@ -133,6 +82,7 @@ async def _handle_compiled_rag_chat(
     *,
     resolved_spec: Dict[str, Any],
     agent_run_context: Dict[str, Any],
+    trace_recorder: Any,
     runtime_label: str,
     failure_code: str,
     failure_reason_prefix: str,
@@ -167,6 +117,7 @@ async def _handle_compiled_rag_chat(
             "use_web_search": use_web_search,
             "use_reranker": use_reranker,
             "telemetry_sink": telemetry_sink,
+            "trace_recorder": trace_recorder,
         }
     }
     state = {
@@ -209,21 +160,10 @@ async def _handle_compiled_rag_chat(
         clarification_options = result.get("clarification_options")
         status = "clarification" if clarification_options else "completed"
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
-        debug_trace = _build_agent_debug_trace(
-            agent_run_id=agent_run_id,
-            thread_id=thread_id,
-            resolved_spec=resolved_spec,
-            agent_run_context=agent_run_context,
-            chat_turn_id=None,
-            result=result,
-            duration_ms=duration_ms,
-            status=status,
-        )
         metadata = {
             **agent_run_context,
             "agent_route": result.get("route"),
             "agent_route_reason": result.get("route_reason"),
-            "agent_debug_trace": debug_trace,
         }
         turn = await create_chat_turn(
             thread_id=thread_id,
@@ -297,6 +237,7 @@ async def _handle_compiled_rag_chat(
             "node_events": result.get("node_events") or [],
             "tool_events": result.get("tool_events") or [],
             "duration_ms": duration_ms,
+            "status": status,
             **agent_run_context,
         }
     except Exception as exc:
@@ -341,23 +282,11 @@ async def _handle_compiled_rag_chat(
             "errors": errors,
             "agent_error": error_payload,
         }
-        debug_trace = _build_agent_debug_trace(
-            agent_run_id=agent_run_id,
-            thread_id=thread_id,
-            resolved_spec=resolved_spec,
-            agent_run_context=agent_run_context,
-            chat_turn_id=None,
-            result=failure_result,
-            duration_ms=duration_ms,
-            status="failed",
-            error=error_payload,
-        )
         metadata = {
             **agent_run_context,
             "agent_route": route,
             "agent_route_reason": route_reason,
             "agent_error": error_payload,
-            "agent_debug_trace": debug_trace,
         }
         turn = await create_chat_turn(
             thread_id=thread_id,
@@ -393,6 +322,7 @@ async def _handle_compiled_rag_chat(
             "tool_events": tool_events,
             "errors": errors,
             "duration_ms": duration_ms,
+            "status": "failed",
             "agent_error": error_payload,
             **agent_run_context,
         }

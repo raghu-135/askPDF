@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.agent_patterns.debug_trace import build_debug_trace
+from app.agent_patterns.debug_trace import build_debug_graph
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
@@ -63,31 +62,17 @@ def _version_payload(version) -> Dict[str, Any]:
     }
 
 
-def _trace_for_response(
-    trace: Dict[str, Any],
-    *,
-    chat_turn_id: str | None,
-    metrics: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    response_trace = deepcopy(trace)
-    trace_metrics = response_trace.get("metrics") if isinstance(response_trace.get("metrics"), dict) else {}
-    response_trace["metrics"] = {**trace_metrics, **(metrics or {})}
-    response_trace["chat_turn_id"] = chat_turn_id
-
-    attributes = dict(response_trace.get("attributes") or {})
-    attributes["askpdf.chat_turn.id"] = chat_turn_id
-    response_trace["attributes"] = attributes
-
-    for span in response_trace.get("spans") or []:
-        if isinstance(span, dict) and span.get("parent_span_id") is None:
-            span_attributes = dict(span.get("attributes") or {})
-            span_attributes["askpdf.chat_turn.id"] = chat_turn_id
-            span["attributes"] = span_attributes
-            break
-    return response_trace
-
-
-def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
+def _run_payload(run) -> Dict[str, Any]:
+    debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else None
+    if debug is not None:
+        summary = debug.get("summary") if isinstance(debug.get("summary"), dict) else {}
+        debug = {
+            **debug,
+            "graph": build_debug_graph(
+                resolved_spec=run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {},
+                summary=summary,
+            ),
+        }
     payload = {
         "id": run.id,
         "thread_id": run.thread_id,
@@ -102,31 +87,8 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
         "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,
         "error_json": run.error_json,
         "metrics_json": run.metrics_json,
+        "debug": debug,
     }
-    if chat_turn is not None:
-        turn_payload = chat_turn.payload if isinstance(chat_turn.payload, dict) else {}
-        metadata = turn_payload.get("metadata") if isinstance(turn_payload.get("metadata"), dict) else {}
-        metrics = run.metrics_json if isinstance(run.metrics_json, dict) else {}
-        trace = metadata.get("agent_debug_trace") if isinstance(metadata.get("agent_debug_trace"), dict) else None
-        if trace is not None:
-            payload["debug"] = {
-                "trace": _trace_for_response(trace, chat_turn_id=chat_turn.id, metrics=metrics),
-            }
-    elif run.status == "failed":
-        metrics = run.metrics_json if isinstance(run.metrics_json, dict) else {}
-        trace = build_debug_trace(
-            run=run,
-            chat_turn=None,
-            node_events=[],
-            tool_events=[],
-            metrics=metrics,
-            route=metrics.get("route"),
-            route_reason=None,
-            error=run.error_json,
-        )
-        payload["debug"] = {
-            "trace": _trace_for_response(trace, chat_turn_id=None, metrics=metrics),
-        }
     return payload
 
 
@@ -276,5 +238,4 @@ async def get_agent_run(run_id: str):
     run = await repo.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Agent run not found")
-    chat_turn = await repo.get_chat_turn_for_run(run)
-    return {"agent_run": _run_payload(run, chat_turn=chat_turn)}
+    return {"agent_run": _run_payload(run)}

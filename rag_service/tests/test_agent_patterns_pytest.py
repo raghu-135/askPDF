@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent_patterns.router_runtime import handle_router_rag_chat
 from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result_metadata
 from app.agent_patterns.graph import build_planner_prompt, infer_required_plan_steps, normalize_execution_plan
-from app.agent_patterns.debug_trace import build_debug_trace
+from app.agent_patterns.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.service import AgentRunService
@@ -34,6 +34,22 @@ from app.time_utils import utc_now
 
 SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 TRACE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "docs" / "agent_debug_trace_v1.schema.json"
+
+
+def make_trace_recorder(run_id: str, thread_id: str, spec: dict, template_id: str = ROUTER_RAG_AGENT_ID) -> AgentTraceRecorder:
+    return AgentTraceRecorder(
+        SimpleNamespace(
+            id=run_id,
+            thread_id=thread_id,
+            user_id=None,
+            template_id=template_id,
+            template_version_id=f"{template_id}:v1",
+            resolved_spec_json=spec,
+            status="running",
+            started_at=utc_now(),
+            completed_at=None,
+        )
+    )
 
 
 class TestModelRetry:
@@ -904,7 +920,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_pattern": {"template_id": "simple_rag_agent"}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
                 captured_context.update(agent_run_context or {})
                 return {
                     "answer": "router fallback",
@@ -961,7 +977,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
                 return {
                     "answer": "router default",
                     "document_sources": [],
@@ -1011,8 +1027,18 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
                 captured_spec.update(resolved_spec)
+                node_event = {"node": "router", "elapsed_ms": 3.5, "route": "direct"}
+                tool_event = {
+                    "tool_name": "search_documents",
+                    "caller_node": "retrieval_worker",
+                    "ok": True,
+                    "elapsed_ms": 9.25,
+                    "warnings": [],
+                }
+                trace_recorder.record_node_event(node_event)
+                trace_recorder.record_tool_event(tool_event)
                 return {
                     "answer": "router ok",
                     "document_sources": [],
@@ -1020,16 +1046,8 @@ class TestAgentRunService:
                     "used_chat_ids": [],
                     "clarification_options": None,
                     "route": "direct",
-                    "node_events": [{"node": "router", "elapsed_ms": 3.5}],
-                    "tool_events": [
-                        {
-                            "tool_name": "search_documents",
-                            "caller_node": "retrieval_worker",
-                            "ok": True,
-                            "elapsed_ms": 9.25,
-                            "warnings": [],
-                        }
-                    ],
+                    "node_events": [node_event],
+                    "tool_events": [tool_event],
                     **agent_run_context,
                 }
 
@@ -1062,6 +1080,9 @@ class TestAgentRunService:
         assert run.metrics_json["node_elapsed_ms"] == {"router": 3.5}
         assert run.metrics_json["tool_event_count"] == 1
         assert run.metrics_json["tool_elapsed_ms"] == 9.25
+        assert run.debug_trace_json["version"] == 1
+        assert run.debug_trace_json["trace"]["run_id"] == run.id
+        assert "graph" not in run.debug_trace_json
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_plan_execute_rag_when_selected(self, engine, sample_thread, monkeypatch):
@@ -1080,8 +1101,10 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_pattern": {"template_id": PLAN_EXECUTE_RAG_AGENT_ID}}
 
-            async def fake_handle_plan_execute_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context):
+            async def fake_handle_plan_execute_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
                 captured_spec.update(resolved_spec)
+                node_event = {"node": "planner", "elapsed_ms": 2.0, "route": "execute", "execution_plan": ["retrieval_worker"]}
+                trace_recorder.record_node_event(node_event)
                 return {
                     "answer": "plan execute ok",
                     "document_sources": [{"id": "doc"}],
@@ -1089,7 +1112,7 @@ class TestAgentRunService:
                     "used_chat_ids": ["turn-1:assistant"],
                     "clarification_options": None,
                     "route": "execute",
-                    "node_events": [{"node": "planner", "elapsed_ms": 2.0, "execution_plan": ["retrieval_worker"]}],
+                    "node_events": [node_event],
                     "tool_events": [],
                     **agent_run_context,
                 }
@@ -1127,6 +1150,8 @@ class TestAgentRunService:
         assert run.metrics_json["node_elapsed_ms"] == {"planner": 2.0}
         assert run.metrics_json["document_source_count"] == 1
         assert run.metrics_json["used_chat_id_count"] == 1
+        assert run.debug_trace_json["summary"]["route"] == "execute"
+        assert "graph" not in run.debug_trace_json
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_persists_failed_run_metrics(self, engine, sample_thread, monkeypatch):
@@ -1144,7 +1169,9 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
+                node_event = {"node": "router", "elapsed_ms": 4.0, "route": "document"}
+                trace_recorder.record_node_event(node_event)
                 return {
                     "answer": "fallback",
                     "document_sources": [],
@@ -1152,7 +1179,7 @@ class TestAgentRunService:
                     "used_chat_ids": [],
                     "clarification_options": None,
                     "route": "document",
-                    "node_events": [{"node": "router", "elapsed_ms": 4.0}],
+                    "node_events": [node_event],
                     "tool_events": [],
                     "errors": [{"code": "router_rag_execution_failed"}],
                     "agent_error": {"code": "router_rag_execution_failed", "raw_message": "boom", "retryable": True},
@@ -1185,6 +1212,8 @@ class TestAgentRunService:
         assert run.metrics_json["route"] == "document"
         assert run.metrics_json["node_event_count"] == 1
         assert run.metrics_json["error_count"] == 1
+        assert run.debug_trace_json["trace"]["status"] == "failed"
+        assert "graph" not in run.debug_trace_json
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
@@ -1373,6 +1402,7 @@ class TestRouterRagRuntime:
                 "agent_pattern_id": ROUTER_RAG_AGENT_ID,
                 "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
             },
+            trace_recorder=make_trace_recorder("run-1", sample_thread.id, builtin_router_rag_spec()),
         )
 
         async with session_factory() as check_session:
@@ -1416,7 +1446,7 @@ class TestRouterRagRuntime:
         assert turn.status == "completed"
         assert turn.payload["metadata"]["agent_run_id"] == "run-1"
         assert turn.payload["metadata"]["agent_route"] == "direct"
-        assert turn.payload["metadata"]["agent_debug_trace"]["schema_version"] == 1
+        assert "agent_debug_trace" not in turn.payload["metadata"]
         assert "agent_node_events" not in turn.payload["metadata"]
         assert "agent_tool_events" not in turn.payload["metadata"]
         assert result["tool_events"] == []
@@ -1595,6 +1625,7 @@ class TestRouterRagRuntime:
                 "agent_pattern_id": ROUTER_RAG_AGENT_ID,
                 "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
             },
+            trace_recorder=make_trace_recorder(f"run-{route}", sample_thread.id, builtin_router_rag_spec()),
         )
 
         async with session_factory() as check_session:
@@ -1606,7 +1637,7 @@ class TestRouterRagRuntime:
         assert turn is not None
         assert turn.status == expected_status
         assert turn.payload["metadata"]["agent_route"] == route
-        assert turn.payload["metadata"]["agent_debug_trace"]["schema_version"] == 1
+        assert "agent_debug_trace" not in turn.payload["metadata"]
         assert "agent_node_events" not in turn.payload["metadata"]
         assert "agent_tool_events" not in turn.payload["metadata"]
         if route == "clarify":
@@ -1751,6 +1782,7 @@ class TestRouterRagRuntime:
                 "agent_pattern_id": ROUTER_RAG_AGENT_ID,
                 "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
             },
+            trace_recorder=make_trace_recorder("run-failed", sample_thread.id, builtin_router_rag_spec()),
         )
 
         async with session_factory() as check_session:
@@ -1759,13 +1791,15 @@ class TestRouterRagRuntime:
         assert result["agent_error"]["code"] == "router_rag_execution_failed"
         assert result["chat_turn_id"] == turn.id
         assert result["route"] == "document"
-        assert [event["node"] for event in result["node_events"]] == ["context_loader", "router"]
+        assert [event["node"] for event in result["node_events"]] == ["context_loader", "router", "retrieval_worker"]
+        assert result["node_events"][-1]["status"] == "failed"
+        assert result["node_events"][-1]["error"]["raw_message"] == "document tool exploded"
         assert result["tool_events"] == []
         assert result["errors"][0]["raw_message"] == "document tool exploded"
         assert turn.status == "failed"
         assert turn.payload["metadata"]["agent_run_id"] == "run-failed"
         assert turn.payload["metadata"]["agent_route"] == "document"
-        assert turn.payload["metadata"]["agent_debug_trace"]["schema_version"] == 1
+        assert "agent_debug_trace" not in turn.payload["metadata"]
         assert "agent_node_events" not in turn.payload["metadata"]
         assert "agent_tool_events" not in turn.payload["metadata"]
         assert turn.payload["metadata"]["agent_error"]["raw_message"] == "document tool exploded"
@@ -1947,25 +1981,17 @@ class TestAgentPatternApi:
                 "warnings": [],
             }
         ]
-        debug_trace = build_debug_trace(
-            run=run,
-            chat_turn=SimpleNamespace(id=turn_id),
-            node_events=node_telemetry,
-            tool_events=tool_telemetry,
-            metrics={
-                "duration_ms": 42.0,
-                "route": "web",
-                "node_event_count": 1,
-                "node_elapsed_ms": {"router": 4.5},
-                "node_total_elapsed_ms": 4.5,
-                "tool_event_count": 1,
-                "tool_warning_count": 0,
-                "tool_error_count": 0,
-                "tool_elapsed_ms": 12.3,
-            },
-            route="web",
-            route_reason="Needs live evidence.",
-        )
+        metrics = {
+            "duration_ms": 42.0,
+            "route": "web",
+            "node_event_count": 1,
+            "node_elapsed_ms": {"router": 4.5},
+            "node_total_elapsed_ms": 4.5,
+            "tool_event_count": 1,
+            "tool_warning_count": 0,
+            "tool_error_count": 0,
+            "tool_elapsed_ms": 12.3,
+        }
 
         turn = ChatTurn(
             id=turn_id,
@@ -1978,7 +2004,6 @@ class TestAgentPatternApi:
                     "agent_run_id": run.id,
                     "agent_route": "web",
                     "agent_route_reason": "Needs live evidence.",
-                    "agent_debug_trace": debug_trace,
                 },
             },
         )
@@ -1987,22 +2012,22 @@ class TestAgentPatternApi:
             await write_session.commit()
         async with session_factory() as repo_session:
             repo = AgentPatternRepository(repo_session)
-            await repo.complete_run(
+            completed_run = await repo.complete_run(
                 run.id,
                 status="completed",
-                metrics_json={
-                    "duration_ms": 42.0,
-                    "route": "web",
-                    "node_event_count": 1,
-                    "node_elapsed_ms": {"router": 4.5},
-                    "node_total_elapsed_ms": 4.5,
-                    "tool_event_count": 1,
-                    "tool_warning_count": 0,
-                    "tool_error_count": 0,
-                    "tool_elapsed_ms": 12.3,
-                },
+                metrics_json=metrics,
                 chat_turn_id=turn.id,
             )
+            debug_payload = build_debug_payload(
+                run=completed_run,
+                chat_turn_id=turn_id,
+                node_events=node_telemetry,
+                tool_events=tool_telemetry,
+                metrics=metrics,
+                route="web",
+                route_reason="Needs live evidence.",
+            )
+            await repo.set_run_debug_trace(completed_run.id, debug_payload)
 
         response = api_client.get(f"/api/agent-runs/{run.id}")
 
@@ -2011,9 +2036,12 @@ class TestAgentPatternApi:
         assert payload["id"] == run.id
         assert payload["chat_turn_id"] == turn.id
         assert payload["metrics_json"]["tool_event_count"] == 1
-        assert set(payload["debug"]) == {"trace"}
+        assert set(payload["debug"]) == {"version", "trace", "summary", "graph"}
         assert "node_events" not in payload["debug"]
         assert "tool_events" not in payload["debug"]
+        assert payload["debug"]["version"] == 1
+        assert payload["debug"]["summary"]["route"] == "web"
+        assert payload["debug"]["graph"]["selectedRoute"] == "web"
         trace = payload["debug"]["trace"]
         assert trace["metrics"]["duration_ms"] == 42.0
         assert trace["metrics"]["route"] == "web"
@@ -2048,7 +2076,7 @@ class TestAgentPatternApi:
         assert any(event["name"] == "tool.completed" for event in span_ids["tool:search_web:0"]["events"])
 
     @pytest.mark.asyncio
-    async def test_get_failed_agent_run_without_turn_includes_error_debug(self, api_client, engine, sample_thread):
+    async def test_get_agent_run_returns_null_debug_when_trace_not_captured(self, api_client, engine, sample_thread):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -2085,15 +2113,4 @@ class TestAgentPatternApi:
         assert response.status_code == 200
         payload = response.json()["agent_run"]
         assert payload["status"] == "failed"
-        assert set(payload["debug"]) == {"trace"}
-        trace = payload["debug"]["trace"]
-        assert trace["schema_version"] == 1
-        assert trace["status"] == "failed"
-        assert trace["chat_turn_id"] is None
-        assert trace["metrics"]["error_count"] == 1
-        assert "raw" not in trace
-        root_span = trace["spans"][0]
-        assert root_span["span_id"] == f"run:{run.id}"
-        assert root_span["status"] == "failed"
-        assert root_span["events"][0]["name"] == "exception"
-        assert root_span["events"][0]["attributes"]["askpdf.error.code"] == "agent_run_failed"
+        assert payload["debug"] is None

@@ -72,6 +72,16 @@ export default function AgentRunDebugPanel({
           {error}
         </Typography>
       )}
+      {!loading && !error && runDetails && !debug && (
+        <Typography variant="caption" color="text.secondary">
+          Trace not captured for this run.
+        </Typography>
+      )}
+      {debug && !traceView && (
+        <Typography variant="caption" color="text.secondary">
+          Trace payload is incomplete.
+        </Typography>
+      )}
       {debug && runDetails && traceView && (
         <>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>

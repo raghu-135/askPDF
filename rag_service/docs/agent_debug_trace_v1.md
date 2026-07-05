@@ -1,9 +1,11 @@
 # Agent Debug Trace v1
 
-`debug.trace` is the backend-owned normalized debug document returned by
-`GET /api/agent-runs/{id}`. The debug UI renders this normalized trace directly.
-Each span preserves the original runtime event for that unit of work under
-`span.raw` for escape-hatch debugging and trace reconstruction.
+Agent runs persist `debug_trace_json`, a backend-owned canonical payload with
+`version`, `trace`, and `summary`. `GET /api/agent-runs/{id}` returns those
+fields plus an API-derived `graph` view model. The debug UI renders `summary`
+and `graph` directly, and uses `trace` for raw inspection. Each span preserves
+the original runtime event for that unit of work under `span.raw` for
+escape-hatch debugging and trace reconstruction.
 
 The v1 trace is inspired by OpenTelemetry spans, LangSmith runs, and
 OpenInference AI span conventions, but it is not an OTLP export format.
@@ -23,6 +25,22 @@ shape for consumers.
 - Represent skipped graph nodes as skipped work, not warnings.
 - Store refs and bounded previews instead of full source bodies.
 - Surface retry telemetry without changing retry behavior.
+
+## Stored Debug Payload
+
+Top-level fields:
+
+- `version`: currently `1`.
+- `trace`: normalized trace document described below.
+- `summary`: ready-to-render run, node, tool, warning, error, token, and timing
+  rollups.
+
+## API Debug Payload
+
+`GET /api/agent-runs/{id}` returns the stored debug payload plus:
+
+- `graph`: ready-to-render graph nodes/edges with runtime status overlays,
+  derived from `summary` and the run's resolved template spec.
 
 ## Trace Document
 
@@ -71,9 +89,7 @@ Every span uses this neutral shape:
 - Router/planner node spans: `AGENT`.
 - Retrieval worker spans: `RETRIEVER`.
 - Other graph node spans: `CHAIN`.
-- First-party tool spans:
-  - `RETRIEVER` for document, memory, timeline, and web categories.
-  - `TOOL` for other categories.
+- First-party tool spans: `TOOL`.
 
 ## Common Attributes
 
@@ -208,7 +224,8 @@ the original runtime event for deeper debugging.
 
 ## Evolution Rules
 
-- `debug.trace` is the public debug rendering contract.
+- `debug.summary` and `debug.graph` are the public debug rendering contract.
+- `debug.trace` is the raw normalized inspection contract.
 - Each span may include `raw`, the original runtime event used to build that
   normalized span.
 - New trace fields should be additive within `schema_version: 1`.

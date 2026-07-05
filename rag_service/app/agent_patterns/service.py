@@ -4,6 +4,7 @@ import time
 import logging
 from typing import Any, Dict, Optional
 
+from app.agent_patterns.debug_trace import AgentTraceRecorder
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.templates import PLAN_EXECUTE_RAG_AGENT_ID, ROUTER_RAG_AGENT_ID, SUPPORTED_BUILTIN_TEMPLATE_IDS
@@ -75,6 +76,7 @@ class AgentRunService:
         )
 
         started = time.perf_counter()
+        trace_recorder = AgentTraceRecorder(run)
         context = {
             "agent_run_id": run.id,
             "agent_pattern_id": template.id,
@@ -93,18 +95,31 @@ class AgentRunService:
                 embed_model,
                 resolved_spec=resolved_spec,
                 agent_run_context=context,
+                trace_recorder=trace_recorder,
             )
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
-            status = "failed" if error_json else "completed"
+            status = result.get("status") if isinstance(result.get("status"), str) else None
+            if status is None:
+                status = "failed" if error_json else "clarification" if result.get("clarification_options") else "completed"
             metrics = build_run_metrics(result, duration_ms=duration_ms)
-            await self.repository.complete_run(
+            completed_run = await self.repository.complete_run(
                 run.id,
                 status=status,
                 metrics_json=metrics,
                 error_json=error_json,
                 chat_turn_id=result.get("chat_turn_id"),
             )
+            if completed_run is not None:
+                debug_payload = trace_recorder.finalize(
+                    run=completed_run,
+                    chat_turn_id=result.get("chat_turn_id"),
+                    metrics=metrics,
+                    route=result.get("route"),
+                    route_reason=result.get("route_reason"),
+                    error=error_json,
+                )
+                await self.repository.set_run_debug_trace(run.id, debug_payload)
             result.update(context)
             return result
         except Exception as exc:
@@ -114,10 +129,19 @@ class AgentRunService:
                 "raw_message": str(exc),
                 "retryable": True,
             }
-            await self.repository.complete_run(
+            metrics = build_run_metrics({"agent_error": error_json}, duration_ms=duration_ms)
+            completed_run = await self.repository.complete_run(
                 run.id,
                 status="failed",
-                metrics_json=build_run_metrics({"agent_error": error_json}, duration_ms=duration_ms),
+                metrics_json=metrics,
                 error_json=error_json,
             )
+            if completed_run is not None:
+                debug_payload = trace_recorder.finalize(
+                    run=completed_run,
+                    chat_turn_id=None,
+                    metrics=metrics,
+                    error=error_json,
+                )
+                await self.repository.set_run_debug_trace(run.id, debug_payload)
             raise
