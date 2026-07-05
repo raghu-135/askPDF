@@ -2114,3 +2114,35 @@ class TestAgentPatternApi:
         payload = response.json()["agent_run"]
         assert payload["status"] == "failed"
         assert payload["debug"] is None
+
+    @pytest.mark.asyncio
+    async def test_get_agent_run_returns_null_debug_for_malformed_trace_payload(self, api_client, engine, sample_thread):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            run = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            await repo.complete_run(
+                run.id,
+                status="completed",
+                metrics_json={"duration_ms": 1.0, "route": "direct"},
+                debug_trace_json={"version": 1, "trace": {"schema_version": 1}},
+            )
+
+        response = api_client.get(f"/api/agent-runs/{run.id}")
+
+        assert response.status_code == 200
+        payload = response.json()["agent_run"]
+        assert payload["status"] == "completed"
+        assert payload["debug"] is None

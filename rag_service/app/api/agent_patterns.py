@@ -62,17 +62,26 @@ def _version_payload(version) -> Dict[str, Any]:
     }
 
 
-def _run_payload(run) -> Dict[str, Any]:
+def _debug_payload_for_response(run) -> Dict[str, Any] | None:
     debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else None
-    if debug is not None:
-        summary = debug.get("summary") if isinstance(debug.get("summary"), dict) else {}
-        debug = {
-            **debug,
-            "graph": build_debug_graph(
-                resolved_spec=run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {},
-                summary=summary,
-            ),
-        }
+    if not debug or debug.get("version") != 1:
+        return None
+    trace = debug.get("trace") if isinstance(debug.get("trace"), dict) else None
+    summary = debug.get("summary") if isinstance(debug.get("summary"), dict) else None
+    if trace is None or summary is None:
+        return None
+    return {
+        **debug,
+        "trace": trace,
+        "summary": summary,
+        "graph": build_debug_graph(
+            resolved_spec=run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {},
+            summary=summary,
+        ),
+    }
+
+
+def _run_payload(run) -> Dict[str, Any]:
     payload = {
         "id": run.id,
         "thread_id": run.thread_id,
@@ -87,7 +96,7 @@ def _run_payload(run) -> Dict[str, Any]:
         "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,
         "error_json": run.error_json,
         "metrics_json": run.metrics_json,
-        "debug": debug,
+        "debug": _debug_payload_for_response(run),
     }
     return payload
 

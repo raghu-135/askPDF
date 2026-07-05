@@ -201,6 +201,12 @@ test('trace projection handles null debug payload', () => {
   assert.equal(buildRunTraceView({ id: 'run-empty', debug: null }), undefined);
 });
 
+test('trace projection rejects empty or stale debug payloads', () => {
+  assert.equal(buildRunTraceView({ id: 'run-empty-object', debug: {} }), undefined);
+  assert.equal(buildRunTraceView({ id: 'run-stale', debug: { ...backendDebug, version: 0 } }), undefined);
+  assert.equal(buildRunTraceView({ id: 'run-partial', debug: { version: 1, trace: backendDebug.trace } }), undefined);
+});
+
 test('trace export returns full backend debug json', () => {
   const view = buildRunTraceView(traceBackedRun);
   const exported = JSON.parse(buildTraceExportJson(view));

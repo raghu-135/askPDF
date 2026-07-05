@@ -73,7 +73,11 @@ const asNumber = (value: any): number | undefined => {
 
 export const getRunDebug = (runDetails: AgentRunDetails): AgentRunDebug | undefined => {
   const debug = runDetails.debug;
-  return debug && typeof debug === 'object' && !Array.isArray(debug) ? debug : undefined;
+  if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return undefined;
+  if (debug.version !== 1) return undefined;
+  if (Object.keys(asObject(debug.trace)).length === 0) return undefined;
+  if (Object.keys(asObject(debug.summary)).length === 0) return undefined;
+  return debug;
 };
 
 export const getRunTrace = (runDetails: AgentRunDetails): AgentDebugTrace | undefined => {
