@@ -85,6 +85,8 @@ export interface AgentGraphRuntimeOverlay {
   route?: string;
   routeReason?: string;
   executionPlan?: string[];
+  graphNodeRows?: Record<string, any>[];
+  graphToolRows?: Record<string, any>[];
   nodeEvents?: Record<string, any>[];
   toolEvents?: Record<string, any>[];
   errors?: Record<string, any>[];

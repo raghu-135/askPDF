@@ -61,3 +61,26 @@ test('plan execute graph marks planner plan and skipped workers', () => {
   assert.equal(executeEdge?.selected, true);
 });
 
+test('graph mapper accepts trace-native graph rows', () => {
+  const graph = buildAgentGraph(
+    getAgentGraphSpec({ pattern_type: 'router_rag_agent' }),
+    {
+      route: 'document',
+      graphNodeRows: [
+        { node: 'router', route: 'document', elapsed_ms: 4 },
+        { node: 'retrieval_worker', elapsed_ms: 9 },
+      ],
+      graphToolRows: [
+        { tool_name: 'search_documents', caller_node: 'retrieval_worker', ok: true, source_count: 2 },
+      ],
+    },
+  );
+
+  const selectedEdge = graph.edges.find((edge) => edge.route === 'document');
+  const retrievalNode = graph.nodes.find((node) => node.id === 'retrieval_worker');
+
+  assert.equal(selectedEdge?.selected, true);
+  assert.equal(retrievalNode?.status, 'active');
+  assert.equal(retrievalNode?.sourceCount, 2);
+  assert.equal(retrievalNode?.toolSummaries.length, 1);
+});

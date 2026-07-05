@@ -16,6 +16,7 @@ import '@xyflow/react/dist/style.css';
 import AgentGraphInspector from './AgentGraphInspector';
 import AgentGraphNode from './AgentGraphNode';
 import { buildAgentGraph, getAgentGraphSpec } from './agent-graph-mapper';
+import type { TraceRunView } from '../agent-debug/agent-trace-projection';
 import type {
   AgentGraphMode,
   AgentGraphNode as AgentGraphNodeModel,
@@ -31,6 +32,19 @@ const nodeTypes = {
 
 const NODE_WIDTH = 230;
 const NODE_HEIGHT = 118;
+
+const overlayFromTraceView = (traceView?: TraceRunView): AgentGraphRuntimeOverlay | undefined => (
+  traceView
+    ? {
+      route: traceView.route,
+      routeReason: traceView.routeReason,
+      graphNodeRows: traceView.nodes.map((node) => node.raw),
+      graphToolRows: traceView.tools.map((tool) => tool.raw),
+      errors: traceView.errors,
+      metrics: traceView.metrics,
+    }
+    : undefined
+);
 
 const getStatusEdgeColor = (edge: { selected?: boolean; active?: boolean }) => {
   if (edge.selected) return '#1976d2';
@@ -79,11 +93,13 @@ function AgentGraphCanvasInner({
   resolvedSpec,
   templateId,
   overlay,
+  traceView,
   mode,
 }: {
   resolvedSpec?: Record<string, any>;
   templateId?: string;
   overlay?: AgentGraphRuntimeOverlay;
+  traceView?: TraceRunView;
   mode: AgentGraphMode;
 }) {
   const theme = useTheme();
@@ -93,8 +109,8 @@ function AgentGraphCanvasInner({
 
   const graph = useMemo(() => {
     const graphSpec = getAgentGraphSpec(resolvedSpec, templateId);
-    return buildAgentGraph(graphSpec, overlay || {});
-  }, [overlay, resolvedSpec, templateId]);
+    return buildAgentGraph(graphSpec, overlayFromTraceView(traceView) || overlay || {});
+  }, [overlay, resolvedSpec, templateId, traceView]);
   const layoutDirection = mode === 'run-debug' ? 'DOWN' : 'RIGHT';
 
   const flowEdges = useMemo((): Edge[] => graph.edges.map((edge) => {
@@ -248,6 +264,7 @@ export default function AgentGraphCanvas(props: {
   resolvedSpec?: Record<string, any>;
   templateId?: string;
   overlay?: AgentGraphRuntimeOverlay;
+  traceView?: TraceRunView;
   mode?: AgentGraphMode;
 }) {
   return (

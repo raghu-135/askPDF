@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
 
+from app.agent_patterns.trace import compact_preview
 from app.time_utils import iso_utc_z
 
 
 TRACE_SCHEMA_VERSION = 1
+TRACE_PREVIEW_LIMIT = 900
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -18,6 +20,22 @@ def _as_list(value: Any) -> List[Any]:
 
 def _clean_dict(value: Mapping[str, Any]) -> Dict[str, Any]:
     return {key: item for key, item in value.items() if item not in (None, "", [], {})}
+
+
+def _bounded_value(value: Any) -> Any:
+    if value in (None, "", [], {}):
+        return value
+    if isinstance(value, str):
+        return compact_preview(value, limit=TRACE_PREVIEW_LIMIT)
+    if isinstance(value, list):
+        return [_bounded_value(item) for item in value[:50]]
+    if isinstance(value, dict):
+        return {
+            key: _bounded_value(item)
+            for key, item in value.items()
+            if item not in (None, "", [], {})
+        }
+    return value
 
 
 def _span_status(event: Mapping[str, Any]) -> str:
@@ -143,6 +161,31 @@ def _llm_completed_event(summary: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+def _llm_retry_events(summary: Any) -> List[Dict[str, Any]]:
+    data = _as_dict(summary)
+    llm = _as_dict(data.get("llm"))
+    result: List[Dict[str, Any]] = []
+    for attempt in _as_list(llm.get("retry_attempts")):
+        if not isinstance(attempt, dict):
+            continue
+        result.append(
+            {
+                "name": "llm.retry",
+                "attributes": _clean_dict(
+                    {
+                        "llm.retry.attempt": attempt.get("attempt"),
+                        "llm.retry.delay_ms": attempt.get("delay_ms"),
+                        "llm.retry.reason": attempt.get("reason"),
+                        "http.status_code": attempt.get("http_status_code"),
+                        "exception.type": attempt.get("exception_type"),
+                        "exception.message": attempt.get("exception_message"),
+                    }
+                ),
+            }
+        )
+    return result
+
+
 def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     if event.get("route") or event.get("route_reason") or event.get("execution_plan"):
@@ -208,6 +251,7 @@ def _node_span(
     events = [
         *_decision_events(event),
         *([prompt] if prompt else []),
+        *_llm_retry_events(event.get("llm_result_summary")),
         *([llm_completed] if llm_completed else []),
         *_warning_events(event.get("warnings")),
         *([exception] if exception else []),
@@ -252,19 +296,20 @@ def _node_span(
                 "llm.token_count.total": token_counts.get("total"),
                 "llm.token_count.reasoning": token_counts.get("reasoning"),
                 "llm.token_count.cached": token_counts.get("cached"),
+                "llm.retry_count": llm_summary.get("retry_count"),
             }
         ),
         "input": _clean_dict(
             {
-                "value": event.get("input_preview"),
-                "refs": event.get("input_refs"),
+                "value": _bounded_value(event.get("input_preview")),
+                "refs": _bounded_value(event.get("input_refs")),
                 "mime_type": "application/json",
             }
         ),
         "output": _clean_dict(
             {
-                "value": event.get("output_preview"),
-                "refs": event.get("output_refs"),
+                "value": _bounded_value(event.get("output_preview")),
+                "refs": _bounded_value(event.get("output_refs")),
                 "mime_type": "application/json",
             }
         ),
@@ -341,9 +386,9 @@ def _tool_span(
         ),
         "output": _clean_dict(
             {
-                "value": event.get("result_preview"),
-                "refs": event.get("artifact_refs"),
-                "summary": event.get("artifact_summary"),
+                "value": _bounded_value(event.get("result_preview")),
+                "refs": _bounded_value(event.get("artifact_refs")),
+                "summary": _bounded_value(event.get("artifact_summary")),
                 "mime_type": "application/json",
             }
         ),

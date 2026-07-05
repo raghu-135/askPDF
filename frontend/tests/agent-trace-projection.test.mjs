@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  buildRunGraphOverlay,
+  buildTraceExportJson,
   buildRunTraceView,
 } from '../src/components/agent-debug/agent-trace-projection.ts';
 
@@ -211,7 +211,6 @@ const traceBackedRun = {
 
 test('trace projection prefers debug.trace spans over raw debug events', () => {
   const view = buildRunTraceView(traceBackedRun);
-  const overlay = buildRunGraphOverlay(view);
 
   assert.equal(view.route, 'execute');
   assert.equal(view.routeReason, 'Document evidence requested.');
@@ -219,10 +218,6 @@ test('trace projection prefers debug.trace spans over raw debug events', () => {
   assert.deepEqual(view.tools.map((tool) => tool.name), ['search_documents']);
   assert.equal(view.nodes[0].span?.span_id, 'node:planner:0');
   assert.equal(view.tools[0].span?.span_id, 'tool:search_documents:0');
-  assert.equal(overlay.route, 'execute');
-  assert.equal(overlay.routeReason, 'Document evidence requested.');
-  assert.deepEqual(overlay.nodeEvents?.map((event) => event.node), ['planner', 'retrieval_worker', 'memory_worker']);
-  assert.deepEqual(overlay.toolEvents?.map((event) => event.tool_name), ['search_documents']);
 });
 
 test('trace summary counts non-skipped nodes and available graph nodes', () => {
@@ -234,6 +229,17 @@ test('trace summary counts non-skipped nodes and available graph nodes', () => {
   assert.equal(view.availableToolCount, 2);
   assert.equal(view.warningCount, 0);
   assert.equal(view.errorCount, 0);
+});
+
+test('trace export returns only normalized trace json', () => {
+  const view = buildRunTraceView(traceBackedRun);
+  const exported = JSON.parse(buildTraceExportJson(view));
+
+  assert.equal(exported.trace_id, 'run-1');
+  assert.equal(exported.schema_version, 1);
+  assert.equal(exported.spans.length, traceBackedRun.debug.trace.spans.length);
+  assert.equal(exported.node_events, undefined);
+  assert.equal(exported.tool_events, undefined);
 });
 
 test('raw debug fallback still works without debug.trace', () => {
@@ -257,12 +263,11 @@ test('raw debug fallback still works without debug.trace', () => {
   };
 
   const view = buildRunTraceView(rawFallbackRun);
-  const overlay = buildRunGraphOverlay(view);
 
   assert.equal(view.route, 'document');
-  assert.equal(overlay.route, 'document');
   assert.deepEqual(view.nodes.map((node) => node.id), ['router', 'retrieval_worker']);
   assert.deepEqual(view.tools.map((tool) => tool.name), ['search_documents']);
   assert.equal(view.usedNodeCount, 2);
   assert.equal(view.usedToolCount, 1);
+  assert.equal(buildTraceExportJson(view), '');
 });

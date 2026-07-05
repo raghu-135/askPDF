@@ -1,6 +1,7 @@
 import os
 import uuid
 import logging
+import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -25,10 +26,42 @@ from app.agent_patterns.templates import (
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
 from app.db.models_sqlmodel import AgentRun, ChatTurn
+from app.models.retry import invoke_with_retry
 from app.time_utils import utc_now
 
 
 SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
+
+
+class TestModelRetry:
+    @pytest.mark.asyncio
+    async def test_invoke_with_retry_reports_retry_attempts_without_changing_behavior(self, monkeypatch):
+        calls = 0
+        observed = []
+        delays = []
+
+        async def fake_sleep(delay):
+            delays.append(delay)
+
+        async def flaky_call():
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise RuntimeError("status_code=429 temporary overload")
+            return "ok"
+
+        monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+        result = await invoke_with_retry(flaky_call, retry_observer=lambda event: observed.append(event))
+
+        assert result == "ok"
+        assert calls == 3
+        assert delays == [2, 4]
+        assert [event["attempt"] for event in observed] == [1, 2]
+        assert observed[0]["delay_ms"] == 2000
+        assert observed[0]["http_status_code"] == 429
+        assert observed[0]["exception_type"] == "RuntimeError"
+        assert observed[0]["reason"] == "Retryable OpenAI-compatible API error (429)"
 
 
 class TestAgentRunMetrics:
@@ -111,6 +144,17 @@ class TestAgentRunMetrics:
                             "reasoning_available": True,
                             "reasoning_format": "structured",
                             "reasoning_chars": 12,
+                            "retry_count": 1,
+                            "retry_attempts": [
+                                {
+                                    "attempt": 1,
+                                    "delay_ms": 2000,
+                                    "reason": "Retryable OpenAI-compatible API error (429)",
+                                    "http_status_code": 429,
+                                    "exception_type": "RuntimeError",
+                                    "exception_message": "status_code=429 temporary overload",
+                                }
+                            ],
                         }
                     },
                 }
@@ -140,6 +184,11 @@ class TestAgentRunMetrics:
         router_span = next(span for span in trace["spans"] if span["span_id"] == "node:router:1")
         assert router_span["attributes"]["llm.model_name"] == "test-llm"
         assert router_span["attributes"]["llm.token_count.total"] == 18
+        assert router_span["attributes"]["llm.retry_count"] == 1
+        retry_event = next(event for event in router_span["events"] if event["name"] == "llm.retry")
+        assert retry_event["attributes"]["llm.retry.attempt"] == 1
+        assert retry_event["attributes"]["llm.retry.delay_ms"] == 2000
+        assert retry_event["attributes"]["http.status_code"] == 429
         llm_event = next(event for event in router_span["events"] if event["name"] == "llm.completed")
         assert llm_event["attributes"]["llm.response_chars"] == 42
         assert llm_event["attributes"]["llm.token_count.reasoning"] == 3
@@ -147,6 +196,103 @@ class TestAgentRunMetrics:
         tool_span = next(span for span in trace["spans"] if span["span_id"] == "tool:search_documents:0")
         assert tool_span["start_time"] == "2026-07-04T02:30:09Z"
         assert tool_span["end_time"] == "2026-07-04T02:30:09.002000Z"
+
+    def test_build_debug_trace_bounds_preview_values_but_preserves_raw_events(self):
+        long_text = "A" * 5000
+        run = SimpleNamespace(
+            id="run-size",
+            thread_id="thread-1",
+            user_id="user-1",
+            template_id=ROUTER_RAG_AGENT_ID,
+            template_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
+            resolved_spec_json=builtin_router_rag_spec(),
+            status="completed",
+            started_at=utc_now(),
+            completed_at=utc_now(),
+        )
+
+        trace = build_debug_trace(
+            run=run,
+            chat_turn=SimpleNamespace(id="turn-1"),
+            node_events=[
+                {
+                    "node": "context_loader",
+                    "status": "completed",
+                    "input_preview": {"question": long_text},
+                    "output_preview": {"document_evidence": long_text},
+                    "output_refs": {
+                        "document_matches": [
+                            {
+                                "file_hash": "file-1",
+                                "chunk_id": "chunk-1",
+                                "preview": long_text,
+                                "text": long_text,
+                            }
+                        ]
+                    },
+                }
+            ],
+            tool_events=[],
+            metrics={"duration_ms": 1.0, "route": "direct", "tool_warning_count": 0, "error_count": 0},
+            route="direct",
+        )
+
+        node_span = next(span for span in trace["spans"] if span["span_id"] == "node:context_loader:0")
+        assert len(node_span["input"]["value"]["question"]) <= 903
+        assert len(node_span["output"]["value"]["document_evidence"]) <= 903
+        ref = node_span["output"]["refs"]["document_matches"][0]
+        assert len(ref["preview"]) <= 903
+        assert len(ref["text"]) <= 903
+        assert trace["raw"]["node_events"][0]["output_refs"]["document_matches"][0]["text"] == long_text
+
+    def test_build_debug_trace_v1_shape_for_direct_tool_plan_and_failed_runs(self):
+        run = SimpleNamespace(
+            id="run-shape",
+            thread_id="thread-1",
+            user_id="user-1",
+            template_id=PLAN_EXECUTE_RAG_AGENT_ID,
+            template_version_id=f"{PLAN_EXECUTE_RAG_AGENT_ID}:v1",
+            resolved_spec_json=builtin_plan_execute_rag_spec(),
+            status="failed",
+            started_at=utc_now(),
+            completed_at=utc_now(),
+        )
+
+        trace = build_debug_trace(
+            run=run,
+            chat_turn=SimpleNamespace(id="turn-1"),
+            node_events=[
+                {"node": "planner", "status": "completed", "route": "execute", "execution_plan": ["retrieval_worker"]},
+                {"node": "retrieval_worker", "status": "failed", "error": {"code": "worker_failed", "message": "boom", "retryable": True}},
+                {"node": "memory_worker", "status": "skipped", "skipped": True, "skip_reason": "not_selected_by_plan"},
+            ],
+            tool_events=[
+                {
+                    "tool_name": "search_documents",
+                    "tool_id": "document_evidence",
+                    "tool_category": "document",
+                    "caller_node": "retrieval_worker",
+                    "ok": False,
+                    "error": {"code": "search_documents_failed", "message": "tool boom", "retryable": True},
+                }
+            ],
+            metrics={"duration_ms": 4.0, "route": "execute", "tool_warning_count": 0, "error_count": 1},
+            route="execute",
+            error={"code": "agent_run_failed", "raw_message": "run boom", "retryable": True},
+        )
+
+        assert trace["schema_version"] == 1
+        assert trace["raw"]["node_events"][0]["node"] == "planner"
+        span_ids = {span["span_id"]: span for span in trace["spans"]}
+        assert span_ids["run:run-shape"]["events"][0]["name"] == "exception"
+        assert span_ids["run:run-shape"]["events"][0]["attributes"]["askpdf.error.retryable"] is True
+        assert span_ids["node:planner:0"]["events"][0]["name"] == "decision.made"
+        assert span_ids["node:retrieval_worker:1"]["status"] == "error"
+        assert any(event["name"] == "exception" for event in span_ids["node:retrieval_worker:1"]["events"])
+        assert span_ids["node:memory_worker:2"]["status"] == "skipped"
+        assert any(event["name"] == "skipped" for event in span_ids["node:memory_worker:2"]["events"])
+        assert span_ids["tool:search_documents:0"]["status"] == "error"
+        assert span_ids["tool:search_documents:0"]["attributes"]["tool.id"] == "document_evidence"
 
 
 class TestRouterRagTemplateValidator:

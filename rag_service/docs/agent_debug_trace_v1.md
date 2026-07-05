@@ -15,6 +15,7 @@ OpenInference AI span conventions, but it is not an OTLP export format.
   inputs, outputs, links, and artifacts.
 - Represent skipped graph nodes as skipped work, not warnings.
 - Store refs and bounded previews instead of full source bodies.
+- Surface retry telemetry without changing retry behavior.
 
 ## Trace Document
 
@@ -125,6 +126,8 @@ Generic event names:
 - `normalization.applied`: planner normalization/clamp notes.
 - `llm.completed`: model name, response character count, token counts, and
   reasoning availability when provider metadata exposes them.
+- `llm.retry`: retry attempt number, delay, reason, HTTP status code, and compact
+  exception details for retryable LLM/provider failures.
 - `tool.called`: tool name, contract ID, and category.
 - `tool.completed`: result character count, source count, and warning count.
 - `warning`: real runtime/tool warning codes.
@@ -165,6 +168,23 @@ Supported `llm.completed` attributes:
 - `llm.reasoning_available`
 - `llm.reasoning_format`
 - `llm.reasoning_chars`
+- `llm.retry_count`
+
+Supported `llm.retry` attributes:
+
+- `llm.retry.attempt`
+- `llm.retry.delay_ms`
+- `llm.retry.reason`
+- `http.status_code`
+- `exception.type`
+- `exception.message`
+
+## Size Guardrails
+
+Generated trace `input.value`, `output.value`, `input.refs`, `output.refs`, and
+tool output refs are compacted recursively. Raw escape-hatch payloads under
+`debug.trace.raw` preserve the original node/tool event bodies for compatibility
+and deeper debugging.
 
 ## Compatibility Rules
 

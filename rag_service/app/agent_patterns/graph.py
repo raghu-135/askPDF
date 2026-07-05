@@ -223,6 +223,7 @@ def _llm_result_metadata(
     *,
     model_name: Optional[str] = None,
     normalized_response: Optional[Dict[str, Any]] = None,
+    retry_attempts: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     usage = getattr(response, "usage_metadata", None)
     usage = usage if isinstance(usage, dict) else {}
@@ -257,11 +258,22 @@ def _llm_result_metadata(
         "model_name": model_name or response_metadata.get("model_name") or response_metadata.get("model"),
         "response_chars": len(content_text),
         "token_counts": token_counts,
+        "retry_count": len(retry_attempts or []),
+        "retry_attempts": retry_attempts or [],
         "reasoning_available": normalized.get("reasoning_available"),
         "reasoning_format": normalized.get("reasoning_format"),
         "reasoning_chars": len(reasoning) if reasoning else None,
     }
     return {key: value for key, value in summary.items() if value not in (None, "", {}, [])}
+
+
+def _llm_retry_observer() -> tuple[List[Dict[str, Any]], Callable[[Dict[str, Any]], None]]:
+    attempts: List[Dict[str, Any]] = []
+
+    def observe(event: Dict[str, Any]) -> None:
+        attempts.append(dict(event))
+
+    return attempts, observe
 
 
 def _format_prefetch_summary(bundle: Dict[str, Any]) -> str:
@@ -477,12 +489,14 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_planner_prompt(state)
+        retry_attempts, retry_observer = _llm_retry_observer()
         response = await invoke_with_retry(
             llm.ainvoke,
             [
                 SystemMessage(content="You are a strict planner for a scoped RAG workflow."),
                 HumanMessage(content=prompt),
             ],
+            retry_observer=retry_observer,
         )
         parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
         normalized = normalize_execution_plan(
@@ -516,7 +530,11 @@ class NodeRegistry:
                 "execution_plan": normalized["execution_plan"],
                 "clarification_option_count": len(normalized.get("clarification_options") or []),
                 "normalization_notes": normalized.get("normalization_notes") or [],
-                "llm": _llm_result_metadata(response, model_name=state.get("llm_model")),
+                "llm": _llm_result_metadata(
+                    response,
+                    model_name=state.get("llm_model"),
+                    retry_attempts=retry_attempts,
+                ),
                 **worker_summary,
             },
             "output_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
@@ -532,12 +550,14 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_router_prompt(state)
+        retry_attempts, retry_observer = _llm_retry_observer()
         response = await invoke_with_retry(
             llm.ainvoke,
             [
                 SystemMessage(content="You are a strict router for a RAG workflow."),
                 HumanMessage(content=prompt),
             ],
+            retry_observer=retry_observer,
         )
         parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
         allowed_routes = {"document", "memory", "timeline", "direct", "clarify"}
@@ -567,7 +587,11 @@ class NodeRegistry:
                 "route": route,
                 "route_reason": route_reason,
                 "clarification_option_count": len(clarification_options or []) if route == "clarify" else 0,
-                "llm": _llm_result_metadata(response, model_name=state.get("llm_model")),
+                "llm": _llm_result_metadata(
+                    response,
+                    model_name=state.get("llm_model"),
+                    retry_attempts=retry_attempts,
+                ),
             },
             "output_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
         }
@@ -761,12 +785,14 @@ class NodeRegistry:
         context = state.get("evidence") or _format_prefetch_summary(state.get("pre_fetch_bundle") or {})
         context_source = "worker_evidence" if state.get("evidence") else "prefetch"
         messages = build_final_answer_messages(state, context)
+        retry_attempts, retry_observer = _llm_retry_observer()
         response = await invoke_with_retry(
             llm.ainvoke,
             [
                 SystemMessage(content=messages["system"]),
                 HumanMessage(content=messages["human"]),
             ],
+            retry_observer=retry_observer,
         )
         normalized = normalize_ai_response(response)
         data = {
@@ -790,6 +816,7 @@ class NodeRegistry:
                     response,
                     model_name=state.get("llm_model"),
                     normalized_response=normalized,
+                    retry_attempts=retry_attempts,
                 ),
             },
             "answer_chars": len(normalized["answer"] or ""),

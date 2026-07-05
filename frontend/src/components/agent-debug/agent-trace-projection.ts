@@ -1,5 +1,4 @@
 import type { AgentDebugTrace, AgentRunDetails, AgentTraceSpan } from '../../lib/api';
-import type { AgentGraphRuntimeOverlay } from '../agent-graph/agent-graph-types';
 
 export interface TraceNodeView {
   id: string;
@@ -255,11 +254,6 @@ export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView => 
   };
 };
 
-export const buildRunGraphOverlay = (view: TraceRunView): AgentGraphRuntimeOverlay => ({
-  route: view.route,
-  routeReason: view.routeReason,
-  nodeEvents: view.nodes.map((node) => node.raw),
-  toolEvents: view.tools.map((tool) => tool.raw),
-  errors: view.errors,
-  metrics: view.metrics,
-});
+export const buildTraceExportJson = (view?: TraceRunView): string => (
+  view?.trace ? JSON.stringify(view.trace, null, 2) : ''
+);

@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import dynamic from 'next/dynamic';
-import { Box, CircularProgress, Typography } from '@mui/material';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DownloadIcon from '@mui/icons-material/Download';
+import { Box, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
 import type { AgentRunDetails } from '../../lib/api';
 import AgentRunHeaderChips from './AgentRunHeaderChips';
-import { buildRunGraphOverlay, buildRunTraceView } from './agent-trace-projection';
+import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
 
 const AgentGraphCanvas = dynamic(() => import('../agent-graph/AgentGraphCanvas'), { ssr: false });
 
@@ -20,9 +22,34 @@ export default function AgentRunDebugPanel({
   loading?: boolean;
   error?: string;
 }) {
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const debug = runDetails?.debug;
   const traceView = runDetails ? buildRunTraceView(runDetails) : undefined;
-  const overlay = traceView ? buildRunGraphOverlay(traceView) : undefined;
+  const trace = traceView?.trace;
+  const traceJson = buildTraceExportJson(traceView);
+
+  const copyTrace = async () => {
+    if (!traceJson || typeof navigator === 'undefined' || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(traceJson);
+      setCopyStatus('copied');
+      window.setTimeout(() => setCopyStatus('idle'), 1600);
+    } catch {
+      setCopyStatus('failed');
+      window.setTimeout(() => setCopyStatus('idle'), 1600);
+    }
+  };
+
+  const downloadTrace = () => {
+    if (!traceJson || typeof window === 'undefined') return;
+    const blob = new Blob([traceJson], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `agent-trace-${runId}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
@@ -47,14 +74,32 @@ export default function AgentRunDebugPanel({
       )}
       {debug && runDetails && traceView && (
         <>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
             <AgentRunHeaderChips runDetails={runDetails} traceView={traceView} />
+            {trace && (
+              <>
+                <Tooltip title={copyStatus === 'copied' ? 'Copied trace JSON' : copyStatus === 'failed' ? 'Copy failed' : 'Copy trace JSON'} arrow>
+                  <span>
+                    <IconButton size="small" onClick={copyTrace} disabled={!traceJson} aria-label="Copy trace JSON">
+                      <ContentCopyIcon fontSize="inherit" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Download trace JSON" arrow>
+                  <span>
+                    <IconButton size="small" onClick={downloadTrace} disabled={!traceJson} aria-label="Download trace JSON">
+                      <DownloadIcon fontSize="inherit" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </>
+            )}
           </Box>
           <AgentGraphCanvas
             resolvedSpec={runDetails.resolved_spec_json}
             templateId={runDetails.template_id}
             mode="run-debug"
-            overlay={overlay}
+            traceView={traceView}
           />
         </>
       )}

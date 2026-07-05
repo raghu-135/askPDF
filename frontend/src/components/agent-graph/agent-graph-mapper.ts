@@ -160,20 +160,20 @@ export const buildAgentGraph = (
   graphSpec: AgentPatternGraphSpec,
   overlay: AgentGraphRuntimeOverlay = {},
 ) => {
-  const nodeEvents = asArray(overlay.nodeEvents);
-  const toolEvents = asArray(overlay.toolEvents);
-  const executionPlan = getExecutionPlan(overlay, nodeEvents);
+  const nodeRows = asArray(overlay.graphNodeRows || overlay.nodeEvents);
+  const toolRows = asArray(overlay.graphToolRows || overlay.toolEvents);
+  const executionPlan = getExecutionPlan(overlay, nodeRows);
   const selectedRoute = overlay.route || overlay.metrics?.route;
 
   const eventsByNode = new Map<string, Record<string, any>[]>();
-  nodeEvents.forEach((event) => {
+  nodeRows.forEach((event) => {
     const nodeId = getNodeIdFromEvent(event);
     if (!nodeId) return;
     eventsByNode.set(nodeId, [...(eventsByNode.get(nodeId) || []), event]);
   });
 
   const toolsByNode = new Map<string, AgentGraphToolSummary[]>();
-  toolEvents.forEach((event) => {
+  toolRows.forEach((event) => {
     const tool = summarizeTool(event);
     if (!tool.callerNode) return;
     toolsByNode.set(tool.callerNode, [...(toolsByNode.get(tool.callerNode) || []), tool]);
