@@ -10,6 +10,7 @@ import pytest
 
 from app.db.models_sqlmodel import MessageRole
 from app.api import messages as messages_api
+from app import db as db_api
 
 
 class TestMessageEndpoints:
@@ -29,12 +30,20 @@ class TestMessageEndpoints:
             reasoning_format="none",
             web_sources=[],
             metadata={
-                "agent_run_id": "run-1",
+                "agent_run_id": "legacy-metadata-run",
                 "agent_pattern_id": "router_rag_agent",
                 "agent_pattern_version": 1,
                 "agent_route": "document",
                 "agent_route_reason": "Question needs document evidence.",
                 "context_compact": "internal compact text",
+            },
+            agent_run_id="run-1",
+            agent_run_turn_kind="assistant_final",
+            agent_run_sequence=0,
+            agent_trace_refs={
+                "node_ids": ["router"],
+                "span_ids": ["node:router:0"],
+                "interrupt_id": None,
             },
             created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         )
@@ -46,14 +55,41 @@ class TestMessageEndpoints:
             data = await messages_api.get_thread_messages_endpoint("thread-1")
 
         assert data["thread_id"] == "thread-1"
-        metadata = data["messages"][0]["metadata"]
+        message = data["messages"][0]
+        assert message["agent_run_id"] == "run-1"
+        assert message["agent_run_turn_kind"] == "assistant_final"
+        assert message["agent_run_sequence"] == 0
+        assert message["agent_trace_refs"]["node_ids"] == ["router"]
+        metadata = message["metadata"]
         assert metadata == {
-            "agent_run_id": "run-1",
             "agent_pattern_id": "router_rag_agent",
             "agent_pattern_version": 1,
             "agent_route": "document",
             "agent_route_reason": "Question needs document evidence.",
         }
+
+    @pytest.mark.asyncio
+    async def test_public_create_chat_turn_forwards_agent_linkage(self):
+        repo = SimpleNamespace(create_turn=AsyncMock(return_value=SimpleNamespace(id="turn-1")))
+
+        with patch("app.db.get_message_repo", return_value=repo):
+            turn = await db_api.create_chat_turn(
+                thread_id="thread-1",
+                question="Question",
+                answer="Answer",
+                agent_run_id="run-1",
+                agent_run_turn_kind="assistant_final",
+                agent_run_sequence=0,
+                agent_trace_refs_json={"node_ids": ["synthesizer"]},
+            )
+
+        assert turn.id == "turn-1"
+        repo.create_turn.assert_awaited_once()
+        kwargs = repo.create_turn.await_args.kwargs
+        assert kwargs["agent_run_id"] == "run-1"
+        assert kwargs["agent_run_turn_kind"] == "assistant_final"
+        assert kwargs["agent_run_sequence"] == 0
+        assert kwargs["agent_trace_refs_json"] == {"node_ids": ["synthesizer"]}
 
     @pytest.mark.asyncio
     async def test_delete_missing_message_is_idempotent(self):

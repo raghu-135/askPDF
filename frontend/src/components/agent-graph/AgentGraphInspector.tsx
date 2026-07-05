@@ -75,6 +75,8 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
     .map((tool) => tool.traceSpan)
     .filter((span): span is Record<string, any> => Boolean(span));
   const rawPayload = {
+    focused_span_ids: node.focusedSpanIds || [],
+    focused_trace_spans: node.focusedTraceSpans || [],
     trace_spans: node.traceSpans || [],
     tool_trace_spans: toolTraceSpans,
     node_rows: node.rawEvents.map(withoutInternalTraceFields),
@@ -93,6 +95,7 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
         {node.artifactCount > 0 && <Chip size="small" label={`${node.artifactCount} artifacts`} variant="outlined" />}
         {node.warningCount > 0 && <Chip size="small" color="warning" label={`${node.warningCount} warnings`} />}
         {node.errorCount > 0 && <Chip size="small" color="error" label={`${node.errorCount} errors`} />}
+        {node.focused && <Chip size="small" color="primary" label="focused" />}
       </Box>
       <Tabs
         value={tab}
@@ -113,6 +116,11 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
               <DetailLine label="Reason" value={node.routeReason} />
               <DetailLine label="Execution plan" value={node.executionPlan?.length ? node.executionPlan.join(' -> ') : undefined} />
               <TraceObject value={node.llmResultSummary} />
+            </InspectorSection>
+          )}
+          {hasValue(node.focusedTraceSpans) && (
+            <InspectorSection title="Focused Spans">
+              <TraceObject value={node.focusedTraceSpans} />
             </InspectorSection>
           )}
           {(hasValue(node.inputPreview) || hasValue(node.inputRefs)) && (

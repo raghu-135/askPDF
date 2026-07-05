@@ -28,6 +28,7 @@ const jsonTreeStyles = {
 
 const SECTION_HELP: Record<string, string> = {
   Decision: 'Route, execution plan, and LLM decision data produced by router or planner nodes.',
+  'Focused Spans': 'Trace spans highlighted for the selected conversation bubble.',
   Input: 'State, refs, and bounded previews available before this node ran.',
   Prompt: 'Rendered LLM prompt summary for nodes that call the model.',
   LLM: 'Model usage, reasoning metadata, token counts, and retry attempts captured for this node.',

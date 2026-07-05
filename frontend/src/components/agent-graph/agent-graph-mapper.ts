@@ -4,6 +4,7 @@ import type {
   AgentGraphNodeStatus,
   AgentGraphRuntimeOverlay,
   AgentGraphToolSummary,
+  AgentTraceRefs,
   AgentPatternGraphSpec,
 } from './agent-graph-types';
 
@@ -260,4 +261,53 @@ export const buildAgentGraph = (
 
   const plannedNodes = unique(executionPlan);
   return { nodes, edges, executionPlan: plannedNodes, selectedRoute };
+};
+
+const normalizeRefSet = (value: unknown) => (
+  new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : [])
+);
+
+const spanIdFor = (span: unknown) => (
+  span && typeof span === 'object' && typeof (span as Record<string, unknown>).span_id === 'string'
+    ? String((span as Record<string, unknown>).span_id)
+    : undefined
+);
+
+const collectNodeSpans = (node: AgentGraphNode) => {
+  const nodeSpans = Array.isArray(node.traceSpans) ? node.traceSpans : [];
+  const toolSpans = node.toolSummaries
+    .map((tool) => tool.traceSpan)
+    .filter((span): span is Record<string, any> => Boolean(span));
+  return [...nodeSpans, ...toolSpans];
+};
+
+export const applyTraceFocusToGraph = (
+  graph: ReturnType<typeof buildAgentGraph>,
+  refs?: AgentTraceRefs | null,
+): ReturnType<typeof buildAgentGraph> => {
+  const focusedNodeIds = normalizeRefSet(refs?.node_ids);
+  const focusedSpanIds = normalizeRefSet(refs?.span_ids);
+  if (focusedNodeIds.size === 0 && focusedSpanIds.size === 0) return graph;
+
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      const spans = collectNodeSpans(node);
+      const matchingSpans = spans.filter((span) => {
+        const spanId = spanIdFor(span);
+        return spanId ? focusedSpanIds.has(spanId) : false;
+      });
+      const focused = focusedNodeIds.has(node.id) || matchingSpans.length > 0;
+      if (!focused) return node;
+      return {
+        ...node,
+        focused: true,
+        focusedSpanIds: unique([
+          ...(node.focusedSpanIds || []),
+          ...matchingSpans.map(spanIdFor).filter((spanId): spanId is string => Boolean(spanId)),
+        ]),
+        focusedTraceSpans: matchingSpans,
+      };
+    }),
+  };
 };

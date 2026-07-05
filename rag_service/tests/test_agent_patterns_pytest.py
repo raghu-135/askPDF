@@ -52,6 +52,32 @@ def make_trace_recorder(run_id: str, thread_id: str, spec: dict, template_id: st
     )
 
 
+async def create_agent_run_record(
+    session_factory,
+    *,
+    run_id: str,
+    thread_id: str,
+    spec: dict,
+    template_id: str = ROUTER_RAG_AGENT_ID,
+) -> AgentRun:
+    async with session_factory() as repo_session:
+        repo = AgentPatternRepository(repo_session)
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(template_id)
+        run = AgentRun(
+            id=run_id,
+            thread_id=thread_id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json=spec,
+            status="running",
+            started_at=utc_now(),
+        )
+        repo_session.add(run)
+        await repo_session.commit()
+        return run
+
+
 class TestModelRetry:
     @pytest.mark.asyncio
     async def test_invoke_with_retry_reports_retry_attempts_without_changing_behavior(self, monkeypatch):
@@ -769,6 +795,60 @@ class TestAgentPatternRepository:
         assert completed.resolved_spec_json == {"pattern_type": ROUTER_RAG_AGENT_ID}
 
     @pytest.mark.asyncio
+    async def test_chat_turns_can_share_one_agent_run_and_null_on_delete(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        run = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+        )
+
+        session = await repo._get_session()
+        async with session.begin():
+            session.add(
+                ChatTurn(
+                    id="agent-run-turn-1",
+                    thread_id=sample_thread.id,
+                    agent_run_id=run.id,
+                    agent_run_turn_kind="assistant_progress",
+                    agent_run_sequence=0,
+                    agent_trace_refs_json={"node_ids": ["planner"]},
+                    status="completed",
+                    payload={"question": "Q1", "answer": "A1", "metadata": {}},
+                )
+            )
+            session.add(
+                ChatTurn(
+                    id="agent-run-turn-2",
+                    thread_id=sample_thread.id,
+                    agent_run_id=run.id,
+                    agent_run_turn_kind="assistant_final",
+                    agent_run_sequence=1,
+                    agent_trace_refs_json={"span_ids": ["node:finalizer:0"]},
+                    status="completed",
+                    payload={"question": "Q2", "answer": "A2", "metadata": {}},
+                )
+            )
+
+        turns = await repo.list_chat_turns_for_run(run.id)
+        assert [turn.id for turn in turns] == ["agent-run-turn-1", "agent-run-turn-2"]
+        assert [turn.agent_run_turn_kind for turn in turns] == ["assistant_progress", "assistant_final"]
+
+        async with session.begin():
+            persisted_run = await session.get(AgentRun, run.id)
+            await session.delete(persisted_run)
+
+        session.expire_all()
+        async with session.begin():
+            first = await session.get(ChatTurn, "agent-run-turn-1")
+            second = await session.get(ChatTurn, "agent-run-turn-2")
+
+        assert first.agent_run_id is None
+        assert second.agent_run_id is None
+
+    @pytest.mark.asyncio
     async def test_list_runs_for_thread_orders_recent_first_and_limits(self, repo, sample_thread):
         await repo.seed_builtin_templates()
         template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
@@ -1338,10 +1418,18 @@ class TestRouterRagRuntime:
             clarification_options=None,
             error=None,
             metadata=None,
+            agent_run_id=None,
+            agent_run_turn_kind=None,
+            agent_run_sequence=None,
+            agent_trace_refs_json=None,
         ):
             turn = ChatTurn(
                 id=str(uuid.uuid4()),
                 thread_id=thread_id,
+                agent_run_id=agent_run_id,
+                agent_run_turn_kind=agent_run_turn_kind,
+                agent_run_sequence=agent_run_sequence,
+                agent_trace_refs_json=agent_trace_refs_json,
                 status=status,
                 payload={
                     "question": question,
@@ -1391,18 +1479,25 @@ class TestRouterRagRuntime:
             client_now_iso="2026-07-02T12:00:00.000Z",
         )
 
+        spec = builtin_router_rag_spec()
+        await create_agent_run_record(
+            session_factory,
+            run_id="run-1",
+            thread_id=sample_thread.id,
+            spec=spec,
+        )
         caplog.set_level(logging.INFO, logger="app.agent_patterns")
         result = await handle_router_rag_chat(
             sample_thread.id,
             req,
             sample_thread.embed_model,
-            resolved_spec=builtin_router_rag_spec(),
+            resolved_spec=spec,
             agent_run_context={
                 "agent_run_id": "run-1",
                 "agent_pattern_id": ROUTER_RAG_AGENT_ID,
                 "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
             },
-            trace_recorder=make_trace_recorder("run-1", sample_thread.id, builtin_router_rag_spec()),
+            trace_recorder=make_trace_recorder("run-1", sample_thread.id, spec),
         )
 
         async with session_factory() as check_session:
@@ -1444,7 +1539,11 @@ class TestRouterRagRuntime:
         assert result["agent_run_id"] == "run-1"
         assert turn is not None
         assert turn.status == "completed"
-        assert turn.payload["metadata"]["agent_run_id"] == "run-1"
+        assert turn.agent_run_id == "run-1"
+        assert turn.agent_run_turn_kind == "assistant_final"
+        assert turn.agent_run_sequence == 0
+        assert turn.agent_trace_refs_json is None
+        assert "agent_run_id" not in turn.payload["metadata"]
         assert turn.payload["metadata"]["agent_route"] == "direct"
         assert "agent_debug_trace" not in turn.payload["metadata"]
         assert "agent_node_events" not in turn.payload["metadata"]
@@ -1545,10 +1644,18 @@ class TestRouterRagRuntime:
             clarification_options=None,
             error=None,
             metadata=None,
+            agent_run_id=None,
+            agent_run_turn_kind=None,
+            agent_run_sequence=None,
+            agent_trace_refs_json=None,
         ):
             turn = ChatTurn(
                 id=str(uuid.uuid4()),
                 thread_id=thread_id,
+                agent_run_id=agent_run_id,
+                agent_run_turn_kind=agent_run_turn_kind,
+                agent_run_sequence=agent_run_sequence,
+                agent_trace_refs_json=agent_trace_refs_json,
                 status=status,
                 payload={
                     "question": question,
@@ -1614,18 +1721,26 @@ class TestRouterRagRuntime:
             client_now_iso=None,
         )
 
+        run_id = f"run-{route}"
+        spec = builtin_router_rag_spec()
+        await create_agent_run_record(
+            session_factory,
+            run_id=run_id,
+            thread_id=sample_thread.id,
+            spec=spec,
+        )
         caplog.set_level(logging.INFO, logger="app.agent_patterns")
         result = await handle_router_rag_chat(
             sample_thread.id,
             req,
             sample_thread.embed_model,
-            resolved_spec=builtin_router_rag_spec(),
+            resolved_spec=spec,
             agent_run_context={
-                "agent_run_id": f"run-{route}",
+                "agent_run_id": run_id,
                 "agent_pattern_id": ROUTER_RAG_AGENT_ID,
                 "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
             },
-            trace_recorder=make_trace_recorder(f"run-{route}", sample_thread.id, builtin_router_rag_spec()),
+            trace_recorder=make_trace_recorder(run_id, sample_thread.id, spec),
         )
 
         async with session_factory() as check_session:
@@ -1636,6 +1751,10 @@ class TestRouterRagRuntime:
         assert all(isinstance(event.get("elapsed_ms"), (int, float)) for event in result["node_events"])
         assert turn is not None
         assert turn.status == expected_status
+        assert turn.agent_run_id == run_id
+        assert turn.agent_run_turn_kind == "assistant_final"
+        assert turn.agent_run_sequence == 0
+        assert turn.agent_trace_refs_json is None
         assert turn.payload["metadata"]["agent_route"] == route
         assert "agent_debug_trace" not in turn.payload["metadata"]
         assert "agent_node_events" not in turn.payload["metadata"]
@@ -1727,10 +1846,18 @@ class TestRouterRagRuntime:
             clarification_options=None,
             error=None,
             metadata=None,
+            agent_run_id=None,
+            agent_run_turn_kind=None,
+            agent_run_sequence=None,
+            agent_trace_refs_json=None,
         ):
             turn = ChatTurn(
                 id=str(uuid.uuid4()),
                 thread_id=thread_id,
+                agent_run_id=agent_run_id,
+                agent_run_turn_kind=agent_run_turn_kind,
+                agent_run_sequence=agent_run_sequence,
+                agent_trace_refs_json=agent_trace_refs_json,
                 status=status,
                 payload={
                     "question": question,
@@ -1772,17 +1899,24 @@ class TestRouterRagRuntime:
             client_now_iso=None,
         )
 
+        spec = builtin_router_rag_spec()
+        await create_agent_run_record(
+            session_factory,
+            run_id="run-failed",
+            thread_id=sample_thread.id,
+            spec=spec,
+        )
         result = await handle_router_rag_chat(
             sample_thread.id,
             req,
             sample_thread.embed_model,
-            resolved_spec=builtin_router_rag_spec(),
+            resolved_spec=spec,
             agent_run_context={
                 "agent_run_id": "run-failed",
                 "agent_pattern_id": ROUTER_RAG_AGENT_ID,
                 "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
             },
-            trace_recorder=make_trace_recorder("run-failed", sample_thread.id, builtin_router_rag_spec()),
+            trace_recorder=make_trace_recorder("run-failed", sample_thread.id, spec),
         )
 
         async with session_factory() as check_session:
@@ -1797,7 +1931,11 @@ class TestRouterRagRuntime:
         assert result["tool_events"] == []
         assert result["errors"][0]["raw_message"] == "document tool exploded"
         assert turn.status == "failed"
-        assert turn.payload["metadata"]["agent_run_id"] == "run-failed"
+        assert turn.agent_run_id == "run-failed"
+        assert turn.agent_run_turn_kind == "assistant_final"
+        assert turn.agent_run_sequence == 0
+        assert turn.agent_trace_refs_json is None
+        assert "agent_run_id" not in turn.payload["metadata"]
         assert turn.payload["metadata"]["agent_route"] == "document"
         assert "agent_debug_trace" not in turn.payload["metadata"]
         assert "agent_node_events" not in turn.payload["metadata"]
@@ -1996,12 +2134,19 @@ class TestAgentPatternApi:
         turn = ChatTurn(
             id=turn_id,
             thread_id=sample_thread.id,
+            agent_run_id=run.id,
+            agent_run_turn_kind="assistant_final",
+            agent_run_sequence=0,
+            agent_trace_refs_json={
+                "node_ids": ["router"],
+                "span_ids": ["node:router:0", "tool:search_web:0"],
+                "interrupt_id": None,
+            },
             status="completed",
             payload={
                 "question": "What happened?",
                 "answer": "Answer",
                 "metadata": {
-                    "agent_run_id": run.id,
                     "agent_route": "web",
                     "agent_route_reason": "Needs live evidence.",
                 },
@@ -2016,7 +2161,6 @@ class TestAgentPatternApi:
                 run.id,
                 status="completed",
                 metrics_json=metrics,
-                chat_turn_id=turn.id,
             )
             debug_payload = build_debug_payload(
                 run=completed_run,
@@ -2034,7 +2178,19 @@ class TestAgentPatternApi:
         assert response.status_code == 200
         payload = response.json()["agent_run"]
         assert payload["id"] == run.id
-        assert payload["chat_turn_id"] == turn.id
+        assert "chat_turn_id" not in payload
+        assert payload["turns"] == [
+            {
+                "id": turn.id,
+                "kind": "assistant_final",
+                "sequence": 0,
+                "trace_refs": {
+                    "node_ids": ["router"],
+                    "span_ids": ["node:router:0", "tool:search_web:0"],
+                    "interrupt_id": None,
+                },
+            }
+        ]
         assert payload["metrics_json"]["tool_event_count"] == 1
         assert set(payload["debug"]) == {"version", "trace", "summary", "graph"}
         assert "node_events" not in payload["debug"]

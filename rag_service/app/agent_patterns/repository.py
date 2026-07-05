@@ -206,23 +206,15 @@ class AgentPatternRepository:
                 replace_jsonb_field(run, "metrics_json", metrics)
             return [run.id for run in runs]
 
-    async def get_chat_turn_for_run(self, run: AgentRun) -> Optional[ChatTurn]:
+    async def list_chat_turns_for_run(self, run_id: str) -> list[ChatTurn]:
         session = await self._get_session()
         async with session.begin():
-            if run.chat_turn_id:
-                chat_turn = await session.get(ChatTurn, run.chat_turn_id)
-                if chat_turn is not None:
-                    return chat_turn
             result = await session.execute(
                 select(ChatTurn)
-                .where(
-                    ChatTurn.thread_id == run.thread_id,
-                    ChatTurn.payload["metadata"]["agent_run_id"].astext == run.id,
-                )
-                .order_by(ChatTurn.created_at.desc(), ChatTurn.id.desc())
-                .limit(1)
+                .where(ChatTurn.agent_run_id == run_id)
+                .order_by(ChatTurn.agent_run_sequence.asc(), ChatTurn.created_at.asc(), ChatTurn.id.asc())
             )
-            return result.scalar_one_or_none()
+            return list(result.scalars().all())
 
     async def create_run(
         self,
@@ -257,7 +249,6 @@ class AgentPatternRepository:
         status: str,
         metrics_json: Optional[Dict[str, Any]] = None,
         error_json: Optional[Dict[str, Any]] = None,
-        chat_turn_id: Optional[str] = None,
         debug_trace_json: Optional[Dict[str, Any]] = None,
         completed_at: Optional[datetime] = None,
     ) -> Optional[AgentRun]:
@@ -271,8 +262,6 @@ class AgentPatternRepository:
             replace_jsonb_field(run, "metrics_json", metrics_json or {})
             if error_json is not None:
                 replace_jsonb_field(run, "error_json", error_json)
-            if chat_turn_id is not None:
-                run.chat_turn_id = chat_turn_id
             if debug_trace_json is not None:
                 replace_jsonb_field(run, "debug_trace_json", debug_trace_json)
             await session.flush()

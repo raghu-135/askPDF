@@ -81,14 +81,25 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
     }
 
 
-def _run_payload(run) -> Dict[str, Any]:
+def _turn_summary_payload(turn) -> Dict[str, Any]:
+    trace_refs = turn.agent_trace_refs_json if isinstance(turn.agent_trace_refs_json, dict) else {}
+    return {
+        "id": turn.id,
+        "kind": turn.agent_run_turn_kind,
+        "sequence": turn.agent_run_sequence,
+        "trace_refs": trace_refs,
+    }
+
+
+def _run_payload(run, turns=None) -> Dict[str, Any]:
+    turns = turns or []
     payload = {
         "id": run.id,
         "thread_id": run.thread_id,
         "user_id": run.user_id,
         "template_id": run.template_id,
         "template_version_id": run.template_version_id,
-        "chat_turn_id": run.chat_turn_id,
+        "turns": [_turn_summary_payload(turn) for turn in turns],
         "resolved_spec_json": run.resolved_spec_json,
         "status": run.status,
         "checkpoint_thread_id": run.checkpoint_thread_id,
@@ -109,7 +120,6 @@ def _run_summary_payload(run) -> Dict[str, Any]:
         "thread_id": run.thread_id,
         "template_id": run.template_id,
         "template_version_id": run.template_version_id,
-        "chat_turn_id": run.chat_turn_id,
         "status": run.status,
         "started_at": iso_utc_z(run.started_at) if run.started_at else None,
         "completed_at": iso_utc_z(run.completed_at) if run.completed_at else None,
@@ -247,4 +257,5 @@ async def get_agent_run(run_id: str):
     run = await repo.get_run(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Agent run not found")
-    return {"agent_run": _run_payload(run)}
+    turns = await repo.list_chat_turns_for_run(run.id)
+    return {"agent_run": _run_payload(run, turns)}

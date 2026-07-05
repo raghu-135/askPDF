@@ -181,6 +181,16 @@ class ChatTurn(SQLModel, table=True):
     thread_id: str = Field(
         sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), index=True)
     )
+    agent_run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("agent_runs.id", ondelete="SET NULL"), index=True)
+    )
+    agent_run_turn_kind: Optional[str] = Field(default=None)
+    agent_run_sequence: Optional[int] = Field(default=None)
+    agent_trace_refs_json: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB)
+    )
     status: str = Field(default="completed", index=True)
     payload: Dict[str, Any] = Field(
         default_factory=dict,
@@ -204,6 +214,7 @@ class ChatTurn(SQLModel, table=True):
 
     __table_args__ = (
         Index("idx_chat_turn_thread_created", "thread_id", "created_at"),
+        Index("idx_chat_turn_agent_run_sequence", "agent_run_id", "agent_run_sequence"),
     )
 
 
@@ -278,10 +289,6 @@ class AgentRun(SQLModel, table=True):
     )
     template_version_id: str = Field(
         sa_column=Column(String, ForeignKey("agent_pattern_template_versions.id", ondelete="RESTRICT"), index=True)
-    )
-    chat_turn_id: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String, ForeignKey("chat_turns.id", ondelete="SET NULL"), index=True)
     )
     resolved_spec_json: Dict[str, Any] = Field(
         default_factory=dict,

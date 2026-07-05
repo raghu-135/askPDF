@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 
+from app.agent_patterns.repository import AgentPatternRepository
+from app.agent_patterns.templates import ROUTER_RAG_AGENT_ID
 from app.db.models_sqlmodel import ChatTurn, MessageRole
 from app.db.repositories.message_repo_sqlmodel import (
     MessageRepository,
@@ -18,6 +20,25 @@ from app.db.repositories.message_repo_sqlmodel import (
 )
 
 SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
+
+
+async def _create_agent_run(engine, thread_id: str):
+    session_factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autoflush=False,
+    )
+    async with session_factory() as repo_session:
+        agent_repo = AgentPatternRepository(repo_session)
+        await agent_repo.seed_builtin_templates()
+        template, version = await agent_repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        return await agent_repo.create_run(
+            thread_id=thread_id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+        )
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
@@ -34,8 +55,9 @@ class TestMessageRepository:
             yield MessageRepository(repo_session)
 
     @pytest.mark.asyncio
-    async def test_create_turn_expands_to_user_and_assistant_messages(self, repo, sample_thread):
+    async def test_create_turn_expands_to_user_and_assistant_messages(self, repo, engine, sample_thread):
         created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        run = await _create_agent_run(engine, sample_thread.id)
         turn = await repo.create_turn(
             thread_id=sample_thread.id,
             question="What changed?",
@@ -47,10 +69,17 @@ class TestMessageRepository:
             web_sources=[{"url": "https://example.com"}],
             metadata={
                 "context_compact": "Q/A compact",
-                "agent_run_id": "run-1",
                 "agent_pattern_id": "router_rag_agent",
                 "agent_pattern_version": 1,
                 "agent_route": "document",
+            },
+            agent_run_id=run.id,
+            agent_run_turn_kind="assistant_final",
+            agent_run_sequence=0,
+            agent_trace_refs_json={
+                "node_ids": ["planner"],
+                "span_ids": ["node:planner:0"],
+                "interrupt_id": None,
             },
             created_at=created_at,
         )
@@ -61,11 +90,15 @@ class TestMessageRepository:
         assert messages[0].id == message_id_for_turn(turn.id, MessageRole.USER.value)
         assert messages[0].content == "What changed?"
         assert messages[0].context_compact == "Summarize the change"
+        assert messages[0].agent_run_id == run.id
+        assert messages[0].agent_run_turn_kind == "assistant_final"
+        assert messages[0].agent_run_sequence == 0
+        assert messages[0].agent_trace_refs["node_ids"] == ["planner"]
         assert messages[1].id == message_id_for_turn(turn.id, MessageRole.ASSISTANT.value)
         assert messages[1].content == "We now store chat turns."
         assert messages[1].reasoning_available is True
         assert messages[1].web_sources == [{"url": "https://example.com"}]
-        assert messages[1].metadata["agent_run_id"] == "run-1"
+        assert messages[1].agent_run_id == run.id
         assert messages[1].metadata["agent_pattern_id"] == "router_rag_agent"
         assert messages[1].metadata["agent_route"] == "document"
 

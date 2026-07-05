@@ -15,13 +15,14 @@ import '@xyflow/react/dist/style.css';
 
 import AgentGraphInspector from './AgentGraphInspector';
 import AgentGraphNode from './AgentGraphNode';
-import { buildAgentGraph, getAgentGraphSpec } from './agent-graph-mapper';
+import { applyTraceFocusToGraph, buildAgentGraph, getAgentGraphSpec } from './agent-graph-mapper';
 import type { TraceRunView } from '../agent-debug/agent-trace-projection';
 import type {
   AgentGraphEdge,
   AgentGraphMode,
   AgentGraphNode as AgentGraphNodeModel,
   AgentGraphSelection,
+  AgentTraceRefs,
 } from './agent-graph-types';
 
 const elk = new ELK();
@@ -80,11 +81,13 @@ function AgentGraphCanvasInner({
   resolvedSpec,
   templateId,
   traceView,
+  focusedTraceRefs,
   mode,
 }: {
   resolvedSpec?: Record<string, any>;
   templateId?: string;
   traceView?: TraceRunView;
+  focusedTraceRefs?: AgentTraceRefs | null;
   mode: AgentGraphMode;
 }) {
   const theme = useTheme();
@@ -93,12 +96,19 @@ function AgentGraphCanvasInner({
   const [selection, setSelection] = useState<AgentGraphSelection>(null);
 
   const graph = useMemo(() => {
+    let baseGraph;
     if (mode === 'run-debug' && traceView?.graph) {
-      return traceView.graph;
+      baseGraph = traceView.graph;
+    } else {
+      const graphSpec = getAgentGraphSpec(resolvedSpec, templateId);
+      baseGraph = buildAgentGraph(graphSpec);
     }
-    const graphSpec = getAgentGraphSpec(resolvedSpec, templateId);
-    return buildAgentGraph(graphSpec);
-  }, [mode, resolvedSpec, templateId, traceView]);
+    return applyTraceFocusToGraph(baseGraph, focusedTraceRefs);
+  }, [focusedTraceRefs, mode, resolvedSpec, templateId, traceView]);
+  const focusSignature = useMemo(() => JSON.stringify({
+    node_ids: focusedTraceRefs?.node_ids || [],
+    span_ids: focusedTraceRefs?.span_ids || [],
+  }), [focusedTraceRefs]);
   const layoutDirection = mode === 'run-debug' ? 'DOWN' : 'RIGHT';
 
   const flowEdges = useMemo((): Edge[] => graph.edges.map((edge: AgentGraphEdge) => {
@@ -163,6 +173,18 @@ function AgentGraphCanvasInner({
       setSelection(null);
     }
   }, [graph.edges, graph.nodes, selection]);
+
+  useEffect(() => {
+    const hasFocusRefs = Boolean(focusedTraceRefs?.node_ids?.length || focusedTraceRefs?.span_ids?.length);
+    if (!hasFocusRefs) {
+      setSelection(null);
+      return;
+    }
+    const focusedNode = graph.nodes.find((node) => node.focused);
+    if (focusedNode) {
+      setSelection({ kind: 'node', node: focusedNode });
+    }
+  }, [focusedTraceRefs, focusSignature, graph.nodes]);
 
   if (graph.nodes.length === 0) {
     return (
@@ -252,6 +274,7 @@ export default function AgentGraphCanvas(props: {
   resolvedSpec?: Record<string, any>;
   templateId?: string;
   traceView?: TraceRunView;
+  focusedTraceRefs?: AgentTraceRefs | null;
   mode?: AgentGraphMode;
 }) {
   return (

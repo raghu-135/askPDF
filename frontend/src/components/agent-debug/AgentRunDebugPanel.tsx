@@ -3,7 +3,7 @@ import dynamic from 'next/dynamic';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import { Box, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
-import type { AgentRunDetails } from '../../lib/api';
+import type { AgentRunDetails, AgentTraceRefs } from '../../lib/api';
 import AgentRunHeaderChips from './AgentRunHeaderChips';
 import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
 
@@ -12,12 +12,14 @@ const AgentGraphCanvas = dynamic(() => import('../agent-graph/AgentGraphCanvas')
 export default function AgentRunDebugPanel({
   runId,
   routeReason,
+  traceRefs,
   runDetails,
   loading,
   error,
 }: {
   runId: string;
   routeReason?: string;
+  traceRefs?: AgentTraceRefs | null;
   runDetails?: AgentRunDetails;
   loading?: boolean;
   error?: string;
@@ -110,6 +112,7 @@ export default function AgentRunDebugPanel({
             templateId={runDetails.template_id}
             mode="run-debug"
             traceView={traceView}
+            focusedTraceRefs={traceRefs}
           />
         </>
       )}

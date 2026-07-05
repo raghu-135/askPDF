@@ -38,6 +38,13 @@ export interface AgentGraphToolSummary {
   raw: Record<string, any>;
 }
 
+export interface AgentTraceRefs {
+  node_ids?: string[];
+  span_ids?: string[];
+  interrupt_id?: string | null;
+  [key: string]: unknown;
+}
+
 export interface AgentGraphNode {
   [key: string]: unknown;
   id: string;
@@ -45,6 +52,9 @@ export interface AgentGraphNode {
   label: string;
   description?: string;
   status: AgentGraphNodeStatus;
+  focused?: boolean;
+  focusedSpanIds?: string[];
+  focusedTraceSpans?: Record<string, any>[];
   elapsedMs?: number;
   route?: string;
   routeReason?: string;

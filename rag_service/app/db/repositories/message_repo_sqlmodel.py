@@ -41,6 +41,10 @@ class ExpandedMessage:
     reasoning_format: str = "none"
     web_sources: Optional[List[Dict[str, Any]]] = None
     metadata: Optional[Dict[str, Any]] = None
+    agent_run_id: Optional[str] = None
+    agent_run_turn_kind: Optional[str] = None
+    agent_run_sequence: Optional[int] = None
+    agent_trace_refs: Optional[Dict[str, Any]] = None
     turn_id: Optional[str] = None
     turn_status: Optional[str] = None
 
@@ -88,13 +92,17 @@ def _normalize_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return data
 
 
+def _trace_refs_from_turn(turn: ChatTurn) -> Optional[Dict[str, Any]]:
+    refs = turn.agent_trace_refs_json
+    return refs if isinstance(refs, dict) else None
+
+
 def _expand_turn(turn: ChatTurn) -> List[ExpandedMessage]:
     payload = _normalize_payload(turn.payload)
     messages: List[ExpandedMessage] = []
 
     question = payload.get("question")
     if question not in (None, ""):
-        metadata = payload.get("metadata") or {}
         messages.append(
             ExpandedMessage(
                 id=message_id_for_turn(turn.id, MessageRole.USER.value),
@@ -102,6 +110,11 @@ def _expand_turn(turn: ChatTurn) -> List[ExpandedMessage]:
                 role=MessageRole.USER.value,
                 content=str(question),
                 context_compact=payload.get("rewritten_question"),
+                metadata=payload.get("metadata") or {},
+                agent_run_id=turn.agent_run_id,
+                agent_run_turn_kind=turn.agent_run_turn_kind,
+                agent_run_sequence=turn.agent_run_sequence,
+                agent_trace_refs=_trace_refs_from_turn(turn),
                 created_at=turn.created_at,
                 turn_id=turn.id,
                 turn_status=turn.status,
@@ -123,6 +136,10 @@ def _expand_turn(turn: ChatTurn) -> List[ExpandedMessage]:
                 reasoning_format=payload.get("reasoning_format") or "none",
                 web_sources=payload.get("web_sources") or None,
                 metadata=payload.get("metadata") or {},
+                agent_run_id=turn.agent_run_id,
+                agent_run_turn_kind=turn.agent_run_turn_kind,
+                agent_run_sequence=turn.agent_run_sequence,
+                agent_trace_refs=_trace_refs_from_turn(turn),
                 created_at=created_at,
                 turn_id=turn.id,
                 turn_status=turn.status,
@@ -159,11 +176,17 @@ class MessageRepository:
         clarification_options: Optional[List[str]] = None,
         error: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        agent_run_id: Optional[str] = None,
+        agent_run_turn_kind: Optional[str] = None,
+        agent_run_sequence: Optional[int] = None,
+        agent_trace_refs_json: Optional[Dict[str, Any]] = None,
         created_at: Optional[datetime] = None,
         completed_at: Optional[datetime] = None,
     ) -> ChatTurn:
         """Create one persisted chat turn."""
         now = created_at or utc_now()
+        safe_metadata = dict(metadata or {})
+        safe_metadata.pop("agent_run_id", None)
         payload = _normalize_payload(
             {
                 "question": question,
@@ -177,12 +200,16 @@ class MessageRepository:
                 "used_chat_ids": used_chat_ids or [],
                 "clarification_options": clarification_options,
                 "error": error,
-                "metadata": metadata or {},
+                "metadata": safe_metadata,
             }
         )
         turn = ChatTurn(
             id=str(uuid.uuid4()),
             thread_id=thread_id,
+            agent_run_id=agent_run_id,
+            agent_run_turn_kind=agent_run_turn_kind,
+            agent_run_sequence=agent_run_sequence,
+            agent_trace_refs_json=agent_trace_refs_json if isinstance(agent_trace_refs_json, dict) else None,
             status=status,
             payload=payload,
             created_at=now,

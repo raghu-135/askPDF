@@ -36,7 +36,6 @@ def _agent_message_metadata(message) -> dict:
     if not isinstance(metadata, dict):
         return {}
     allowed_keys = {
-        "agent_run_id",
         "agent_pattern_id",
         "agent_pattern_version",
         "agent_route",
@@ -69,6 +68,10 @@ async def get_thread_messages_endpoint(
                     "reasoning_format": m.reasoning_format,
                     "web_sources": m.web_sources,
                     "metadata": _agent_message_metadata(m),
+                    "agent_run_id": getattr(m, "agent_run_id", None),
+                    "agent_run_turn_kind": getattr(m, "agent_run_turn_kind", None),
+                    "agent_run_sequence": getattr(m, "agent_run_sequence", None),
+                    "agent_trace_refs": getattr(m, "agent_trace_refs", None),
                     "created_at": iso_utc_z(m.created_at),
                 }
                 for m in messages

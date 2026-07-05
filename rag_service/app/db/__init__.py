@@ -296,6 +296,10 @@ async def create_chat_turn(
     clarification_options: list = None,
     error: dict = None,
     metadata: dict = None,
+    agent_run_id: str = None,
+    agent_run_turn_kind: str = None,
+    agent_run_sequence: int = None,
+    agent_trace_refs_json: dict = None,
 ):
     """Create one JSONB-backed chat turn."""
     return await get_message_repo().create_turn(
@@ -313,6 +317,10 @@ async def create_chat_turn(
         clarification_options=clarification_options,
         error=error,
         metadata=metadata,
+        agent_run_id=agent_run_id,
+        agent_run_turn_kind=agent_run_turn_kind,
+        agent_run_sequence=agent_run_sequence,
+        agent_trace_refs_json=agent_trace_refs_json,
     )
 
 

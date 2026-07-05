@@ -189,6 +189,13 @@ export interface AgentMessageMetadata {
   agent_route_reason?: string;
 }
 
+export interface AgentTraceRefs {
+  node_ids?: string[];
+  span_ids?: string[];
+  interrupt_id?: string | null;
+  [key: string]: any;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -202,6 +209,9 @@ export interface Message {
   web_sources?: WebSource[];
   metadata?: AgentMessageMetadata;
   agent_run_id?: string;
+  agent_run_turn_kind?: string;
+  agent_run_sequence?: number | null;
+  agent_trace_refs?: AgentTraceRefs | null;
   agent_pattern_id?: string;
   agent_pattern_version?: number | string;
   agent_route?: string;
@@ -299,6 +309,12 @@ export interface AgentRunDetails {
   started_at?: string;
   completed_at?: string | null;
   debug?: AgentRunDebug | null;
+  turns?: {
+    id: string;
+    kind?: string | null;
+    sequence?: number | null;
+    trace_refs?: AgentTraceRefs | null;
+  }[];
   [key: string]: any;
 }
 
@@ -609,6 +625,9 @@ export async function threadChat(
   rewritten_query?: string;
   clarification_options?: string[] | null;
   agent_run_id?: string;
+  agent_run_turn_kind?: string;
+  agent_run_sequence?: number | null;
+  agent_trace_refs?: AgentTraceRefs | null;
   agent_pattern_id?: string;
   agent_pattern_version?: number | string;
   route?: string;

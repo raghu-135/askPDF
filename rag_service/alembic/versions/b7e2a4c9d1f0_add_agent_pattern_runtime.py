@@ -87,6 +87,7 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'{}'::jsonb"),
         ),
+        sa.Column("debug_trace_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.ForeignKeyConstraint(["template_id"], ["agent_pattern_templates.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["template_version_id"], ["agent_pattern_template_versions.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["thread_id"], ["threads.id"], ondelete="CASCADE"),
@@ -99,8 +100,34 @@ def upgrade() -> None:
     op.create_index(op.f("ix_agent_runs_thread_id"), "agent_runs", ["thread_id"], unique=False)
     op.create_index(op.f("ix_agent_runs_user_id"), "agent_runs", ["user_id"], unique=False)
 
+    op.add_column("chat_turns", sa.Column("agent_run_id", sa.String(), nullable=True))
+    op.add_column("chat_turns", sa.Column("agent_run_turn_kind", sa.String(), nullable=True))
+    op.add_column("chat_turns", sa.Column("agent_run_sequence", sa.Integer(), nullable=True))
+    op.add_column(
+        "chat_turns",
+        sa.Column("agent_trace_refs_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    )
+    op.create_foreign_key(
+        "fk_chat_turns_agent_run_id_agent_runs",
+        "chat_turns",
+        "agent_runs",
+        ["agent_run_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
+    op.create_index("idx_chat_turn_agent_run_sequence", "chat_turns", ["agent_run_id", "agent_run_sequence"], unique=False)
+    op.create_index(op.f("ix_chat_turns_agent_run_id"), "chat_turns", ["agent_run_id"], unique=False)
+
 
 def downgrade() -> None:
+    op.drop_index(op.f("ix_chat_turns_agent_run_id"), table_name="chat_turns")
+    op.drop_index("idx_chat_turn_agent_run_sequence", table_name="chat_turns")
+    op.drop_constraint("fk_chat_turns_agent_run_id_agent_runs", "chat_turns", type_="foreignkey")
+    op.drop_column("chat_turns", "agent_trace_refs_json")
+    op.drop_column("chat_turns", "agent_run_sequence")
+    op.drop_column("chat_turns", "agent_run_turn_kind")
+    op.drop_column("chat_turns", "agent_run_id")
+
     op.drop_index(op.f("ix_agent_runs_user_id"), table_name="agent_runs")
     op.drop_index(op.f("ix_agent_runs_thread_id"), table_name="agent_runs")
     op.drop_index(op.f("ix_agent_runs_template_version_id"), table_name="agent_runs")

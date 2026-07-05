@@ -53,6 +53,7 @@ import {
     getPromptPreview,
     getAgentRun,
     AgentRunDetails,
+    AgentTraceRefs,
 } from '../lib/api';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
@@ -69,6 +70,9 @@ interface ChatMessage extends Message {
     rewritten_query?: string;
     web_sources?: WebSource[];
     agent_run_id?: string;
+    agent_run_turn_kind?: string;
+    agent_run_sequence?: number | null;
+    agent_trace_refs?: AgentTraceRefs | null;
     agent_pattern_id?: string;
     agent_pattern_version?: number | string;
     agent_route?: string;
@@ -375,11 +379,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 isRecollected: false,
                 rewritten_query: m.role === 'user' ? m.context_compact : undefined,
                 web_sources: m.role === 'assistant' ? (m.web_sources || []) : undefined,
-                agent_run_id: m.role === 'assistant' ? m.metadata?.agent_run_id : undefined,
-                agent_pattern_id: m.role === 'assistant' ? m.metadata?.agent_pattern_id : undefined,
-                agent_pattern_version: m.role === 'assistant' ? m.metadata?.agent_pattern_version : undefined,
-                agent_route: m.role === 'assistant' ? m.metadata?.agent_route : undefined,
-                agent_route_reason: m.role === 'assistant' ? m.metadata?.agent_route_reason : undefined,
+                agent_run_id: m.agent_run_id,
+                agent_run_turn_kind: m.agent_run_turn_kind,
+                agent_run_sequence: m.agent_run_sequence,
+                agent_trace_refs: m.agent_trace_refs,
+                agent_pattern_id: m.agent_pattern_id ?? m.metadata?.agent_pattern_id,
+                agent_pattern_version: m.agent_pattern_version ?? m.metadata?.agent_pattern_version,
+                agent_route: m.agent_route ?? m.metadata?.agent_route,
+                agent_route_reason: m.agent_route_reason ?? m.metadata?.agent_route_reason,
             })));
         } catch (error) {
             console.error('Failed to load messages:', error);
@@ -843,6 +850,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         role: 'user',
                         content: textToSend, // Keep original input
                         rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
+                        agent_run_id: response.agent_run_id,
+                        agent_run_turn_kind: response.agent_run_turn_kind,
+                        agent_run_sequence: response.agent_run_sequence,
+                        agent_trace_refs: response.agent_trace_refs,
+                        agent_pattern_id: response.agent_pattern_id,
+                        agent_pattern_version: response.agent_pattern_version,
+                        agent_route: response.agent_route || response.route,
+                        agent_route_reason: response.agent_route_reason,
                         created_at: new Date().toISOString()
                     });
 
@@ -856,6 +871,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             reasoning_format: response.reasoning_format || 'none',
                             web_sources: response.web_sources || [],
                             agent_run_id: response.agent_run_id,
+                            agent_run_turn_kind: response.agent_run_turn_kind,
+                            agent_run_sequence: response.agent_run_sequence,
+                            agent_trace_refs: response.agent_trace_refs,
                             agent_pattern_id: response.agent_pattern_id,
                             agent_pattern_version: response.agent_pattern_version,
                             agent_route: response.agent_route || response.route,
@@ -1292,7 +1310,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     color: isUser
                                         ? theme.palette.getContrastText(theme.palette.primary.main)
                                         : theme.palette.text.primary,
-                                    width: !isUser && msg.agent_run_id ? `calc(100% - ${theme.spacing(6)})` : 'fit-content',
+                                    width: msg.agent_run_id ? `calc(100% - ${theme.spacing(6)})` : 'fit-content',
                                     maxWidth: isUser ? '90%' : `calc(100% - ${theme.spacing(6)})`,
                                     minWidth: 0,
                                     overflowWrap: 'anywhere',
@@ -1517,7 +1535,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         </details>
                                     </Box>
                                 )}
-                                {msg.role === 'assistant' && msg.agent_run_id && (
+                                {msg.agent_run_id && (
                                     <Box sx={{ mt: 1 }}>
                                         <details onToggle={(event) => handleAgentRunToggle(msg, event)}>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
@@ -1538,6 +1556,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                 <AgentRunDebugPanel
                                                     runId={msg.agent_run_id}
                                                     routeReason={msg.agent_route_reason}
+                                                    traceRefs={msg.agent_trace_refs}
                                                     runDetails={agentRunDetails[msg.agent_run_id]}
                                                     loading={agentRunLoading[msg.agent_run_id]}
                                                     error={agentRunErrors[msg.agent_run_id]}

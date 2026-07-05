@@ -161,7 +161,9 @@ async def _handle_compiled_rag_chat(
         status = "clarification" if clarification_options else "completed"
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         metadata = {
-            **agent_run_context,
+            "agent_pattern_id": agent_run_context.get("agent_pattern_id"),
+            "agent_pattern_version": agent_run_context.get("agent_pattern_version"),
+            "agent_pattern_template_version_id": agent_run_context.get("agent_pattern_template_version_id"),
             "agent_route": result.get("route"),
             "agent_route_reason": result.get("route_reason"),
         }
@@ -179,6 +181,10 @@ async def _handle_compiled_rag_chat(
             used_chat_ids=result.get("used_chat_ids") or [],
             clarification_options=clarification_options,
             metadata=metadata,
+            agent_run_id=agent_run_id,
+            agent_run_turn_kind="assistant_final",
+            agent_run_sequence=0,
+            agent_trace_refs_json=None,
         )
         user_message_id = f"{turn.id}:user"
         assistant_message_id = f"{turn.id}:assistant"
@@ -238,6 +244,9 @@ async def _handle_compiled_rag_chat(
             "tool_events": result.get("tool_events") or [],
             "duration_ms": duration_ms,
             "status": status,
+            "agent_run_turn_kind": "assistant_final",
+            "agent_run_sequence": 0,
+            "agent_trace_refs": None,
             **agent_run_context,
         }
     except Exception as exc:
@@ -283,7 +292,9 @@ async def _handle_compiled_rag_chat(
             "agent_error": error_payload,
         }
         metadata = {
-            **agent_run_context,
+            "agent_pattern_id": agent_run_context.get("agent_pattern_id"),
+            "agent_pattern_version": agent_run_context.get("agent_pattern_version"),
+            "agent_pattern_template_version_id": agent_run_context.get("agent_pattern_template_version_id"),
             "agent_route": route,
             "agent_route_reason": route_reason,
             "agent_error": error_payload,
@@ -301,6 +312,10 @@ async def _handle_compiled_rag_chat(
             used_chat_ids=[],
             error=error_payload,
             metadata=metadata,
+            agent_run_id=agent_run_id,
+            agent_run_turn_kind="assistant_final",
+            agent_run_sequence=0,
+            agent_trace_refs_json=None,
         )
         return {
             "answer": fallback_answer,
@@ -324,5 +339,8 @@ async def _handle_compiled_rag_chat(
             "duration_ms": duration_ms,
             "status": "failed",
             "agent_error": error_payload,
+            "agent_run_turn_kind": "assistant_final",
+            "agent_run_sequence": 0,
+            "agent_trace_refs": None,
             **agent_run_context,
         }

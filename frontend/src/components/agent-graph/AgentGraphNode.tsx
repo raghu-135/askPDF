@@ -29,8 +29,10 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
   const sourcePosition = isVertical ? Position.Bottom : Position.Right;
   const skipReason = formatSkipReason(data.skipReason);
   const statusLabel = data.status === 'skipped' ? skipReason || 'Skipped' : data.status;
+  const isFocused = data.focused === true;
   const tooltip = [
     data.label,
+    isFocused ? 'focused by message' : null,
     data.route ? `route: ${data.route}` : null,
     elapsed ? `elapsed: ${elapsed}` : null,
     data.skipped ? skipReason || 'Skipped' : null,
@@ -48,10 +50,10 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
           px: 1.25,
           py: 1,
           borderRadius: 1,
-          border: 1,
-          borderColor: selected ? 'primary.main' : statusColor[data.status] || 'divider',
+          border: isFocused ? 2 : 1,
+          borderColor: selected || isFocused ? 'primary.main' : statusColor[data.status] || 'divider',
           bgcolor: statusBg[data.status] || 'background.paper',
-          boxShadow: selected ? 3 : 1,
+          boxShadow: selected || isFocused ? 3 : 1,
           color: 'text.primary',
           cursor: 'pointer',
         }}
@@ -65,6 +67,7 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
         </Typography>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, mt: 0.8 }}>
           <Chip size="small" label={statusLabel} sx={{ height: 22, fontSize: '0.72rem' }} />
+          {isFocused ? <Chip size="small" color="primary" label="focused" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
           {elapsed && <Chip size="small" label={elapsed} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />}
           {data.executionPlan?.length ? <Chip size="small" label={`plan ${data.executionPlan.length}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
           {toolCount ? <Chip size="small" label={`tools ${toolCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}

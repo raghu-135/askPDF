@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { buildAgentGraph, getAgentGraphSpec } from '../src/components/agent-graph/agent-graph-mapper.ts';
+import {
+  applyTraceFocusToGraph,
+  buildAgentGraph,
+  getAgentGraphSpec,
+} from '../src/components/agent-graph/agent-graph-mapper.ts';
 
 test('router graph maps conditional route edges and highlights selected route', () => {
   const graph = buildAgentGraph(
@@ -95,4 +99,40 @@ test('graph mapper accepts trace-native graph rows', () => {
   assert.equal(retrievalNode?.toolSummaries.length, 1);
   assert.equal(graph.nodes.find((node) => node.id === 'router')?.llmSummary?.model_name, 'gpt-test');
   assert.equal(graph.nodes.find((node) => node.id === 'router')?.llmSummary?.token_counts.total, 42);
+});
+
+test('graph mapper applies node and span focus refs', () => {
+  const graph = buildAgentGraph(
+    getAgentGraphSpec({ pattern_type: 'plan_execute_rag_agent' }),
+    {
+      route: 'execute',
+      nodeRows: [
+        { node: 'planner', elapsed_ms: 4, __trace_span: { span_id: 'node:planner:0' } },
+        { node: 'retrieval_worker', elapsed_ms: 8, __trace_span: { span_id: 'node:retrieval_worker:0' } },
+      ],
+      toolRows: [
+        {
+          tool_name: 'search_documents',
+          caller_node: 'retrieval_worker',
+          ok: true,
+          __trace_span: { span_id: 'tool:search_documents:0', output: { sources: 2 } },
+        },
+      ],
+    },
+  );
+
+  const focused = applyTraceFocusToGraph(graph, {
+    node_ids: ['planner'],
+    span_ids: ['tool:search_documents:0'],
+  });
+
+  const planner = focused.nodes.find((node) => node.id === 'planner');
+  const retrieval = focused.nodes.find((node) => node.id === 'retrieval_worker');
+  const memory = focused.nodes.find((node) => node.id === 'memory_worker');
+
+  assert.equal(planner?.focused, true);
+  assert.equal(retrieval?.focused, true);
+  assert.deepEqual(retrieval?.focusedSpanIds, ['tool:search_documents:0']);
+  assert.equal(retrieval?.focusedTraceSpans?.[0]?.output.sources, 2);
+  assert.equal(memory?.focused, undefined);
 });

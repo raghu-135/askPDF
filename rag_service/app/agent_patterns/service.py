@@ -108,7 +108,6 @@ class AgentRunService:
                 status=status,
                 metrics_json=metrics,
                 error_json=error_json,
-                chat_turn_id=result.get("chat_turn_id"),
             )
             if completed_run is not None:
                 debug_payload = trace_recorder.finalize(
