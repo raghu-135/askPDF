@@ -34,7 +34,6 @@ class TestMessageEndpoints:
                 "agent_pattern_version": 1,
                 "agent_route": "document",
                 "agent_route_reason": "Question needs document evidence.",
-                "agent_node_events": [{"node": "router"}],
                 "context_compact": "internal compact text",
             },
             created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),

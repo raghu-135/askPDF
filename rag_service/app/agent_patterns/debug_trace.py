@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
 
+from app.agent.tool_registry import get_tool_contract_metadata
 from app.agent_patterns.trace import compact_preview
 from app.time_utils import iso_utc_z
 
@@ -75,6 +76,21 @@ def _tool_kind(event: Mapping[str, Any]) -> str:
     if category in {"document", "memory", "timeline", "web"}:
         return "RETRIEVER"
     return "TOOL"
+
+
+def enrich_tool_event(event: Mapping[str, Any]) -> Dict[str, Any]:
+    tool_name = event.get("tool_name")
+    contract = get_tool_contract_metadata(tool_name) if isinstance(tool_name, str) else {}
+    if not contract:
+        return dict(event)
+    return {
+        **event,
+        "tool_id": contract.get("id"),
+        "tool_category": contract.get("category"),
+        "tool_display_name": contract.get("display_name"),
+        "artifact_keys": contract.get("artifact_keys", []),
+        "known_warning_codes": contract.get("warning_codes", []),
+    }
 
 
 def _event_time(value: Any) -> Optional[str]:
@@ -528,7 +544,12 @@ def build_debug_trace(
         if isinstance(node, str) and node not in caller_span_by_node:
             caller_span_by_node[node] = span["span_id"]
 
-    for index, event in enumerate(tool_events):
+    enriched_tool_events = [
+        enrich_tool_event(event)
+        for event in tool_events
+        if isinstance(event, dict)
+    ]
+    for index, event in enumerate(enriched_tool_events):
         spans.append(
             _tool_span(
                 event,

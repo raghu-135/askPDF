@@ -1416,7 +1416,9 @@ class TestRouterRagRuntime:
         assert turn.status == "completed"
         assert turn.payload["metadata"]["agent_run_id"] == "run-1"
         assert turn.payload["metadata"]["agent_route"] == "direct"
-        assert turn.payload["metadata"]["agent_tool_events"] == []
+        assert turn.payload["metadata"]["agent_debug_trace"]["schema_version"] == 1
+        assert "agent_node_events" not in turn.payload["metadata"]
+        assert "agent_tool_events" not in turn.payload["metadata"]
         assert result["tool_events"] == []
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
@@ -1604,6 +1606,9 @@ class TestRouterRagRuntime:
         assert turn is not None
         assert turn.status == expected_status
         assert turn.payload["metadata"]["agent_route"] == route
+        assert turn.payload["metadata"]["agent_debug_trace"]["schema_version"] == 1
+        assert "agent_node_events" not in turn.payload["metadata"]
+        assert "agent_tool_events" not in turn.payload["metadata"]
         if route == "clarify":
             assert result["tool_events"] == []
         else:
@@ -1611,7 +1616,6 @@ class TestRouterRagRuntime:
             assert result["tool_events"][0]["caller_node"] == expected_nodes[2]
             assert result["tool_events"][0]["ok"] is True
             assert result["tool_events"][0]["result_preview"].endswith("worker evidence.")
-            assert turn.payload["metadata"]["agent_tool_events"] == result["tool_events"]
         if route == "document":
             assert result["tool_events"][0]["tool_name"] == "search_documents"
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
@@ -1761,8 +1765,9 @@ class TestRouterRagRuntime:
         assert turn.status == "failed"
         assert turn.payload["metadata"]["agent_run_id"] == "run-failed"
         assert turn.payload["metadata"]["agent_route"] == "document"
-        assert turn.payload["metadata"]["agent_node_events"] == result["node_events"]
-        assert turn.payload["metadata"]["agent_tool_events"] == []
+        assert turn.payload["metadata"]["agent_debug_trace"]["schema_version"] == 1
+        assert "agent_node_events" not in turn.payload["metadata"]
+        assert "agent_tool_events" not in turn.payload["metadata"]
         assert turn.payload["metadata"]["agent_error"]["raw_message"] == "document tool exploded"
 
 
@@ -1931,8 +1936,39 @@ class TestAgentPatternApi:
                 resolved_spec_json=builtin_router_rag_spec(),
             )
 
+        turn_id = str(uuid.uuid4())
+        node_telemetry = [{"node": "router", "route": "web", "elapsed_ms": 4.5}]
+        tool_telemetry = [
+            {
+                "tool_name": "search_web",
+                "caller_node": "web_worker",
+                "ok": True,
+                "elapsed_ms": 12.3,
+                "warnings": [],
+            }
+        ]
+        debug_trace = build_debug_trace(
+            run=run,
+            chat_turn=SimpleNamespace(id=turn_id),
+            node_events=node_telemetry,
+            tool_events=tool_telemetry,
+            metrics={
+                "duration_ms": 42.0,
+                "route": "web",
+                "node_event_count": 1,
+                "node_elapsed_ms": {"router": 4.5},
+                "node_total_elapsed_ms": 4.5,
+                "tool_event_count": 1,
+                "tool_warning_count": 0,
+                "tool_error_count": 0,
+                "tool_elapsed_ms": 12.3,
+            },
+            route="web",
+            route_reason="Needs live evidence.",
+        )
+
         turn = ChatTurn(
-            id=str(uuid.uuid4()),
+            id=turn_id,
             thread_id=sample_thread.id,
             status="completed",
             payload={
@@ -1942,16 +1978,7 @@ class TestAgentPatternApi:
                     "agent_run_id": run.id,
                     "agent_route": "web",
                     "agent_route_reason": "Needs live evidence.",
-                    "agent_node_events": [{"node": "router", "route": "web", "elapsed_ms": 4.5}],
-                    "agent_tool_events": [
-                        {
-                            "tool_name": "search_web",
-                            "caller_node": "web_worker",
-                            "ok": True,
-                            "elapsed_ms": 12.3,
-                            "warnings": [],
-                        }
-                    ],
+                    "agent_debug_trace": debug_trace,
                 },
             },
         )

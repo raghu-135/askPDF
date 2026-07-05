@@ -5,9 +5,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.agent.tool_registry import get_tool_contract_metadata
 from app.agent_patterns.debug_trace import build_debug_trace
-from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
@@ -64,21 +62,6 @@ def _version_payload(version) -> Dict[str, Any]:
     }
 
 
-def _enriched_tool_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    tool_name = event.get("tool_name")
-    contract = get_tool_contract_metadata(tool_name) if isinstance(tool_name, str) else {}
-    if not contract:
-        return dict(event)
-    return {
-        **event,
-        "tool_id": contract.get("id"),
-        "tool_category": contract.get("category"),
-        "tool_display_name": contract.get("display_name"),
-        "artifact_keys": contract.get("artifact_keys", []),
-        "known_warning_codes": contract.get("warning_codes", []),
-    }
-
-
 def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
     payload = {
         "id": run.id,
@@ -98,23 +81,22 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
     if chat_turn is not None:
         turn_payload = chat_turn.payload if isinstance(chat_turn.payload, dict) else {}
         metadata = turn_payload.get("metadata") if isinstance(turn_payload.get("metadata"), dict) else {}
-        tool_events = metadata.get("agent_tool_events") if isinstance(metadata.get("agent_tool_events"), list) else []
-        node_events = metadata.get("agent_node_events") if isinstance(metadata.get("agent_node_events"), list) else []
-        enriched_tool_events = [
-            _enriched_tool_event(event)
-            for event in tool_events
-            if isinstance(event, dict)
-        ]
         metrics = run.metrics_json if isinstance(run.metrics_json, dict) else {}
-        event_metrics = build_run_metrics(
-            {
-                "route": metadata.get("agent_route"),
-                "node_events": node_events,
-                "tool_events": enriched_tool_events,
-            },
-            duration_ms=metrics.get("duration_ms") or 0,
-        )
-        debug_metrics = {**event_metrics, **metrics}
+        trace = metadata.get("agent_debug_trace") if isinstance(metadata.get("agent_debug_trace"), dict) else None
+        trace_metrics = trace.get("metrics") if isinstance(trace, dict) and isinstance(trace.get("metrics"), dict) else {}
+        debug_metrics = {**trace_metrics, **metrics}
+        if trace is not None:
+            trace = {**trace, "metrics": debug_metrics}
+            trace["chat_turn_id"] = chat_turn.id
+            trace_attributes = dict(trace.get("attributes") or {})
+            trace_attributes["askpdf.chat_turn.id"] = chat_turn.id
+            trace["attributes"] = trace_attributes
+            for span in trace.get("spans") or []:
+                if isinstance(span, dict) and span.get("parent_span_id") is None:
+                    attributes = dict(span.get("attributes") or {})
+                    attributes["askpdf.chat_turn.id"] = chat_turn.id
+                    span["attributes"] = attributes
+                    break
         error = metadata.get("agent_error") or run.error_json
         payload["debug"] = {
             "chat_turn_id": chat_turn.id,
@@ -124,16 +106,8 @@ def _run_payload(run, *, chat_turn=None) -> Dict[str, Any]:
             "error": error,
             "metrics": debug_metrics,
         }
-        payload["debug"]["trace"] = build_debug_trace(
-            run=run,
-            chat_turn=chat_turn,
-            node_events=node_events,
-            tool_events=enriched_tool_events,
-            metrics=debug_metrics,
-            route=metadata.get("agent_route"),
-            route_reason=metadata.get("agent_route_reason"),
-            error=error,
-        )
+        if trace is not None:
+            payload["debug"]["trace"] = trace
     elif run.status == "failed":
         metrics = run.metrics_json if isinstance(run.metrics_json, dict) else {}
         payload["debug"] = {
