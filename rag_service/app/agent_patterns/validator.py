@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
-from app.agent.tool_registry import known_tool_contract_ids, tool_contracts_by_id
+from app.agent.tool_registry import collect_tool_contract_metadata_errors, known_tool_contract_ids, tool_contracts_by_id
 from app.agent_patterns.node_catalog import (
     collect_node_catalog_errors,
     get_node_catalog,
@@ -628,7 +628,14 @@ class GenericGraphValidator:
         route_registry_errors = collect_route_function_registry_errors(route_registry)
         if route_registry_errors:
             return [f"route function registry incompatible: {error}" for error in route_registry_errors]
+        tool_contracts = tool_contracts_by_id()
+        tool_contract_errors = collect_tool_contract_metadata_errors(
+            [record for records in tool_contracts.values() for record in records]
+        )
+        if tool_contract_errors:
+            return [f"tool contract registry incompatible: {error}" for error in tool_contract_errors]
         errors.extend(self._collect_catalog_route_function_errors(node_catalog, route_registry))
+        errors.extend(self._collect_catalog_tool_contract_errors(node_catalog, tool_contracts))
         node_ids: set[str] = set()
         node_types_by_id: dict[str, str] = {}
         node_type_counts: dict[str, int] = {}
@@ -817,6 +824,33 @@ class GenericGraphValidator:
                     errors.append(
                         f"node catalog type {node_type} allows route_fn {route_fn}, "
                         "but route registry does not allow that source type"
+                    )
+        return errors
+
+    def _collect_catalog_tool_contract_errors(
+        self,
+        node_catalog: Dict[str, Dict[str, Any]],
+        tool_contracts: Dict[str, list[Dict[str, Any]]],
+    ) -> list[str]:
+        errors: list[str] = []
+        known_contract_ids = set(tool_contracts)
+        for node_type, metadata in sorted(node_catalog.items()):
+            node_capabilities = set(metadata.get("capabilities") or [])
+            for contract_id in metadata.get("allowed_tool_contract_ids") or []:
+                if contract_id not in known_contract_ids:
+                    errors.append(f"node catalog type {node_type} references unknown tool contract: {contract_id}")
+                    continue
+                compatible = False
+                for contract in tool_contracts.get(contract_id) or []:
+                    allowed_node_types = set(contract.get("allowed_node_types") or [])
+                    required_capabilities = set(contract.get("required_node_capabilities") or [])
+                    if node_type in allowed_node_types or node_capabilities.intersection(required_capabilities):
+                        compatible = True
+                        break
+                if not compatible:
+                    errors.append(
+                        f"node catalog type {node_type} allows tool contract {contract_id}, "
+                        "but tool registry does not allow that node type or capability"
                     )
         return errors
 

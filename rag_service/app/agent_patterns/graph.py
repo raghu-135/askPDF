@@ -2181,10 +2181,23 @@ class TemplateCompiler:
             metadata = get_node_type_metadata(str(node_type)) if isinstance(node_type, str) else {}
             display_name = metadata.get("display_name")
             category = metadata.get("category")
-            if isinstance(display_name, str) and display_name and not node.get("label"):
+            if isinstance(display_name, str) and display_name:
                 node["label"] = display_name
-            if isinstance(category, str) and category and not node.get("category"):
+            if isinstance(category, str) and category:
                 node["category"] = category
+            for key in (
+                "capabilities",
+                "allowed_route_functions",
+                "allowed_tool_contract_ids",
+                "state_reads",
+                "state_writes",
+                "prompt_slots",
+                "context_policy",
+                "observability",
+                "max_instances",
+            ):
+                if key in metadata:
+                    node[key] = deepcopy(metadata[key])
             nodes.append(node)
         return {**graph_spec, "nodes": nodes}
 

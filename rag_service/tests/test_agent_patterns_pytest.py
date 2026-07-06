@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.tool_registry import collect_tool_contract_metadata_errors, tool_contracts_by_id
 from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.router_runtime import handle_router_rag_chat
 from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result_metadata, _route_function_for_edge
@@ -658,6 +659,19 @@ class TestRouterRagTemplateValidator:
         assert "router_route.allowed_source_types must be a list of non-empty strings" in errors
         assert "planner_route.route_labels must be null or a list of non-empty strings" in errors
 
+    def test_tool_contract_registry_shape_validation_reports_bad_metadata(self):
+        records = [record for records in tool_contracts_by_id().values() for record in records]
+        records[0] = dict(records[0])
+        records[0]["allowed_node_types"] = []
+        records[0]["required_node_capabilities"] = []
+        records[1] = dict(records[1])
+        records[1]["artifact_keys"] = ["document_sources", ""]
+
+        errors = collect_tool_contract_metadata_errors(records)
+
+        assert any(error.endswith("must declare allowed_node_types or required_node_capabilities") for error in errors)
+        assert any(error.endswith("artifact_keys must be a list of non-empty strings") for error in errors)
+
     def test_rejects_router_rag_graph_topology_changes(self):
         spec = builtin_router_rag_v2_spec()
         spec["config"]["graph"]["nodes"].append({"id": "surprise", "type": "retrieval_worker"})
@@ -1081,6 +1095,32 @@ class TestRouterRagGraphToolConsumers:
         spec = builtin_router_rag_v2_spec()
 
         with pytest.raises(TemplateValidationError, match="node catalog type router allows route_fn router_route"):
+            TemplateValidator().validate(spec)
+
+    def test_v2_custom_graph_rejects_incompatible_tool_contract_registry(self, monkeypatch):
+        contracts = tool_contracts_by_id()
+        contracts["document_evidence"] = [dict(contracts["document_evidence"][0])]
+        contracts["document_evidence"][0]["artifact_keys"] = ["document_sources", ""]
+        monkeypatch.setattr("app.agent_patterns.validator.tool_contracts_by_id", lambda: contracts)
+
+        spec = builtin_router_rag_v2_spec()
+
+        with pytest.raises(TemplateValidationError, match="tool contract registry incompatible"):
+            TemplateValidator().validate(spec)
+
+    def test_v2_custom_graph_rejects_catalog_tool_contract_mismatch(self, monkeypatch):
+        contracts = tool_contracts_by_id()
+        contracts["document_evidence"] = [dict(contracts["document_evidence"][0])]
+        contracts["document_evidence"][0]["allowed_node_types"] = ["memory_worker"]
+        contracts["document_evidence"][0]["required_node_capabilities"] = ["retrieval.memory"]
+        monkeypatch.setattr("app.agent_patterns.validator.tool_contracts_by_id", lambda: contracts)
+
+        spec = builtin_router_rag_v2_spec()
+
+        with pytest.raises(
+            TemplateValidationError,
+            match="node catalog type retrieval_worker allows tool contract document_evidence",
+        ):
             TemplateValidator().validate(spec)
 
     def test_v2_custom_graph_rejects_node_type_instance_limit_overflow(self):
@@ -3318,12 +3358,16 @@ class TestAgentRunService:
             for node in run.resolved_spec_json["config"]["graph"]["nodes"]
             if node.get("id") == "retrieval_1"
         )
-        assert retrieval_node == {
-            "id": "retrieval_1",
-            "type": "retrieval_worker",
-            "label": "Document Retrieval",
-            "category": "retrieval",
-        }
+        assert retrieval_node["id"] == "retrieval_1"
+        assert retrieval_node["type"] == "retrieval_worker"
+        assert retrieval_node["label"] == "Document Retrieval"
+        assert retrieval_node["category"] == "retrieval"
+        assert retrieval_node["capabilities"] == ["retrieval.document"]
+        assert "document_evidence" in retrieval_node["allowed_tool_contract_ids"]
+        assert "evidence_packets" in retrieval_node["state_writes"]
+        assert retrieval_node["context_policy"]["mode"] == "append_evidence"
+        assert retrieval_node["observability"]["span_kind"] == "tool_worker"
+        assert retrieval_node["max_instances"] >= 1
         assert any(
             event.get("node") == "retrieval_1" and event.get("node_type") == "retrieval_worker"
             for event in result["node_events"]

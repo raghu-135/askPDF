@@ -190,6 +190,35 @@ def list_tool_contract_metadata() -> List[Dict[str, Any]]:
     return records
 
 
+def collect_tool_contract_metadata_errors(records: List[Dict[str, Any]] | None = None) -> list[str]:
+    """Return shape errors for the tool contract registry."""
+
+    errors: list[str] = []
+    source = records if isinstance(records, list) else list_tool_contract_metadata()
+    for index, record in enumerate(source):
+        if not isinstance(record, dict):
+            errors.append(f"tool contract record {index} must be an object")
+            continue
+        tool_name = record.get("tool_name")
+        prefix = str(tool_name) if isinstance(tool_name, str) and tool_name else f"tool contract record {index}"
+        for key in ("tool_name", "id", "category"):
+            if not isinstance(record.get(key), str) or not record.get(key):
+                errors.append(f"{prefix}.{key} must be a non-empty string")
+        for key in (
+            "allowed_caller_nodes",
+            "allowed_node_types",
+            "required_node_capabilities",
+            "artifact_keys",
+            "warning_codes",
+        ):
+            value = record.get(key)
+            if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+                errors.append(f"{prefix}.{key} must be a list of non-empty strings")
+        if not record.get("allowed_node_types") and not record.get("required_node_capabilities"):
+            errors.append(f"{prefix} must declare allowed_node_types or required_node_capabilities")
+    return errors
+
+
 def known_tool_contract_ids() -> set[str]:
     """Public tool IDs allowed in versioned agent pattern specs."""
 
