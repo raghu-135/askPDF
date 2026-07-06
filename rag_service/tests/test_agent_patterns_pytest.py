@@ -331,8 +331,7 @@ class TestAgentRunMetrics:
         assert len(ref["text"]) <= 903
         assert len(node_span["raw"]["output_refs"]["document_matches"][0]["text"]) <= 903
 
-    def test_debug_payload_redacts_sensitive_values_and_trims_oversized_payload(self, monkeypatch):
-        monkeypatch.setenv("ASKPDF_AGENT_DEBUG_TRACE_MAX_BYTES", "12000")
+    def test_debug_payload_redacts_sensitive_values_and_bounds_large_values(self):
         long_text = "secret-adjacent context " * 1000
         run = SimpleNamespace(
             id="run-redact",
@@ -380,9 +379,10 @@ class TestAgentRunMetrics:
         )
 
         encoded = json.dumps(payload, ensure_ascii=True, default=str)
-        assert len(encoded.encode("utf-8")) <= 12000
         assert "should-not-survive" not in encoded
-        assert payload["summary"]["traceGuardrails"]["truncated"] is True
+        router_span = next(span for span in payload["trace"]["spans"] if span["span_id"] == "node:router:0")
+        assert len(router_span["input"]["value"]["question"]) <= 903
+        assert len(router_span["output"]["value"]["answer"]) <= 903
 
     def test_runtime_trace_redaction_preserves_token_usage_counters(self):
         event = build_runtime_trace_event(

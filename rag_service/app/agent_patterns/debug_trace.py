@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -20,7 +19,6 @@ from app.time_utils import iso_utc_z
 DEBUG_PAYLOAD_VERSION = 1
 TRACE_SCHEMA_VERSION = 1
 TRACE_PREVIEW_LIMIT = 900
-TRACE_MAX_PAYLOAD_BYTES = 256_000
 TRACE_REDACTED_VALUE = "[redacted]"
 TRACE_SENSITIVE_KEY_PARTS = {
     "api_key",
@@ -119,109 +117,6 @@ def _bounded_value(value: Any, *, key: Any = None) -> Any:
             if item not in (None, "", [], {})
         }
     return value
-
-
-def _debug_payload_max_bytes() -> int:
-    try:
-        return max(8_000, int(os.environ.get("ASKPDF_AGENT_DEBUG_TRACE_MAX_BYTES", TRACE_MAX_PAYLOAD_BYTES)))
-    except (TypeError, ValueError):
-        return TRACE_MAX_PAYLOAD_BYTES
-
-
-def _encoded_size(value: Any) -> int:
-    return len(json.dumps(value, ensure_ascii=True, default=str, sort_keys=True).encode("utf-8"))
-
-
-def _without_span_details(span: Any) -> Any:
-    if not isinstance(span, dict):
-        return span
-    compact = dict(span)
-    compact.pop("raw", None)
-    compact.pop("links", None)
-    compact["input"] = {"truncated": True} if compact.get("input") else {}
-    compact["output"] = {"truncated": True} if compact.get("output") else {}
-    compact["events"] = [
-        {
-            "name": event.get("name"),
-            "attributes": _as_dict(event.get("attributes")),
-        }
-        for event in _as_list(compact.get("events"))
-        if isinstance(event, dict)
-    ]
-    return compact
-
-
-def _ensure_trace_shape(trace: Dict[str, Any]) -> None:
-    trace.setdefault("spans", [])
-    trace.setdefault("links", [])
-    trace.setdefault("artifacts", [])
-    for span in _as_list(trace.get("spans")):
-        if not isinstance(span, dict):
-            continue
-        span.setdefault("parent_span_id", None)
-        span.setdefault("attributes", {})
-        span.setdefault("input", {})
-        span.setdefault("output", {})
-        span.setdefault("events", [])
-        span.setdefault("links", [])
-        span.setdefault("raw", {})
-
-
-def _apply_debug_payload_guardrails(payload: Dict[str, Any]) -> Dict[str, Any]:
-    guarded = _bounded_value(payload)
-    if not isinstance(guarded, dict):
-        return payload
-    trace = guarded.get("trace") if isinstance(guarded.get("trace"), dict) else None
-    if trace is not None:
-        _ensure_trace_shape(trace)
-    max_bytes = _debug_payload_max_bytes()
-    payload_bytes = _encoded_size(guarded)
-    if payload_bytes <= max_bytes:
-        return guarded
-
-    summary = dict(_as_dict(guarded.get("summary")))
-    summary["traceGuardrails"] = {
-        "truncated": True,
-        "payloadBytes": payload_bytes,
-        "maxBytes": max_bytes,
-    }
-    for node in _as_list(summary.get("nodes")):
-        if isinstance(node, dict):
-            node.pop("span", None)
-            node.pop("raw", None)
-    for tool in _as_list(summary.get("tools")):
-        if isinstance(tool, dict):
-            tool.pop("span", None)
-            tool.pop("raw", None)
-    guarded["summary"] = summary
-
-    trace = dict(_as_dict(guarded.get("trace")))
-    trace["links"] = []
-    trace["artifacts"] = []
-    for span in _as_list(trace.get("spans")):
-        if isinstance(span, dict):
-            span.pop("raw", None)
-    guarded["trace"] = trace
-
-    if _encoded_size(guarded) <= max_bytes:
-        return guarded
-
-    trace["spans"] = [_without_span_details(span) for span in _as_list(trace.get("spans"))]
-    _ensure_trace_shape(trace)
-    if _encoded_size(guarded) <= max_bytes:
-        return guarded
-
-    root_span = _find_root_span(_as_list(trace.get("spans")))
-    if root_span is not None:
-        trace["spans"] = [_without_span_details(root_span)]
-    else:
-        trace["spans"] = []
-    _ensure_trace_shape(trace)
-    summary["nodes"] = []
-    summary["tools"] = []
-    summary["errors"] = []
-    summary["traceGuardrails"]["droppedSpanDetails"] = True
-    return guarded
 
 
 def _jsonable(value: Any) -> Any:
@@ -742,7 +637,7 @@ def append_interrupt_event_to_debug_payload(
     if run_status:
         summary["status"] = run_status
     summary.update(_interrupt_summary(trace))
-    return _apply_debug_payload_guardrails({**debug_payload, "trace": trace, "summary": summary})
+    return {**debug_payload, "trace": trace, "summary": summary}
 
 
 def append_runtime_event_to_debug_payload(
@@ -792,7 +687,7 @@ def append_runtime_event_to_debug_payload(
     if run_status:
         summary["status"] = run_status
     summary.update(_interrupt_summary(trace))
-    return _apply_debug_payload_guardrails({**debug_payload, "trace": trace, "summary": summary})
+    return {**debug_payload, "trace": trace, "summary": summary}
 
 
 def _rebuild_trace_refs(trace: Dict[str, Any]) -> None:
@@ -910,7 +805,7 @@ def merge_debug_payloads(
 
     _rebuild_trace_refs(base_trace)
     summary = _build_summary_from_trace(base_trace, resolved_spec)
-    return _apply_debug_payload_guardrails({**base_payload, "trace": base_trace, "summary": summary})
+    return {**base_payload, "trace": base_trace, "summary": summary}
 
 
 class AgentTraceRecorder:
@@ -1325,11 +1220,11 @@ class AgentTraceRecorder:
             self._finalized = True
         trace = self._build_trace(run=run, chat_turn_id=chat_turn_id, metrics=metrics)
         summary = self._build_summary(trace)
-        return _apply_debug_payload_guardrails({
+        return {
             "version": DEBUG_PAYLOAD_VERSION,
             "trace": trace,
             "summary": summary,
-        })
+        }
 
     def _span_to_dict(self, span: ReadableSpan) -> Dict[str, Any]:
         attrs = dict(span.attributes or {})
