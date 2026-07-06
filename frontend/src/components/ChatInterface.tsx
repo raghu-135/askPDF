@@ -1278,6 +1278,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 {messages.map((msg, idx) => {
                     const isRecollected = recollectedIds.has(msg.id);
                     const isUser = msg.role === 'user';
+                    const showAgentRunDebug = msg.role === 'assistant' && Boolean(msg.agent_run_id);
                     const isEditingThisMessage = editingMessageId === msg.id;
                     const isOlderQuestion = isUser && latestUserMessageId !== null && msg.id !== latestUserMessageId;
                     const editTooltip = isEditingThisMessage
@@ -1310,7 +1311,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     color: isUser
                                         ? theme.palette.getContrastText(theme.palette.primary.main)
                                         : theme.palette.text.primary,
-                                    width: msg.agent_run_id ? `calc(100% - ${theme.spacing(6)})` : 'fit-content',
+                                    width: showAgentRunDebug ? `calc(100% - ${theme.spacing(6)})` : 'fit-content',
                                     maxWidth: isUser ? '90%' : `calc(100% - ${theme.spacing(6)})`,
                                     minWidth: 0,
                                     overflowWrap: 'anywhere',
@@ -1535,7 +1536,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         </details>
                                     </Box>
                                 )}
-                                {msg.agent_run_id && (
+                                {showAgentRunDebug && msg.agent_run_id && (
                                     <Box sx={{ mt: 1 }}>
                                         <details onToggle={(event) => handleAgentRunToggle(msg, event)}>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
