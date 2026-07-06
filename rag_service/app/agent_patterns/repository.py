@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -56,6 +57,8 @@ PENDING_INTERRUPT_MAX_BYTES = 16_000
 PENDING_INTERRUPT_STRING_LIMIT = 2_000
 PENDING_INTERRUPT_LIST_LIMIT = 20
 PENDING_INTERRUPT_DICT_LIMIT = 50
+SUPPORTED_SPEC_SCHEMA_VERSION = 2
+INTERRUPT_COMPATIBILITY_SCHEMA_VERSION = 1
 
 
 class AgentRunInterruptError(ValueError):
@@ -154,6 +157,57 @@ def _option_ids(interrupt: Dict[str, Any]) -> set[str]:
         for option in options
         if isinstance(option, dict) and isinstance(option.get("id"), str) and option.get("id")
     }
+
+
+def _canonical_json_hash(value: Any) -> str:
+    encoded = json.dumps(value if isinstance(value, dict) else {}, ensure_ascii=True, sort_keys=True, default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _run_interrupt_compatibility(run: AgentRun) -> Dict[str, Any]:
+    spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
+    metadata = run.run_metadata_json if isinstance(run.run_metadata_json, dict) else {}
+    return {
+        "schema_version": INTERRUPT_COMPATIBILITY_SCHEMA_VERSION,
+        "spec_schema_version": spec.get("schema_version"),
+        "template_id": run.template_id,
+        "template_version_id": metadata.get("template_version_id"),
+        "template_version": metadata.get("template_version"),
+        "checkpoint_thread_id": run.checkpoint_thread_id,
+        "resolved_spec_hash": _canonical_json_hash(spec),
+    }
+
+
+def _validate_interrupt_compatibility(interrupt: Dict[str, Any], run: AgentRun) -> None:
+    compatibility = interrupt.get("compatibility") if isinstance(interrupt.get("compatibility"), dict) else {}
+    if not compatibility:
+        raise AgentRunInterruptError(
+            "interrupt_compatibility_missing",
+            "The pending interrupt is missing run compatibility metadata.",
+        )
+
+    expected = _run_interrupt_compatibility(run)
+    if compatibility.get("spec_schema_version") != SUPPORTED_SPEC_SCHEMA_VERSION:
+        raise AgentRunInterruptError(
+            "interrupt_spec_schema_unsupported",
+            "The pending interrupt was created for an unsupported agent pattern schema.",
+        )
+
+    fields = (
+        "schema_version",
+        "spec_schema_version",
+        "template_id",
+        "template_version_id",
+        "template_version",
+        "checkpoint_thread_id",
+        "resolved_spec_hash",
+    )
+    mismatched = [field for field in fields if compatibility.get(field) != expected.get(field)]
+    if mismatched:
+        raise AgentRunInterruptError(
+            "interrupt_compatibility_mismatch",
+            "The pending interrupt no longer matches the stored agent run.",
+        )
 
 
 class AgentPatternRepository:
@@ -557,15 +611,18 @@ class AgentPatternRepository:
     ) -> Optional[AgentRun]:
         """Pause a run on a bounded pending-interrupt payload."""
 
-        pending_interrupt = normalize_pending_interrupt_payload(
-            pending_interrupt_json,
-            requested_at=requested_at,
-        )
         session = await self._get_session()
         async with session.begin():
             run = await session.get(AgentRun, run_id)
             if not run:
                 return None
+            pending_interrupt = normalize_pending_interrupt_payload(
+                {
+                    **pending_interrupt_json,
+                    "compatibility": _run_interrupt_compatibility(run),
+                },
+                requested_at=requested_at,
+            )
             run.status = RUN_STATUS_AWAITING_HUMAN
             run.completed_at = None
             replace_jsonb_field(run, "pending_interrupt_json", pending_interrupt)
@@ -742,6 +799,7 @@ class AgentPatternRepository:
                     "This agent run is not awaiting a human decision.",
                 )
 
+            _validate_interrupt_compatibility(interrupt, run)
             self._validate_pending_interrupt_request(
                 interrupt,
                 interrupt_id=interrupt_id,

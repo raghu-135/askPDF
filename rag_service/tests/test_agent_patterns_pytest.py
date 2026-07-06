@@ -2033,7 +2033,8 @@ class TestAgentPatternRepository:
             thread_id=sample_thread.id,
             template_id=template.id,
             template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+            template_version=version.version,
+            resolved_spec_json=builtin_router_rag_v2_spec(),
         )
 
         paused = await repo.mark_run_awaiting_human(
@@ -2055,6 +2056,14 @@ class TestAgentPatternRepository:
         assert paused.pending_interrupt_json["status"] == "pending"
         assert len(paused.pending_interrupt_json["prompt"]) <= 2003
         assert len(paused.pending_interrupt_json["input_summary"]["source_text"]) <= 2003
+        compatibility = paused.pending_interrupt_json["compatibility"]
+        assert compatibility["spec_schema_version"] == 2
+        assert compatibility["template_id"] == ROUTER_RAG_AGENT_ID
+        assert compatibility["template_version_id"] == version.id
+        assert compatibility["template_version"] == version.version
+        assert compatibility["checkpoint_thread_id"] == run.checkpoint_thread_id
+        assert isinstance(compatibility["resolved_spec_hash"], str)
+        assert len(compatibility["resolved_spec_hash"]) == 64
 
         awaiting_runs = await repo.list_runs_for_thread(sample_thread.id, status="awaiting_human")
         assert [item.id for item in awaiting_runs] == [run.id]
@@ -2067,7 +2076,8 @@ class TestAgentPatternRepository:
             thread_id=sample_thread.id,
             template_id=template.id,
             template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+            template_version=version.version,
+            resolved_spec_json=builtin_router_rag_v2_spec(),
         )
         debug_payload = build_debug_payload(
             run=run,
@@ -2131,6 +2141,45 @@ class TestAgentPatternRepository:
             )
 
     @pytest.mark.asyncio
+    async def test_resolve_pending_interrupt_rejects_stale_compatibility_stamp(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        run = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            template_version=version.version,
+            resolved_spec_json=builtin_router_rag_v2_spec(),
+        )
+        await repo.mark_run_awaiting_human(
+            run.id,
+            {
+                "interrupt_id": "interrupt-stale",
+                "allowed_actions": ["approve", "reject"],
+                "resume_version": 1,
+            },
+        )
+
+        session = await repo._get_session()
+        async with session.begin():
+            stored_run = await session.get(AgentRun, run.id)
+            pending = dict(stored_run.pending_interrupt_json or {})
+            compatibility = dict(pending.get("compatibility") or {})
+            compatibility["resolved_spec_hash"] = "0" * 64
+            pending["compatibility"] = compatibility
+            stored_run.pending_interrupt_json = pending
+
+        with pytest.raises(AgentRunInterruptError) as exc:
+            await repo.resolve_pending_interrupt(
+                run.id,
+                interrupt_id="interrupt-stale",
+                action="approve",
+                resume_version=1,
+            )
+
+        assert exc.value.code == "interrupt_compatibility_mismatch"
+
+    @pytest.mark.asyncio
     async def test_resolve_pending_interrupt_validates_selected_options(self, repo, sample_thread):
         await repo.seed_builtin_templates()
         template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
@@ -2138,7 +2187,8 @@ class TestAgentPatternRepository:
             thread_id=sample_thread.id,
             template_id=template.id,
             template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+            template_version=version.version,
+            resolved_spec_json=builtin_router_rag_v2_spec(),
         )
         run_id = run.id
         await repo.mark_run_awaiting_human(
@@ -2186,7 +2236,8 @@ class TestAgentPatternRepository:
             thread_id=sample_thread.id,
             template_id=template.id,
             template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+            template_version=version.version,
+            resolved_spec_json=builtin_router_rag_v2_spec(),
         )
         await repo.mark_run_awaiting_human(
             run.id,
