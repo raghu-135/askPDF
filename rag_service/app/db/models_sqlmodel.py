@@ -255,7 +255,7 @@ class AgentPatternTemplateVersion(SQLModel, table=True):
         sa_column=Column(String, ForeignKey("agent_pattern_templates.id", ondelete="CASCADE"), index=True)
     )
     version: int = Field(index=True)
-    schema_version: int = Field(default=1)
+    schema_version: int = Field(default=2)
     spec_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)

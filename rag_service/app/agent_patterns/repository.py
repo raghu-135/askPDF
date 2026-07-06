@@ -263,7 +263,6 @@ class AgentPatternRepository:
         template_id: str,
         version: int,
         *,
-        include_preview: bool = False,
         include_custom: bool = False,
     ) -> tuple[Optional[AgentPatternTemplate], Optional[AgentPatternTemplateVersion]]:
         session = await self._get_session()
@@ -277,7 +276,7 @@ class AgentPatternRepository:
             if template.current_version_id:
                 current = await session.get(AgentPatternTemplateVersion, template.current_version_id)
                 current_version_number = current.version if current else None
-            if current_version_number is not None and version > current_version_number and not include_preview:
+            if current_version_number is not None and version > current_version_number:
                 return template, None
             result = await session.execute(
                 select(AgentPatternTemplateVersion)

@@ -119,11 +119,11 @@ const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCa
   return {
     id,
     type,
-    label: asNonEmptyString(row.label)
+    label: formatNodeLabel(id, type, nodeCatalog)
+      || asNonEmptyString(row.label)
       || asNonEmptyString(row.node_name)
       || asNonEmptyString(raw.label)
-      || asNonEmptyString(raw.node_name)
-      || formatNodeLabel(id, type, nodeCatalog),
+      || asNonEmptyString(raw.node_name),
     instanceLabel: formatNodeInstanceLabel(id, type),
     status: typeof row.status === 'string' ? row.status : undefined,
     skipped: row.skipped === true || row.status === 'skipped',
@@ -167,12 +167,11 @@ const getRunGraph = (debug?: AgentRunDebug, nodeCatalog?: AgentNodeCatalog): Tra
   const nodes = (asArray(graph.nodes) as AgentGraphNode[]).map((node) => {
     const id = String(node.id || 'unknown_node');
     const type = typeof node.type === 'string' ? node.type : id;
-    const storedLabel = asNonEmptyString(node.label);
     return {
       ...node,
       id,
       type,
-      label: storedLabel || formatNodeLabel(id, type, nodeCatalog),
+      label: formatNodeLabel(id, type, nodeCatalog) || asNonEmptyString(node.label) || id,
       instanceId: id,
       instanceLabel: formatNodeInstanceLabel(id, type),
     };
@@ -191,31 +190,38 @@ export const buildRunTraceView = (
   runDetails: AgentRunDetails,
   options: { nodeCatalog?: AgentNodeCatalog } = {},
 ): TraceRunView | undefined => {
-  const debug = getRunDebug(runDetails);
-  if (!debug) return undefined;
-  const summary = asObject(debug.summary);
-  const metrics = getRunDebugMetrics(runDetails);
-  const nodes = asArray(summary.nodes).map((node) => nodeViewFromSummary(node, options.nodeCatalog));
-  const tools = asArray(summary.tools).map(toolViewFromSummary);
-  const usedNodeCount = asNumber(summary.usedNodeCount) ?? nodes.filter((node) => !node.skipped).length;
-  const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
-  return {
-    debug,
-    trace: getRunTrace(runDetails),
-    graph: getRunGraph(debug, options.nodeCatalog),
-    route: typeof summary.route === 'string' ? summary.route : typeof metrics.route === 'string' ? metrics.route : undefined,
-    routeReason: typeof summary.routeReason === 'string' ? summary.routeReason : undefined,
-    metrics,
-    nodes,
-    tools,
-    usedNodeCount,
-    availableNodeCount: asNumber(summary.availableNodeCount),
-    usedToolCount,
-    availableToolCount: asNumber(summary.availableToolCount),
-    warningCount: asNumber(summary.warningCount) ?? Number(metrics.tool_warning_count ?? 0),
-    errorCount: asNumber(summary.errorCount) ?? Number(metrics.error_count ?? metrics.tool_error_count ?? 0),
-    errors: asArray(summary.errors),
-  };
+  try {
+    const debug = getRunDebug(runDetails);
+    if (!debug) return undefined;
+    const summary = asObject(debug.summary);
+    const metrics = getRunDebugMetrics(runDetails);
+    const nodes = asArray(summary.nodes).map((node) => nodeViewFromSummary(node, options.nodeCatalog));
+    const tools = asArray(summary.tools).map(toolViewFromSummary);
+    const usedNodeCount = asNumber(summary.usedNodeCount) ?? nodes.filter((node) => !node.skipped).length;
+    const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
+    return {
+      debug,
+      trace: getRunTrace(runDetails),
+      graph: getRunGraph(debug, options.nodeCatalog),
+      route: typeof summary.route === 'string' ? summary.route : typeof metrics.route === 'string' ? metrics.route : undefined,
+      routeReason: typeof summary.routeReason === 'string' ? summary.routeReason : undefined,
+      metrics,
+      nodes,
+      tools,
+      usedNodeCount,
+      availableNodeCount: asNumber(summary.availableNodeCount),
+      usedToolCount,
+      availableToolCount: asNumber(summary.availableToolCount),
+      warningCount: asNumber(summary.warningCount) ?? Number(metrics.tool_warning_count ?? 0),
+      errorCount: asNumber(summary.errorCount) ?? Number(metrics.error_count ?? metrics.tool_error_count ?? 0),
+      errors: asArray(summary.errors),
+    };
+  } catch (err) {
+    if (typeof console !== 'undefined') {
+      console.error('Unable to project agent trace payload', err);
+    }
+    return undefined;
+  }
 };
 
 export const buildTraceExportJson = (view?: TraceRunView): string => (

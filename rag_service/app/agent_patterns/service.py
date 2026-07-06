@@ -14,7 +14,7 @@ from app.agent_patterns.templates import (
     ROUTER_RAG_AGENT_ID,
     SUPPORTED_BUILTIN_TEMPLATE_IDS,
 )
-from app.agent_patterns.validator import TemplateResolver
+from app.agent_patterns.validator import TemplateResolver, TemplateValidationError
 from app.db import get_thread_settings
 
 
@@ -29,12 +29,10 @@ class AgentRunService:
         repository: Optional[AgentPatternRepository] = None,
         resolver: Optional[TemplateResolver] = None,
         *,
-        allow_preview_agent_patterns: bool = False,
         allow_custom_agent_patterns: bool = False,
     ):
         self.repository = repository or AgentPatternRepository()
         self.resolver = resolver or TemplateResolver()
-        self.allow_preview_agent_patterns = allow_preview_agent_patterns
         self.allow_custom_agent_patterns = allow_custom_agent_patterns
 
     async def run_thread_chat(self, thread_id: str, req: Any, embed_model: str) -> Dict[str, Any]:
@@ -60,13 +58,10 @@ class AgentRunService:
         except (TypeError, ValueError):
             requested_template_version = None
 
-        if requested_template_version is not None and (
-            self.allow_preview_agent_patterns or allow_custom_for_run
-        ):
+        if requested_template_version is not None and allow_custom_for_run:
             template, version = await self.repository.get_template_version(
                 template_id,
                 requested_template_version,
-                include_preview=True,
                 include_custom=allow_custom_for_run,
             )
         elif allow_custom_for_run:
@@ -78,13 +73,10 @@ class AgentRunService:
             template, version = await self.repository.get_template_with_current_version(template_id)
         if template is None or version is None:
             await self.repository.seed_builtin_templates()
-            if requested_template_version is not None and (
-                self.allow_preview_agent_patterns or allow_custom_for_run
-            ):
+            if requested_template_version is not None and allow_custom_for_run:
                 template, version = await self.repository.get_template_version(
                     template_id,
                     requested_template_version,
-                    include_preview=True,
                     include_custom=allow_custom_for_run,
                 )
             elif allow_custom_for_run:
@@ -95,7 +87,16 @@ class AgentRunService:
             else:
                 template, version = await self.repository.get_template_with_current_version(template_id)
         if template is None or version is None:
-            raise RuntimeError("No agent pattern is available")
+            if template_id != ROUTER_RAG_AGENT_ID:
+                logger.warning(
+                    "Selected agent pattern unavailable; falling back to default | thread_id=%s requested_template=%s",
+                    thread_id,
+                    template_id,
+                )
+                template_id = ROUTER_RAG_AGENT_ID
+                template, version = await self.repository.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        if template is None or version is None:
+            raise RuntimeError("Default agent pattern is unavailable")
         logger.info(
             "Selected agent pattern for thread %s | template=%s version=%s",
             thread_id,
@@ -111,11 +112,47 @@ class AgentRunService:
             "tool_instructions": getattr(req, "tool_instructions_override", None),
             "custom_instructions": getattr(req, "custom_instructions_override", None),
         }
-        resolved_spec = self.resolver.resolve(
-            version.spec_json,
-            thread_settings=thread_settings,
-            request_overrides=request_overrides,
-        )
+        try:
+            resolved_spec = self.resolver.resolve(
+                version.spec_json,
+                thread_settings=thread_settings,
+                request_overrides=request_overrides,
+            )
+        except TemplateValidationError as exc:
+            if template.id == ROUTER_RAG_AGENT_ID:
+                logger.exception(
+                    "Default agent pattern failed compatibility validation | thread_id=%s version_id=%s",
+                    thread_id,
+                    version.id,
+                )
+                raise RuntimeError("Default agent pattern is incompatible with this service version") from exc
+            logger.warning(
+                "Selected agent pattern failed compatibility validation; falling back to default | thread_id=%s requested_template=%s version_id=%s error=%s",
+                thread_id,
+                template.id,
+                version.id,
+                exc,
+            )
+            fallback_template, fallback_version = await self.repository.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            if fallback_template is None or fallback_version is None:
+                await self.repository.seed_builtin_templates()
+                fallback_template, fallback_version = await self.repository.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            if fallback_template is None or fallback_version is None:
+                raise RuntimeError("Default agent pattern is unavailable") from exc
+            template, version = fallback_template, fallback_version
+            try:
+                resolved_spec = self.resolver.resolve(
+                    version.spec_json,
+                    thread_settings=thread_settings,
+                    request_overrides=request_overrides,
+                )
+            except TemplateValidationError as fallback_exc:
+                logger.exception(
+                    "Default agent pattern failed compatibility validation | thread_id=%s version_id=%s",
+                    thread_id,
+                    version.id,
+                )
+                raise RuntimeError("Default agent pattern is incompatible with this service version") from fallback_exc
         from app.agent_patterns.graph import TemplateCompiler, normalize_hitl_policy_for_thread_settings
 
         resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}

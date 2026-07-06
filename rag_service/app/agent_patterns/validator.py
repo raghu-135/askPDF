@@ -84,7 +84,7 @@ HITL_GATE_KEYS = {
 
 
 class TemplateValidator:
-    """Validator for supported built-in agent pattern schemas."""
+    """Validator for schema v2 catalog-backed agent pattern specs."""
 
     def validate(self, spec: Dict[str, Any]) -> Dict[str, Any]:
         errors = self.collect_errors(spec)
@@ -94,94 +94,18 @@ class TemplateValidator:
         return result
 
     def collect_errors(self, spec: Dict[str, Any]) -> list[str]:
-        errors: list[str] = []
         if not isinstance(spec, dict):
             return ["spec must be an object"]
-
-        if spec.get("schema_version") == 2:
-            return GenericGraphValidator().collect_errors(spec)
-
-        if spec.get("schema_version") != 1:
-            errors.append("schema_version must be 1 or 2")
-        pattern_type = spec.get("pattern_type")
-        if pattern_type not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
-            errors.append(f"pattern_type must be one of: {', '.join(sorted(SUPPORTED_BUILTIN_TEMPLATE_IDS))}")
-
-        config = spec.get("config")
-        if not isinstance(config, dict):
-            errors.append("config must be an object")
-            return errors
-
-        unknown_keys = sorted(set(config) - ALLOWED_ROUTER_RAG_CONFIG_KEYS)
-        if unknown_keys:
-            errors.append(f"unknown config keys: {', '.join(unknown_keys)}")
-
-        for key in ("use_web_search", "use_reranker"):
-            if key in config and not isinstance(config[key], bool):
-                errors.append(f"{key} must be a boolean")
-
-        if "replans" in config and pattern_type != EVALUATOR_REPLANNER_RAG_AGENT_ID:
-            errors.append("replans is only supported for evaluator_replanner_rag_agent")
-        elif "replans" in config:
-            replans = config.get("replans")
-            if not isinstance(replans, int):
-                errors.append("replans must be an integer")
-            elif replans < 1 or replans > REPLANS_LIMIT:
-                errors.append(f"replans must be between 1 and {REPLANS_LIMIT}")
-
-        system_role = config.get("system_role", "")
-        if not isinstance(system_role, str) or len(system_role) > MAX_SYSTEM_ROLE_CHARS:
-            errors.append(f"system_role must be a string up to {MAX_SYSTEM_ROLE_CHARS} characters")
-
-        custom_instructions = config.get("custom_instructions", "")
-        if not isinstance(custom_instructions, str) or len(custom_instructions) > MAX_CUSTOM_INSTRUCTIONS_CHARS:
-            errors.append(f"custom_instructions must be a string up to {MAX_CUSTOM_INSTRUCTIONS_CHARS} characters")
-
-        tool_instructions = config.get("tool_instructions", {})
-        if not isinstance(tool_instructions, dict):
-            errors.append("tool_instructions must be an object")
-        elif not all(isinstance(k, str) and isinstance(v, str) for k, v in tool_instructions.items()):
-            errors.append("tool_instructions keys and values must be strings")
-
-        allowed_tool_ids = config.get("allowed_tool_ids", [])
-        known_tool_ids = _known_tool_ids()
-        if not isinstance(allowed_tool_ids, list) or not all(isinstance(item, str) for item in allowed_tool_ids):
-            errors.append("allowed_tool_ids must be a list of strings")
-        else:
-            unknown_tool_ids = sorted(set(allowed_tool_ids) - known_tool_ids)
-            if unknown_tool_ids:
-                errors.append(f"unknown allowed_tool_ids: {', '.join(unknown_tool_ids)}")
-            required_tool_ids = PATTERN_REQUIRED_TOOL_IDS.get(pattern_type, set())
-            if required_tool_ids:
-                missing_tool_ids = sorted(required_tool_ids - set(allowed_tool_ids))
-                if missing_tool_ids:
-                    errors.append(f"{pattern_type} missing required allowed_tool_ids: {', '.join(missing_tool_ids)}")
-                errors.extend(self._collect_tool_permission_errors(pattern_type, set(allowed_tool_ids)))
-
-        prefetch_policy = config.get("prefetch_policy", {})
-        if not isinstance(prefetch_policy, dict):
-            errors.append("prefetch_policy must be an object")
-        elif set(prefetch_policy) - {"enabled"}:
-            errors.append("prefetch_policy only supports the enabled key in v1")
-        elif "enabled" in prefetch_policy and not isinstance(prefetch_policy["enabled"], bool):
-            errors.append("prefetch_policy.enabled must be a boolean")
-
-        errors.extend(self._collect_hitl_policy_errors(config.get("hitl_policy", {}), pattern_type, config.get("graph")))
-
-        if pattern_type == ROUTER_RAG_AGENT_ID:
-            errors.extend(self._collect_router_graph_errors(config.get("graph")))
-        elif pattern_type == PLAN_EXECUTE_RAG_AGENT_ID:
-            errors.extend(self._collect_plan_execute_graph_errors(config.get("graph")))
-        elif pattern_type == EVALUATOR_REPLANNER_RAG_AGENT_ID:
-            errors.extend(self._collect_evaluator_replanner_graph_errors(config.get("graph")))
-
-        return errors
+        if spec.get("schema_version") != 2:
+            return ["schema_version must be 2"]
+        return GenericGraphValidator().collect_errors(spec)
 
     def report(self, spec: Dict[str, Any]) -> Dict[str, Any]:
         """Return a structured validation report for admin/debug API consumers."""
 
+        spec_obj = spec if isinstance(spec, dict) else {}
         errors = self.collect_errors(spec)
-        config = spec.get("config") if isinstance(spec, dict) else {}
+        config = spec_obj.get("config") if isinstance(spec_obj.get("config"), dict) else {}
         config = config if isinstance(config, dict) else {}
         allowed_tool_ids = config.get("allowed_tool_ids") if isinstance(config.get("allowed_tool_ids"), list) else []
         known_tool_ids = _known_tool_ids()
@@ -189,13 +113,13 @@ class TemplateValidator:
             "valid": not errors,
             "errors": errors,
             "warnings": [],
-            "schema_version": spec.get("schema_version") if isinstance(spec, dict) else None,
-            "pattern_type": spec.get("pattern_type") if isinstance(spec, dict) else None,
+            "schema_version": spec_obj.get("schema_version"),
+            "pattern_type": spec_obj.get("pattern_type"),
             "supported_pattern_types": sorted([*SUPPORTED_BUILTIN_TEMPLATE_IDS, "custom_rag_agent"]),
             "allowed_tool_ids": allowed_tool_ids,
-            "required_tool_ids": sorted(PATTERN_REQUIRED_TOOL_IDS.get(spec.get("pattern_type"), set())),
+            "required_tool_ids": sorted(PATTERN_REQUIRED_TOOL_IDS.get(spec_obj.get("pattern_type"), set())),
             "missing_required_tool_ids": sorted(
-                PATTERN_REQUIRED_TOOL_IDS.get(spec.get("pattern_type"), set()) - set(allowed_tool_ids)
+                PATTERN_REQUIRED_TOOL_IDS.get(spec_obj.get("pattern_type"), set()) - set(allowed_tool_ids)
             ),
             "unknown_allowed_tool_ids": sorted(set(allowed_tool_ids) - known_tool_ids),
         }
@@ -666,6 +590,7 @@ class GenericGraphValidator:
         if not isinstance(config, dict):
             errors.append("config must be an object")
             return errors
+        errors.extend(self._collect_config_errors(config, pattern_type))
 
         allowed_tool_ids = config.get("allowed_tool_ids", [])
         known_tool_ids = _known_tool_ids()
@@ -676,6 +601,10 @@ class GenericGraphValidator:
             unknown_tool_ids = sorted(set(allowed_tool_ids) - known_tool_ids)
             if unknown_tool_ids:
                 errors.append(f"unknown allowed_tool_ids: {', '.join(unknown_tool_ids)}")
+            required_tool_ids = PATTERN_REQUIRED_TOOL_IDS.get(pattern_type, set())
+            missing_tool_ids = sorted(required_tool_ids - set(allowed_tool_ids))
+            if missing_tool_ids:
+                errors.append(f"{pattern_type} missing required allowed_tool_ids: {', '.join(missing_tool_ids)}")
 
         graph = config.get("graph")
         if not isinstance(graph, dict):
@@ -686,6 +615,7 @@ class GenericGraphValidator:
         if not isinstance(nodes, list) or not isinstance(edges, list):
             errors.append("graph.nodes and graph.edges must be lists")
             return errors
+        errors.extend(TemplateValidator()._collect_hitl_policy_errors(config.get("hitl_policy", {}), pattern_type, graph))
 
         node_catalog = get_node_catalog()
         node_ids: set[str] = set()
@@ -787,6 +717,67 @@ class GenericGraphValidator:
 
         errors.extend(self._collect_loop_policy_errors(config.get("loop_policy"), adjacency, node_ids, node_types_by_id, node_catalog))
         errors.extend(self._collect_reachability_errors(adjacency, node_ids))
+        return errors
+
+    def _collect_config_errors(self, config: Dict[str, Any], pattern_type: Any) -> list[str]:
+        errors: list[str] = []
+        allowed_keys = ALLOWED_ROUTER_RAG_CONFIG_KEYS | {"context_policy", "loop_policy"}
+        unknown_keys = sorted(set(config) - allowed_keys)
+        if unknown_keys:
+            errors.append(f"unknown config keys: {', '.join(unknown_keys)}")
+
+        for key in ("use_web_search", "use_reranker"):
+            if key in config and not isinstance(config[key], bool):
+                errors.append(f"{key} must be a boolean")
+
+        if "replans" in config:
+            replans = config.get("replans")
+            if not isinstance(replans, int):
+                errors.append("replans must be an integer")
+            elif replans < 1 or replans > REPLANS_LIMIT:
+                errors.append(f"replans must be between 1 and {REPLANS_LIMIT}")
+
+        system_role = config.get("system_role", "")
+        if not isinstance(system_role, str) or len(system_role) > MAX_SYSTEM_ROLE_CHARS:
+            errors.append(f"system_role must be a string up to {MAX_SYSTEM_ROLE_CHARS} characters")
+
+        custom_instructions = config.get("custom_instructions", "")
+        if not isinstance(custom_instructions, str) or len(custom_instructions) > MAX_CUSTOM_INSTRUCTIONS_CHARS:
+            errors.append(f"custom_instructions must be a string up to {MAX_CUSTOM_INSTRUCTIONS_CHARS} characters")
+
+        tool_instructions = config.get("tool_instructions", {})
+        if not isinstance(tool_instructions, dict):
+            errors.append("tool_instructions must be an object")
+        elif not all(isinstance(k, str) and isinstance(v, str) for k, v in tool_instructions.items()):
+            errors.append("tool_instructions keys and values must be strings")
+
+        prefetch_policy = config.get("prefetch_policy", {})
+        if not isinstance(prefetch_policy, dict):
+            errors.append("prefetch_policy must be an object")
+        elif set(prefetch_policy) - {"enabled"}:
+            errors.append("prefetch_policy only supports the enabled key")
+        elif "enabled" in prefetch_policy and not isinstance(prefetch_policy["enabled"], bool):
+            errors.append("prefetch_policy.enabled must be a boolean")
+
+        context_policy = config.get("context_policy", {})
+        if not isinstance(context_policy, dict):
+            errors.append("context_policy must be an object")
+        else:
+            unknown_context_keys = sorted(
+                set(context_policy) - {"evidence_packet_limit", "evidence_packet_content_limit", "final_prompt_assembly"}
+            )
+            if unknown_context_keys:
+                errors.append(f"context_policy has unknown keys: {', '.join(unknown_context_keys)}")
+            for key in ("evidence_packet_limit", "evidence_packet_content_limit"):
+                if key in context_policy:
+                    try:
+                        value = int(context_policy[key])
+                    except (TypeError, ValueError):
+                        value = 0
+                    if value < 1:
+                        errors.append(f"context_policy.{key} must be a positive integer")
+            if "final_prompt_assembly" in context_policy and not isinstance(context_policy["final_prompt_assembly"], str):
+                errors.append("context_policy.final_prompt_assembly must be a string")
         return errors
 
     def _collect_edge_compatibility_errors(

@@ -41,6 +41,7 @@ from app.agent_patterns.templates import (
     builtin_router_rag_hitl_web_spec,
     builtin_router_rag_spec,
     builtin_router_rag_v2_spec,
+    legacy_builtin_router_rag_v1_spec,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
 from app.db import get_thread_settings
@@ -554,14 +555,13 @@ class TestRouterRagTemplateValidator:
     @pytest.mark.parametrize(
         "mutate, expected",
         [
-            (lambda spec: spec.update({"pattern_type": "simple_rag_agent"}), "pattern_type must be one of:"),
             (lambda spec: spec["config"].update({"surprise": True}), "unknown config keys: surprise"),
             (lambda spec: spec["config"].update({"allowed_tool_ids": ["not_a_tool"]}), "unknown allowed_tool_ids: not_a_tool"),
-            (lambda spec: spec["config"].update({"replans": 999}), "replans is only supported"),
+            (lambda spec: spec["config"].update({"replans": 999}), "replans must be between"),
         ],
     )
     def test_rejects_invalid_router_rag_specs(self, mutate, expected):
-        spec = builtin_router_rag_spec()
+        spec = builtin_router_rag_v2_spec()
         mutate(spec)
 
         with pytest.raises(TemplateValidationError) as exc:
@@ -571,7 +571,7 @@ class TestRouterRagTemplateValidator:
 
     def test_resolver_freezes_thread_and_request_overrides(self):
         resolved = TemplateResolver().resolve(
-            builtin_router_rag_spec(),
+            builtin_router_rag_v2_spec(),
             thread_settings={"replans": 3, "use_reranker": False},
             request_overrides={"use_web_search": True},
         )
@@ -581,14 +581,14 @@ class TestRouterRagTemplateValidator:
         assert resolved["config"]["use_web_search"] is True
 
         evaluator_resolved = TemplateResolver().resolve(
-            builtin_evaluator_replanner_rag_spec(),
+            builtin_evaluator_replanner_rag_v2_spec(),
             thread_settings={"replans": 3, "use_reranker": False},
             request_overrides={"use_web_search": True},
         )
         assert evaluator_resolved["config"]["replans"] == 3
 
     def test_rejects_zero_replan_budget(self):
-        spec = builtin_evaluator_replanner_rag_spec()
+        spec = builtin_evaluator_replanner_rag_v2_spec()
         spec["config"]["replans"] = 0
 
         with pytest.raises(TemplateValidationError) as exc:
@@ -596,37 +596,43 @@ class TestRouterRagTemplateValidator:
 
         assert "replans must be between" in str(exc.value)
 
+    def test_rejects_legacy_v1_builtin_specs(self):
+        with pytest.raises(TemplateValidationError, match="schema_version must be 2"):
+            TemplateValidator().validate(legacy_builtin_router_rag_v1_spec())
+
     def test_accepts_builtin_router_rag_spec(self):
-        result = TemplateValidator().validate(builtin_router_rag_spec())
+        result = TemplateValidator().validate(builtin_router_rag_v2_spec())
 
         assert result == {"valid": True, "errors": []}
 
     def test_accepts_builtin_router_rag_hitl_web_spec(self):
-        result = TemplateValidator().validate(builtin_router_rag_hitl_web_spec())
+        spec = builtin_router_rag_v2_spec()
+        spec["config"]["hitl_policy"] = builtin_router_rag_hitl_web_spec()["config"]["hitl_policy"]
+        result = TemplateValidator().validate(spec)
 
         assert result == {"valid": True, "errors": []}
 
     def test_accepts_builtin_plan_execute_rag_spec(self):
-        result = TemplateValidator().validate(builtin_plan_execute_rag_spec())
+        result = TemplateValidator().validate(builtin_plan_execute_rag_v2_spec())
 
         assert result == {"valid": True, "errors": []}
 
     def test_accepts_builtin_evaluator_replanner_rag_spec(self):
-        result = TemplateValidator().validate(builtin_evaluator_replanner_rag_spec())
+        result = TemplateValidator().validate(builtin_evaluator_replanner_rag_v2_spec())
 
         assert result == {"valid": True, "errors": []}
 
     def test_rejects_router_rag_graph_topology_changes(self):
-        spec = builtin_router_rag_spec()
+        spec = builtin_router_rag_v2_spec()
         spec["config"]["graph"]["nodes"].append({"id": "surprise", "type": "retrieval_worker"})
 
         with pytest.raises(TemplateValidationError) as exc:
             TemplateValidator().validate(spec)
 
-        assert "graph nodes must match" in str(exc.value)
+        assert "graph contains unreachable nodes: surprise" in str(exc.value)
 
     def test_rejects_router_rag_specs_missing_required_tools(self):
-        spec = builtin_router_rag_spec()
+        spec = builtin_router_rag_v2_spec()
         spec["config"]["allowed_tool_ids"].remove("document_evidence")
 
         with pytest.raises(TemplateValidationError) as exc:
@@ -635,13 +641,13 @@ class TestRouterRagTemplateValidator:
         assert "missing required allowed_tool_ids: document_evidence" in str(exc.value)
 
     def test_compiles_builtin_router_rag_spec(self):
-        graph = TemplateCompiler().compile(builtin_router_rag_spec())
+        graph = TemplateCompiler().compile(builtin_router_rag_v2_spec())
 
         assert graph is not None
 
     def test_compiler_requires_explicit_route_function_after_materialization(self):
         compiler = TemplateCompiler()
-        materialized = compiler.materialize_spec(builtin_router_rag_spec())
+        materialized = compiler.materialize_spec(builtin_router_rag_v2_spec())
         router_edge = next(
             edge
             for edge in materialized["config"]["graph"]["edges"]
@@ -657,12 +663,14 @@ class TestRouterRagTemplateValidator:
             )
 
     def test_compiles_builtin_router_rag_hitl_web_spec(self):
-        graph = TemplateCompiler().compile(builtin_router_rag_hitl_web_spec())
+        spec = builtin_router_rag_v2_spec()
+        spec["config"]["hitl_policy"] = builtin_router_rag_hitl_web_spec()["config"]["hitl_policy"]
+        graph = TemplateCompiler().compile(spec)
 
         assert graph is not None
 
     def test_materializes_generic_hitl_gate_overlay_for_action_node(self):
-        spec = builtin_router_rag_spec()
+        spec = builtin_router_rag_v2_spec()
         spec["config"]["hitl_policy"] = {
             "enabled": True,
             "gates": {
@@ -693,7 +701,7 @@ class TestRouterRagTemplateValidator:
         assert gate_edge["routes"] == {"approve": "retrieval_worker", "continue_without": "synthesizer"}
 
     def test_materializes_multi_select_choice_gate_overlay(self):
-        spec = builtin_plan_execute_rag_spec()
+        spec = builtin_plan_execute_rag_v2_spec()
         spec["config"]["hitl_policy"] = {
             "enabled": True,
             "gates": {
@@ -737,7 +745,7 @@ class TestRouterRagTemplateValidator:
         }
 
     def test_materializes_final_review_as_hitl_policy_overlay(self):
-        spec = builtin_router_rag_spec()
+        spec = builtin_router_rag_v2_spec()
         spec["config"]["hitl_policy"] = {
             "enabled": True,
             "gates": {
@@ -777,35 +785,35 @@ class TestRouterRagTemplateValidator:
         }
 
     def test_compiles_builtin_plan_execute_rag_spec(self):
-        graph = TemplateCompiler().compile(builtin_plan_execute_rag_spec())
+        graph = TemplateCompiler().compile(builtin_plan_execute_rag_v2_spec())
 
         assert graph is not None
 
     def test_compiles_builtin_evaluator_replanner_rag_spec(self):
-        graph = TemplateCompiler().compile(builtin_evaluator_replanner_rag_spec())
+        graph = TemplateCompiler().compile(builtin_evaluator_replanner_rag_v2_spec())
 
         assert graph is not None
 
     def test_rejects_plan_execute_graph_topology_changes(self):
-        spec = builtin_plan_execute_rag_spec()
+        spec = builtin_plan_execute_rag_v2_spec()
         spec["config"]["graph"]["edges"].append({"from": "planner", "to": "synthesizer"})
 
         with pytest.raises(TemplateValidationError) as exc:
             TemplateValidator().validate(spec)
 
-        assert "plan_execute_rag_agent graph edges must match" in str(exc.value)
+        assert "node planner type planner cannot connect to synthesizer type synthesizer" in str(exc.value)
 
     def test_rejects_evaluator_replanner_graph_topology_changes(self):
-        spec = builtin_evaluator_replanner_rag_spec()
+        spec = builtin_evaluator_replanner_rag_v2_spec()
         spec["config"]["graph"]["edges"].append({"from": "evidence_evaluator", "to": "finalizer"})
 
         with pytest.raises(TemplateValidationError) as exc:
             TemplateValidator().validate(spec)
 
-        assert "evaluator_replanner_rag_agent graph edges must match" in str(exc.value)
+        assert "node evidence_evaluator type evidence_evaluator cannot connect to finalizer type finalizer" in str(exc.value)
 
     def test_rejects_evaluator_replanner_unbounded_replans(self):
-        spec = builtin_evaluator_replanner_rag_spec()
+        spec = builtin_evaluator_replanner_rag_v2_spec()
         spec["config"]["replans"] = REPLANS_LIMIT + 1
 
         with pytest.raises(TemplateValidationError) as exc:
@@ -1587,10 +1595,10 @@ class TestAgentPatternRepository:
         assert evaluator_version.validation_result_json == {"valid": True, "errors": []}
 
     @pytest.mark.asyncio
-    async def test_seed_builtin_v2_preview_versions_validate_and_compile(self, repo):
+    async def test_seed_builtin_current_v2_versions_validate_and_compile(self, repo):
         await repo.seed_builtin_templates()
 
-        preview_specs = [
+        current_specs = [
             (ROUTER_RAG_AGENT_ID, ROUTER_RAG_AGENT_V2_VERSION, builtin_router_rag_v2_spec),
             (PLAN_EXECUTE_RAG_AGENT_ID, PLAN_EXECUTE_RAG_AGENT_V2_VERSION, builtin_plan_execute_rag_v2_spec),
             (
@@ -1599,22 +1607,18 @@ class TestAgentPatternRepository:
                 builtin_evaluator_replanner_rag_v2_spec,
             ),
         ]
-        for template_id, version_number, spec_factory in preview_specs:
-            template, preview_version = await repo.get_template_version(
+        for template_id, version_number, spec_factory in current_specs:
+            template, current_version = await repo.get_template_version(
                 template_id,
                 version_number,
-                include_preview=True,
             )
 
             assert template.id == template_id
-            assert preview_version.version == version_number
-            assert preview_version.schema_version == 2
-            assert preview_version.spec_json == spec_factory()
-            assert preview_version.validation_result_json == {"valid": True, "errors": []}
-            TemplateCompiler().compile(preview_version.spec_json)
-
-        _, hidden_preview = await repo.get_template_version(ROUTER_RAG_AGENT_ID, ROUTER_RAG_AGENT_V2_VERSION)
-        assert hidden_preview is None
+            assert current_version.version == version_number
+            assert current_version.schema_version == 2
+            assert current_version.spec_json == spec_factory()
+            assert current_version.validation_result_json == {"valid": True, "errors": []}
+            TemplateCompiler().compile(current_version.spec_json)
 
     @pytest.mark.asyncio
     async def test_db_loaded_invalid_v2_spec_fails_validation(self, repo):
@@ -2605,7 +2609,7 @@ class TestAgentRunService:
         assert any(node["id"] == "router" for node in run.debug_trace_json["graph"]["nodes"])
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_can_load_v2_preview_version_when_opted_in(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_uses_current_v2_builtin(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -2622,7 +2626,6 @@ class TestAgentRunService:
                 return {
                     "agent_pattern": {
                         "template_id": ROUTER_RAG_AGENT_ID,
-                        "template_version": ROUTER_RAG_AGENT_V2_VERSION,
                     }
                 }
 
@@ -2652,10 +2655,7 @@ class TestAgentRunService:
                 tool_instructions_override={},
                 custom_instructions_override="",
             )
-            result = await AgentRunService(
-                repository=repo,
-                allow_preview_agent_patterns=True,
-            ).run_thread_chat(
+            result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
                 sample_thread.embed_model,
@@ -4361,7 +4361,7 @@ class TestRouterRagRuntime:
             client_now_iso="2026-07-02T12:00:00.000Z",
         )
 
-        spec = builtin_router_rag_spec()
+        spec = builtin_router_rag_v2_spec()
         await create_agent_run_record(
             session_factory,
             run_id="run-1",
@@ -4604,7 +4604,7 @@ class TestRouterRagRuntime:
         )
 
         run_id = f"run-{route}"
-        spec = builtin_router_rag_spec()
+        spec = builtin_router_rag_v2_spec()
         await create_agent_run_record(
             session_factory,
             run_id=run_id,
@@ -4781,7 +4781,7 @@ class TestRouterRagRuntime:
             client_now_iso=None,
         )
 
-        spec = builtin_router_rag_spec()
+        spec = builtin_router_rag_v2_spec()
         await create_agent_run_record(
             session_factory,
             run_id="run-failed",
@@ -5034,11 +5034,11 @@ class TestAgentPatternApi:
     def test_validate_agent_pattern_endpoint(self, api_client):
         valid = api_client.post(
             "/api/agent-patterns/validate",
-            json={"spec": builtin_router_rag_spec()},
+            json={"spec": builtin_router_rag_v2_spec()},
         )
-        invalid_spec = builtin_router_rag_spec()
+        invalid_spec = builtin_router_rag_v2_spec()
         invalid_spec["config"]["allowed_tool_ids"] = ["mystery_tool"]
-        stale_spec = builtin_router_rag_spec()
+        stale_spec = legacy_builtin_router_rag_v1_spec()
         stale_spec["pattern_type"] = "simple_rag_agent"
         invalid = api_client.post(
             "/api/agent-patterns/validate",

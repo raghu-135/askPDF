@@ -82,18 +82,37 @@ def _template_payload(template) -> Dict[str, Any]:
 
 
 def _version_payload(version) -> Dict[str, Any]:
-    validator = TemplateValidator()
+    try:
+        validation = TemplateValidator().report(version.spec_json if isinstance(version.spec_json, dict) else {})
+    except Exception as exc:
+        validation = {
+            "valid": False,
+            "errors": [f"validation failed: {exc}"],
+            "warnings": [],
+            "schema_version": getattr(version, "schema_version", None),
+            "pattern_type": None,
+        }
     return {
         "id": version.id,
         "template_id": version.template_id,
         "version": version.version,
         "schema_version": version.schema_version,
-        "spec_json": version.spec_json,
-        "validation": validator.report(version.spec_json),
-        "validation_result_json": version.validation_result_json,
+        "spec_json": version.spec_json if isinstance(version.spec_json, dict) else {},
+        "validation": validation,
+        "validation_result_json": version.validation_result_json if isinstance(version.validation_result_json, dict) else {},
         "changelog": version.changelog,
         "created_at": iso_utc_z(version.created_at) if version.created_at else None,
     }
+
+
+def _is_compatible_version(version) -> bool:
+    if not version or version.schema_version != 2 or not isinstance(version.spec_json, dict):
+        return False
+    try:
+        TemplateValidator().validate(version.spec_json)
+    except Exception:
+        return False
+    return True
 
 
 def _debug_payload_for_response(run) -> Dict[str, Any] | None:
@@ -252,7 +271,15 @@ async def list_agent_patterns():
     repo = AgentPatternRepository()
     await repo.seed_builtin_templates()
     templates = await repo.list_templates()
-    return {"agent_patterns": [_template_payload(template) for template in templates]}
+    compatible_templates = []
+    for template in templates:
+        try:
+            _, version = await repo.get_template_with_current_version(template.id)
+            if _is_compatible_version(version):
+                compatible_templates.append(template)
+        except Exception:
+            continue
+    return {"agent_patterns": [_template_payload(template) for template in compatible_templates]}
 
 
 @router.get("/agent-patterns/{template_id}")
@@ -260,7 +287,7 @@ async def get_agent_pattern(template_id: str):
     repo = AgentPatternRepository()
     await repo.seed_builtin_templates()
     template, version = await repo.get_template_with_current_version(template_id)
-    if not template or not version:
+    if not template or not version or not _is_compatible_version(version):
         raise HTTPException(status_code=404, detail="Agent pattern not found")
     return {
         "agent_pattern": _template_payload(template),
@@ -351,7 +378,6 @@ async def select_internal_thread_agent_pattern(
         template, version = await repo.get_template_version(
             req.template_id,
             req.template_version,
-            include_preview=True,
             include_custom=True,
         )
     else:
@@ -359,7 +385,7 @@ async def select_internal_thread_agent_pattern(
             req.template_id,
             include_custom=True,
         )
-    if not template or not version or template.is_builtin:
+    if not template or not version or template.is_builtin or not _is_compatible_version(version):
         raise HTTPException(status_code=404, detail="Internal agent pattern not found")
 
     current_settings = await get_thread_settings(thread_id)
@@ -419,7 +445,10 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
                 if value is not None:
                     candidate_config[key] = value
         candidate["config"] = candidate_config
-        report = TemplateValidator().report(candidate)
+        try:
+            report = TemplateValidator().report(candidate)
+        except Exception as report_exc:
+            report = {"valid": False, "errors": [str(report_exc)], "warnings": []}
         report["errors"] = report["errors"] or [str(exc)]
         return {
             "valid": False,

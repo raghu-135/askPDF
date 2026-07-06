@@ -1,4 +1,4 @@
-"""Agent Pattern Runtime v1."""
+"""Agent Pattern Runtime."""
 
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
