@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.agent.tool_registry import tool_contracts_by_id
-from app.agent_patterns.debug_trace import build_debug_graph
 from app.agent_patterns.graph import normalize_hitl_policy_for_thread_settings
 from app.agent_patterns.node_catalog import get_node_catalog
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
@@ -105,17 +104,10 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
     summary = debug.get("summary") if isinstance(debug.get("summary"), dict) else None
     if trace is None or summary is None:
         return None
-    graph = debug.get("graph") if isinstance(debug.get("graph"), dict) else None
-    if graph is None:
-        graph = build_debug_graph(
-            resolved_spec=run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {},
-            summary=summary,
-        )
     return {
         **debug,
         "trace": trace,
         "summary": summary,
-        "graph": graph,
     }
 
 

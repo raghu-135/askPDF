@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.router_runtime import handle_router_rag_chat
-from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result_metadata
+from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result_metadata, _route_function_for_edge
 from app.agent_patterns.graph import (
     build_planner_prompt,
     infer_required_plan_steps,
@@ -638,6 +638,23 @@ class TestRouterRagTemplateValidator:
         graph = TemplateCompiler().compile(builtin_router_rag_spec())
 
         assert graph is not None
+
+    def test_compiler_requires_explicit_route_function_after_materialization(self):
+        compiler = TemplateCompiler()
+        materialized = compiler.materialize_spec(builtin_router_rag_spec())
+        router_edge = next(
+            edge
+            for edge in materialized["config"]["graph"]["edges"]
+            if edge.get("from") == "router" and edge.get("conditional")
+        )
+
+        assert router_edge["route_fn"] == "router_route"
+        with pytest.raises(ValueError, match="must declare route_fn"):
+            _route_function_for_edge(
+                {"from": "router", "conditional": True, "routes": {"direct": "finalizer"}},
+                source="router",
+                node_types={"router": "router"},
+            )
 
     def test_compiles_builtin_router_rag_hitl_web_spec(self):
         graph = TemplateCompiler().compile(builtin_router_rag_hitl_web_spec())
@@ -5378,6 +5395,12 @@ class TestAgentPatternApi:
                 route="web",
                 route_reason="Needs live evidence.",
             )
+            stored_graph = {
+                "nodes": [{"id": "stored_only", "label": "Stored Graph"}],
+                "edges": [],
+                "selectedRoute": "stored",
+            }
+            debug_payload["graph"] = stored_graph
             await repo.set_run_debug_trace(completed_run.id, debug_payload)
 
         response = api_client.get(f"/api/agent-runs/{run.id}?thread_id={sample_thread.id}")
@@ -5404,7 +5427,7 @@ class TestAgentPatternApi:
         assert "tool_events" not in payload["debug"]
         assert payload["debug"]["version"] == 1
         assert payload["debug"]["summary"]["route"] == "web"
-        assert payload["debug"]["graph"]["selectedRoute"] == "web"
+        assert payload["debug"]["graph"] == stored_graph
         trace = payload["debug"]["trace"]
         assert trace["metrics"]["duration_ms"] == 42.0
         assert trace["metrics"]["route"] == "web"

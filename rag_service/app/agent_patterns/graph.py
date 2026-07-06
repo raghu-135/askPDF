@@ -2043,7 +2043,6 @@ def _route_function_for_edge(
     *,
     source: str,
     node_types: Dict[str, str],
-    schema_version: Any,
 ) -> Callable[[RouterRagState], Any]:
     route_fn_id = edge.get("route_fn")
     source_type = node_types.get(source)
@@ -2060,15 +2059,7 @@ def _route_function_for_edge(
             return router_route
         raise ValueError(f"Unknown route function: {route_fn_id}")
 
-    if schema_version == 2:
-        raise ValueError(f"Conditional edge from {source} must declare route_fn")
-    if source == "planner":
-        return planner_route
-    if source == "evidence_evaluator":
-        return evaluator_route
-    if source_type == "hitl_gate":
-        return hitl_gate_route_for(str(source))
-    return router_route
+    raise ValueError(f"Conditional edge from {source} must declare route_fn")
 
 
 class TemplateCompiler:
@@ -2086,12 +2077,10 @@ class TemplateCompiler:
         from app.agent_patterns.validator import TemplateValidator
 
         graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
-        schema_version = spec.get("schema_version") if isinstance(spec, dict) else None
         if not graph_spec.get("hitl_compiled"):
             TemplateValidator().validate(spec)
             spec = self.materialize_spec(spec)
             graph_spec = (spec.get("config") or {}).get("graph") or {}
-            schema_version = spec.get("schema_version") if isinstance(spec, dict) else None
         workflow = StateGraph(RouterRagState)
         node_types: Dict[str, str] = {}
         for node in graph_spec.get("nodes", []):
@@ -2106,7 +2095,6 @@ class TemplateCompiler:
                     edge,
                     source=str(source),
                     node_types=node_types,
-                    schema_version=schema_version,
                 )
                 routes = {
                     key: END if value == "END" else value
@@ -2128,13 +2116,39 @@ class TemplateCompiler:
         config = materialized.get("config") if isinstance(materialized.get("config"), dict) else {}
         graph_spec = config.get("graph") if isinstance(config.get("graph"), dict) else {}
         hitl_policy = config.get("hitl_policy") if isinstance(config.get("hitl_policy"), dict) else {}
+        explicit_graph = self._with_explicit_route_functions(graph_spec)
         compiled_graph = self._with_hitl_policy_gates(
-            graph_spec,
+            explicit_graph,
             hitl_policy=hitl_policy,
         )
         config["graph"] = self._with_catalog_node_metadata(compiled_graph)
         materialized["config"] = config
         return materialized
+
+    def _with_explicit_route_functions(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
+        nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
+        node_types = {
+            str(node.get("id")): str(node.get("type"))
+            for node in nodes
+            if isinstance(node.get("id"), str) and isinstance(node.get("type"), str)
+        }
+        route_by_type = {
+            "router": "router_route",
+            "planner": "planner_route",
+            "evidence_evaluator": "evaluator_route",
+            "hitl_gate": "hitl_gate_route",
+        }
+        edges = []
+        for raw_edge in graph_spec.get("edges", []):
+            if not isinstance(raw_edge, dict):
+                continue
+            edge = dict(raw_edge)
+            if edge.get("conditional") and not edge.get("route_fn"):
+                route_fn = route_by_type.get(node_types.get(str(edge.get("from")), ""))
+                if route_fn:
+                    edge["route_fn"] = route_fn
+            edges.append(edge)
+        return {**graph_spec, "nodes": nodes, "edges": edges}
 
     def _with_catalog_node_metadata(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
         nodes = []
