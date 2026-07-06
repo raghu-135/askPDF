@@ -39,6 +39,7 @@ class AgentRunResumeRequest(BaseModel):
     interrupt_id: str = Field(..., min_length=1)
     edited_payload: Optional[Dict[str, Any]] = None
     client_metadata: Optional[Dict[str, Any]] = None
+    selected_option_ids: Optional[list[str]] = None
     resume_token: Optional[str] = None
     resume_version: Optional[int] = None
     thread_id: Optional[str] = None
@@ -294,6 +295,7 @@ async def resume_agent_run(run_id: str, req: AgentRunResumeRequest):
             action=req.action,
             edited_payload=req.edited_payload,
             client_metadata=req.client_metadata,
+            selected_option_ids=req.selected_option_ids,
             resume_token=req.resume_token,
             resume_version=req.resume_version,
             expected_thread_id=req.thread_id,

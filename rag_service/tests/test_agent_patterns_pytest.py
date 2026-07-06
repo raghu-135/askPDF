@@ -540,6 +540,96 @@ class TestRouterRagTemplateValidator:
 
         assert graph is not None
 
+    def test_materializes_generic_hitl_gate_overlay(self):
+        spec = builtin_router_rag_spec()
+        spec["config"]["hitl_policy"] = {
+            "enabled": True,
+            "gates": {
+                "review_before_web": {
+                    "enabled": True,
+                    "mode": "approval",
+                    "phase": "before",
+                    "target": {"node_id": "web_worker"},
+                    "allowed_actions": ["approve", "continue_without"],
+                    "default_action": "continue_without",
+                    "routes": {"approve": "web_worker", "continue_without": "synthesizer"},
+                }
+            },
+        }
+
+        TemplateValidator().validate(spec)
+        materialized = TemplateCompiler().materialize_spec(spec)
+        graph_spec = materialized["config"]["graph"]
+
+        assert {"id": "review_before_web", "type": "hitl_gate"} in graph_spec["nodes"]
+        router_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "router")
+        assert router_edge["routes"]["web"] == "review_before_web"
+        gate_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "review_before_web")
+        assert gate_edge["routes"] == {"approve": "web_worker", "continue_without": "synthesizer"}
+
+    def test_materializes_multi_select_choice_gate_overlay(self):
+        spec = builtin_plan_execute_rag_spec()
+        spec["config"]["hitl_policy"] = {
+            "enabled": True,
+            "gates": {
+                "research_source_choice": {
+                    "enabled": True,
+                    "mode": "choice",
+                    "phase": "before",
+                    "target": {"node_id": "retrieval_worker"},
+                    "selection_mode": "multi",
+                    "allowed_actions": ["approve_selected", "continue_without", "reject"],
+                    "default_action": "continue_without",
+                    "options": [
+                        {"id": "document_search", "label": "Document search", "target_node_id": "retrieval_worker"},
+                        {"id": "web_search", "label": "Web search", "target_node_id": "web_worker"},
+                    ],
+                    "routes": {
+                        "continue_without": "synthesizer",
+                        "reject": "synthesizer",
+                    },
+                }
+            },
+        }
+
+        TemplateValidator().validate(spec)
+        materialized = TemplateCompiler().materialize_spec(spec)
+        graph_spec = materialized["config"]["graph"]
+
+        assert {"id": "research_source_choice", "type": "hitl_gate"} in graph_spec["nodes"]
+        planner_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "planner")
+        assert planner_edge["routes"]["execute"] == "research_source_choice"
+        gate_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "research_source_choice")
+        assert gate_edge["routes"] == {
+            "document_search": "retrieval_worker",
+            "web_search": "web_worker",
+            "continue_without": "synthesizer",
+            "reject": "synthesizer",
+        }
+
+    def test_materializes_final_review_as_hitl_policy_overlay(self):
+        materialized = TemplateCompiler().materialize_spec(
+            builtin_router_rag_spec(),
+            enable_hitl_final_review=True,
+        )
+        config = materialized["config"]
+        graph_spec = config["graph"]
+
+        assert config["hitl_policy"]["enabled"] is True
+        assert config["hitl_policy"]["gates"]["human_review_gate"]["mode"] == "review"
+        assert {"id": "human_review_gate", "type": "hitl_gate"} in graph_spec["nodes"]
+        assert {"from": "finalizer", "to": "human_review_gate"} in graph_spec["edges"]
+        gate_edge = next(
+            edge
+            for edge in graph_spec["edges"]
+            if edge.get("from") == "human_review_gate" and edge.get("conditional") is True
+        )
+        assert gate_edge["routes"] == {
+            "approve": "END",
+            "edit": "END",
+            "continue_without": "END",
+        }
+
     def test_compiles_builtin_plan_execute_rag_spec(self):
         graph = TemplateCompiler().compile(builtin_plan_execute_rag_spec())
 
@@ -974,6 +1064,54 @@ class TestAgentPatternRepository:
                 interrupt_id="interrupt-approve",
                 action="reject",
             )
+
+    @pytest.mark.asyncio
+    async def test_resolve_pending_interrupt_validates_selected_options(self, repo, sample_thread):
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        run = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+        )
+        run_id = run.id
+        await repo.mark_run_awaiting_human(
+            run_id,
+            {
+                "interrupt_id": "interrupt-choice",
+                "type": "option_review",
+                "mode": "choice",
+                "allowed_actions": ["approve_selected", "continue_without"],
+                "selection_mode": "single_or_multi",
+                "options": [
+                    {"id": "document_search", "label": "Document search", "target_node_id": "retrieval_worker"},
+                    {"id": "web_search", "label": "Web search", "target_node_id": "web_worker"},
+                ],
+                "resume_version": 1,
+            },
+        )
+
+        with pytest.raises(AgentRunInterruptError) as exc:
+            await repo.resolve_pending_interrupt(
+                run_id,
+                interrupt_id="interrupt-choice",
+                action="approve_selected",
+                selected_option_ids=["unknown"],
+                resume_version=1,
+            )
+        assert exc.value.code == "interrupt_selection_invalid"
+
+        result = await repo.resolve_pending_interrupt(
+            run_id,
+            interrupt_id="interrupt-choice",
+            action="approve_selected",
+            selected_option_ids=["document_search", "web_search"],
+            resume_version=1,
+        )
+
+        assert result.outcome == "resumed"
+        assert result.interrupt["decision"]["selected_option_ids"] == ["document_search", "web_search"]
 
     @pytest.mark.asyncio
     async def test_reject_pending_interrupt_marks_run_terminal(self, repo, sample_thread):

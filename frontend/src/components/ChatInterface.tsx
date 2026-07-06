@@ -54,6 +54,9 @@ import {
     getAgentRun,
     AgentRunDetails,
     AgentTraceRefs,
+    AgentRunPendingInterrupt,
+    AgentRunResumeAction,
+    resumeAgentRun,
 } from '../lib/api';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
@@ -77,11 +80,19 @@ interface ChatMessage extends Message {
     agent_pattern_version?: number | string;
     agent_route?: string;
     agent_route_reason?: string;
+    pending_human_review?: boolean;
 }
 
 type ClarificationChoice = {
     text: string;
     isOriginal: boolean;
+};
+
+type PendingHumanReview = {
+    runId: string;
+    interrupt: AgentRunPendingInterrupt;
+    localUserMessageId: string;
+    localAssistantMessageId: string;
 };
 
 const normalizeAgentPatternForUi = (templateId?: string | null) => (
@@ -171,6 +182,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [agentRunDetails, setAgentRunDetails] = useState<Record<string, AgentRunDetails>>({});
     const [agentRunLoading, setAgentRunLoading] = useState<Record<string, boolean>>({});
     const [agentRunErrors, setAgentRunErrors] = useState<Record<string, string>>({});
+    const [pendingHumanReview, setPendingHumanReview] = useState<PendingHumanReview | null>(null);
+    const [humanReviewSubmitting, setHumanReviewSubmitting] = useState<AgentRunResumeAction | null>(null);
+    const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
+    const [humanReviewEditText, setHumanReviewEditText] = useState('');
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -292,6 +307,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setAgentRunDetails({});
             setAgentRunLoading({});
             setAgentRunErrors({});
+            setPendingHumanReview(null);
+            setHumanReviewSubmitting(null);
+            setHumanReviewError(null);
+            setHumanReviewEditText('');
         }
     }, [activeThread?.id]);
 
@@ -750,6 +769,45 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setClarificationOptions(null);
     };
 
+    const handleHumanReviewAction = async (action: AgentRunResumeAction) => {
+        if (!pendingHumanReview || !activeThread) return;
+        const interrupt = pendingHumanReview.interrupt;
+        if (!interrupt.interrupt_id) return;
+
+        setHumanReviewSubmitting(action);
+        setHumanReviewError(null);
+        try {
+            const response = await resumeAgentRun(pendingHumanReview.runId, {
+                action,
+                interrupt_id: interrupt.interrupt_id,
+                resume_token: interrupt.resume_token || undefined,
+                resume_version: interrupt.resume_version || undefined,
+                thread_id: activeThread.id,
+                edited_payload: action === 'edit' ? { final_answer: humanReviewEditText } : undefined,
+                client_metadata: { source: 'chat_pending_review_panel' },
+            });
+            setAgentRunDetails(prev => ({ ...prev, [response.agent_run.id]: response.agent_run }));
+
+            if (response.agent_run.status === 'awaiting_human' && response.agent_run.pending_interrupt) {
+                setPendingHumanReview(prev => prev ? {
+                    ...prev,
+                    interrupt: response.agent_run.pending_interrupt as AgentRunPendingInterrupt,
+                } : prev);
+                setHumanReviewEditText(response.agent_run.pending_interrupt.proposed_final_answer || humanReviewEditText);
+                return;
+            }
+
+            setPendingHumanReview(null);
+            setHumanReviewEditText('');
+            await loadMessages();
+            onThreadUpdate?.();
+        } catch (err: any) {
+            setHumanReviewError(err?.message || 'Unable to submit review decision.');
+        } finally {
+            setHumanReviewSubmitting(null);
+        }
+    };
+
     const handleSend = async (
         overrideInput?: string | React.SyntheticEvent,
         options?: { isClarificationSelection?: boolean }
@@ -824,6 +882,78 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions,
                 customInstructions
             );
+
+            if (response.status === 'awaiting_human' && response.agent_run_id && response.pending_interrupt) {
+                const localUserMessageId = response.user_message_id || ('review-user-' + Date.now());
+                const localAssistantMessageId = response.assistant_message_id || ('review-asst-' + Date.now());
+                const pendingReview: PendingHumanReview = {
+                    runId: response.agent_run_id,
+                    interrupt: response.pending_interrupt,
+                    localUserMessageId,
+                    localAssistantMessageId,
+                };
+
+                setPendingHumanReview(pendingReview);
+                setHumanReviewError(null);
+                setHumanReviewEditText(response.pending_interrupt.proposed_final_answer || response.answer || '');
+
+                setMessages(prev => {
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    return [
+                        ...updated,
+                        {
+                            id: localUserMessageId,
+                            role: 'user',
+                            content: textToSend,
+                            rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
+                            agent_run_id: response.agent_run_id,
+                            agent_run_turn_kind: 'user_prompt',
+                            agent_trace_refs: response.agent_trace_refs,
+                            agent_pattern_id: response.agent_pattern_id,
+                            agent_pattern_version: response.agent_pattern_version,
+                            agent_route: response.agent_route || response.route,
+                            agent_route_reason: response.agent_route_reason,
+                            created_at: new Date().toISOString()
+                        },
+                        {
+                            id: localAssistantMessageId,
+                            role: 'assistant',
+                            content: response.pending_interrupt.title || 'Human review required before saving the final answer.',
+                            agent_run_id: response.agent_run_id,
+                            agent_run_turn_kind: 'assistant_pending_review',
+                            agent_trace_refs: response.agent_trace_refs,
+                            agent_pattern_id: response.agent_pattern_id,
+                            agent_pattern_version: response.agent_pattern_version,
+                            agent_route: response.agent_route || response.route,
+                            agent_route_reason: response.agent_route_reason,
+                            pending_human_review: true,
+                            created_at: new Date().toISOString()
+                        },
+                    ];
+                });
+
+                try {
+                    const run = await getAgentRun(response.agent_run_id);
+                    setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
+                } catch (error: any) {
+                    setAgentRunErrors(prev => ({
+                        ...prev,
+                        [response.agent_run_id!]: error?.message || 'Unable to load agent run.',
+                    }));
+                }
+
+                if (isEditingQuestion) {
+                    setEditingMessageId(null);
+                    setEditingOriginalText('');
+                }
+                if (isClarificationSelection) {
+                    if (priorClarificationIds) {
+                        cleanupClarificationTurn(priorClarificationIds);
+                    }
+                    lastClarificationIdsRef.current = null;
+                }
+                return;
+            }
 
             // Handle ambiguous query / clarification options
             if (response.clarification_options) {
@@ -950,7 +1080,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             messageId.startsWith('final-user-') ||
             messageId.startsWith('assistant-') ||
             messageId.startsWith('clarify-user-') ||
-            messageId.startsWith('clarify-asst-');
+            messageId.startsWith('clarify-asst-') ||
+            messageId.startsWith('review-user-') ||
+            messageId.startsWith('review-asst-');
         if (isTempId) {
             setMessages(prev => {
                 const idx = prev.findIndex(m => m.id === messageId);
@@ -959,11 +1091,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 const isLocalUser = (id: string) =>
                     id.startsWith('temp-user-') ||
                     id.startsWith('final-user-') ||
-                    id.startsWith('clarify-user-');
+                    id.startsWith('clarify-user-') ||
+                    id.startsWith('review-user-');
                 const isLocalAssistant = (id: string) =>
                     id.startsWith('error-') ||
                     id.startsWith('assistant-') ||
-                    id.startsWith('clarify-asst-');
+                    id.startsWith('clarify-asst-') ||
+                    id.startsWith('review-asst-');
 
                 // Deleting a local assistant message also removes its preceding local user message.
                 if (msg.role === 'assistant' && idx > 0) {
@@ -1133,6 +1267,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         },
     };
     const latestUserMessageId = [...messages].reverse().find(m => m.role === 'user')?.id ?? null;
+    const pendingReviewInterrupt = pendingHumanReview?.interrupt ?? null;
+    const pendingReviewActions = Array.isArray(pendingReviewInterrupt?.allowed_actions)
+        ? pendingReviewInterrupt.allowed_actions.map(String)
+        : [];
+    const showDecisionPanel = Boolean(clarificationOptions || pendingHumanReview);
 
     return (
         <Paper ref={chatRootRef} elevation={0} sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
@@ -1641,7 +1780,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
 
 
-                {clarificationOptions && (
+                {showDecisionPanel && (
                     <Box
                         sx={{
                             display: 'flex',
@@ -1660,7 +1799,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             onPointerDown={handleClarificationResizeStart}
                             role="separator"
                             aria-orientation="horizontal"
-                            aria-label="Resize clarification options"
+                            aria-label="Resize decision panel"
                             sx={{
                                 flex: '0 0 auto',
                                 height: '1.5rem',
@@ -1686,75 +1825,158 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         />
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, pb: 1, flexShrink: 0 }}>
                             <Typography variant="caption" sx={{ flex: 1, textAlign: 'center', color: 'text.secondary', fontWeight: 'bold' }}>
-                                I need a bit more clarification. Did you mean one of these?
+                                {clarificationOptions
+                                    ? 'I need a bit more clarification. Did you mean one of these?'
+                                    : 'Review the final answer before it is saved.'}
                             </Typography>
-                            <Tooltip title="Close clarification options">
-                                <IconButton
-                                    size="small"
-                                    onClick={() => {
-                                        setClarificationOptions(null);
-                                        cleanupClarificationTurn();
-                                    }}
-                                    sx={{ flex: '0 0 auto' }}
-                                >
-                                    <CloseIcon fontSize="small" />
-                                </IconButton>
-                            </Tooltip>
+                            {clarificationOptions && (
+                                <Tooltip title="Close clarification options">
+                                    <IconButton
+                                        size="small"
+                                        onClick={() => {
+                                            setClarificationOptions(null);
+                                            cleanupClarificationTurn();
+                                        }}
+                                        sx={{ flex: '0 0 auto' }}
+                                    >
+                                        <CloseIcon fontSize="small" />
+                                    </IconButton>
+                                </Tooltip>
+                            )}
                         </Box>
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 1, pb: 1, overflowY: 'auto', minHeight: 0 }}>
-                            {clarificationOptions.map((choice, i) => (
-                                <Box
-                                    key={i}
-                                    sx={{
-                                        display: 'grid',
-                                        gridTemplateColumns: 'minmax(0, 1fr) 2.5rem',
-                                        gap: 1,
-                                        alignItems: 'flex-start',
-                                        width: '100%',
-                                        minWidth: 0,
-                                    }}
-                                >
-                                    <TextField
-                                        fullWidth
-                                        size="small"
-                                        multiline
-                                        label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
-                                        value={choice.text}
+                            {clarificationOptions && clarificationOptions.map((choice, i) => (
+                                    <Box
+                                        key={i}
                                         sx={{
-                                            '& .MuiOutlinedInput-root': {
-                                                bgcolor: 'action.hover',
-                                            },
+                                            display: 'grid',
+                                            gridTemplateColumns: 'minmax(0, 1fr) 2.5rem',
+                                            gap: 1,
+                                            alignItems: 'flex-start',
+                                            width: '100%',
+                                            minWidth: 0,
                                         }}
-                                        onChange={(event) => {
-                                            const nextText = event.target.value;
-                                            setClarificationOptions(prev => prev?.map((item, index) => (
-                                                index === i ? { ...item, text: nextText } : item
-                                            )) ?? null);
-                                        }}
-                                    />
-                                    <Tooltip title="Send this question">
-                                        <Box
-                                            component="span"
+                                    >
+                                        <TextField
+                                            fullWidth
+                                            size="small"
+                                            multiline
+                                            label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
+                                            value={choice.text}
                                             sx={{
-                                                width: '2.5rem',
-                                                display: 'flex',
-                                                justifyContent: 'center',
-                                                flex: '0 0 auto',
+                                                '& .MuiOutlinedInput-root': {
+                                                    bgcolor: 'action.hover',
+                                                },
                                             }}
-                                        >
-                                            <IconButton
-                                                color="primary"
-                                                size="medium"
-                                                disabled={!choice.text.trim() || loading}
-                                                onClick={() => handleSend(choice.text.trim(), { isClarificationSelection: true })}
-                                                sx={{ mt: 0.25 }}
+                                            onChange={(event) => {
+                                                const nextText = event.target.value;
+                                                setClarificationOptions(prev => prev?.map((item, index) => (
+                                                    index === i ? { ...item, text: nextText } : item
+                                                )) ?? null);
+                                            }}
+                                        />
+                                        <Tooltip title="Send this question">
+                                            <Box
+                                                component="span"
+                                                sx={{
+                                                    width: '2.5rem',
+                                                    display: 'flex',
+                                                    justifyContent: 'center',
+                                                    flex: '0 0 auto',
+                                                }}
                                             >
-                                                <SendIcon fontSize="medium" />
-                                            </IconButton>
-                                        </Box>
-                                    </Tooltip>
-                                </Box>
-                            ))}
+                                                <IconButton
+                                                    color="primary"
+                                                    size="medium"
+                                                    disabled={!choice.text.trim() || loading}
+                                                    onClick={() => handleSend(choice.text.trim(), { isClarificationSelection: true })}
+                                                    sx={{ mt: 0.25 }}
+                                                >
+                                                    <SendIcon fontSize="medium" />
+                                                </IconButton>
+                                            </Box>
+                                        </Tooltip>
+                                    </Box>
+                                ))}
+                            {pendingReviewInterrupt && (
+                                <>
+                                    {(pendingReviewInterrupt.prompt || pendingReviewInterrupt.body) && (
+                                        <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                            {pendingReviewInterrupt.prompt || pendingReviewInterrupt.body}
+                                        </Typography>
+                                    )}
+                                    {pendingReviewInterrupt.proposed_final_answer && (
+                                        <TextField
+                                            fullWidth
+                                            size="small"
+                                            multiline
+                                            minRows={5}
+                                            maxRows={12}
+                                            label={pendingReviewActions.includes('edit') ? 'Final answer draft' : 'Proposed final answer'}
+                                            value={humanReviewEditText}
+                                            disabled={!pendingReviewActions.includes('edit') || Boolean(humanReviewSubmitting)}
+                                            onChange={(event) => setHumanReviewEditText(event.target.value)}
+                                            sx={{
+                                                '& .MuiOutlinedInput-root': {
+                                                    bgcolor: 'action.hover',
+                                                },
+                                            }}
+                                        />
+                                    )}
+                                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+                                        {pendingReviewActions.includes('approve') && (
+                                            <Button
+                                                size="small"
+                                                variant="contained"
+                                                startIcon={<CheckIcon fontSize="inherit" />}
+                                                disabled={Boolean(humanReviewSubmitting)}
+                                                onClick={() => handleHumanReviewAction('approve')}
+                                            >
+                                                {humanReviewSubmitting === 'approve' ? 'Approving...' : 'Approve'}
+                                            </Button>
+                                        )}
+                                        {pendingReviewActions.includes('edit') && (
+                                            <Button
+                                                size="small"
+                                                variant="contained"
+                                                color="secondary"
+                                                startIcon={<EditIcon fontSize="inherit" />}
+                                                disabled={Boolean(humanReviewSubmitting) || !humanReviewEditText.trim()}
+                                                onClick={() => handleHumanReviewAction('edit')}
+                                            >
+                                                {humanReviewSubmitting === 'edit' ? 'Saving...' : 'Save edit'}
+                                            </Button>
+                                        )}
+                                        {pendingReviewActions.includes('continue_without') && (
+                                            <Button
+                                                size="small"
+                                                variant="outlined"
+                                                disabled={Boolean(humanReviewSubmitting)}
+                                                onClick={() => handleHumanReviewAction('continue_without')}
+                                            >
+                                                {humanReviewSubmitting === 'continue_without' ? 'Continuing...' : 'Continue'}
+                                            </Button>
+                                        )}
+                                        {pendingReviewActions.includes('reject') && (
+                                            <Button
+                                                size="small"
+                                                variant="outlined"
+                                                color="error"
+                                                startIcon={<CloseIcon fontSize="inherit" />}
+                                                disabled={Boolean(humanReviewSubmitting)}
+                                                onClick={() => handleHumanReviewAction('reject')}
+                                            >
+                                                {humanReviewSubmitting === 'reject' ? 'Rejecting...' : 'Reject'}
+                                            </Button>
+                                        )}
+                                    </Box>
+                                    {humanReviewError && (
+                                        <Typography variant="caption" color="error">
+                                            {humanReviewError}
+                                        </Typography>
+                                    )}
+                                </>
+                            )}
                         </Box>
                     </Box>
                 )}

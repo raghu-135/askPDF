@@ -45,7 +45,7 @@ INTERRUPT_STATUS_RESUMED = "resumed"
 INTERRUPT_STATUS_REJECTED = "rejected"
 INTERRUPT_STATUS_EXPIRED = "expired"
 
-RESUME_ACTIONS = {"approve", "edit", "continue_without"}
+RESUME_ACTIONS = {"approve", "approve_selected", "edit", "continue_without"}
 TERMINAL_INTERRUPT_STATUSES = {
     INTERRUPT_STATUS_RESUMED,
     INTERRUPT_STATUS_REJECTED,
@@ -145,6 +145,15 @@ def _terminal_decision_matches(interrupt: Dict[str, Any], *, action: str, interr
     if decision.get("interrupt_id") != interrupt_id:
         return False
     return decision.get("action") == action or decision.get("requested_action") == action
+
+
+def _option_ids(interrupt: Dict[str, Any]) -> set[str]:
+    options = interrupt.get("options") if isinstance(interrupt.get("options"), list) else []
+    return {
+        str(option.get("id"))
+        for option in options
+        if isinstance(option, dict) and isinstance(option.get("id"), str) and option.get("id")
+    }
 
 
 class AgentPatternRepository:
@@ -468,6 +477,7 @@ class AgentPatternRepository:
         edited_payload: Optional[Dict[str, Any]],
         client_metadata: Optional[Dict[str, Any]],
         resume_version: Optional[int],
+        selected_option_ids: Optional[list[str]],
     ) -> Dict[str, Any]:
         decision = {
             "interrupt_id": interrupt_id,
@@ -478,6 +488,8 @@ class AgentPatternRepository:
             decision["resume_version"] = resume_version
         if edited_payload is not None:
             decision["edited_payload"] = _compact_interrupt_value(edited_payload)
+        if selected_option_ids is not None:
+            decision["selected_option_ids"] = _compact_interrupt_value(selected_option_ids)
         if client_metadata is not None:
             decision["client_metadata"] = _compact_interrupt_value(client_metadata)
         return decision
@@ -490,6 +502,7 @@ class AgentPatternRepository:
         action: str,
         resume_token: Optional[str],
         resume_version: Optional[int],
+        selected_option_ids: Optional[list[str]],
     ) -> None:
         if interrupt.get("interrupt_id") != interrupt_id:
             raise AgentRunInterruptError(
@@ -518,6 +531,35 @@ class AgentPatternRepository:
                 "The resume version does not match the current interrupt.",
             )
 
+        if action == "approve_selected":
+            valid_option_ids = _option_ids(interrupt)
+            if not valid_option_ids:
+                raise AgentRunInterruptError(
+                    "interrupt_options_missing",
+                    "This interrupt does not expose selectable options.",
+                    http_status=400,
+                )
+            if not selected_option_ids:
+                raise AgentRunInterruptError(
+                    "interrupt_selection_required",
+                    "At least one option must be selected.",
+                    http_status=400,
+                )
+            invalid_option_ids = sorted(set(map(str, selected_option_ids)) - valid_option_ids)
+            if invalid_option_ids:
+                raise AgentRunInterruptError(
+                    "interrupt_selection_invalid",
+                    f"Selected option ids are invalid: {', '.join(invalid_option_ids)}",
+                    http_status=400,
+                )
+            selection_mode = str(interrupt.get("selection_mode") or "single")
+            if selection_mode == "single" and len(selected_option_ids) != 1:
+                raise AgentRunInterruptError(
+                    "interrupt_selection_count_invalid",
+                    "This interrupt requires exactly one selected option.",
+                    http_status=400,
+                )
+
     async def resolve_pending_interrupt(
         self,
         run_id: str,
@@ -526,6 +568,7 @@ class AgentPatternRepository:
         action: str,
         edited_payload: Optional[Dict[str, Any]] = None,
         client_metadata: Optional[Dict[str, Any]] = None,
+        selected_option_ids: Optional[list[str]] = None,
         resume_token: Optional[str] = None,
         resume_version: Optional[int] = None,
         expected_thread_id: Optional[str] = None,
@@ -586,6 +629,7 @@ class AgentPatternRepository:
                 action=action,
                 resume_token=resume_token,
                 resume_version=resume_version,
+                selected_option_ids=selected_option_ids,
             )
 
             decision = self._build_interrupt_decision(
@@ -595,6 +639,7 @@ class AgentPatternRepository:
                 edited_payload=edited_payload,
                 client_metadata=client_metadata,
                 resume_version=resume_version,
+                selected_option_ids=selected_option_ids,
             )
             if isinstance(run.debug_trace_json, dict):
                 replace_jsonb_field(
@@ -631,6 +676,12 @@ class AgentPatternRepository:
                     },
                 )
                 outcome = INTERRUPT_STATUS_EXPIRED
+            elif action == "reject" and interrupt.get("reject_behavior") == "resume":
+                interrupt["status"] = INTERRUPT_STATUS_RESUMED
+                interrupt["decision"] = decision
+                run.status = RUN_STATUS_RUNNING
+                run.completed_at = None
+                outcome = INTERRUPT_STATUS_RESUMED
             elif action == "reject":
                 interrupt["status"] = INTERRUPT_STATUS_REJECTED
                 interrupt["decision"] = decision

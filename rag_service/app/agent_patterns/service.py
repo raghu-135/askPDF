@@ -68,13 +68,20 @@ class AgentRunService:
             thread_settings=thread_settings,
             request_overrides=request_overrides,
         )
+        from app.agent_patterns.graph import TemplateCompiler
+
+        enable_hitl_final_review = final_review_hitl_enabled()
+        stored_resolved_spec = TemplateCompiler().materialize_spec(
+            resolved_spec,
+            enable_hitl_final_review=enable_hitl_final_review,
+        )
 
         run = await self.repository.create_run(
             thread_id=thread_id,
             template_id=template.id,
             template_version_id=version.id,
             template_version=version.version,
-            resolved_spec_json=resolved_spec,
+            resolved_spec_json=stored_resolved_spec,
         )
 
         started = time.perf_counter()
@@ -97,11 +104,11 @@ class AgentRunService:
                     thread_id,
                     req,
                     embed_model,
-                    resolved_spec=resolved_spec,
+                    resolved_spec=stored_resolved_spec,
                     agent_run_context=context,
                     trace_recorder=trace_recorder,
                     checkpointer=checkpointer,
-                    enable_hitl_final_review=final_review_hitl_enabled(),
+                    enable_hitl_final_review=enable_hitl_final_review,
                 )
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
@@ -192,6 +199,7 @@ class AgentRunService:
         action: str,
         edited_payload: Optional[Dict[str, Any]] = None,
         client_metadata: Optional[Dict[str, Any]] = None,
+        selected_option_ids: Optional[list[str]] = None,
         resume_token: Optional[str] = None,
         resume_version: Optional[int] = None,
         expected_thread_id: Optional[str] = None,
@@ -202,6 +210,7 @@ class AgentRunService:
             action=action,
             edited_payload=edited_payload,
             client_metadata=client_metadata,
+            selected_option_ids=selected_option_ids,
             resume_token=resume_token,
             resume_version=resume_version,
             expected_thread_id=expected_thread_id,

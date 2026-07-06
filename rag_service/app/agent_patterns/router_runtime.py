@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from langgraph.types import Command
 
-from app.agent_patterns.graph import TemplateCompiler
+from app.agent_patterns.graph import TemplateCompiler, with_final_review_hitl_policy
 from app.db import (
     create_chat_turn,
     increment_qa_stats,
@@ -118,8 +118,12 @@ def _interrupted_node_event(partial: Dict[str, Any], pending_interrupt: Dict[str
             "interrupt_id": pending_interrupt.get("interrupt_id"),
             "gate_id": pending_interrupt.get("gate_id"),
             "type": pending_interrupt.get("type"),
+            "mode": pending_interrupt.get("mode"),
+            "phase": pending_interrupt.get("phase"),
+            "target_node_id": pending_interrupt.get("target_node_id"),
             "allowed_actions": pending_interrupt.get("allowed_actions"),
             "default_action": pending_interrupt.get("default_action"),
+            "options": pending_interrupt.get("options"),
             "proposed_tool": pending_interrupt.get("proposed_tool"),
             "proposed_final_answer": pending_interrupt.get("proposed_final_answer"),
         },
@@ -328,6 +332,9 @@ async def _handle_compiled_rag_chat(
     pattern_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
     allowed_tool_ids = pattern_config.get("allowed_tool_ids")
     allowed_tool_ids = allowed_tool_ids if isinstance(allowed_tool_ids, list) else []
+    hitl_policy = pattern_config.get("hitl_policy") if isinstance(pattern_config.get("hitl_policy"), dict) else {}
+    if enable_hitl_final_review:
+        hitl_policy = with_final_review_hitl_policy(hitl_policy)
     checkpoint_thread_id = str(agent_run_context.get("checkpoint_thread_id") or agent_run_id or thread_id)
 
     started = time.perf_counter()
@@ -361,7 +368,7 @@ async def _handle_compiled_rag_chat(
         "tool_instructions": tool_instructions,
         "custom_instructions": custom_instructions,
         "allowed_tool_ids": allowed_tool_ids,
-        "hitl_policy": pattern_config.get("hitl_policy") if isinstance(pattern_config.get("hitl_policy"), dict) else {},
+        "hitl_policy": hitl_policy,
         "client_timezone": getattr(req, "client_timezone", None),
         "client_locale": getattr(req, "client_locale", None),
         "client_now_iso": getattr(req, "client_now_iso", None),

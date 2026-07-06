@@ -297,7 +297,7 @@ export interface AgentRunDebug {
   };
 }
 
-export type AgentRunResumeAction = 'approve' | 'reject' | 'edit' | 'continue_without';
+export type AgentRunResumeAction = 'approve' | 'approve_selected' | 'reject' | 'edit' | 'continue_without';
 
 export interface AgentRunPendingInterrupt {
   interrupt_id: string;
@@ -309,6 +309,16 @@ export interface AgentRunPendingInterrupt {
   expires_at?: string | null;
   default_action?: AgentRunResumeAction | string | null;
   allowed_actions?: AgentRunResumeAction[] | string[];
+  mode?: 'approval' | 'choice' | 'review' | string | null;
+  phase?: 'before' | 'after' | 'inside_tool' | string | null;
+  selection_mode?: 'single' | 'multi' | 'single_or_multi' | string | null;
+  options?: {
+    id: string;
+    label?: string;
+    target_node_id?: string;
+    description?: string;
+    [key: string]: any;
+  }[];
   prompt?: string | null;
   title?: string | null;
   body?: string | null;
@@ -635,6 +645,7 @@ export async function resumeAgentRun(
     interrupt_id: string;
     edited_payload?: Record<string, any>;
     client_metadata?: Record<string, any>;
+    selected_option_ids?: string[];
     resume_token?: string;
     resume_version?: number;
     thread_id?: string;
@@ -667,6 +678,7 @@ export async function threadChat(
   customInstructionsOverride?: string
 ): Promise<{
   answer: string;
+  status?: string;
   user_message_id: string | null;
   assistant_message_id: string | null;
   used_chat_ids: string[];

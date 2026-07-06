@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import { Box, Button, CircularProgress, IconButton, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Checkbox, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
 import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import AgentRunHeaderChips from './AgentRunHeaderChips';
 import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
@@ -33,6 +33,7 @@ export default function AgentRunDebugPanel({
   const [resumeSubmitting, setResumeSubmitting] = useState<AgentRunResumeAction | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeMessage, setResumeMessage] = useState<string | null>(null);
+  const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const debug = runDetails?.debug;
   const pendingInterrupt = runDetails?.pending_interrupt;
   const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? 'pending' : undefined);
@@ -42,6 +43,23 @@ export default function AgentRunDebugPanel({
   const traceView = runDetails ? buildRunTraceView(runDetails) : undefined;
   const trace = traceView?.trace;
   const traceJson = buildTraceExportJson(traceView);
+  const interruptOptions = Array.isArray(pendingInterrupt?.options)
+    ? pendingInterrupt.options.filter((option) => option && typeof option.id === 'string')
+    : [];
+  const selectionMode = String(pendingInterrupt?.selection_mode || 'single');
+  const isMultiSelect = selectionMode === 'multi' || selectionMode === 'single_or_multi';
+
+  useEffect(() => {
+    if (interruptOptions.length === 0) {
+      setSelectedOptionIds([]);
+      return;
+    }
+    setSelectedOptionIds((current) => {
+      const valid = current.filter((id) => interruptOptions.some((option) => option.id === id));
+      if (valid.length > 0) return isMultiSelect ? valid : valid.slice(0, 1);
+      return [interruptOptions[0].id];
+    });
+  }, [pendingInterrupt?.interrupt_id, isMultiSelect, interruptOptions.map((option) => option.id).join('|')]);
 
   const copyTrace = async () => {
     if (!traceJson || typeof navigator === 'undefined' || !navigator.clipboard) return;
@@ -78,6 +96,7 @@ export default function AgentRunDebugPanel({
         resume_token: pendingInterrupt.resume_token || undefined,
         resume_version: pendingInterrupt.resume_version || undefined,
         thread_id: runDetails.thread_id,
+        selected_option_ids: action === 'approve_selected' ? selectedOptionIds : undefined,
         client_metadata: { source: 'agent_run_debug_panel' },
       });
       onRunDetailsChange?.(response.agent_run);
@@ -118,6 +137,17 @@ export default function AgentRunDebugPanel({
         {resumeSubmitting === action ? 'Submitting...' : label}
       </Button>
     );
+  };
+
+  const toggleOption = (optionId: string) => {
+    setSelectedOptionIds((current) => {
+      if (!isMultiSelect) return [optionId];
+      if (current.includes(optionId)) {
+        const next = current.filter((id) => id !== optionId);
+        return next.length > 0 ? next : current;
+      }
+      return [...current, optionId];
+    });
   };
 
   return (
@@ -161,11 +191,37 @@ export default function AgentRunDebugPanel({
             </Typography>
           )}
           {interruptStatus === 'pending' && (
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-              {renderInterruptAction('approve', 'Approve', <CheckIcon fontSize="inherit" />)}
-              {renderInterruptAction('continue_without', 'Continue', <PlayArrowIcon fontSize="inherit" />)}
-              {renderInterruptAction('reject', 'Reject', <CloseIcon fontSize="inherit" />, 'error')}
-            </Box>
+            <>
+              {interruptOptions.length > 0 && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                  {interruptOptions.map((option) => (
+                    <FormControlLabel
+                      key={option.id}
+                      sx={{ m: 0 }}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={selectedOptionIds.includes(option.id)}
+                          onChange={() => toggleOption(option.id)}
+                          disabled={Boolean(resumeSubmitting)}
+                        />
+                      }
+                      label={
+                        <Typography variant="caption">
+                          {option.label || option.id}
+                        </Typography>
+                      }
+                    />
+                  ))}
+                </Box>
+              )}
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+                {renderInterruptAction('approve', 'Approve', <CheckIcon fontSize="inherit" />)}
+                {renderInterruptAction('approve_selected', 'Approve selected', <CheckIcon fontSize="inherit" />)}
+                {renderInterruptAction('continue_without', 'Continue', <PlayArrowIcon fontSize="inherit" />)}
+                {renderInterruptAction('reject', 'Reject', <CloseIcon fontSize="inherit" />, 'error')}
+              </Box>
+            </>
           )}
           {resumeMessage && (
             <Typography variant="caption" color="text.secondary">

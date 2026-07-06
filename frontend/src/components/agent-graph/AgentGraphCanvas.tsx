@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Typography, useTheme } from '@mui/material';
+import React, { Component, ReactNode, useEffect, useMemo, useState } from 'react';
+import { Box, Chip, Typography, useTheme } from '@mui/material';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import {
   Background,
@@ -39,6 +39,59 @@ const getStatusEdgeColor = (edge: { selected?: boolean; active?: boolean }) => {
   if (edge.active) return '#2e7d32';
   return '#bdbdbd';
 };
+
+class AgentGraphErrorBoundary extends Component<
+  { children: ReactNode; fallback: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidUpdate(previousProps: { children: ReactNode; fallback: ReactNode }) {
+    if (previousProps.children !== this.props.children && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) return this.props.fallback;
+    return this.props.children;
+  }
+}
+
+function AgentGraphFallback({ graph }: { graph: ReturnType<typeof buildAgentGraph> }) {
+  if (graph.nodes.length === 0) {
+    return (
+      <Box sx={{ p: 1, borderRadius: 1, bgcolor: 'rgba(0,0,0,0.03)' }}>
+        <Typography variant="caption" color="text.secondary">
+          No agent graph topology is available for this run.
+        </Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ p: 1, borderRadius: 1, border: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
+      <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mb: 0.75 }}>
+        Agent graph
+      </Typography>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+        {graph.nodes.map((node) => (
+          <Chip
+            key={node.id}
+            size="small"
+            color={node.status === 'error' ? 'error' : node.status === 'active' ? 'success' : node.status === 'planned' ? 'primary' : 'default'}
+            variant={node.status === 'inactive' ? 'outlined' : 'filled'}
+            label={`${node.label}: ${node.status}`}
+          />
+        ))}
+      </Box>
+    </Box>
+  );
+}
 
 const layoutGraph = async (
   nodes: AgentGraphNodeModel[],
@@ -101,7 +154,12 @@ function AgentGraphCanvasInner({
       baseGraph = traceView.graph;
     } else {
       const graphSpec = getAgentGraphSpec(resolvedSpec, templateId);
-      baseGraph = buildAgentGraph(graphSpec);
+      baseGraph = buildAgentGraph(graphSpec, mode === 'run-debug' && traceView ? {
+        route: traceView.route,
+        metrics: traceView.metrics,
+        nodeRows: traceView.nodes.map((node) => ({ ...node.raw, node: node.id })),
+        toolRows: traceView.tools.map((tool) => ({ ...tool.raw, tool_name: tool.name, caller_node: tool.callerNode })),
+      } : {});
     }
     return applyTraceFocusToGraph(baseGraph, focusedTraceRefs);
   }, [focusedTraceRefs, mode, resolvedSpec, templateId, traceView]);
@@ -237,28 +295,30 @@ function AgentGraphCanvasInner({
           },
         }}
       >
-        <ReactFlow
-          nodes={flowNodes}
-          edges={flowEdges}
-          nodeTypes={nodeTypes}
-          nodesDraggable={mode === 'builder'}
-          nodesConnectable={mode === 'builder'}
-          elementsSelectable
-          fitView
-          fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
-          minZoom={0.55}
-          maxZoom={1.8}
-          zoomOnScroll={false}
-          zoomOnPinch
-          preventScrolling={false}
-          onNodeClick={(_, node) => setSelection({ kind: 'node', node: node.data as AgentGraphNodeModel })}
-          onEdgeClick={(_, edge) => setSelection({ kind: 'edge', edge: edge.data as any })}
-          onPaneClick={() => setSelection(null)}
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background gap={24} size={1} />
-          <Controls showInteractive={false} />
-        </ReactFlow>
+        <AgentGraphErrorBoundary fallback={<AgentGraphFallback graph={graph} />}>
+          <ReactFlow
+            nodes={flowNodes}
+            edges={flowEdges}
+            nodeTypes={nodeTypes}
+            nodesDraggable={mode === 'builder'}
+            nodesConnectable={mode === 'builder'}
+            elementsSelectable
+            fitView
+            fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
+            minZoom={0.55}
+            maxZoom={1.8}
+            zoomOnScroll={false}
+            zoomOnPinch
+            preventScrolling={false}
+            onNodeClick={(_, node) => setSelection({ kind: 'node', node: node.data as AgentGraphNodeModel })}
+            onEdgeClick={(_, edge) => setSelection({ kind: 'edge', edge: edge.data as any })}
+            onPaneClick={() => setSelection(null)}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background gap={24} size={1} />
+            <Controls showInteractive={false} />
+          </ReactFlow>
+        </AgentGraphErrorBoundary>
       </Box>
       <AgentGraphInspector selection={selection} />
       {graph.executionPlan.length > 0 && (

@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from copy import deepcopy
 from datetime import timedelta
 from typing import Any, Callable, Dict, List, Literal, Optional, TypedDict
 
@@ -41,6 +42,7 @@ from app.time_utils import iso_utc_z, utc_now
 RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarify"]
 
 logger = logging.getLogger(__name__)
+FINAL_REVIEW_GATE_ID = "human_review_gate"
 
 
 TEMPORAL_PLAN_RE = re.compile(
@@ -100,6 +102,9 @@ class RouterRagState(TypedDict, total=False):
     hitl_policy: Dict[str, Any]
     hitl_decisions: List[Dict[str, Any]]
     hitl_gate_route: str
+    hitl_gate_routes: Dict[str, Any]
+    hitl_selected_options: Dict[str, List[str]]
+    skipped_nodes: List[str]
     node_events: List[Dict[str, Any]]
     tool_events: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
@@ -493,6 +498,105 @@ def _state_evidence_refs(state: RouterRagState) -> Dict[str, Any]:
             "messages": refs_from_messages(state.get("used_chat_ids")),
         }
     )
+
+
+def _hitl_gates_from_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
+    return policy.get("gates") if isinstance(policy.get("gates"), dict) else {}
+
+
+def _normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]:
+    gate = dict(gate_policy) if isinstance(gate_policy, dict) else {}
+    if gate_id == WEB_APPROVAL_GATE_ID:
+        gate.setdefault("mode", "approval")
+        gate.setdefault("phase", "before")
+        gate.setdefault("target", {"node_id": "web_worker", "node_type": "web_worker"})
+        gate.setdefault("interrupt_type", "tool_approval")
+        gate.setdefault("title", "Approve web search?")
+        gate.setdefault(
+            "prompt",
+            "This answer needs live web research. Approve web search or continue without it.",
+        )
+        gate.setdefault("allowed_actions", ["approve", "continue_without"])
+        gate.setdefault("default_action", "continue_without")
+        gate.setdefault("routes", {"approve": "web_worker", "continue_without": "synthesizer"})
+    if gate_id == FINAL_REVIEW_GATE_ID:
+        gate.setdefault("mode", "review")
+        gate.setdefault("phase", "after")
+        gate.setdefault("target", {"node_id": "finalizer", "node_type": "finalizer"})
+        gate.setdefault("interrupt_type", "final_answer_review")
+        gate.setdefault("title", "Review final answer")
+        gate.setdefault("prompt", "Approve this answer before it is saved to the thread.")
+        gate.setdefault("allowed_actions", ["approve", "edit", "continue_without", "reject"])
+        gate.setdefault("default_action", "approve")
+        gate.setdefault("routes", {"approve": "END", "edit": "END", "continue_without": "END"})
+        gate.setdefault("editable_fields", ["final_answer"])
+    gate.setdefault("mode", "approval")
+    gate.setdefault("phase", "before")
+    if not isinstance(gate.get("routes"), dict):
+        gate["routes"] = {}
+    if not isinstance(gate.get("allowed_actions"), list):
+        gate["allowed_actions"] = ["approve_selected", "continue_without"] if gate.get("mode") == "choice" else ["approve", "continue_without"]
+    if not isinstance(gate.get("default_action"), str):
+        gate["default_action"] = "approve_selected" if gate.get("mode") == "choice" else "approve"
+    return gate
+
+
+def _normalize_hitl_actions(gate: Dict[str, Any]) -> List[str]:
+    allowed = gate.get("allowed_actions")
+    if not isinstance(allowed, list) or not all(isinstance(action, str) for action in allowed):
+        allowed = ["approve_selected", "continue_without"] if gate.get("mode") == "choice" else ["approve", "continue_without"]
+    allowed = [action for action in allowed if action in {"approve", "approve_selected", "continue_without", "reject", "edit"}]
+    return allowed or ["approve", "continue_without"]
+
+
+def _hitl_option_ids(gate: Dict[str, Any]) -> List[str]:
+    options = gate.get("options") if isinstance(gate.get("options"), list) else []
+    return [
+        str(option.get("id"))
+        for option in options
+        if isinstance(option, dict) and isinstance(option.get("id"), str) and option.get("id")
+    ]
+
+
+def _hitl_selected_option_ids(decision: Dict[str, Any], gate: Dict[str, Any]) -> List[str]:
+    valid_ids = _hitl_option_ids(gate)
+    selected = decision.get("selected_option_ids")
+    if isinstance(selected, str):
+        selected = [selected]
+    if not isinstance(selected, list):
+        selected = []
+    normalized = [str(item) for item in selected if str(item) in valid_ids]
+    selection_mode = str(gate.get("selection_mode") or "single")
+    if selection_mode == "single" and len(normalized) > 1:
+        normalized = normalized[:1]
+    return normalized
+
+
+def _hitl_option_targets(gate: Dict[str, Any], selected_option_ids: List[str]) -> List[str]:
+    options = gate.get("options") if isinstance(gate.get("options"), list) else []
+    selected = set(selected_option_ids)
+    targets: List[str] = []
+    for option in options:
+        if not isinstance(option, dict) or option.get("id") not in selected:
+            continue
+        target = option.get("target_node_id")
+        if isinstance(target, str) and target not in targets:
+            targets.append(target)
+    return targets
+
+
+def with_final_review_hitl_policy(policy: Any) -> Dict[str, Any]:
+    """Return a policy with the compatibility final-answer review gate enabled."""
+
+    normalized = deepcopy(policy) if isinstance(policy, dict) else {}
+    normalized["enabled"] = True
+    gates = dict(normalized.get("gates") or {})
+    gates[FINAL_REVIEW_GATE_ID] = _normalize_hitl_gate_policy(
+        FINAL_REVIEW_GATE_ID,
+        gates.get(FINAL_REVIEW_GATE_ID),
+    )
+    normalized["gates"] = gates
+    return normalized
 
 
 def normalize_execution_plan(
@@ -1101,71 +1205,121 @@ class NodeRegistry:
         *,
         node_id: str = WEB_APPROVAL_GATE_ID,
     ) -> Dict[str, Any]:
-        """Pause at a constrained human approval gate declared in the graph spec."""
+        """Pause at a reusable human-in-the-loop gate declared by hitl_policy."""
 
         started = time.perf_counter()
         policy = state.get("hitl_policy") if isinstance(state.get("hitl_policy"), dict) else {}
-        gates = policy.get("gates") if isinstance(policy.get("gates"), dict) else {}
-        gate_policy = gates.get(node_id) if isinstance(gates.get(node_id), dict) else {}
+        gates = _hitl_gates_from_policy(policy)
+        gate_policy = _normalize_hitl_gate_policy(node_id, gates.get(node_id))
         enabled = bool(policy.get("enabled")) and gate_policy.get("enabled", True) is not False
         if not enabled:
+            routes = dict(state.get("hitl_gate_routes") or {})
+            routes[node_id] = "approve"
             return _skipped_worker_update(state, config, node_id, started, "hitl_policy_disabled") | {
                 "hitl_gate_route": "approve",
+                "hitl_gate_routes": routes,
             }
 
-        allowed_actions = gate_policy.get("allowed_actions")
-        if not isinstance(allowed_actions, list) or not all(isinstance(action, str) for action in allowed_actions):
-            allowed_actions = ["approve", "continue_without"]
-        allowed_actions = [action for action in allowed_actions if action in {"approve", "continue_without"}]
-        if not allowed_actions:
-            allowed_actions = ["approve", "continue_without"]
+        mode = str(gate_policy.get("mode") or "approval")
+        phase = str(gate_policy.get("phase") or "before")
+        target = gate_policy.get("target") if isinstance(gate_policy.get("target"), dict) else {}
+        target_node_id = target.get("node_id")
+        target_node_type = target.get("node_type")
+        interrupt_type = str(gate_policy.get("interrupt_type") or gate_policy.get("type") or ("option_review" if mode == "choice" else "human_review"))
+        allowed_actions = _normalize_hitl_actions(gate_policy)
         default_action = str(gate_policy.get("default_action") or "continue_without")
         if default_action not in allowed_actions:
             default_action = "continue_without" if "continue_without" in allowed_actions else allowed_actions[0]
+
+        options = gate_policy.get("options") if isinstance(gate_policy.get("options"), list) else []
+        option_ids = _hitl_option_ids(gate_policy)
+        input_summary = {
+            "question": compact_preview(state.get("question")),
+            "route": state.get("route"),
+            "route_reason": compact_preview(state.get("route_reason")),
+            "document_source_count": len(state.get("document_sources") or []),
+            "web_source_count": len(state.get("web_sources") or []),
+            "used_chat_id_count": len(state.get("used_chat_ids") or []),
+            "evidence": compact_preview(state.get("evidence")),
+        }
+        proposed_tool = None
+        if target_node_id == "web_worker" or node_id == WEB_APPROVAL_GATE_ID:
+            proposed_tool = {
+                "name": "search_web",
+                "caller_node": "web_worker",
+                "input": compact_preview(state.get("question"), limit=1000),
+            }
 
         decision = interrupt(
             {
                 "gate_id": node_id,
                 "node_id": node_id,
-                "type": "tool_approval",
-                "title": gate_policy.get("title") or "Approve web search?",
+                "target_node_id": target_node_id,
+                "target_node_type": target_node_type,
+                "phase": phase,
+                "mode": mode,
+                "type": interrupt_type,
+                "title": gate_policy.get("title") or ("Choose approved options" if mode == "choice" else "Human review requested"),
                 "prompt": gate_policy.get("prompt")
                 or gate_policy.get("body")
-                or "This answer needs live web research. Approve web search or continue without it.",
+                or ("Select which options may run." if mode == "choice" else "Review this step before the graph continues."),
                 "allowed_actions": allowed_actions,
                 "default_action": default_action,
+                "selection_mode": gate_policy.get("selection_mode") if mode == "choice" else None,
+                "options": options if mode == "choice" else None,
                 "checkpoint_resume": True,
-                "input_summary": {
-                    "question": compact_preview(state.get("question")),
-                    "route": state.get("route"),
-                    "route_reason": compact_preview(state.get("route_reason")),
-                    "document_source_count": len(state.get("document_sources") or []),
-                    "web_source_count": len(state.get("web_sources") or []),
-                    "used_chat_id_count": len(state.get("used_chat_ids") or []),
-                    "evidence": compact_preview(state.get("evidence")),
-                },
-                "proposed_tool": {
-                    "name": "search_web",
-                    "caller_node": "web_worker",
-                    "input": compact_preview(state.get("question"), limit=1000),
-                },
+                "reject_behavior": "resume" if "reject" in dict(gate_policy.get("routes") or {}) else gate_policy.get("reject_behavior"),
+                "input_summary": input_summary,
+                "proposed_tool": proposed_tool,
+                "proposed_final_answer": compact_preview(state.get("final_answer"), limit=2000) if mode == "review" else None,
+                "editable_fields": gate_policy.get("editable_fields") if mode == "review" else None,
             }
         )
         decision = decision if isinstance(decision, dict) else {"action": str(decision or default_action)}
         action = str(decision.get("action") or default_action)
         if action not in allowed_actions:
             action = default_action
-        route = "approve" if action == "approve" else "continue_without"
+        selected_option_ids = _hitl_selected_option_ids(decision, gate_policy) if mode == "choice" else []
+        if action == "approve_selected" and not selected_option_ids and option_ids:
+            selected_option_ids = [option_ids[0]]
+
+        routes_by_action = gate_policy.get("routes") if isinstance(gate_policy.get("routes"), dict) else {}
+        if mode == "choice" and action == "approve_selected":
+            route: Any = selected_option_ids[0] if selected_option_ids else "continue_without"
+        elif action == "approve":
+            route = "approve"
+        elif action in routes_by_action:
+            route = action
+        else:
+            route = "continue_without" if action in {"continue_without", "reject"} else action
+
+        gate_routes = dict(state.get("hitl_gate_routes") or {})
+        gate_routes[node_id] = route
+        selected_options_by_gate = dict(state.get("hitl_selected_options") or {})
+        if selected_option_ids:
+            selected_options_by_gate[node_id] = selected_option_ids
+
+        selected_targets = _hitl_option_targets(gate_policy, selected_option_ids)
+        execution_plan = state.get("execution_plan")
+        execution_plan_update = None
+        if selected_targets and all(target in PLAN_EXECUTE_WORKER_NODES for target in selected_targets):
+            execution_plan_update = [target for target in PLAN_EXECUTE_WORKER_NODES if target in selected_targets]
 
         update: Dict[str, Any] = {
             "hitl_gate_route": route,
+            "hitl_gate_routes": gate_routes,
+            "hitl_selected_options": selected_options_by_gate,
             "hitl_decisions": [
                 *(state.get("hitl_decisions") if isinstance(state.get("hitl_decisions"), list) else []),
                 {
                     "gate_id": node_id,
                     "node_id": node_id,
-                    "type": "tool_approval",
+                    "target_node_id": target_node_id,
+                    "phase": phase,
+                    "mode": mode,
+                    "type": interrupt_type,
                     "action": action,
+                    "selected_option_ids": selected_option_ids,
                     "decision": {
                         key: value
                         for key, value in decision.items()
@@ -1174,12 +1328,28 @@ class NodeRegistry:
                 },
             ],
         }
-        if route == "continue_without":
+        if execution_plan_update is not None:
+            update["execution_plan"] = execution_plan_update
+        elif isinstance(execution_plan, list):
+            update["execution_plan"] = execution_plan
+
+        if mode == "review":
+            update["human_review_decision"] = {
+                key: value
+                for key, value in decision.items()
+                if key not in {"resume_token"}
+            }
+            edited_payload = decision.get("edited_payload") if isinstance(decision.get("edited_payload"), dict) else {}
+            edited_answer = edited_payload.get("final_answer") or edited_payload.get("answer")
+            if action == "edit" and isinstance(edited_answer, str) and edited_answer.strip():
+                update["final_answer"] = edited_answer.strip()
+
+        if route == "continue_without" or action == "reject":
             update["evidence"] = _combine_evidence(
                 state.get("evidence"),
                 (
-                    "A human reviewer chose to continue without live web research. "
-                    "Do not claim that live or current web evidence was checked; answer only from available context."
+                    "A human reviewer chose to continue without one or more gated options. "
+                    "Do not claim skipped tools, branches, or live evidence were checked; answer only from available context."
                 ),
                 label="HITL decision",
             )
@@ -1193,10 +1363,13 @@ class NodeRegistry:
                 "question": compact_preview(state.get("question")),
                 "route": state.get("route"),
                 "route_reason": compact_preview(state.get("route_reason")),
+                "options": options if mode == "choice" else None,
+                "proposed_final_answer": compact_preview(state.get("final_answer")) if mode == "review" else None,
             },
             "output_preview": {
                 "decision": update["hitl_decisions"][-1],
-                "next": "web_worker" if route == "approve" else "synthesizer",
+                "next": routes_by_action.get(route) or (selected_targets[0] if selected_targets else route),
+                "final_answer": compact_preview(update.get("final_answer") or state.get("final_answer")) if mode == "review" else None,
             },
         }
         _log_node_end(state, node_id, started, data)
@@ -1276,6 +1449,15 @@ def hitl_gate_route(state: RouterRagState) -> str:
     return route if route in {"approve", "continue_without"} else "continue_without"
 
 
+def hitl_gate_route_for(gate_id: str) -> Callable[[RouterRagState], Any]:
+    def _route(state: RouterRagState) -> Any:
+        routes = state.get("hitl_gate_routes") if isinstance(state.get("hitl_gate_routes"), dict) else {}
+        route = routes.get(gate_id, state.get("hitl_gate_route"))
+        return route if isinstance(route, str) and route else "continue_without"
+
+    return _route
+
+
 class TemplateCompiler:
     """Compile validated v2 template specs into LangGraph StateGraph instances."""
 
@@ -1285,8 +1467,11 @@ class TemplateCompiler:
     def compile(self, spec: Dict[str, Any], *, checkpointer: Any = None, enable_hitl_final_review: bool = False):
         from app.agent_patterns.validator import TemplateValidator
 
-        TemplateValidator().validate(spec)
-        graph_spec = (spec.get("config") or {}).get("graph") or {}
+        graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
+        if not graph_spec.get("hitl_compiled"):
+            TemplateValidator().validate(spec)
+            spec = self.materialize_spec(spec)
+            graph_spec = (spec.get("config") or {}).get("graph") or {}
         if enable_hitl_final_review:
             graph_spec = self._with_final_review_gate(graph_spec)
         workflow = StateGraph(RouterRagState)
@@ -1302,10 +1487,14 @@ class TemplateCompiler:
                 if source == "planner":
                     route_fn = planner_route
                 elif node_types.get(source) == "hitl_gate":
-                    route_fn = hitl_gate_route
+                    route_fn = hitl_gate_route_for(str(source))
                 else:
                     route_fn = router_route
-                workflow.add_conditional_edges(source, route_fn, edge["routes"])
+                routes = {
+                    key: END if value == "END" else value
+                    for key, value in dict(edge["routes"]).items()
+                }
+                workflow.add_conditional_edges(source, route_fn, routes)
                 continue
             source_ref = START if source == "START" else source
             target_ref = END if target == "END" else target
@@ -1313,21 +1502,169 @@ class TemplateCompiler:
 
         return workflow.compile(checkpointer=checkpointer)
 
+    def materialize_spec(self, spec: Dict[str, Any], *, enable_hitl_final_review: bool = False) -> Dict[str, Any]:
+        materialized = deepcopy(spec)
+        config = materialized.get("config") if isinstance(materialized.get("config"), dict) else {}
+        graph_spec = config.get("graph") if isinstance(config.get("graph"), dict) else {}
+        hitl_policy = config.get("hitl_policy") if isinstance(config.get("hitl_policy"), dict) else {}
+        if enable_hitl_final_review:
+            hitl_policy = with_final_review_hitl_policy(hitl_policy)
+            config["hitl_policy"] = hitl_policy
+        config["graph"] = self._with_hitl_policy_gates(
+            graph_spec,
+            hitl_policy=hitl_policy,
+        )
+        materialized["config"] = config
+        return materialized
+
+    def _with_hitl_policy_gates(self, graph_spec: Dict[str, Any], *, hitl_policy: Dict[str, Any]) -> Dict[str, Any]:
+        nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
+        edges = [dict(edge) for edge in graph_spec.get("edges", []) if isinstance(edge, dict)]
+        if graph_spec.get("hitl_compiled") or not bool(hitl_policy.get("enabled")):
+            return {**graph_spec, "nodes": nodes, "edges": edges}
+
+        node_types = {
+            str(node.get("id")): str(node.get("type"))
+            for node in nodes
+            if isinstance(node.get("id"), str) and isinstance(node.get("type"), str)
+        }
+        existing_node_ids = set(node_types)
+        gates = _hitl_gates_from_policy(hitl_policy)
+        for gate_id, raw_gate in gates.items():
+            if not isinstance(gate_id, str) or gate_id in existing_node_ids:
+                continue
+            gate = _normalize_hitl_gate_policy(gate_id, raw_gate)
+            if gate.get("enabled", True) is False:
+                continue
+            phase = str(gate.get("phase") or "before")
+            if phase == "inside_tool":
+                continue
+            target_node_id = self._resolve_hitl_target_node_id(gate, node_types)
+            if not target_node_id:
+                continue
+
+            nodes.append({"id": gate_id, "type": "hitl_gate"})
+            existing_node_ids.add(gate_id)
+            routes = self._hitl_gate_routes(gate, target_node_id, edges, phase=phase)
+            if phase == "before":
+                edges = self._insert_before_gate(edges, gate_id, target_node_id)
+            elif phase == "after":
+                edges = self._insert_after_gate(edges, gate_id, target_node_id)
+            else:
+                continue
+            edges.append({"from": gate_id, "conditional": True, "routes": routes})
+
+        return {"nodes": nodes, "edges": edges, "hitl_compiled": True}
+
+    def _resolve_hitl_target_node_id(self, gate: Dict[str, Any], node_types: Dict[str, str]) -> Optional[str]:
+        target = gate.get("target") if isinstance(gate.get("target"), dict) else {}
+        node_id = target.get("node_id")
+        if isinstance(node_id, str) and node_id in node_types:
+            return node_id
+        node_type = target.get("node_type")
+        if isinstance(node_type, str):
+            matches = [candidate for candidate, candidate_type in node_types.items() if candidate_type == node_type]
+            if len(matches) == 1:
+                return matches[0]
+        return None
+
+    def _default_bypass_target(self, target_node_id: str, edges: List[Dict[str, Any]]) -> str:
+        for edge in edges:
+            if edge.get("from") == target_node_id and isinstance(edge.get("to"), str):
+                return str(edge["to"])
+        return "END"
+
+    def _hitl_gate_routes(self, gate: Dict[str, Any], target_node_id: str, edges: List[Dict[str, Any]], *, phase: str) -> Dict[str, str]:
+        configured = dict(gate.get("routes") or {})
+        mode = str(gate.get("mode") or "approval")
+        bypass = self._default_bypass_target(target_node_id, edges)
+        routes: Dict[str, str] = {}
+        if mode == "choice":
+            options = gate.get("options") if isinstance(gate.get("options"), list) else []
+            for option in options:
+                if not isinstance(option, dict):
+                    continue
+                option_id = option.get("id")
+                option_target = option.get("target_node_id")
+                if isinstance(option_id, str) and isinstance(option_target, str):
+                    routes[option_id] = option_target
+            routes["continue_without"] = configured.get("continue_without") or bypass
+            if "reject" in configured:
+                routes["reject"] = configured["reject"]
+            return routes
+        routes["approve"] = configured.get("approve") or (target_node_id if phase == "before" else bypass)
+        routes["continue_without"] = configured.get("continue_without") or bypass
+        if "reject" in configured:
+            routes["reject"] = configured["reject"]
+        if "edit" in configured:
+            routes["edit"] = configured["edit"]
+        return routes
+
+    def _insert_before_gate(self, edges: List[Dict[str, Any]], gate_id: str, target_node_id: str) -> List[Dict[str, Any]]:
+        updated: List[Dict[str, Any]] = []
+        for edge in edges:
+            edge = dict(edge)
+            if edge.get("conditional") and isinstance(edge.get("routes"), dict):
+                routes = dict(edge["routes"])
+                changed = False
+                for route, target in list(routes.items()):
+                    if target == target_node_id:
+                        routes[route] = gate_id
+                        changed = True
+                if changed:
+                    edge["routes"] = routes
+                updated.append(edge)
+                continue
+            if edge.get("to") == target_node_id:
+                edge["to"] = gate_id
+            updated.append(edge)
+        return updated
+
+    def _insert_after_gate(self, edges: List[Dict[str, Any]], gate_id: str, target_node_id: str) -> List[Dict[str, Any]]:
+        updated: List[Dict[str, Any]] = []
+        for edge in edges:
+            edge = dict(edge)
+            if edge.get("from") == target_node_id:
+                edge["from"] = gate_id
+            updated.append(edge)
+        updated.append({"from": target_node_id, "to": gate_id})
+        return updated
+
     def _with_final_review_gate(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
         nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
         edges = [dict(edge) for edge in graph_spec.get("edges", []) if isinstance(edge, dict)]
-        if not any(node.get("id") == "human_review_gate" for node in nodes):
-            nodes.append({"id": "human_review_gate", "type": "human_review_gate"})
+        if not any(node.get("id") == FINAL_REVIEW_GATE_ID for node in nodes):
+            nodes.append({"id": FINAL_REVIEW_GATE_ID, "type": "hitl_gate"})
+        else:
+            for node in nodes:
+                if node.get("id") == FINAL_REVIEW_GATE_ID:
+                    node["type"] = "hitl_gate"
 
         updated_edges: List[Dict[str, Any]] = []
         inserted = False
         for edge in edges:
             if edge.get("from") == "finalizer" and edge.get("to") == "END":
-                updated_edges.append({"from": "finalizer", "to": "human_review_gate"})
-                updated_edges.append({"from": "human_review_gate", "to": "END"})
+                updated_edges.append({"from": "finalizer", "to": FINAL_REVIEW_GATE_ID})
                 inserted = True
+            elif edge.get("from") == FINAL_REVIEW_GATE_ID:
+                continue
             else:
                 updated_edges.append(edge)
-        if not inserted:
-            updated_edges.append({"from": "human_review_gate", "to": "END"})
-        return {"nodes": nodes, "edges": updated_edges}
+        if not inserted and not any(edge.get("from") == "finalizer" and edge.get("to") == FINAL_REVIEW_GATE_ID for edge in updated_edges):
+            updated_edges.append({"from": "finalizer", "to": FINAL_REVIEW_GATE_ID})
+        if not any(edge.get("from") == FINAL_REVIEW_GATE_ID and edge.get("conditional") is True for edge in updated_edges):
+            updated_edges.append(
+                {
+                    "from": FINAL_REVIEW_GATE_ID,
+                    "conditional": True,
+                    "routes": {
+                        "approve": "END",
+                        "edit": "END",
+                        "continue_without": "END",
+                    },
+                }
+            )
+        result = {"nodes": nodes, "edges": updated_edges}
+        if graph_spec.get("hitl_compiled"):
+            result["hitl_compiled"] = True
+        return result
