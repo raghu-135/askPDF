@@ -3535,12 +3535,18 @@ class TestAgentPatternApi:
                 },
             )
 
-        get_response = api_client.get(f"/api/agent-runs/{run.id}")
+        get_response = api_client.get(f"/api/agent-runs/{run.id}?thread_id={sample_thread.id}")
         assert get_response.status_code == 200
         get_payload = get_response.json()["agent_run"]
         assert get_payload["status"] == "awaiting_human"
         assert get_payload["completed_at"] is None
         assert get_payload["pending_interrupt"]["interrupt_id"] == "api-resume-interrupt"
+
+        missing_thread_response = api_client.get(f"/api/agent-runs/{run.id}")
+        assert missing_thread_response.status_code == 422
+
+        wrong_thread_response = api_client.get(f"/api/agent-runs/{run.id}?thread_id={uuid.uuid4()}")
+        assert wrong_thread_response.status_code == 404
 
         request_payload = {
             "action": "approve",
@@ -3565,6 +3571,54 @@ class TestAgentPatternApi:
         assert second_payload["outcome"] == "resumed"
         assert second_payload["duplicate"] is True
         assert second_payload["agent_run"]["metrics_json"]["interrupt_resolution_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_resume_agent_run_requires_matching_thread_id(self, api_client, engine, sample_thread):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            run = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            await repo.mark_run_awaiting_human(
+                run.id,
+                {
+                    "interrupt_id": "api-thread-boundary-interrupt",
+                    "allowed_actions": ["approve", "reject"],
+                    "resume_version": 1,
+                },
+            )
+
+        missing_thread = api_client.post(
+            f"/api/agent-runs/{run.id}/resume",
+            json={
+                "action": "approve",
+                "interrupt_id": "api-thread-boundary-interrupt",
+                "resume_version": 1,
+            },
+        )
+        assert missing_thread.status_code == 422
+
+        wrong_thread = api_client.post(
+            f"/api/agent-runs/{run.id}/resume",
+            json={
+                "action": "approve",
+                "interrupt_id": "api-thread-boundary-interrupt",
+                "resume_version": 1,
+                "thread_id": str(uuid.uuid4()),
+            },
+        )
+        assert wrong_thread.status_code == 404
 
     @pytest.mark.asyncio
     async def test_get_agent_run_includes_debug_telemetry(self, api_client, engine, sample_thread):
@@ -3650,7 +3704,7 @@ class TestAgentPatternApi:
             )
             await repo.set_run_debug_trace(completed_run.id, debug_payload)
 
-        response = api_client.get(f"/api/agent-runs/{run.id}")
+        response = api_client.get(f"/api/agent-runs/{run.id}?thread_id={sample_thread.id}")
 
         assert response.status_code == 200
         payload = response.json()["agent_run"]
@@ -3741,7 +3795,7 @@ class TestAgentPatternApi:
                 error_json={"code": "agent_run_failed", "raw_message": "compile failed", "retryable": True},
             )
 
-        response = api_client.get(f"/api/agent-runs/{run.id}")
+        response = api_client.get(f"/api/agent-runs/{run.id}?thread_id={sample_thread.id}")
 
         assert response.status_code == 200
         payload = response.json()["agent_run"]
@@ -3773,7 +3827,7 @@ class TestAgentPatternApi:
                 debug_trace_json={"version": 1, "trace": {"schema_version": 1}},
             )
 
-        response = api_client.get(f"/api/agent-runs/{run.id}")
+        response = api_client.get(f"/api/agent-runs/{run.id}?thread_id={sample_thread.id}")
 
         assert response.status_code == 200
         payload = response.json()["agent_run"]

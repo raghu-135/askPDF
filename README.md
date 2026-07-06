@@ -159,10 +159,10 @@ docker compose up --build
 <summary>🤖 Advanced AI Features</summary>
 
 ### Multi-Agent Architecture
-- **Orchestrator Agent**: LangGraph-powered agent that plans, selects tools, and synthesizes answers
-- **Intent Agent** (optional): Pre-processes questions to improve query clarity and search precision
-- **Tool-Calling**: Dynamic tool selection including document search, memory recall, web search, and clarification
-- **Configurable Iterations**: Control tool-call rounds with forced final answer to prevent infinite loops
+- **Agent Pattern Runtime**: LangGraph-powered Router RAG and Plan-and-Execute RAG templates with persisted run metadata
+- **Human-in-the-Loop Gates**: Optional web-search approval and resumable checkpoints for agent runs awaiting review
+- **Tool Contracts**: First-party tool contracts for document search, memory recall, timeline search, web search, and clarification
+- **Debug Traces**: Run-level trace payloads for inspecting routes, node execution, tool calls, warnings, and errors
 
 ### Reasoning & Thinking Support
 - **Multi-Provider Extraction**: Supports reasoning traces from Claude, OpenAI o-series, DeepSeek, QwQ, Qwen3-Thinking
@@ -327,10 +327,16 @@ Environment variables are now managed using a `.env` file for better security an
 | `WEAVIATE_URL` | `http://weaviate:8080` | Weaviate vector database endpoint |
 | `WEAVIATE_HYBRID_ALPHA` | `0.7` | Hybrid search balance (0.0=pure vector, 1.0=pure keyword) |
 | `CAPTURE_SERVICE_URL` | `http://browser-capture:8080` | Browser capture service endpoint |
-| `ASKPDF_AGENT_CHECKPOINTER` | `postgres` | LangGraph checkpointer backend for resumable agent runs (`postgres` or `memory`) |
+| `ASKPDF_AGENT_CHECKPOINTER` | `memory` (`postgres` in Docker/CI) | LangGraph checkpointer backend for resumable agent runs (`postgres` or `memory`) |
 | `AGENT_CHECKPOINT_DATABASE_URL` | unset | Optional Postgres URL override for LangGraph checkpoints; falls back to `DATABASE_URL` |
 | `ASKPDF_AGENT_CHECKPOINTER_SETUP` | `true` | Run LangGraph Postgres checkpointer setup on startup/use |
 | `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK` | unset | Explicit opt-in to memory fallback when `ASKPDF_AGENT_CHECKPOINTER=postgres` is misconfigured |
+
+**Agent Runtime Operations**
+- Bare Python processes default to the in-memory LangGraph checkpointer for local development and unit tests. Docker and CI explicitly set `ASKPDF_AGENT_CHECKPOINTER=postgres` so paused HITL runs survive process restarts.
+- Postgres checkpointer mode fails closed when the saver package or database URL is missing. Set `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=true` only for local debugging where losing resumable checkpoints is acceptable.
+- Stale running-run cleanup and pending-interrupt expiration are separate operations. Cleanup for stale `running` rows must not mark `awaiting_human` runs failed; pending review rows should transition through interrupt expiration.
+- Checkpoint pruning should be limited to terminal run statuses (`completed`, `clarification`, `failed`, `rejected`, `expired`) and should not delete checkpoints for active `awaiting_human` runs.
 
 ### Setup Instructions
 

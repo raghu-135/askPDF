@@ -42,7 +42,7 @@ class AgentRunResumeRequest(BaseModel):
     selected_option_ids: Optional[list[str]] = None
     resume_token: Optional[str] = None
     resume_version: Optional[int] = None
-    thread_id: Optional[str] = None
+    thread_id: str = Field(..., min_length=1)
 
 
 def _template_payload(template) -> Dict[str, Any]:
@@ -276,10 +276,13 @@ async def list_thread_agent_runs(
 
 
 @router.get("/agent-runs/{run_id}")
-async def get_agent_run(run_id: str):
+async def get_agent_run(
+    run_id: str,
+    thread_id: str = Query(..., min_length=1),
+):
     repo = AgentPatternRepository()
     run = await repo.get_run(run_id)
-    if not run:
+    if not run or run.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Agent run not found")
     turns = await repo.list_chat_turns_for_run(run.id)
     return {"agent_run": _run_payload(run, turns)}

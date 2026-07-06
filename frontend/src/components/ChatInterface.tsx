@@ -52,6 +52,7 @@ import {
     getPromptTools,
     getPromptPreview,
     getAgentRun,
+    listThreadAgentRuns,
     AgentRunDetails,
     AgentTraceRefs,
     AgentRunPendingInterrupt,
@@ -288,6 +289,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (activeThread) {
             applyThreadSettingsToState(activeThread.settings);
             loadMessages();
+            recoverPendingHumanReview(activeThread.id);
             checkIndexStatus();
             loadThreadSettings();
             checkEmbedModelStatus();
@@ -415,6 +417,74 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             })));
         } catch (error) {
             console.error('Failed to load messages:', error);
+        }
+    };
+
+    const recoverPendingHumanReview = async (threadId: string) => {
+        try {
+            const response = await listThreadAgentRuns(threadId, { status: 'awaiting_human', limit: 1 });
+            if (activeThreadIdRef.current !== threadId) return;
+            const latest = response.agent_runs?.[0];
+            if (!latest?.id || !latest.pending_interrupt) {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
+
+            const run = await getAgentRun(latest.id, threadId);
+            if (activeThreadIdRef.current !== threadId) return;
+            const interrupt = run.pending_interrupt || latest.pending_interrupt;
+            if (!interrupt || interrupt.status && interrupt.status !== 'pending') {
+                setPendingHumanReview(null);
+                setHumanReviewEditText('');
+                return;
+            }
+
+            const localUserMessageId = `recovered-review-user-${run.id}`;
+            const localAssistantMessageId = `recovered-review-asst-${run.id}`;
+            setPendingHumanReview({
+                runId: run.id,
+                interrupt,
+                localUserMessageId,
+                localAssistantMessageId,
+            });
+            setHumanReviewError(null);
+            setHumanReviewEditText(interrupt.proposed_final_answer || '');
+            setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
+
+            const inputSummary = interrupt.input_summary;
+            const recoveredQuestion = typeof inputSummary === 'object' && inputSummary !== null
+                ? String(inputSummary.question || '')
+                : '';
+            setMessages(prev => {
+                if (prev.some(msg => msg.agent_run_id === run.id || msg.id === localAssistantMessageId)) {
+                    return prev;
+                }
+                const recovered: ChatMessage[] = [];
+                if (recoveredQuestion.trim()) {
+                    recovered.push({
+                        id: localUserMessageId,
+                        role: 'user',
+                        content: recoveredQuestion.trim(),
+                        created_at: run.started_at || new Date().toISOString(),
+                        agent_run_id: run.id,
+                        agent_run_turn_kind: 'user_prompt',
+                    });
+                }
+                recovered.push({
+                    id: localAssistantMessageId,
+                    role: 'assistant',
+                    content: interrupt.title || 'Human review required before the agent can continue.',
+                    created_at: interrupt.requested_at || run.started_at || new Date().toISOString(),
+                    agent_run_id: run.id,
+                    agent_run_turn_kind: 'assistant_pending_review',
+                    pending_human_review: true,
+                });
+                return [...prev, ...recovered];
+            });
+        } catch (error) {
+            if (activeThreadIdRef.current !== threadId) return;
+            console.error('Failed to recover pending human review:', error);
         }
     };
 
@@ -940,7 +1010,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 });
 
                 try {
-                    const run = await getAgentRun(response.agent_run_id);
+                    const run = await getAgentRun(response.agent_run_id, activeThread.id);
                     setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
                 } catch (error: any) {
                     setAgentRunErrors(prev => ({
@@ -1214,7 +1284,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleAgentRunToggle = async (msg: ChatMessage, event: React.SyntheticEvent<HTMLDetailsElement>) => {
         const details = event.currentTarget;
         const runId = msg.agent_run_id;
-        if (!details.open || !runId || agentRunDetails[runId] || agentRunLoading[runId]) return;
+        if (!activeThread || !details.open || !runId || agentRunDetails[runId] || agentRunLoading[runId]) return;
 
         setAgentRunLoading(prev => ({ ...prev, [runId]: true }));
         setAgentRunErrors(prev => {
@@ -1223,7 +1293,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             return next;
         });
         try {
-            const run = await getAgentRun(runId);
+            const run = await getAgentRun(runId, activeThread.id);
             setAgentRunDetails(prev => ({ ...prev, [runId]: run }));
         } catch (error: any) {
             setAgentRunErrors(prev => ({
@@ -1644,7 +1714,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         <details>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
                                                 <Tooltip
-                                                    title="To disable rewriting, turn off Intent Agent in the settings."
+                                                    title="This question was rewritten with thread context for retrieval."
                                                     arrow
                                                 >
                                                     <span>Rewritten for context</span>

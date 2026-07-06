@@ -357,6 +357,20 @@ export interface AgentRunDetails {
   [key: string]: any;
 }
 
+export interface AgentRunSummary {
+  id: string;
+  thread_id: string;
+  template_id: string;
+  template_version_id?: string;
+  status: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  pending_interrupt?: AgentRunPendingInterrupt | null;
+  metrics?: Record<string, any>;
+  error?: Record<string, any> | null;
+  [key: string]: any;
+}
+
 export async function createThread(name: string, embedModel: string): Promise<Thread> {
   const res = await fetch(`${API_BASE}/api/threads`, {
     method: "POST",
@@ -633,8 +647,21 @@ export async function deleteMessage(messageId: string): Promise<{ deleted_ids: s
   return res.json();
 }
 
-export async function getAgentRun(runId: string): Promise<AgentRunDetails> {
-  const res = await fetch(`${API_BASE}/api/agent-runs/${runId}`);
+export async function listThreadAgentRuns(
+  threadId: string,
+  options: { limit?: number; status?: string } = {}
+): Promise<{ thread_id: string; limit: number; status?: string | null; agent_runs: AgentRunSummary[] }> {
+  const params = new URLSearchParams();
+  params.set("limit", String(options.limit ?? 20));
+  if (options.status) params.set("status", options.status);
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/agent-runs?${params.toString()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getAgentRun(runId: string, threadId: string): Promise<AgentRunDetails> {
+  const params = new URLSearchParams({ thread_id: threadId });
+  const res = await fetch(`${API_BASE}/api/agent-runs/${runId}?${params.toString()}`);
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.agent_run;
