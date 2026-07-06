@@ -28,7 +28,7 @@ from app.agent_patterns.prompting import (
     build_replanner_prompt,
     build_router_prompt,
 )
-from app.agent_patterns.node_catalog import get_node_type_metadata, node_type_capabilities
+from app.agent_patterns.node_catalog import get_node_type_metadata, node_type_capabilities, node_type_default_max_visits
 from app.agent_patterns.route_registry import route_function_allowed_for_node_type
 from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES, WEB_APPROVAL_GATE_ID
 from app.agent_patterns.trace import (
@@ -104,12 +104,22 @@ def _runtime_node_capabilities(config: Optional[RunnableConfig]) -> List[str]:
     return [str(item) for item in capabilities] if isinstance(capabilities, list) else []
 
 
+def _runtime_visit_index(config: Optional[RunnableConfig]) -> Optional[int]:
+    runtime = _node_runtime(config)
+    try:
+        value = int(runtime.get("visit_index"))
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 1 else None
+
+
 def _with_node_runtime_config(
     config: Optional[RunnableConfig],
     *,
     node_id: str,
     node_type: str,
     capabilities: List[str],
+    visit_index: int,
 ) -> RunnableConfig:
     updated = dict(config or {})
     configurable = dict(updated.get("configurable") or {})
@@ -117,6 +127,7 @@ def _with_node_runtime_config(
         "node_id": node_id,
         "node_type": node_type,
         "capabilities": list(capabilities),
+        "visit_index": visit_index,
     }
     updated["configurable"] = configurable
     metadata = dict(updated.get("metadata") or {})
@@ -125,10 +136,119 @@ def _with_node_runtime_config(
             "node_id": node_id,
             "node_type": node_type,
             "node_capabilities": list(capabilities),
+            "node_visit_index": visit_index,
         }
     )
     updated["metadata"] = metadata
     return updated
+
+
+def _loop_policy(state: RouterRagState) -> Dict[str, Any]:
+    policy = state.get("loop_policy")
+    return policy if isinstance(policy, dict) else {}
+
+
+def _node_visit_counts(state: RouterRagState) -> Dict[str, int]:
+    counts = state.get("node_visit_counts")
+    if not isinstance(counts, dict):
+        return {}
+    normalized: Dict[str, int] = {}
+    for key, value in counts.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            normalized[key] = max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return normalized
+
+
+def _node_visit_sequence(state: RouterRagState) -> List[Dict[str, Any]]:
+    sequence = state.get("node_visit_sequence")
+    return [item for item in sequence if isinstance(item, dict)] if isinstance(sequence, list) else []
+
+
+def _node_visit_limit(state: RouterRagState, *, node_id: str, node_type: str) -> Optional[int]:
+    policy = _loop_policy(state)
+    if not policy:
+        return None
+    node_limits = policy.get("node_visit_limits") if isinstance(policy.get("node_visit_limits"), dict) else {}
+    if node_id in node_limits:
+        try:
+            return max(1, int(node_limits[node_id]))
+        except (TypeError, ValueError):
+            return 1
+    try:
+        default_limit = int(policy.get("default_max_node_visits", node_type_default_max_visits(node_type)))
+    except (TypeError, ValueError):
+        default_limit = node_type_default_max_visits(node_type)
+    return max(1, min(default_limit, node_type_default_max_visits(node_type)))
+
+
+def _total_visit_limit(state: RouterRagState) -> Optional[int]:
+    policy = _loop_policy(state)
+    if not policy:
+        return None
+    try:
+        value = int(policy.get("max_total_visits"))
+    except (TypeError, ValueError):
+        return None
+    return max(1, value)
+
+
+def _check_visit_budget(state: RouterRagState, *, node_id: str, node_type: str, visit_index: int) -> None:
+    limit = _node_visit_limit(state, node_id=node_id, node_type=node_type)
+    if limit is not None and visit_index > limit:
+        raise ValueError(f"Node {node_id} exceeded visit limit {limit}")
+    total_limit = _total_visit_limit(state)
+    if total_limit is not None and len(_node_visit_sequence(state)) + 1 > total_limit:
+        raise ValueError(f"Graph exceeded total visit limit {total_limit}")
+
+
+def _with_visit_accounting(
+    update: Dict[str, Any],
+    state: RouterRagState,
+    *,
+    node_id: str,
+    node_type: str,
+    visit_index: int,
+) -> Dict[str, Any]:
+    counts = _node_visit_counts(state)
+    counts[node_id] = max(counts.get(node_id, 0), visit_index)
+    sequence = [
+        *_node_visit_sequence(state),
+        {"node": node_id, "node_type": node_type, "visit_index": visit_index},
+    ]
+    return {
+        **update,
+        "node_visit_counts": counts,
+        "node_visit_sequence": sequence,
+    }
+
+
+def _hitl_interrupt_counts(state: RouterRagState) -> Dict[str, int]:
+    counts = state.get("hitl_interrupt_counts")
+    if not isinstance(counts, dict):
+        return {}
+    normalized: Dict[str, int] = {}
+    for key, value in counts.items():
+        if not isinstance(key, str):
+            continue
+        try:
+            normalized[key] = max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return normalized
+
+
+def _hitl_interrupt_limit(policy: Dict[str, Any], gate_policy: Dict[str, Any]) -> Optional[int]:
+    raw = gate_policy.get("max_interrupts_per_run", policy.get("max_interrupts_per_run"))
+    if raw in (None, ""):
+        return None
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 1
 
 
 class RouterRagState(TypedDict, total=False):
@@ -170,6 +290,11 @@ class RouterRagState(TypedDict, total=False):
     errors: List[Dict[str, Any]]
     allowed_tool_ids: List[str]
     pattern_type: str
+    loop_policy: Dict[str, Any]
+    node_visit_counts: Dict[str, int]
+    node_visit_sequence: List[Dict[str, Any]]
+    evidence_packets: List[Dict[str, Any]]
+    hitl_interrupt_counts: Dict[str, int]
     execution_plan: List[str]
     replans: int
     replan_count: int
@@ -194,6 +319,9 @@ def _append_event(
         "node_type": _runtime_node_type(config, node),
         **(data or {}),
     }
+    visit_index = _runtime_visit_index(config)
+    if visit_index is not None:
+        event["visit_index"] = visit_index
     if started is not None:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
         completed_at = utc_now()
@@ -220,6 +348,9 @@ def _append_tool_event(
     caller_node_type = event.get("caller_node_type") or _runtime_node_type(config, str(event.get("caller_node") or ""))
     if caller_node_type:
         event["caller_node_type"] = caller_node_type
+    visit_index = _runtime_visit_index(config)
+    if visit_index is not None:
+        event["caller_visit_index"] = visit_index
     telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
     if isinstance(telemetry_sink, dict):
         telemetry_sink.setdefault("tool_events", []).append(dict(event))
@@ -511,6 +642,42 @@ def _combine_evidence(existing: Any, addition: Any, *, label: str) -> str:
         return existing_text
     labeled = f"[{label}]\n{addition_text}"
     return "\n\n".join(part for part in (existing_text, labeled) if part).strip()
+
+
+EVIDENCE_PACKET_LIMIT = 12
+EVIDENCE_PACKET_CONTENT_LIMIT = 2_000
+
+
+def _evidence_packets(state: RouterRagState) -> List[Dict[str, Any]]:
+    packets = state.get("evidence_packets")
+    return [item for item in packets if isinstance(item, dict)] if isinstance(packets, list) else []
+
+
+def _append_evidence_packet(
+    state: RouterRagState,
+    config: RunnableConfig,
+    *,
+    kind: str,
+    content: Any,
+    refs: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    text = compact_preview(content, limit=EVIDENCE_PACKET_CONTENT_LIMIT)
+    if not text:
+        return _evidence_packets(state)
+    node_id = _runtime_node_id(config, kind)
+    node_type = _runtime_node_type(config, kind)
+    visit_index = _runtime_visit_index(config) or 1
+    packet = {
+        "id": f"{node_id}:visit:{visit_index}:{kind}:{len(_evidence_packets(state)) + 1}",
+        "producer_node_id": node_id,
+        "producer_node_type": node_type,
+        "visit_index": visit_index,
+        "kind": kind,
+        "content": text,
+        "refs": refs or {},
+        "created_at": iso_utc_z(utc_now()),
+    }
+    return [*_evidence_packets(state), packet][-EVIDENCE_PACKET_LIMIT:]
 
 
 def _should_skip_worker(state: RouterRagState, worker_node: str) -> bool:
@@ -867,15 +1034,26 @@ class NodeRegistry:
         node_impl = self.get(node_type)
 
         async def _bound_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+            visit_index = _node_visit_counts(state).get(node_id, 0) + 1
+            _check_visit_budget(state, node_id=node_id, node_type=node_type, visit_index=visit_index)
             runtime_config = _with_node_runtime_config(
                 config,
                 node_id=node_id,
                 node_type=node_type,
                 capabilities=capabilities,
+                visit_index=visit_index,
             )
             if node_type == "hitl_gate":
-                return await self.hitl_gate(state, runtime_config, node_id=node_id)
-            return await node_impl(state, runtime_config)
+                update = await self.hitl_gate(state, runtime_config, node_id=node_id)
+            else:
+                update = await node_impl(state, runtime_config)
+            return _with_visit_accounting(
+                update,
+                state,
+                node_id=node_id,
+                node_type=node_type,
+                visit_index=visit_index,
+            )
 
         return _bound_node
 
@@ -1096,6 +1274,13 @@ class NodeRegistry:
         document_sources = [*state.get("document_sources", []), *artifacts.get("document_sources", [])]
         web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
         evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Document evidence")
+        evidence_packets = _append_evidence_packet(
+            state,
+            config,
+            kind="document",
+            content=payload.get("content", ""),
+            refs=refs_from_artifacts(artifacts),
+        )
         data = {
             "status": "completed" if payload.get("ok", True) else "failed",
             "warnings": normalize_warnings(payload.get("warnings")),
@@ -1105,6 +1290,7 @@ class NodeRegistry:
                 "previous_evidence": compact_preview(state.get("evidence")),
             },
             "evidence_chars": len(str(evidence or "")),
+            "evidence_packet_count": len(evidence_packets),
             "document_source_count": len(document_sources),
             "web_source_count": len(web_sources),
             "output_refs": compact_refs(
@@ -1126,6 +1312,7 @@ class NodeRegistry:
             "evidence": evidence,
             "document_sources": document_sources,
             "web_sources": web_sources,
+            "evidence_packets": evidence_packets,
             "node_events": _append_event(state, "retrieval_worker", data, started=started, config=config),
             "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
         }
@@ -1154,6 +1341,13 @@ class NodeRegistry:
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
         evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Memory evidence")
+        evidence_packets = _append_evidence_packet(
+            state,
+            config,
+            kind="memory",
+            content=payload.get("content", ""),
+            refs=refs_from_artifacts(artifacts),
+        )
         used_chat_ids = [*state.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])]
         data = {
             "status": "completed" if payload.get("ok", True) else "failed",
@@ -1164,6 +1358,7 @@ class NodeRegistry:
                 "previous_evidence": compact_preview(state.get("evidence")),
             },
             "evidence_chars": len(str(evidence or "")),
+            "evidence_packet_count": len(evidence_packets),
             "used_chat_id_count": len(used_chat_ids),
             "output_refs": compact_refs(
                 {
@@ -1176,6 +1371,7 @@ class NodeRegistry:
         _log_node_end(state, "memory_worker", started, data)
         return {
             "evidence": evidence,
+            "evidence_packets": evidence_packets,
             "used_chat_ids": used_chat_ids,
             "node_events": _append_event(state, "memory_worker", data, started=started, config=config),
             "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
@@ -1205,6 +1401,13 @@ class NodeRegistry:
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
         evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Timeline evidence")
+        evidence_packets = _append_evidence_packet(
+            state,
+            config,
+            kind="timeline",
+            content=payload.get("content", ""),
+            refs=refs_from_artifacts(artifacts),
+        )
         data = {
             "status": "completed" if payload.get("ok", True) else "failed",
             "warnings": normalize_warnings(payload.get("warnings")),
@@ -1214,6 +1417,7 @@ class NodeRegistry:
                 "previous_evidence": compact_preview(state.get("evidence")),
             },
             "evidence_chars": len(str(evidence or "")),
+            "evidence_packet_count": len(evidence_packets),
             "timeline_event_count": len(artifacts.get("timeline_events", []) or []),
             "output_refs": compact_refs(
                 {
@@ -1226,6 +1430,7 @@ class NodeRegistry:
         _log_node_end(state, "timeline_worker", started, data)
         return {
             "evidence": evidence,
+            "evidence_packets": evidence_packets,
             "node_events": _append_event(state, "timeline_worker", data, started=started, config=config),
             "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
         }
@@ -1257,6 +1462,13 @@ class NodeRegistry:
         artifacts = payload.get("artifacts") or {}
         web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
         evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Web evidence")
+        evidence_packets = _append_evidence_packet(
+            state,
+            config,
+            kind="web",
+            content=payload.get("content", ""),
+            refs=refs_from_artifacts(artifacts),
+        )
         data = {
             "status": "completed" if payload.get("ok", True) else "failed",
             "warnings": normalize_warnings(payload.get("warnings")),
@@ -1266,6 +1478,7 @@ class NodeRegistry:
                 "previous_evidence": compact_preview(state.get("evidence")),
             },
             "evidence_chars": len(str(evidence or "")),
+            "evidence_packet_count": len(evidence_packets),
             "web_source_count": len(web_sources),
             "output_refs": compact_refs(
                 {
@@ -1278,6 +1491,7 @@ class NodeRegistry:
         _log_node_end(state, "web_worker", started, data)
         return {
             "evidence": evidence,
+            "evidence_packets": evidence_packets,
             "web_sources": web_sources,
             "node_events": _append_event(state, "web_worker", data, started=started, config=config),
             "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
@@ -1625,6 +1839,29 @@ class NodeRegistry:
         default_action = str(gate_policy.get("default_action") or "continue_without")
         if default_action not in allowed_actions:
             default_action = "continue_without" if "continue_without" in allowed_actions else allowed_actions[0]
+        routes_by_action = gate_policy.get("routes") if isinstance(gate_policy.get("routes"), dict) else {}
+
+        interrupt_counts = _hitl_interrupt_counts(state)
+        interrupt_limit = _hitl_interrupt_limit(policy, gate_policy)
+        if interrupt_limit is not None and interrupt_counts.get(node_id, 0) >= interrupt_limit:
+            route = "continue_without" if "continue_without" in allowed_actions or "continue_without" in routes_by_action else default_action
+            gate_routes = dict(state.get("hitl_gate_routes") or {})
+            gate_routes[node_id] = route
+            update: Dict[str, Any] = {
+                "hitl_gate_route": route,
+                "hitl_gate_routes": gate_routes,
+                "hitl_interrupt_counts": interrupt_counts,
+            }
+            if route == "continue_without":
+                update["evidence"] = _combine_evidence(
+                    state.get("evidence"),
+                    (
+                        "The configured human review interrupt limit was reached. "
+                        "Continue without additional gated actions unless already approved by available context."
+                    ),
+                    label="HITL decision",
+                )
+            return _skipped_worker_update(state, config, node_id, started, "hitl_interrupt_limit_exhausted") | update
 
         options = gate_policy.get("options") if isinstance(gate_policy.get("options"), list) else []
         option_ids = _hitl_option_ids(gate_policy)
@@ -1678,7 +1915,6 @@ class NodeRegistry:
         if action == "approve_selected" and not selected_option_ids and option_ids:
             selected_option_ids = [option_ids[0]]
 
-        routes_by_action = gate_policy.get("routes") if isinstance(gate_policy.get("routes"), dict) else {}
         if mode == "choice" and action == "approve_selected":
             route: Any = selected_option_ids[0] if selected_option_ids else "continue_without"
         elif action == "approve":
@@ -1704,6 +1940,7 @@ class NodeRegistry:
             "hitl_gate_route": route,
             "hitl_gate_routes": gate_routes,
             "hitl_selected_options": selected_options_by_gate,
+            "hitl_interrupt_counts": {**interrupt_counts, node_id: interrupt_counts.get(node_id, 0) + 1},
             "hitl_decisions": [
                 *(state.get("hitl_decisions") if isinstance(state.get("hitl_decisions"), list) else []),
                 {

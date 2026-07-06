@@ -172,8 +172,8 @@ class AgentPatternRepository:
         session = await self._get_session()
         async with session.begin():
             for template_def in builtin_templates():
-                version_def = template_def["version"]
-                validation_result = validator.validate(version_def["spec_json"])
+                current_version_def = template_def["version"]
+                version_defs = template_def.get("versions") or [current_version_def]
 
                 template = await session.get(AgentPatternTemplate, template_def["id"])
                 if template is None:
@@ -194,24 +194,26 @@ class AgentPatternRepository:
                     template.current_version_id = template_def["current_version_id"]
                     template.updated_at = utc_now()
 
-                version = await session.get(AgentPatternTemplateVersion, version_def["id"])
-                if version is None:
-                    version = AgentPatternTemplateVersion(
-                        id=version_def["id"],
-                        template_id=template_def["id"],
-                        version=version_def["version"],
-                        schema_version=version_def["schema_version"],
-                        spec_json=version_def["spec_json"],
-                        validation_result_json=validation_result,
-                        changelog=version_def["changelog"],
-                    )
-                    session.add(version)
-                else:
-                    # Built-in v1 specs are code-owned; keep seeding idempotent and corrective.
-                    version.schema_version = version_def["schema_version"]
-                    replace_jsonb_field(version, "spec_json", version_def["spec_json"])
-                    replace_jsonb_field(version, "validation_result_json", validation_result)
-                    version.changelog = version_def["changelog"]
+                for version_def in version_defs:
+                    validation_result = validator.validate(version_def["spec_json"])
+                    version = await session.get(AgentPatternTemplateVersion, version_def["id"])
+                    if version is None:
+                        version = AgentPatternTemplateVersion(
+                            id=version_def["id"],
+                            template_id=template_def["id"],
+                            version=version_def["version"],
+                            schema_version=version_def["schema_version"],
+                            spec_json=version_def["spec_json"],
+                            validation_result_json=validation_result,
+                            changelog=version_def["changelog"],
+                        )
+                        session.add(version)
+                    else:
+                        # Built-in specs are code-owned; keep seeding idempotent and corrective.
+                        version.schema_version = version_def["schema_version"]
+                        replace_jsonb_field(version, "spec_json", version_def["spec_json"])
+                        replace_jsonb_field(version, "validation_result_json", validation_result)
+                        version.changelog = version_def["changelog"]
 
     async def list_templates(self) -> list[AgentPatternTemplate]:
         session = await self._get_session()
@@ -233,10 +235,12 @@ class AgentPatternRepository:
     async def get_template_with_current_version(
         self,
         template_id: str,
+        *,
+        include_custom: bool = False,
     ) -> tuple[Optional[AgentPatternTemplate], Optional[AgentPatternTemplateVersion]]:
         session = await self._get_session()
         async with session.begin():
-            if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            if not include_custom and template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
                 return None, None
             template = await session.get(AgentPatternTemplate, template_id)
             if not template:
@@ -253,6 +257,35 @@ class AgentPatternRepository:
                 )
                 version = result.scalar_one_or_none()
             return template, version
+
+    async def get_template_version(
+        self,
+        template_id: str,
+        version: int,
+        *,
+        include_preview: bool = False,
+        include_custom: bool = False,
+    ) -> tuple[Optional[AgentPatternTemplate], Optional[AgentPatternTemplateVersion]]:
+        session = await self._get_session()
+        async with session.begin():
+            if not include_custom and template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+                return None, None
+            template = await session.get(AgentPatternTemplate, template_id)
+            if not template:
+                return None, None
+            current_version_number: Optional[int] = None
+            if template.current_version_id:
+                current = await session.get(AgentPatternTemplateVersion, template.current_version_id)
+                current_version_number = current.version if current else None
+            if current_version_number is not None and version > current_version_number and not include_preview:
+                return template, None
+            result = await session.execute(
+                select(AgentPatternTemplateVersion)
+                .where(AgentPatternTemplateVersion.template_id == template_id)
+                .where(AgentPatternTemplateVersion.version == version)
+                .limit(1)
+            )
+            return template, result.scalar_one_or_none()
 
     async def get_run(self, run_id: str) -> Optional[AgentRun]:
         session = await self._get_session()

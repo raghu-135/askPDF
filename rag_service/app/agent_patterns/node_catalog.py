@@ -13,6 +13,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": ["thread_shape"],
         "allowed_parent_types": ["START"],
         "allowed_child_types": ["router", "planner"],
+        "limits": {"default_max_visits": 1},
     },
     "router": {
         "display_name": "Router",
@@ -30,6 +31,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             "finalizer",
             "hitl_gate",
         ],
+        "limits": {"default_max_visits": 1},
     },
     "planner": {
         "display_name": "Planner",
@@ -39,6 +41,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": ["clarify_intent"],
         "allowed_parent_types": ["context_loader", "hitl_gate"],
         "allowed_child_types": ["retrieval_worker", "direct_answer", "finalizer", "hitl_gate"],
+        "limits": {"default_max_visits": 1},
     },
     "retrieval_worker": {
         "display_name": "Document Retrieval",
@@ -56,6 +59,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             "finalizer",
             "hitl_gate",
         ],
+        "limits": {"default_max_visits": 2},
     },
     "memory_worker": {
         "display_name": "Memory Retrieval",
@@ -72,6 +76,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             "finalizer",
             "hitl_gate",
         ],
+        "limits": {"default_max_visits": 2},
     },
     "timeline_worker": {
         "display_name": "Timeline Retrieval",
@@ -81,6 +86,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": ["thread_timeline"],
         "allowed_parent_types": ["router", "memory_worker", "planner", "replanner", "hitl_gate"],
         "allowed_child_types": ["web_worker", "evidence_evaluator", "synthesizer", "finalizer", "hitl_gate"],
+        "limits": {"default_max_visits": 2},
     },
     "web_worker": {
         "display_name": "Web Retrieval",
@@ -99,6 +105,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         ],
         "allowed_parent_types": ["router", "timeline_worker", "memory_worker", "planner", "replanner", "hitl_gate"],
         "allowed_child_types": ["evidence_evaluator", "synthesizer", "finalizer", "hitl_gate"],
+        "limits": {"default_max_visits": 2},
     },
     "evidence_evaluator": {
         "display_name": "Evidence Evaluator",
@@ -108,6 +115,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": ["clarify_intent"],
         "allowed_parent_types": ["retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "hitl_gate"],
         "allowed_child_types": ["synthesizer", "replanner", "hitl_gate"],
+        "limits": {"default_max_visits": 2},
     },
     "replanner": {
         "display_name": "Replanner",
@@ -117,6 +125,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": ["clarify_intent"],
         "allowed_parent_types": ["evidence_evaluator", "hitl_gate"],
         "allowed_child_types": ["retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "hitl_gate"],
+        "limits": {"default_max_visits": 1},
     },
     "direct_answer": {
         "display_name": "Direct Answer",
@@ -126,6 +135,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": [],
         "allowed_parent_types": ["router", "planner", "hitl_gate"],
         "allowed_child_types": ["finalizer", "hitl_gate"],
+        "limits": {"default_max_visits": 1},
     },
     "synthesizer": {
         "display_name": "Synthesizer",
@@ -142,6 +152,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             "hitl_gate",
         ],
         "allowed_child_types": ["finalizer", "hitl_gate"],
+        "limits": {"default_max_visits": 1},
     },
     "finalizer": {
         "display_name": "Finalizer",
@@ -161,6 +172,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             "hitl_gate",
         ],
         "allowed_child_types": ["END"],
+        "limits": {"default_max_visits": 1},
     },
     "hitl_gate": {
         "display_name": "HITL Gate",
@@ -170,6 +182,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": [],
         "allowed_parent_types": ["router", "planner", "retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "evidence_evaluator", "replanner", "direct_answer", "synthesizer", "finalizer"],
         "allowed_child_types": ["router", "planner", "retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "evidence_evaluator", "replanner", "direct_answer", "synthesizer", "finalizer", "END"],
+        "limits": {"default_max_visits": 1},
     },
 }
 
@@ -194,3 +207,12 @@ def node_type_capabilities(node_type: str) -> list[str]:
 def node_type_allowed_tool_contract_ids(node_type: str) -> set[str]:
     metadata = NODE_CATALOG.get(node_type) or {}
     return {str(item) for item in metadata.get("allowed_tool_contract_ids") or [] if item}
+
+
+def node_type_default_max_visits(node_type: str) -> int:
+    metadata = NODE_CATALOG.get(node_type) or {}
+    limits = metadata.get("limits") if isinstance(metadata.get("limits"), dict) else {}
+    try:
+        return max(1, int(limits.get("default_max_visits", 1)))
+    except (TypeError, ValueError):
+        return 1

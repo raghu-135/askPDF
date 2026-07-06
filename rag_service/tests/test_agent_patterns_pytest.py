@@ -27,17 +27,23 @@ from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
     EVALUATOR_REPLANNER_RAG_AGENT_ID,
     EVALUATOR_REPLANNER_RAG_AGENT_VERSION,
+    EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION,
     PLAN_EXECUTE_RAG_AGENT_ID,
     PLAN_EXECUTE_RAG_AGENT_VERSION,
+    PLAN_EXECUTE_RAG_AGENT_V2_VERSION,
     ROUTER_RAG_AGENT_ID,
     ROUTER_RAG_AGENT_VERSION,
+    ROUTER_RAG_AGENT_V2_VERSION,
     builtin_evaluator_replanner_rag_spec,
+    builtin_evaluator_replanner_rag_v2_spec,
     builtin_plan_execute_rag_spec,
+    builtin_plan_execute_rag_v2_spec,
     builtin_router_rag_hitl_web_spec,
     builtin_router_rag_spec,
+    builtin_router_rag_v2_spec,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
-from app.db.models_sqlmodel import AgentRun, ChatTurn, Thread
+from app.db.models_sqlmodel import AgentPatternTemplate, AgentPatternTemplateVersion, AgentRun, ChatTurn, Thread
 from app.models.llm_server_client import REPLANS_LIMIT
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z, utc_now
@@ -1055,6 +1061,167 @@ class TestRouterRagGraphToolConsumers:
         with pytest.raises(TemplateValidationError, match="not supported by any node"):
             TemplateValidator().validate(spec)
 
+    def test_v2_custom_graph_rejects_unbounded_cycles(self):
+        spec = {
+            "schema_version": 2,
+            "pattern_type": "custom_rag_agent",
+            "config": {
+                "allowed_tool_ids": ["document_evidence", "clarify_intent"],
+                "graph": {
+                    "nodes": [
+                        {"id": "context_1", "type": "context_loader"},
+                        {"id": "planner_1", "type": "planner"},
+                        {"id": "retrieval_1", "type": "retrieval_worker"},
+                        {"id": "evaluator_1", "type": "evidence_evaluator"},
+                        {"id": "replanner_1", "type": "replanner"},
+                        {"id": "synth_1", "type": "synthesizer"},
+                        {"id": "final_1", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_1"},
+                        {"from": "context_1", "to": "planner_1"},
+                        {
+                            "from": "planner_1",
+                            "conditional": True,
+                            "route_fn": "planner_route",
+                            "routes": {"execute": "retrieval_1", "direct": "final_1", "clarify": "final_1"},
+                        },
+                        {"from": "retrieval_1", "to": "evaluator_1"},
+                        {
+                            "from": "evaluator_1",
+                            "conditional": True,
+                            "route_fn": "evaluator_route",
+                            "routes": {"answer": "synth_1", "replan": "replanner_1", "answer_budget_exhausted": "synth_1"},
+                        },
+                        {"from": "replanner_1", "to": "retrieval_1"},
+                        {"from": "synth_1", "to": "final_1"},
+                        {"from": "final_1", "to": "END"},
+                    ],
+                },
+            },
+        }
+
+        with pytest.raises(TemplateValidationError, match="requires loop_policy"):
+            TemplateValidator().validate(spec)
+
+    def test_v2_custom_graph_accepts_bounded_cycles(self):
+        spec = {
+            "schema_version": 2,
+            "pattern_type": "custom_rag_agent",
+            "config": {
+                "allowed_tool_ids": ["document_evidence", "clarify_intent"],
+                "loop_policy": {
+                    "max_total_visits": 9,
+                    "default_max_node_visits": 1,
+                    "node_visit_limits": {
+                        "retrieval_1": 2,
+                        "evaluator_1": 2,
+                    },
+                },
+                "graph": {
+                    "nodes": [
+                        {"id": "context_1", "type": "context_loader"},
+                        {"id": "planner_1", "type": "planner"},
+                        {"id": "retrieval_1", "type": "retrieval_worker"},
+                        {"id": "evaluator_1", "type": "evidence_evaluator"},
+                        {"id": "replanner_1", "type": "replanner"},
+                        {"id": "synth_1", "type": "synthesizer"},
+                        {"id": "final_1", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_1"},
+                        {"from": "context_1", "to": "planner_1"},
+                        {
+                            "from": "planner_1",
+                            "conditional": True,
+                            "route_fn": "planner_route",
+                            "routes": {"execute": "retrieval_1", "direct": "final_1", "clarify": "final_1"},
+                        },
+                        {"from": "retrieval_1", "to": "evaluator_1"},
+                        {
+                            "from": "evaluator_1",
+                            "conditional": True,
+                            "route_fn": "evaluator_route",
+                            "routes": {"answer": "synth_1", "replan": "replanner_1", "answer_budget_exhausted": "synth_1"},
+                        },
+                        {"from": "replanner_1", "to": "retrieval_1"},
+                        {"from": "synth_1", "to": "final_1"},
+                        {"from": "final_1", "to": "END"},
+                    ],
+                },
+            },
+        }
+
+        assert TemplateValidator().validate(spec)["valid"] is True
+        assert TemplateCompiler().compile(spec) is not None
+
+    @pytest.mark.asyncio
+    async def test_bound_node_spec_enforces_visit_limits(self, monkeypatch):
+        class FakeTool:
+            async def ainvoke(self, _args, config=None):
+                return {"content": "Document evidence."}
+
+        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool())
+        bound = NodeRegistry().get_for_spec({"id": "retrieval_1", "type": "retrieval_worker"})
+        with pytest.raises(ValueError, match="exceeded visit limit 1"):
+            await bound(
+                {
+                    "agent_run_id": "run-1",
+                    "thread_id": "thread-1",
+                    "question": "What does the document say?",
+                    "route": "document",
+                    "document_sources": [],
+                    "web_sources": [],
+                    "used_chat_ids": [],
+                    "node_events": [],
+                    "tool_events": [],
+                    "allowed_tool_ids": ["document_evidence"],
+                    "loop_policy": {
+                        "max_total_visits": 4,
+                        "default_max_node_visits": 1,
+                        "node_visit_limits": {"retrieval_1": 1},
+                    },
+                    "node_visit_counts": {"retrieval_1": 1},
+                    "node_visit_sequence": [{"node": "retrieval_1", "node_type": "retrieval_worker", "visit_index": 1}],
+                },
+                {"configurable": {"thread_id": "thread-1"}},
+            )
+
+    @pytest.mark.asyncio
+    async def test_hitl_gate_respects_interrupt_limit_without_interrupting(self):
+        bound = NodeRegistry().get_for_spec({"id": "approval_1", "type": "hitl_gate"})
+        update = await bound(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "Should web run?",
+                "route": "web",
+                "node_events": [],
+                "tool_events": [],
+                "hitl_interrupt_counts": {"approval_1": 1},
+                "hitl_policy": {
+                    "enabled": True,
+                    "gates": {
+                        "approval_1": {
+                            "enabled": True,
+                            "mode": "approval",
+                            "target": {"node_id": "web_worker", "node_type": "web_worker"},
+                            "allowed_actions": ["approve", "continue_without"],
+                            "default_action": "continue_without",
+                            "max_interrupts_per_run": 1,
+                            "routes": {"approve": "web_worker", "continue_without": "synthesizer"},
+                        }
+                    },
+                },
+            },
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        assert update["hitl_gate_route"] == "continue_without"
+        assert update["hitl_gate_routes"]["approval_1"] == "continue_without"
+        assert update["hitl_interrupt_counts"]["approval_1"] == 1
+        assert update["node_events"][-1]["skip_reason"] == "hitl_interrupt_limit_exhausted"
+
     @pytest.mark.asyncio
     async def test_bound_node_spec_emits_instance_id_and_node_type(self, monkeypatch):
         class FakeTool:
@@ -1084,8 +1251,13 @@ class TestRouterRagGraphToolConsumers:
 
         assert update["node_events"][-1]["node"] == "retrieval_1"
         assert update["node_events"][-1]["node_type"] == "retrieval_worker"
+        assert update["node_events"][-1]["visit_index"] == 1
+        assert update["node_visit_counts"]["retrieval_1"] == 1
         assert update["tool_events"][0]["caller_node"] == "retrieval_1"
         assert update["tool_events"][0]["caller_node_type"] == "retrieval_worker"
+        assert update["tool_events"][0]["caller_visit_index"] == 1
+        assert update["evidence_packets"][0]["producer_node_id"] == "retrieval_1"
+        assert update["evidence_packets"][0]["producer_node_type"] == "retrieval_worker"
 
     @pytest.mark.asyncio
     async def test_workers_consume_tool_artifacts_without_legacy_fields(self, monkeypatch):
@@ -1386,6 +1558,71 @@ class TestAgentPatternRepository:
         assert evaluator_template.current_version_id == evaluator_version.id
         assert evaluator_version.version == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
         assert evaluator_version.validation_result_json == {"valid": True, "errors": []}
+
+    @pytest.mark.asyncio
+    async def test_seed_builtin_v2_preview_versions_validate_and_compile(self, repo):
+        await repo.seed_builtin_templates()
+
+        preview_specs = [
+            (ROUTER_RAG_AGENT_ID, ROUTER_RAG_AGENT_V2_VERSION, builtin_router_rag_v2_spec),
+            (PLAN_EXECUTE_RAG_AGENT_ID, PLAN_EXECUTE_RAG_AGENT_V2_VERSION, builtin_plan_execute_rag_v2_spec),
+            (
+                EVALUATOR_REPLANNER_RAG_AGENT_ID,
+                EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION,
+                builtin_evaluator_replanner_rag_v2_spec,
+            ),
+        ]
+        for template_id, version_number, spec_factory in preview_specs:
+            template, preview_version = await repo.get_template_version(
+                template_id,
+                version_number,
+                include_preview=True,
+            )
+
+            assert template.id == template_id
+            assert preview_version.version == version_number
+            assert preview_version.schema_version == 2
+            assert preview_version.spec_json == spec_factory()
+            assert preview_version.validation_result_json == {"valid": True, "errors": []}
+            TemplateCompiler().compile(preview_version.spec_json)
+
+        _, hidden_preview = await repo.get_template_version(ROUTER_RAG_AGENT_ID, ROUTER_RAG_AGENT_V2_VERSION)
+        assert hidden_preview is None
+
+    @pytest.mark.asyncio
+    async def test_db_loaded_invalid_v2_spec_fails_validation(self, repo):
+        bad_spec = builtin_router_rag_v2_spec()
+        bad_spec["config"]["graph"]["nodes"].append({"id": "unsafe_1", "type": "unsafe_type"})
+        bad_spec["config"]["graph"]["edges"].append({"from": "router", "to": "unsafe_1"})
+
+        async with repo._session.begin():
+            repo._session.add(
+                AgentPatternTemplate(
+                    id="internal_bad_agent",
+                    name="Internal Bad Agent",
+                    description="Invalid internal test agent.",
+                    visibility="internal",
+                    is_builtin=False,
+                    current_version_id="internal_bad_agent:v1",
+                )
+            )
+            repo._session.add(
+                AgentPatternTemplateVersion(
+                    id="internal_bad_agent:v1",
+                    template_id="internal_bad_agent",
+                    version=1,
+                    schema_version=2,
+                    spec_json=bad_spec,
+                    validation_result_json={},
+                    changelog="Invalid test spec.",
+                )
+            )
+
+        template, version = await repo.get_template_with_current_version("internal_bad_agent", include_custom=True)
+
+        assert template.id == "internal_bad_agent"
+        with pytest.raises(TemplateValidationError, match="unknown type"):
+            TemplateValidator().validate(version.spec_json)
 
     @pytest.mark.asyncio
     async def test_run_lifecycle_persists_resolved_spec(self, repo, sample_thread):
@@ -2285,6 +2522,77 @@ class TestAgentRunService:
         assert run.debug_trace_json["version"] == 1
         assert run.debug_trace_json["trace"]["run_id"] == run.id
         assert "graph" not in run.debug_trace_json
+
+    @pytest.mark.asyncio
+    async def test_run_thread_chat_can_load_v2_preview_version_when_opted_in(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        captured_spec = {}
+
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+
+            async def fake_get_thread_settings(_thread_id):
+                return {
+                    "agent_pattern": {
+                        "template_id": ROUTER_RAG_AGENT_ID,
+                        "template_version": ROUTER_RAG_AGENT_V2_VERSION,
+                    }
+                }
+
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+                captured_spec.update(resolved_spec)
+                return {
+                    "answer": "router v2 ok",
+                    "document_sources": [],
+                    "web_sources": [],
+                    "used_chat_ids": [],
+                    "clarification_options": None,
+                    "route": "direct",
+                    "node_events": [],
+                    **agent_run_context,
+                }
+
+            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+
+            req = SimpleNamespace(
+                question="What is this about?",
+                llm_model="test-llm",
+                use_web_search=False,
+                use_reranker=True,
+                replans=1,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+            )
+            result = await AgentRunService(
+                repository=repo,
+                allow_preview_agent_patterns=True,
+            ).run_thread_chat(
+                sample_thread.id,
+                req,
+                sample_thread.embed_model,
+            )
+
+            run = await repo.get_run(result["agent_run_id"])
+
+        router_edge = next(
+            edge
+            for edge in captured_spec["config"]["graph"]["edges"]
+            if edge.get("from") == "router" and edge.get("conditional")
+        )
+        assert result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
+        assert result["agent_pattern_version"] == ROUTER_RAG_AGENT_V2_VERSION
+        assert run.template_version_id == f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_V2_VERSION}"
+        assert run.resolved_spec_json["schema_version"] == 2
+        assert router_edge["route_fn"] == "router_route"
+        assert captured_spec["config"]["loop_policy"]["max_total_visits"] == 9
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_plan_execute_rag_when_selected(self, engine, sample_thread, monkeypatch):

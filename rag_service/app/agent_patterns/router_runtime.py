@@ -347,6 +347,7 @@ async def _handle_compiled_rag_chat(
     allowed_tool_ids = pattern_config.get("allowed_tool_ids")
     allowed_tool_ids = allowed_tool_ids if isinstance(allowed_tool_ids, list) else []
     hitl_policy = pattern_config.get("hitl_policy") if isinstance(pattern_config.get("hitl_policy"), dict) else {}
+    loop_policy = pattern_config.get("loop_policy") if isinstance(pattern_config.get("loop_policy"), dict) else {}
     try:
         replans = max(1, int(pattern_config.get("replans", 1)))
     except (TypeError, ValueError):
@@ -384,6 +385,11 @@ async def _handle_compiled_rag_chat(
         "custom_instructions": custom_instructions,
         "allowed_tool_ids": allowed_tool_ids,
         "hitl_policy": hitl_policy,
+        "loop_policy": loop_policy,
+        "node_visit_counts": {},
+        "node_visit_sequence": [],
+        "evidence_packets": [],
+        "hitl_interrupt_counts": {},
         "replans": replans,
         "replan_count": 0,
         "replan_history": [],

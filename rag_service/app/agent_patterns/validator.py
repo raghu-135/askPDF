@@ -79,6 +79,7 @@ HITL_GATE_KEYS = {
     "editable_fields",
     "requires_reason",
     "reject_behavior",
+    "max_interrupts_per_run",
 }
 
 
@@ -220,11 +221,18 @@ class TemplateValidator:
         errors: list[str] = []
         if not isinstance(hitl_policy, dict):
             return ["hitl_policy must be an object"]
-        unknown_policy_keys = sorted(set(hitl_policy) - {"enabled", "gates"})
+        unknown_policy_keys = sorted(set(hitl_policy) - {"enabled", "gates", "max_interrupts_per_run"})
         if unknown_policy_keys:
-            errors.append(f"hitl_policy only supports keys: enabled, gates; unknown: {', '.join(unknown_policy_keys)}")
+            errors.append(f"hitl_policy only supports keys: enabled, gates, max_interrupts_per_run; unknown: {', '.join(unknown_policy_keys)}")
         if "enabled" in hitl_policy and not isinstance(hitl_policy["enabled"], bool):
             errors.append("hitl_policy.enabled must be a boolean")
+        if "max_interrupts_per_run" in hitl_policy:
+            try:
+                max_interrupts = int(hitl_policy.get("max_interrupts_per_run"))
+            except (TypeError, ValueError):
+                max_interrupts = 0
+            if max_interrupts < 1:
+                errors.append("hitl_policy.max_interrupts_per_run must be a positive integer")
         gates = hitl_policy.get("gates", {})
         if not isinstance(gates, dict):
             errors.append("hitl_policy.gates must be an object")
@@ -281,6 +289,13 @@ class TemplateValidator:
             for key in ("title", "prompt", "body", "default_action", "interrupt_type", "type", "selection_mode", "reject_behavior"):
                 if key in gate and not isinstance(gate[key], str):
                     errors.append(f"hitl_policy.gates.{gate_id}.{key} must be a string")
+            if "max_interrupts_per_run" in gate:
+                try:
+                    max_interrupts = int(gate.get("max_interrupts_per_run"))
+                except (TypeError, ValueError):
+                    max_interrupts = 0
+                if max_interrupts < 1:
+                    errors.append(f"hitl_policy.gates.{gate_id}.max_interrupts_per_run must be a positive integer")
             if "selection_mode" in gate and isinstance(gate.get("selection_mode"), str) and gate["selection_mode"] not in HITL_SELECTION_MODES:
                 errors.append(f"hitl_policy.gates.{gate_id}.selection_mode is unsupported")
 
@@ -770,6 +785,7 @@ class GenericGraphValidator:
             adjacency.setdefault(source, set()).add(target)
             errors.extend(self._collect_edge_compatibility_errors(source, target, node_types_by_id, node_catalog))
 
+        errors.extend(self._collect_loop_policy_errors(config.get("loop_policy"), adjacency, node_ids, node_types_by_id, node_catalog))
         errors.extend(self._collect_reachability_errors(adjacency, node_ids))
         return errors
 
@@ -790,6 +806,102 @@ class GenericGraphValidator:
         if target_type not in allowed_children:
             return [f"node {source} type {source_type} cannot connect to {target} type {target_type}"]
         return []
+
+    def _collect_loop_policy_errors(
+        self,
+        loop_policy: Any,
+        adjacency: dict[str, set[str]],
+        node_ids: set[str],
+        node_types_by_id: dict[str, str],
+        node_catalog: Dict[str, Dict[str, Any]],
+    ) -> list[str]:
+        errors: list[str] = []
+        has_cycle = self._graph_has_cycle(adjacency, node_ids)
+        if not has_cycle and loop_policy in (None, {}):
+            return errors
+        if not isinstance(loop_policy, dict):
+            return ["graph contains cycles and requires loop_policy"]
+
+        unknown_keys = sorted(set(loop_policy) - {"max_total_visits", "default_max_node_visits", "node_visit_limits"})
+        if unknown_keys:
+            errors.append(f"loop_policy has unknown keys: {', '.join(unknown_keys)}")
+
+        max_total_visits = loop_policy.get("max_total_visits")
+        try:
+            max_total_visits_value = int(max_total_visits)
+        except (TypeError, ValueError):
+            max_total_visits_value = 0
+        if max_total_visits_value < max(1, len(node_ids)):
+            errors.append("loop_policy.max_total_visits must be an integer at least the number of graph nodes")
+
+        default_max = loop_policy.get("default_max_node_visits", 1)
+        try:
+            default_max_value = int(default_max)
+        except (TypeError, ValueError):
+            default_max_value = 0
+        if default_max_value < 1:
+            errors.append("loop_policy.default_max_node_visits must be a positive integer")
+
+        node_visit_limits = loop_policy.get("node_visit_limits", {})
+        if not isinstance(node_visit_limits, dict):
+            errors.append("loop_policy.node_visit_limits must be an object")
+            return errors
+
+        for node_id, raw_limit in node_visit_limits.items():
+            if not isinstance(node_id, str) or node_id not in node_ids:
+                errors.append(f"loop_policy.node_visit_limits has unknown node: {node_id}")
+                continue
+            try:
+                limit = int(raw_limit)
+            except (TypeError, ValueError):
+                limit = 0
+            if limit < 1:
+                errors.append(f"loop_policy.node_visit_limits.{node_id} must be a positive integer")
+                continue
+            node_type = node_types_by_id.get(node_id)
+            metadata = node_catalog.get(node_type or "") or {}
+            limits = metadata.get("limits") if isinstance(metadata.get("limits"), dict) else {}
+            try:
+                catalog_default = int(limits.get("default_max_visits", default_max_value))
+            except (TypeError, ValueError):
+                catalog_default = default_max_value
+            if limit > max(default_max_value, catalog_default):
+                errors.append(
+                    f"loop_policy.node_visit_limits.{node_id} exceeds allowed max for node type {node_type}"
+                )
+
+        if has_cycle and max_total_visits_value > 0 and default_max_value > 0:
+            effective_total = 0
+            for node_id in node_ids:
+                raw_limit = node_visit_limits.get(node_id, default_max_value)
+                try:
+                    effective_total += max(1, int(raw_limit))
+                except (TypeError, ValueError):
+                    effective_total += default_max_value
+            if max_total_visits_value > effective_total:
+                errors.append("loop_policy.max_total_visits cannot exceed the sum of per-node visit limits")
+        return errors
+
+    def _graph_has_cycle(self, adjacency: dict[str, set[str]], node_ids: set[str]) -> bool:
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(node: str) -> bool:
+            if node in {"START", "END"}:
+                return False
+            if node in visiting:
+                return True
+            if node in visited:
+                return False
+            visiting.add(node)
+            for target in adjacency.get(node) or set():
+                if target in node_ids and visit(target):
+                    return True
+            visiting.remove(node)
+            visited.add(node)
+            return False
+
+        return any(visit(node_id) for node_id in sorted(node_ids))
 
     def _collect_reachability_errors(self, adjacency: dict[str, set[str]], node_ids: set[str]) -> list[str]:
         errors: list[str] = []

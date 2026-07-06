@@ -7,13 +7,21 @@ from typing import Any, Dict
 ROUTER_RAG_AGENT_ID = "router_rag_agent"
 ROUTER_RAG_AGENT_VERSION = 1
 ROUTER_RAG_AGENT_VERSION_ID = f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_VERSION}"
+ROUTER_RAG_AGENT_V2_VERSION = 2
+ROUTER_RAG_AGENT_V2_VERSION_ID = f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_V2_VERSION}"
 PLAN_EXECUTE_RAG_AGENT_ID = "plan_execute_rag_agent"
 PLAN_EXECUTE_RAG_AGENT_VERSION = 1
 PLAN_EXECUTE_RAG_AGENT_VERSION_ID = f"{PLAN_EXECUTE_RAG_AGENT_ID}:v{PLAN_EXECUTE_RAG_AGENT_VERSION}"
+PLAN_EXECUTE_RAG_AGENT_V2_VERSION = 2
+PLAN_EXECUTE_RAG_AGENT_V2_VERSION_ID = f"{PLAN_EXECUTE_RAG_AGENT_ID}:v{PLAN_EXECUTE_RAG_AGENT_V2_VERSION}"
 EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
 EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 1
 EVALUATOR_REPLANNER_RAG_AGENT_VERSION_ID = (
     f"{EVALUATOR_REPLANNER_RAG_AGENT_ID}:v{EVALUATOR_REPLANNER_RAG_AGENT_VERSION}"
+)
+EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION = 2
+EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION_ID = (
+    f"{EVALUATOR_REPLANNER_RAG_AGENT_ID}:v{EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION}"
 )
 SUPPORTED_BUILTIN_TEMPLATE_IDS = {
     ROUTER_RAG_AGENT_ID,
@@ -316,6 +324,62 @@ def builtin_evaluator_replanner_rag_spec() -> Dict[str, Any]:
     return deepcopy(BUILTIN_EVALUATOR_REPLANNER_RAG_SPEC)
 
 
+def _with_v2_contract(spec: Dict[str, Any], *, max_total_visits: int) -> Dict[str, Any]:
+    v2 = deepcopy(spec)
+    v2["schema_version"] = 2
+    config = v2.setdefault("config", {})
+    config.setdefault(
+        "context_policy",
+        {
+            "evidence_packet_limit": 12,
+            "evidence_packet_content_limit": 2000,
+            "final_prompt_assembly": "legacy_evidence",
+        },
+    )
+    graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
+    node_types = {
+        str(node.get("id")): str(node.get("type"))
+        for node in graph.get("nodes", [])
+        if isinstance(node, dict) and node.get("id") and node.get("type")
+    }
+    repeatable_node_ids = {
+        node_id
+        for node_id, node_type in node_types.items()
+        if node_type in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "evidence_evaluator"}
+    }
+    config["loop_policy"] = {
+        "max_total_visits": max_total_visits,
+        "default_max_node_visits": 1,
+        "node_visit_limits": {node_id: 2 for node_id in sorted(repeatable_node_ids)},
+    }
+    route_by_type = {
+        "router": "router_route",
+        "planner": "planner_route",
+        "evidence_evaluator": "evaluator_route",
+        "hitl_gate": "hitl_gate_route",
+    }
+    for edge in graph.get("edges", []):
+        if not isinstance(edge, dict) or not edge.get("conditional"):
+            continue
+        source = str(edge.get("from"))
+        route_fn = route_by_type.get(node_types.get(source, source))
+        if route_fn:
+            edge["route_fn"] = route_fn
+    return v2
+
+
+def builtin_router_rag_v2_spec() -> Dict[str, Any]:
+    return _with_v2_contract(BUILTIN_ROUTER_RAG_SPEC, max_total_visits=9)
+
+
+def builtin_plan_execute_rag_v2_spec() -> Dict[str, Any]:
+    return _with_v2_contract(BUILTIN_PLAN_EXECUTE_RAG_SPEC, max_total_visits=9)
+
+
+def builtin_evaluator_replanner_rag_v2_spec() -> Dict[str, Any]:
+    return _with_v2_contract(BUILTIN_EVALUATOR_REPLANNER_RAG_SPEC, max_total_visits=16)
+
+
 def builtin_templates() -> list[Dict[str, Any]]:
     return [
         {
@@ -332,6 +396,23 @@ def builtin_templates() -> list[Dict[str, Any]]:
                 "spec_json": builtin_router_rag_spec(),
                 "changelog": "Initial compiled Router RAG Agent pattern.",
             },
+            "versions": [
+                {
+                    "id": ROUTER_RAG_AGENT_VERSION_ID,
+                    "version": ROUTER_RAG_AGENT_VERSION,
+                    "schema_version": 1,
+                    "spec_json": builtin_router_rag_spec(),
+                    "changelog": "Initial compiled Router RAG Agent pattern.",
+                },
+                {
+                    "id": ROUTER_RAG_AGENT_V2_VERSION_ID,
+                    "version": ROUTER_RAG_AGENT_V2_VERSION,
+                    "schema_version": 2,
+                    "spec_json": builtin_router_rag_v2_spec(),
+                    "changelog": "Catalog-backed v2 preview for DB-loaded graph execution.",
+                    "preview": True,
+                },
+            ],
         },
         {
             "id": PLAN_EXECUTE_RAG_AGENT_ID,
@@ -347,6 +428,23 @@ def builtin_templates() -> list[Dict[str, Any]]:
                 "spec_json": builtin_plan_execute_rag_spec(),
                 "changelog": "Initial scoped Plan-and-Execute RAG Agent pattern.",
             },
+            "versions": [
+                {
+                    "id": PLAN_EXECUTE_RAG_AGENT_VERSION_ID,
+                    "version": PLAN_EXECUTE_RAG_AGENT_VERSION,
+                    "schema_version": 1,
+                    "spec_json": builtin_plan_execute_rag_spec(),
+                    "changelog": "Initial scoped Plan-and-Execute RAG Agent pattern.",
+                },
+                {
+                    "id": PLAN_EXECUTE_RAG_AGENT_V2_VERSION_ID,
+                    "version": PLAN_EXECUTE_RAG_AGENT_V2_VERSION,
+                    "schema_version": 2,
+                    "spec_json": builtin_plan_execute_rag_v2_spec(),
+                    "changelog": "Catalog-backed v2 preview for DB-loaded graph execution.",
+                    "preview": True,
+                },
+            ],
         },
         {
             "id": EVALUATOR_REPLANNER_RAG_AGENT_ID,
@@ -362,5 +460,22 @@ def builtin_templates() -> list[Dict[str, Any]]:
                 "spec_json": builtin_evaluator_replanner_rag_spec(),
                 "changelog": "Initial bounded Evaluator/Replanner RAG Agent pattern.",
             },
+            "versions": [
+                {
+                    "id": EVALUATOR_REPLANNER_RAG_AGENT_VERSION_ID,
+                    "version": EVALUATOR_REPLANNER_RAG_AGENT_VERSION,
+                    "schema_version": 1,
+                    "spec_json": builtin_evaluator_replanner_rag_spec(),
+                    "changelog": "Initial bounded Evaluator/Replanner RAG Agent pattern.",
+                },
+                {
+                    "id": EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION_ID,
+                    "version": EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION,
+                    "schema_version": 2,
+                    "spec_json": builtin_evaluator_replanner_rag_v2_spec(),
+                    "changelog": "Catalog-backed v2 preview for DB-loaded graph execution.",
+                    "preview": True,
+                },
+            ],
         },
     ]
