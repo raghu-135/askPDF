@@ -13,6 +13,7 @@ from app.agent_patterns.templates import (
     ROUTER_RAG_AGENT_ID,
     ROUTER_RAG_REQUIRED_TOOL_IDS,
     SUPPORTED_BUILTIN_TEMPLATE_IDS,
+    WEB_APPROVAL_GATE_ID,
 )
 from app.models.llm_server_client import (
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -118,6 +119,8 @@ class TemplateValidator:
         elif "enabled" in prefetch_policy and not isinstance(prefetch_policy["enabled"], bool):
             errors.append("prefetch_policy.enabled must be a boolean")
 
+        errors.extend(self._collect_hitl_policy_errors(config.get("hitl_policy", {})))
+
         if pattern_type == ROUTER_RAG_AGENT_ID:
             errors.extend(self._collect_router_graph_errors(config.get("graph")))
         elif pattern_type == PLAN_EXECUTE_RAG_AGENT_ID:
@@ -165,6 +168,56 @@ class TemplateValidator:
                 )
         return errors
 
+    def _collect_hitl_policy_errors(self, hitl_policy: Any) -> list[str]:
+        errors: list[str] = []
+        if not isinstance(hitl_policy, dict):
+            return ["hitl_policy must be an object"]
+        unknown_policy_keys = sorted(set(hitl_policy) - {"enabled", "gates"})
+        if unknown_policy_keys:
+            errors.append(f"hitl_policy only supports keys: enabled, gates; unknown: {', '.join(unknown_policy_keys)}")
+        if "enabled" in hitl_policy and not isinstance(hitl_policy["enabled"], bool):
+            errors.append("hitl_policy.enabled must be a boolean")
+        gates = hitl_policy.get("gates", {})
+        if not isinstance(gates, dict):
+            errors.append("hitl_policy.gates must be an object")
+            return errors
+        unknown_gates = sorted(set(gates) - {WEB_APPROVAL_GATE_ID})
+        if unknown_gates:
+            errors.append(f"hitl_policy.gates only supports {WEB_APPROVAL_GATE_ID}; unknown: {', '.join(unknown_gates)}")
+        gate = gates.get(WEB_APPROVAL_GATE_ID)
+        if gate is None:
+            return errors
+        if not isinstance(gate, dict):
+            errors.append(f"hitl_policy.gates.{WEB_APPROVAL_GATE_ID} must be an object")
+            return errors
+        unknown_gate_keys = sorted(set(gate) - {"enabled", "title", "prompt", "body", "allowed_actions", "default_action"})
+        if unknown_gate_keys:
+            errors.append(
+                f"hitl_policy.gates.{WEB_APPROVAL_GATE_ID} has unknown keys: {', '.join(unknown_gate_keys)}"
+            )
+        if "enabled" in gate and not isinstance(gate["enabled"], bool):
+            errors.append(f"hitl_policy.gates.{WEB_APPROVAL_GATE_ID}.enabled must be a boolean")
+        for key in ("title", "prompt", "body", "default_action"):
+            if key in gate and not isinstance(gate[key], str):
+                errors.append(f"hitl_policy.gates.{WEB_APPROVAL_GATE_ID}.{key} must be a string")
+        allowed_actions = gate.get("allowed_actions", [])
+        if not isinstance(allowed_actions, list) or not all(isinstance(action, str) for action in allowed_actions):
+            errors.append(f"hitl_policy.gates.{WEB_APPROVAL_GATE_ID}.allowed_actions must be a list of strings")
+        else:
+            unsupported = sorted(set(allowed_actions) - {"approve", "continue_without"})
+            if unsupported:
+                errors.append(
+                    f"hitl_policy.gates.{WEB_APPROVAL_GATE_ID}.allowed_actions unsupported: {', '.join(unsupported)}"
+                )
+            if "approve" not in allowed_actions or "continue_without" not in allowed_actions:
+                errors.append(
+                    f"hitl_policy.gates.{WEB_APPROVAL_GATE_ID}.allowed_actions must include approve and continue_without"
+                )
+        default_action = gate.get("default_action", "continue_without")
+        if isinstance(default_action, str) and default_action not in {"approve", "continue_without"}:
+            errors.append(f"hitl_policy.gates.{WEB_APPROVAL_GATE_ID}.default_action is unsupported")
+        return errors
+
     def _collect_router_graph_errors(self, graph: Any) -> list[str]:
         errors: list[str] = []
         if not isinstance(graph, dict):
@@ -195,6 +248,54 @@ class TemplateValidator:
             node_type = node.get("type")
             if isinstance(node_id, str) and isinstance(node_type, str):
                 actual_nodes[node_id] = node_type
+        expected_hitl_nodes = {
+            "context_loader": "context_loader",
+            "router": "router",
+            "retrieval_worker": "retrieval_worker",
+            "memory_worker": "memory_worker",
+            "timeline_worker": "timeline_worker",
+            WEB_APPROVAL_GATE_ID: "hitl_gate",
+            "web_worker": "web_worker",
+            "direct_answer": "direct_answer",
+            "synthesizer": "synthesizer",
+            "finalizer": "finalizer",
+        }
+        if actual_nodes == expected_hitl_nodes:
+            expected_hitl_edges = [
+                {"from": "START", "to": "context_loader"},
+                {"from": "context_loader", "to": "router"},
+                {
+                    "from": "router",
+                    "conditional": True,
+                    "routes": {
+                        "document": "retrieval_worker",
+                        "memory": "memory_worker",
+                        "timeline": "timeline_worker",
+                        "web": WEB_APPROVAL_GATE_ID,
+                        "direct": "direct_answer",
+                        "clarify": "finalizer",
+                    },
+                },
+                {"from": "retrieval_worker", "to": "synthesizer"},
+                {"from": "memory_worker", "to": "synthesizer"},
+                {"from": "timeline_worker", "to": "synthesizer"},
+                {
+                    "from": WEB_APPROVAL_GATE_ID,
+                    "conditional": True,
+                    "routes": {
+                        "approve": "web_worker",
+                        "continue_without": "synthesizer",
+                    },
+                },
+                {"from": "web_worker", "to": "synthesizer"},
+                {"from": "direct_answer", "to": "finalizer"},
+                {"from": "synthesizer", "to": "finalizer"},
+                {"from": "finalizer", "to": "END"},
+            ]
+            if edges != expected_hitl_edges:
+                errors.append("router_rag_agent HITL web graph edges must match the built-in fixed topology")
+            return errors
+
         if actual_nodes != expected_nodes:
             errors.append("router_rag_agent graph nodes must match the built-in Router RAG topology")
 

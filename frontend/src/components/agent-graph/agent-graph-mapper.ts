@@ -15,10 +15,12 @@ const NODE_LABELS: Record<string, string> = {
   retrieval_worker: 'Document Retrieval',
   memory_worker: 'Memory Retrieval',
   timeline_worker: 'Timeline Retrieval',
+  web_approval_gate: 'Web Approval',
   web_worker: 'Web Retrieval',
   direct_answer: 'Direct Answer',
   synthesizer: 'Synthesizer',
   finalizer: 'Finalizer',
+  hitl_gate: 'HITL Gate',
 };
 
 const BUILTIN_GRAPHS: Record<string, AgentPatternGraphSpec> = {

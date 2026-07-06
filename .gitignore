@@ -55,7 +55,6 @@ yarn-error.log*
 .next/
 out/
 .vercel
-.DS_Store
 *.pem
 .pnp
 .pnp.js

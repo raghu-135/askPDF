@@ -165,9 +165,11 @@ def _node_display_name(node: str) -> str:
         "memory_worker": "Memory Retrieval",
         "timeline_worker": "Timeline Retrieval",
         "web_worker": "Web Retrieval",
+        "web_approval_gate": "Web Approval",
         "direct_answer": "Direct Answer",
         "synthesizer": "Synthesizer",
         "finalizer": "Finalizer",
+        "hitl_gate": "HITL Gate",
     }
     return labels.get(node, node.replace("_", " ").title())
 
@@ -1316,7 +1318,7 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
     ]
     nodes = [_summary_node(span) for span in node_spans if isinstance(span, dict)]
     tools = [_summary_tool(span) for span in tool_spans if isinstance(span, dict)]
-    used_node_count = sum(1 for node in nodes if not node.get("skipped"))
+    used_node_count = len({node.get("id") for node in nodes if node.get("id") and not node.get("skipped")})
     warning_count = sum(len(node.get("warningCodes") or []) for node in nodes) + sum(len(tool.get("warningCodes") or []) for tool in tools)
     error_count = int(metrics.get("error_count") or 0)
     if errors:

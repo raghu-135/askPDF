@@ -14,6 +14,7 @@ from app.db import (
 )
 from app.rag.indexer import index_chat_memory_for_thread
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
+from app.agent_patterns.trace import compact_preview
 
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,12 @@ def _first_interrupt(result: Dict[str, Any]) -> Any:
     return interrupts
 
 
-def _pending_interrupt_from_result(result: Dict[str, Any], *, checkpoint_thread_id: str) -> Dict[str, Any] | None:
+def _pending_interrupt_from_result(
+    result: Dict[str, Any],
+    *,
+    checkpoint_thread_id: str,
+    enable_hitl_final_review: bool,
+) -> Dict[str, Any] | None:
     interrupt_obj = _first_interrupt(result)
     if not interrupt_obj:
         return None
@@ -74,6 +80,7 @@ def _pending_interrupt_from_result(result: Dict[str, Any], *, checkpoint_thread_
         payload["interrupt_id"] = str(interrupt_id)
     payload["checkpoint_resume"] = True
     payload["checkpoint_thread_id"] = checkpoint_thread_id
+    payload["enable_hitl_final_review"] = bool(enable_hitl_final_review)
     return payload
 
 
@@ -86,6 +93,60 @@ def _without_runtime_keys(result: Dict[str, Any]) -> Dict[str, Any]:
 def _as_resume_action(interrupt: Dict[str, Any]) -> Any:
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
     return decision.get("action") or decision.get("requested_action") or interrupt.get("default_action")
+
+
+def _interrupt_compile_final_review_enabled(interrupt: Dict[str, Any]) -> bool:
+    if "enable_hitl_final_review" in interrupt:
+        return bool(interrupt.get("enable_hitl_final_review"))
+    return interrupt.get("node_id") == "human_review_gate" or interrupt.get("type") == "final_answer_review"
+
+
+def _interrupted_node_event(partial: Dict[str, Any], pending_interrupt: Dict[str, Any]) -> Dict[str, Any]:
+    node_id = str(pending_interrupt.get("node_id") or pending_interrupt.get("gate_id") or "hitl_gate")
+    return {
+        "node": node_id,
+        "status": "interrupted",
+        "route": partial.get("route"),
+        "route_reason": partial.get("route_reason"),
+        "input_preview": {
+            "question": compact_preview(partial.get("question")),
+            "title": compact_preview(pending_interrupt.get("title")),
+            "prompt": compact_preview(pending_interrupt.get("prompt") or pending_interrupt.get("body")),
+            "input_summary": pending_interrupt.get("input_summary"),
+        },
+        "output_preview": {
+            "interrupt_id": pending_interrupt.get("interrupt_id"),
+            "gate_id": pending_interrupt.get("gate_id"),
+            "type": pending_interrupt.get("type"),
+            "allowed_actions": pending_interrupt.get("allowed_actions"),
+            "default_action": pending_interrupt.get("default_action"),
+            "proposed_tool": pending_interrupt.get("proposed_tool"),
+            "proposed_final_answer": pending_interrupt.get("proposed_final_answer"),
+        },
+    }
+
+
+def _node_events_with_interrupted_gate(
+    *,
+    partial: Dict[str, Any],
+    telemetry_sink: Dict[str, Any],
+    pending_interrupt: Dict[str, Any],
+    trace_recorder: Any = None,
+) -> list[Dict[str, Any]]:
+    node_events = list(partial.get("node_events") or telemetry_sink.get("node_events") or [])
+    interrupted = _interrupted_node_event(partial, pending_interrupt)
+    node_id = interrupted["node"]
+    has_interrupted = any(
+        isinstance(event, dict)
+        and event.get("node") == node_id
+        and event.get("status") == "interrupted"
+        for event in node_events
+    )
+    if not has_interrupted:
+        node_events.append(interrupted)
+        if trace_recorder is not None and hasattr(trace_recorder, "record_node_event"):
+            trace_recorder.record_node_event(interrupted)
+    return node_events
 
 
 async def _persist_success_turn(
@@ -300,6 +361,7 @@ async def _handle_compiled_rag_chat(
         "tool_instructions": tool_instructions,
         "custom_instructions": custom_instructions,
         "allowed_tool_ids": allowed_tool_ids,
+        "hitl_policy": pattern_config.get("hitl_policy") if isinstance(pattern_config.get("hitl_policy"), dict) else {},
         "client_timezone": getattr(req, "client_timezone", None),
         "client_locale": getattr(req, "client_locale", None),
         "client_now_iso": getattr(req, "client_now_iso", None),
@@ -323,9 +385,19 @@ async def _handle_compiled_rag_chat(
         )
         result = await _invoke_graph_with_partial_state(app, state, config)
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
-        pending_interrupt = _pending_interrupt_from_result(result, checkpoint_thread_id=checkpoint_thread_id)
+        pending_interrupt = _pending_interrupt_from_result(
+            result,
+            checkpoint_thread_id=checkpoint_thread_id,
+            enable_hitl_final_review=enable_hitl_final_review,
+        )
         if pending_interrupt:
             partial = _without_runtime_keys(result)
+            node_events = _node_events_with_interrupted_gate(
+                partial=partial,
+                telemetry_sink=telemetry_sink,
+                pending_interrupt=pending_interrupt,
+                trace_recorder=trace_recorder,
+            )
             logger.info(
                 "%s run awaiting human | run_id=%s thread_id=%s route=%s elapsed_ms=%.1f",
                 runtime_label,
@@ -347,7 +419,7 @@ async def _handle_compiled_rag_chat(
                 "context": "Compiled agent execution paused for human review.",
                 "route": partial.get("route"),
                 "route_reason": partial.get("route_reason"),
-                "node_events": partial.get("node_events") or [],
+                "node_events": node_events,
                 "tool_events": partial.get("tool_events") or [],
                 "duration_ms": duration_ms,
                 "status": "awaiting_human",
@@ -491,10 +563,11 @@ async def resume_compiled_rag_chat(
     resolved_spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
     checkpoint_thread_id = str(run.checkpoint_thread_id or run.id)
     telemetry_sink: Dict[str, Any] = {"node_events": [], "tool_events": []}
+    enable_hitl_final_review = _interrupt_compile_final_review_enabled(interrupt)
     app = TemplateCompiler().compile(
         resolved_spec,
         checkpointer=checkpointer,
-        enable_hitl_final_review=True,
+        enable_hitl_final_review=enable_hitl_final_review,
     )
     config = _runtime_config(
         app_thread_id=run.thread_id,
@@ -537,11 +610,22 @@ async def resume_compiled_rag_chat(
         )
     result = await _invoke_graph_with_partial_state(app, Command(resume=decision), config)
     duration_ms = round((time.perf_counter() - started) * 1000, 2)
-    pending_interrupt = _pending_interrupt_from_result(result, checkpoint_thread_id=checkpoint_thread_id)
+    pending_interrupt = _pending_interrupt_from_result(
+        result,
+        checkpoint_thread_id=checkpoint_thread_id,
+        enable_hitl_final_review=enable_hitl_final_review,
+    )
     if pending_interrupt:
         partial = _without_runtime_keys(result)
+        node_events = _node_events_with_interrupted_gate(
+            partial=partial,
+            telemetry_sink=telemetry_sink,
+            pending_interrupt=pending_interrupt,
+            trace_recorder=trace_recorder,
+        )
         return {
             **partial,
+            "node_events": node_events,
             "status": "awaiting_human",
             "pending_interrupt": pending_interrupt,
             "duration_ms": duration_ms,

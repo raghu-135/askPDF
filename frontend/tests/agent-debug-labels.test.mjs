@@ -6,6 +6,7 @@ import { formatSkipReason } from '../src/lib/agentDebugLabels.ts';
 test('formatSkipReason maps internal skip codes to concise labels', () => {
   assert.equal(formatSkipReason('not_selected_by_plan'), 'Not in plan');
   assert.equal(formatSkipReason('web_search_disabled'), 'Web disabled');
+  assert.equal(formatSkipReason('hitl_policy_disabled'), 'Review disabled');
 });
 
 test('formatSkipReason falls back to readable unknown codes', () => {

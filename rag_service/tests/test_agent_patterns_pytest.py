@@ -25,6 +25,7 @@ from app.agent_patterns.templates import (
     ROUTER_RAG_AGENT_ID,
     ROUTER_RAG_AGENT_VERSION,
     builtin_plan_execute_rag_spec,
+    builtin_router_rag_hitl_web_spec,
     builtin_router_rag_spec,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
@@ -501,6 +502,11 @@ class TestRouterRagTemplateValidator:
 
         assert result == {"valid": True, "errors": []}
 
+    def test_accepts_builtin_router_rag_hitl_web_spec(self):
+        result = TemplateValidator().validate(builtin_router_rag_hitl_web_spec())
+
+        assert result == {"valid": True, "errors": []}
+
     def test_accepts_builtin_plan_execute_rag_spec(self):
         result = TemplateValidator().validate(builtin_plan_execute_rag_spec())
 
@@ -526,6 +532,11 @@ class TestRouterRagTemplateValidator:
 
     def test_compiles_builtin_router_rag_spec(self):
         graph = TemplateCompiler().compile(builtin_router_rag_spec())
+
+        assert graph is not None
+
+    def test_compiles_builtin_router_rag_hitl_web_spec(self):
+        graph = TemplateCompiler().compile(builtin_router_rag_hitl_web_spec())
 
         assert graph is not None
 
@@ -1291,6 +1302,222 @@ class TestAgentPatternRepository:
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestAgentRunService:
+    def _agent_req(self, question: str = "Needs current research?") -> SimpleNamespace:
+        return SimpleNamespace(
+            question=question,
+            llm_model="test-llm",
+            use_web_search=True,
+            use_reranker=False,
+            context_window=8192,
+            max_iterations=1,
+            system_role_override="",
+            tool_instructions_override={},
+            custom_instructions_override="",
+            client_timezone="America/Chicago",
+            client_locale="en-US",
+            client_now_iso="2026-07-05T12:00:00.000Z",
+        )
+
+    async def _run_hitl_web_gate_flow(
+        self,
+        session_factory,
+        sample_thread,
+        monkeypatch,
+        *,
+        action: str,
+        enable_final_review: bool = False,
+        duplicate_after_resume: bool = True,
+    ):
+        class FakeLlm:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages):
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(content='{"route":"web","reason":"Needs live evidence."}')
+                if action == "approve":
+                    return SimpleNamespace(content="Answer with approved web evidence.")
+                return SimpleNamespace(content="Answer without live web evidence.")
+
+        class FakeWebTool:
+            name = "search_web"
+
+            def __init__(self):
+                self.calls = 0
+                self.inputs = []
+
+            async def ainvoke(self, tool_input, config=None):
+                self.calls += 1
+                self.inputs.append(tool_input)
+                return {
+                    "content": "Live web evidence.",
+                    "sources": [{"url": "https://example.test/result", "title": "Example"}],
+                    "artifacts": {
+                        "web_sources": [
+                            {
+                                "url": "https://example.test/result",
+                                "title": "Example",
+                                "preview": "Live web evidence.",
+                            }
+                        ]
+                    },
+                    "trace": {"tool_name": "search_web", "caller_node": "web_worker"},
+                    "metrics": {"result_chars": 18, "source_count": 1, "warning_count": 0},
+                }
+
+        fake_llm = FakeLlm()
+        fake_web = FakeWebTool()
+        created_turn_ids = []
+        stats_calls = []
+        index_calls = []
+
+        async def fake_get_thread_settings(_thread_id):
+            return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
+
+        async def fake_prefetch_context(**kwargs):
+            return {
+                "recent_history_text": "",
+                "semantic_history_text": "",
+                "document_evidence_text": "",
+                "web_evidence_text": "",
+                "stats": {"total_messages": 0, "estimated_history_tokens": 0},
+                "documents": [],
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+            }
+
+        async def fake_create_chat_turn(
+            *,
+            thread_id,
+            question,
+            answer,
+            rewritten_question=None,
+            status="completed",
+            reasoning="",
+            reasoning_available=False,
+            reasoning_format="none",
+            web_sources=None,
+            document_sources=None,
+            used_chat_ids=None,
+            clarification_options=None,
+            error=None,
+            metadata=None,
+            agent_run_id=None,
+            agent_run_turn_kind=None,
+            agent_run_sequence=None,
+            agent_trace_refs_json=None,
+        ):
+            turn = ChatTurn(
+                id=str(uuid.uuid4()),
+                thread_id=thread_id,
+                agent_run_id=agent_run_id,
+                agent_run_turn_kind=agent_run_turn_kind,
+                agent_run_sequence=agent_run_sequence,
+                agent_trace_refs_json=agent_trace_refs_json,
+                status=status,
+                payload={
+                    "question": question,
+                    "rewritten_question": rewritten_question,
+                    "answer": answer,
+                    "reasoning": reasoning,
+                    "reasoning_available": reasoning_available,
+                    "reasoning_format": reasoning_format,
+                    "web_sources": web_sources or [],
+                    "document_sources": document_sources or [],
+                    "used_chat_ids": used_chat_ids or [],
+                    "clarification_options": clarification_options,
+                    "error": error,
+                    "metadata": metadata or {},
+                },
+            )
+            async with session_factory() as write_session:
+                write_session.add(turn)
+                await write_session.commit()
+                await write_session.refresh(turn)
+            created_turn_ids.append(turn.id)
+            return turn
+
+        async def fake_index_chat_memory_for_thread(**kwargs):
+            index_calls.append(kwargs)
+            return {}
+
+        async def fake_update_message_context_compact(_turn_id, _compact_text):
+            return None
+
+        async def fake_increment_qa_stats(thread_id, qa_chars):
+            stats_calls.append((thread_id, qa_chars))
+
+        monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+        if enable_final_review:
+            monkeypatch.setenv("ASKPDF_AGENT_HITL_FINAL_REVIEW", "true")
+        else:
+            monkeypatch.delenv("ASKPDF_AGENT_HITL_FINAL_REVIEW", raising=False)
+        monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_patterns.graph.search_web", fake_web)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            template_ref = SimpleNamespace(id=template.id)
+            version_ref = SimpleNamespace(
+                id=version.id,
+                version=version.version,
+                spec_json=builtin_router_rag_hitl_web_spec(),
+            )
+
+            async def fake_get_template_with_current_version(_template_id):
+                return template_ref, version_ref
+
+            repo.get_template_with_current_version = fake_get_template_with_current_version
+            service = AgentRunService(repository=repo)
+            paused = await service.run_thread_chat(sample_thread.id, self._agent_req(), sample_thread.embed_model)
+            paused_run = await repo.get_run(paused["agent_run_id"])
+            paused_debug = paused_run.debug_trace_json
+            paused_turns = await repo.list_chat_turns_for_run(paused_run.id)
+            pending = dict(paused_run.pending_interrupt_json or {})
+            resumed = await service.resume_agent_run(
+                paused_run.id,
+                interrupt_id=pending["interrupt_id"],
+                action=action,
+                resume_version=pending["resume_version"],
+                expected_thread_id=sample_thread.id,
+            )
+            duplicate = None
+            if duplicate_after_resume:
+                duplicate = await service.resume_agent_run(
+                    paused_run.id,
+                    interrupt_id=pending["interrupt_id"],
+                    action=action,
+                    resume_version=pending["resume_version"],
+                    expected_thread_id=sample_thread.id,
+                )
+            turns = await repo.list_chat_turns_for_run(paused_run.id)
+
+        return {
+            "paused": paused,
+            "paused_run": paused_run,
+            "paused_debug": paused_debug,
+            "paused_turns": paused_turns,
+            "pending": pending,
+            "resumed": resumed,
+            "duplicate": duplicate,
+            "turns": turns,
+            "created_turn_ids": created_turn_ids,
+            "stats_calls": stats_calls,
+            "index_calls": index_calls,
+            "fake_llm": fake_llm,
+            "fake_web": fake_web,
+        }
+
     @pytest.mark.asyncio
     async def test_run_thread_chat_falls_back_to_router_for_unsupported_simple_setting(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
@@ -1736,6 +1963,137 @@ class TestAgentRunService:
         assert resumed.run.debug_trace_json["trace"]["status"] == "completed"
         assert resumed.run.debug_trace_json["trace"]["chat_turn_id"] == turns[0].id
         assert resumed.run.debug_trace_json["summary"]["lastInterruptStatus"] == "resumed"
+
+    @pytest.mark.asyncio
+    async def test_hitl_web_gate_approve_resumes_and_executes_web_once(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        result = await self._run_hitl_web_gate_flow(session_factory, sample_thread, monkeypatch, action="approve")
+
+        assert result["paused"]["status"] == "awaiting_human"
+        assert "chat_turn_id" not in result["paused"]
+        assert result["paused_turns"] == []
+        assert result["pending"]["type"] == "tool_approval"
+        assert result["pending"]["gate_id"] == "web_approval_gate"
+        assert result["pending"]["allowed_actions"] == ["approve", "continue_without"]
+        assert result["pending"]["proposed_tool"]["name"] == "search_web"
+        assert result["pending"]["enable_hitl_final_review"] is False
+        assert any(
+            event.get("node") == "web_approval_gate" and event.get("status") == "interrupted"
+            for event in result["paused"]["node_events"]
+        )
+        paused_node_ids = {
+            span["attributes"]["askpdf.node.id"]
+            for span in result["paused_debug"]["trace"]["spans"]
+            if span.get("attributes", {}).get("askpdf.node.id")
+        }
+        assert "web_approval_gate" in paused_node_ids
+        assert result["created_turn_ids"] == [result["turns"][0].id]
+        assert len(result["stats_calls"]) == 1
+        assert len(result["index_calls"]) == 1
+        assert result["fake_web"].calls == 1
+        assert result["resumed"].run.status == "completed"
+        assert result["resumed"].run.pending_interrupt_json["status"] == "resumed"
+        assert result["resumed"].run.pending_interrupt_json["decision"]["action"] == "approve"
+        assert result["duplicate"].duplicate is True
+        assert result["fake_web"].calls == 1
+        assert len(result["turns"]) == 1
+        assert result["turns"][0].payload["answer"] == "Answer with approved web evidence."
+        assert result["turns"][0].payload["web_sources"] == [
+            {
+                "url": "https://example.test/result",
+                "title": "Example",
+                "preview": "Live web evidence.",
+            }
+        ]
+        node_ids = {
+            span["attributes"]["askpdf.node.id"]
+            for span in result["resumed"].run.debug_trace_json["trace"]["spans"]
+            if span.get("attributes", {}).get("askpdf.node.id")
+        }
+        assert {"web_approval_gate", "web_worker"} <= node_ids
+        root_events = [
+            event
+            for span in result["resumed"].run.debug_trace_json["trace"]["spans"]
+            if span["span_id"] == f"run:{result['resumed'].run.id}"
+            for event in span["events"]
+        ]
+        assert [event["name"] for event in root_events if event["name"].startswith("interrupt.")] == [
+            "interrupt.requested",
+            "interrupt.resumed",
+        ]
+        assert "graph.resumed" in [event["name"] for event in root_events]
+
+    @pytest.mark.asyncio
+    async def test_hitl_web_gate_continue_without_skips_web_and_completes(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        result = await self._run_hitl_web_gate_flow(session_factory, sample_thread, monkeypatch, action="continue_without")
+
+        assert result["paused"]["status"] == "awaiting_human"
+        assert result["paused_turns"] == []
+        assert any(
+            event.get("node") == "web_approval_gate" and event.get("status") == "interrupted"
+            for event in result["paused"]["node_events"]
+        )
+        assert result["fake_web"].calls == 0
+        assert result["resumed"].run.status == "completed"
+        assert result["resumed"].run.pending_interrupt_json["decision"]["action"] == "continue_without"
+        assert result["duplicate"].duplicate is True
+        assert len(result["turns"]) == 1
+        assert result["turns"][0].payload["answer"] == "Answer without live web evidence."
+        assert result["turns"][0].payload["web_sources"] == []
+        node_ids = {
+            span["attributes"]["askpdf.node.id"]
+            for span in result["resumed"].run.debug_trace_json["trace"]["spans"]
+            if span.get("attributes", {}).get("askpdf.node.id")
+        }
+        assert "web_approval_gate" in node_ids
+        assert "web_worker" not in node_ids
+        gate_spans = [
+            span
+            for span in result["resumed"].run.debug_trace_json["trace"]["spans"]
+            if span.get("attributes", {}).get("askpdf.node.id") == "web_approval_gate"
+        ]
+        assert gate_spans[-1]["output"]["value"]["next"] == "synthesizer"
+
+    @pytest.mark.asyncio
+    async def test_hitl_web_gate_preserves_final_review_compile_option_on_resume(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        result = await self._run_hitl_web_gate_flow(
+            session_factory,
+            sample_thread,
+            monkeypatch,
+            action="approve",
+            enable_final_review=True,
+            duplicate_after_resume=False,
+        )
+
+        assert result["pending"]["gate_id"] == "web_approval_gate"
+        assert result["pending"]["enable_hitl_final_review"] is True
+        assert result["fake_web"].calls == 1
+        assert result["resumed"].run.status == "awaiting_human"
+        next_pending = result["resumed"].run.pending_interrupt_json
+        assert next_pending["node_id"] == "human_review_gate"
+        assert next_pending["type"] == "final_answer_review"
+        assert next_pending["enable_hitl_final_review"] is True
+        assert result["turns"] == []
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(

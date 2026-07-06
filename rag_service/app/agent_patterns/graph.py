@@ -21,7 +21,7 @@ from app.agent.external_research_tools import search_web
 from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
 from app.rag.chat_service import prefetch_context
 from app.agent_patterns.prompting import build_final_answer_messages, build_planner_prompt, build_router_prompt
-from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES
+from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES, WEB_APPROVAL_GATE_ID
 from app.agent_patterns.trace import (
     available_document_refs,
     compact_preview,
@@ -97,6 +97,9 @@ class RouterRagState(TypedDict, total=False):
     reasoning_available: bool
     reasoning_format: str
     human_review_decision: Dict[str, Any]
+    hitl_policy: Dict[str, Any]
+    hitl_decisions: List[Dict[str, Any]]
+    hitl_gate_route: str
     node_events: List[Dict[str, Any]]
     tool_events: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
@@ -557,6 +560,7 @@ class NodeRegistry:
             "direct_answer": self.direct_answer,
             "synthesizer": self.synthesizer,
             "finalizer": self.finalizer,
+            "hitl_gate": self.hitl_gate,
             "human_review_gate": self.human_review_gate,
         }
 
@@ -564,6 +568,17 @@ class NodeRegistry:
         if node_type not in self._nodes:
             raise ValueError(f"Unknown node type: {node_type}")
         return self._nodes[node_type]
+
+    def get_for_spec(self, node_spec: Dict[str, Any]) -> Callable[..., Any]:
+        node_type = str(node_spec.get("type") or "")
+        if node_type != "hitl_gate":
+            return self.get(node_type)
+        node_id = str(node_spec.get("id") or node_type)
+
+        async def _bound_hitl_gate(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+            return await self.hitl_gate(state, config, node_id=node_id)
+
+        return _bound_hitl_gate
 
     async def context_loader(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
@@ -1079,6 +1094,117 @@ class NodeRegistry:
         _log_node_end(state, "finalizer", started, data)
         return {"node_events": _append_event(state, "finalizer", data, started=started, config=config)}
 
+    async def hitl_gate(
+        self,
+        state: RouterRagState,
+        config: RunnableConfig,
+        *,
+        node_id: str = WEB_APPROVAL_GATE_ID,
+    ) -> Dict[str, Any]:
+        """Pause at a constrained human approval gate declared in the graph spec."""
+
+        started = time.perf_counter()
+        policy = state.get("hitl_policy") if isinstance(state.get("hitl_policy"), dict) else {}
+        gates = policy.get("gates") if isinstance(policy.get("gates"), dict) else {}
+        gate_policy = gates.get(node_id) if isinstance(gates.get(node_id), dict) else {}
+        enabled = bool(policy.get("enabled")) and gate_policy.get("enabled", True) is not False
+        if not enabled:
+            return _skipped_worker_update(state, config, node_id, started, "hitl_policy_disabled") | {
+                "hitl_gate_route": "approve",
+            }
+
+        allowed_actions = gate_policy.get("allowed_actions")
+        if not isinstance(allowed_actions, list) or not all(isinstance(action, str) for action in allowed_actions):
+            allowed_actions = ["approve", "continue_without"]
+        allowed_actions = [action for action in allowed_actions if action in {"approve", "continue_without"}]
+        if not allowed_actions:
+            allowed_actions = ["approve", "continue_without"]
+        default_action = str(gate_policy.get("default_action") or "continue_without")
+        if default_action not in allowed_actions:
+            default_action = "continue_without" if "continue_without" in allowed_actions else allowed_actions[0]
+
+        decision = interrupt(
+            {
+                "gate_id": node_id,
+                "node_id": node_id,
+                "type": "tool_approval",
+                "title": gate_policy.get("title") or "Approve web search?",
+                "prompt": gate_policy.get("prompt")
+                or gate_policy.get("body")
+                or "This answer needs live web research. Approve web search or continue without it.",
+                "allowed_actions": allowed_actions,
+                "default_action": default_action,
+                "checkpoint_resume": True,
+                "input_summary": {
+                    "question": compact_preview(state.get("question")),
+                    "route": state.get("route"),
+                    "route_reason": compact_preview(state.get("route_reason")),
+                    "document_source_count": len(state.get("document_sources") or []),
+                    "web_source_count": len(state.get("web_sources") or []),
+                    "used_chat_id_count": len(state.get("used_chat_ids") or []),
+                    "evidence": compact_preview(state.get("evidence")),
+                },
+                "proposed_tool": {
+                    "name": "search_web",
+                    "caller_node": "web_worker",
+                    "input": compact_preview(state.get("question"), limit=1000),
+                },
+            }
+        )
+        decision = decision if isinstance(decision, dict) else {"action": str(decision or default_action)}
+        action = str(decision.get("action") or default_action)
+        if action not in allowed_actions:
+            action = default_action
+        route = "approve" if action == "approve" else "continue_without"
+
+        update: Dict[str, Any] = {
+            "hitl_gate_route": route,
+            "hitl_decisions": [
+                *(state.get("hitl_decisions") if isinstance(state.get("hitl_decisions"), list) else []),
+                {
+                    "gate_id": node_id,
+                    "node_id": node_id,
+                    "type": "tool_approval",
+                    "action": action,
+                    "decision": {
+                        key: value
+                        for key, value in decision.items()
+                        if key not in {"resume_token"}
+                    },
+                },
+            ],
+        }
+        if route == "continue_without":
+            update["evidence"] = _combine_evidence(
+                state.get("evidence"),
+                (
+                    "A human reviewer chose to continue without live web research. "
+                    "Do not claim that live or current web evidence was checked; answer only from available context."
+                ),
+                label="HITL decision",
+            )
+
+        data = {
+            "status": "completed",
+            "action": action,
+            "route": state.get("route"),
+            "route_reason": state.get("route_reason"),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "route": state.get("route"),
+                "route_reason": compact_preview(state.get("route_reason")),
+            },
+            "output_preview": {
+                "decision": update["hitl_decisions"][-1],
+                "next": "web_worker" if route == "approve" else "synthesizer",
+            },
+        }
+        _log_node_end(state, node_id, started, data)
+        return {
+            **update,
+            "node_events": _append_event(state, node_id, data, started=started, config=config),
+        }
+
     async def human_review_gate(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         """Pause after final answer synthesis so a human can approve before persistence."""
 
@@ -1145,6 +1271,11 @@ def planner_route(state: RouterRagState) -> str:
     return route if route in {"execute", "direct", "clarify"} else "execute"
 
 
+def hitl_gate_route(state: RouterRagState) -> str:
+    route = state.get("hitl_gate_route")
+    return route if route in {"approve", "continue_without"} else "continue_without"
+
+
 class TemplateCompiler:
     """Compile validated v2 template specs into LangGraph StateGraph instances."""
 
@@ -1159,14 +1290,21 @@ class TemplateCompiler:
         if enable_hitl_final_review:
             graph_spec = self._with_final_review_gate(graph_spec)
         workflow = StateGraph(RouterRagState)
+        node_types: Dict[str, str] = {}
         for node in graph_spec.get("nodes", []):
-            workflow.add_node(node["id"], self.registry.get(node["type"]))
+            node_types[node["id"]] = node["type"]
+            workflow.add_node(node["id"], self.registry.get_for_spec(node))
 
         for edge in graph_spec.get("edges", []):
             source = edge.get("from")
             target = edge.get("to")
             if edge.get("conditional"):
-                route_fn = planner_route if source == "planner" else router_route
+                if source == "planner":
+                    route_fn = planner_route
+                elif node_types.get(source) == "hitl_gate":
+                    route_fn = hitl_gate_route
+                else:
+                    route_fn = router_route
                 workflow.add_conditional_edges(source, route_fn, edge["routes"])
                 continue
             source_ref = START if source == "START" else source

@@ -11,6 +11,7 @@ PLAN_EXECUTE_RAG_AGENT_ID = "plan_execute_rag_agent"
 PLAN_EXECUTE_RAG_AGENT_VERSION = 1
 PLAN_EXECUTE_RAG_AGENT_VERSION_ID = f"{PLAN_EXECUTE_RAG_AGENT_ID}:v{PLAN_EXECUTE_RAG_AGENT_VERSION}"
 SUPPORTED_BUILTIN_TEMPLATE_IDS = {ROUTER_RAG_AGENT_ID, PLAN_EXECUTE_RAG_AGENT_ID}
+WEB_APPROVAL_GATE_ID = "web_approval_gate"
 
 ROUTER_RAG_REQUIRED_TOOL_IDS = {
     "document_evidence",
@@ -57,6 +58,7 @@ ALLOWED_ROUTER_RAG_CONFIG_KEYS = {
     "custom_instructions",
     "allowed_tool_ids",
     "prefetch_policy",
+    "hitl_policy",
     "graph",
 }
 
@@ -80,6 +82,10 @@ BUILTIN_ROUTER_RAG_SPEC: Dict[str, Any] = {
         ],
         "prefetch_policy": {
             "enabled": True,
+        },
+        "hitl_policy": {
+            "enabled": False,
+            "gates": {},
         },
         "graph": {
             "nodes": [
@@ -121,6 +127,66 @@ BUILTIN_ROUTER_RAG_SPEC: Dict[str, Any] = {
 }
 
 
+BUILTIN_ROUTER_RAG_HITL_WEB_SPEC: Dict[str, Any] = deepcopy(BUILTIN_ROUTER_RAG_SPEC)
+BUILTIN_ROUTER_RAG_HITL_WEB_SPEC["config"]["hitl_policy"] = {
+    "enabled": True,
+    "gates": {
+        WEB_APPROVAL_GATE_ID: {
+            "enabled": True,
+            "title": "Approve web search?",
+            "prompt": "This answer needs live web research. Approve web search or continue without it.",
+            "allowed_actions": ["approve", "continue_without"],
+            "default_action": "continue_without",
+        },
+    },
+}
+BUILTIN_ROUTER_RAG_HITL_WEB_SPEC["config"]["graph"] = {
+    "nodes": [
+        {"id": "context_loader", "type": "context_loader"},
+        {"id": "router", "type": "router"},
+        {"id": "retrieval_worker", "type": "retrieval_worker"},
+        {"id": "memory_worker", "type": "memory_worker"},
+        {"id": "timeline_worker", "type": "timeline_worker"},
+        {"id": WEB_APPROVAL_GATE_ID, "type": "hitl_gate"},
+        {"id": "web_worker", "type": "web_worker"},
+        {"id": "direct_answer", "type": "direct_answer"},
+        {"id": "synthesizer", "type": "synthesizer"},
+        {"id": "finalizer", "type": "finalizer"},
+    ],
+    "edges": [
+        {"from": "START", "to": "context_loader"},
+        {"from": "context_loader", "to": "router"},
+        {
+            "from": "router",
+            "conditional": True,
+            "routes": {
+                "document": "retrieval_worker",
+                "memory": "memory_worker",
+                "timeline": "timeline_worker",
+                "web": WEB_APPROVAL_GATE_ID,
+                "direct": "direct_answer",
+                "clarify": "finalizer",
+            },
+        },
+        {"from": "retrieval_worker", "to": "synthesizer"},
+        {"from": "memory_worker", "to": "synthesizer"},
+        {"from": "timeline_worker", "to": "synthesizer"},
+        {
+            "from": WEB_APPROVAL_GATE_ID,
+            "conditional": True,
+            "routes": {
+                "approve": "web_worker",
+                "continue_without": "synthesizer",
+            },
+        },
+        {"from": "web_worker", "to": "synthesizer"},
+        {"from": "direct_answer", "to": "finalizer"},
+        {"from": "synthesizer", "to": "finalizer"},
+        {"from": "finalizer", "to": "END"},
+    ],
+}
+
+
 BUILTIN_PLAN_EXECUTE_RAG_SPEC: Dict[str, Any] = {
     "schema_version": 1,
     "pattern_type": PLAN_EXECUTE_RAG_AGENT_ID,
@@ -140,6 +206,10 @@ BUILTIN_PLAN_EXECUTE_RAG_SPEC: Dict[str, Any] = {
         ],
         "prefetch_policy": {
             "enabled": True,
+        },
+        "hitl_policy": {
+            "enabled": False,
+            "gates": {},
         },
         "graph": {
             "nodes": [
@@ -180,6 +250,10 @@ BUILTIN_PLAN_EXECUTE_RAG_SPEC: Dict[str, Any] = {
 
 def builtin_router_rag_spec() -> Dict[str, Any]:
     return deepcopy(BUILTIN_ROUTER_RAG_SPEC)
+
+
+def builtin_router_rag_hitl_web_spec() -> Dict[str, Any]:
+    return deepcopy(BUILTIN_ROUTER_RAG_HITL_WEB_SPEC)
 
 
 def builtin_plan_execute_rag_spec() -> Dict[str, Any]:
