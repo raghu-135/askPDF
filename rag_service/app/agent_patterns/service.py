@@ -42,7 +42,9 @@ class AgentRunService:
         agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
         template_id = agent_settings.get("template_id") or ROUTER_RAG_AGENT_ID
-        if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS and not self.allow_custom_agent_patterns:
+        custom_enabled_for_thread = bool(agent_settings.get("allow_custom"))
+        allow_custom_for_run = self.allow_custom_agent_patterns and custom_enabled_for_thread
+        if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS and not allow_custom_for_run:
             logger.warning(
                 "Unsupported agent pattern requested for thread %s | requested_template=%s fallback_template=%s",
                 thread_id,
@@ -58,14 +60,16 @@ class AgentRunService:
         except (TypeError, ValueError):
             requested_template_version = None
 
-        if self.allow_preview_agent_patterns and requested_template_version is not None:
+        if requested_template_version is not None and (
+            self.allow_preview_agent_patterns or allow_custom_for_run
+        ):
             template, version = await self.repository.get_template_version(
                 template_id,
                 requested_template_version,
                 include_preview=True,
-                include_custom=self.allow_custom_agent_patterns,
+                include_custom=allow_custom_for_run,
             )
-        elif self.allow_custom_agent_patterns:
+        elif allow_custom_for_run:
             template, version = await self.repository.get_template_with_current_version(
                 template_id,
                 include_custom=True,
@@ -74,14 +78,16 @@ class AgentRunService:
             template, version = await self.repository.get_template_with_current_version(template_id)
         if template is None or version is None:
             await self.repository.seed_builtin_templates()
-            if self.allow_preview_agent_patterns and requested_template_version is not None:
+            if requested_template_version is not None and (
+                self.allow_preview_agent_patterns or allow_custom_for_run
+            ):
                 template, version = await self.repository.get_template_version(
                     template_id,
                     requested_template_version,
                     include_preview=True,
-                    include_custom=self.allow_custom_agent_patterns,
+                    include_custom=allow_custom_for_run,
                 )
-            elif self.allow_custom_agent_patterns:
+            elif allow_custom_for_run:
                 template, version = await self.repository.get_template_with_current_version(
                     template_id,
                     include_custom=True,

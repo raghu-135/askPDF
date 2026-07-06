@@ -26,7 +26,7 @@ from app.agent_patterns.templates import (
     SUPPORTED_BUILTIN_TEMPLATE_IDS,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
-from app.db import get_thread, get_thread_settings
+from app.db import get_thread, get_thread_settings, update_thread_settings
 from app.time_utils import iso_utc_z
 
 
@@ -50,6 +50,11 @@ class InternalAgentPatternCreateRequest(BaseModel):
     changelog: Optional[str] = None
     spec_json: Dict[str, Any] = Field(default_factory=dict)
     set_current: bool = True
+
+
+class InternalThreadAgentPatternSelectionRequest(BaseModel):
+    template_id: str = Field(..., min_length=1)
+    template_version: Optional[int] = Field(default=None, ge=1)
 
 
 class AgentRunResumeRequest(BaseModel):
@@ -334,6 +339,53 @@ async def get_internal_agent_pattern(template_id: str):
     return {
         "agent_pattern": _template_payload(template),
         "current_version": _version_payload(version),
+    }
+
+
+@router.post("/internal/threads/{thread_id}/agent-pattern")
+async def select_internal_thread_agent_pattern(
+    thread_id: str,
+    req: InternalThreadAgentPatternSelectionRequest,
+):
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    repo = AgentPatternRepository()
+    if req.template_version is not None:
+        template, version = await repo.get_template_version(
+            req.template_id,
+            req.template_version,
+            include_preview=True,
+            include_custom=True,
+        )
+    else:
+        template, version = await repo.get_template_with_current_version(
+            req.template_id,
+            include_custom=True,
+        )
+    if not template or not version or template.is_builtin:
+        raise HTTPException(status_code=404, detail="Internal agent pattern not found")
+
+    current_settings = await get_thread_settings(thread_id)
+    next_settings = dict(current_settings) if isinstance(current_settings, dict) else {}
+    agent_pattern: Dict[str, Any] = {
+        "template_id": template.id,
+        "allow_custom": True,
+        "source": "internal",
+    }
+    if req.template_version is not None:
+        agent_pattern["template_version"] = version.version
+    next_settings["agent_pattern"] = agent_pattern
+    persisted = await update_thread_settings(thread_id, next_settings)
+    if persisted is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    return {
+        "thread_id": thread_id,
+        "agent_pattern": agent_pattern,
+        "template": _template_payload(template),
+        "version": _version_payload(version),
     }
 
 
