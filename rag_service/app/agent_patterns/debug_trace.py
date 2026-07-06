@@ -12,6 +12,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode, set_span_in_contex
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.agent.tool_registry import get_tool_contract_metadata
+from app.agent_patterns.node_catalog import get_node_type_metadata
 from app.agent_patterns.trace import compact_preview
 from app.time_utils import iso_utc_z
 
@@ -189,33 +190,38 @@ def _otel_status(status: str) -> Status:
     return Status(StatusCode.ERROR if status == "error" else StatusCode.OK)
 
 
+def _node_metadata(node_type: Optional[str]) -> Dict[str, Any]:
+    return get_node_type_metadata(node_type) if isinstance(node_type, str) and node_type else {}
+
+
+def _observability_metadata(node_type: Optional[str]) -> Dict[str, Any]:
+    metadata = _node_metadata(node_type)
+    observability = metadata.get("observability")
+    return observability if isinstance(observability, dict) else {}
+
+
+def _catalog_display_name(node: str) -> str:
+    metadata = _node_metadata(node)
+    display_name = metadata.get("display_name")
+    if isinstance(display_name, str) and display_name:
+        return display_name
+    return node.replace("_", " ").title()
+
+
 def _node_kind(node: str, node_type: Optional[str] = None) -> str:
-    kind_source = node_type or node
-    if kind_source in {"router", "planner", "evidence_evaluator", "replanner"}:
+    observability = _observability_metadata(node_type or node)
+    span_kind = str(observability.get("span_kind") or "")
+    if span_kind in {"control", "human_review"}:
         return OpenInferenceSpanKindValues.AGENT.value
-    if kind_source in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker"}:
+    if span_kind == "tool_worker":
         return OpenInferenceSpanKindValues.RETRIEVER.value
     return OpenInferenceSpanKindValues.CHAIN.value
 
 
 def _node_display_name(node: str) -> str:
-    labels = {
-        "context_loader": "Context Loader",
-        "router": "Router",
-        "planner": "Planner",
-        "evidence_evaluator": "Evidence Evaluator",
-        "replanner": "Replanner",
-        "retrieval_worker": "Document Retrieval",
-        "memory_worker": "Memory Retrieval",
-        "timeline_worker": "Timeline Retrieval",
-        "web_worker": "Web Retrieval",
-        "web_approval_gate": "Web Approval",
-        "direct_answer": "Direct Answer",
-        "synthesizer": "Synthesizer",
-        "finalizer": "Finalizer",
-        "hitl_gate": "HITL Gate",
-    }
-    return labels.get(node, node.replace("_", " ").title())
+    if node == "web_approval_gate":
+        return "Web Approval"
+    return _catalog_display_name(node)
 
 
 def _tool_kind(event: Mapping[str, Any]) -> str:
@@ -1006,6 +1012,8 @@ class AgentTraceRecorder:
         self._node_index += 1
         node = str(event.get("node") or event.get("name") or f"node_{index}")
         node_type = str(event.get("node_type") or node)
+        node_metadata = _node_metadata(node_type)
+        observability = _observability_metadata(node_type)
         node_display_name = self._node_display_name(node, node_type)
         status = _span_status(event)
         span_id = f"node:{node}:{index}"
@@ -1035,8 +1043,14 @@ class AgentTraceRecorder:
                 SpanAttributes.GRAPH_NODE_NAME: node_display_name,
                 "askpdf.node.id": node,
                 "askpdf.node.type": node_type,
+                "askpdf.node.category": node_metadata.get("category"),
+                "askpdf.node.capabilities": node_metadata.get("capabilities"),
                 "askpdf.node.visit_index": event.get("visit_index"),
                 "askpdf.node.name": node_display_name,
+                "askpdf.observability.span_kind": observability.get("span_kind"),
+                "askpdf.observability.event_prefix": observability.get("event_prefix"),
+                "askpdf.observability.summary_fields": observability.get("summary_fields"),
+                "askpdf.observability.raw_payload": observability.get("raw_payload"),
                 "askpdf.route": event.get("route"),
                 "askpdf.route_reason": event.get("route_reason"),
                 "askpdf.evaluator_route": event.get("evaluator_route"),
@@ -1589,9 +1603,11 @@ def build_debug_graph(
             {
                 "id": node_id,
                 "type": str(spec.get("type") or node_id),
-                "label": str(spec.get("label") or _node_display_name(node_id)),
-                "category": spec.get("category"),
+                "label": str(spec.get("label") or _node_display_name(str(spec.get("type") or node_id))),
+                "category": spec.get("category") or _node_metadata(str(spec.get("type") or node_id)).get("category"),
                 "description": spec.get("description"),
+                "capabilities": spec.get("capabilities") or _node_metadata(str(spec.get("type") or node_id)).get("capabilities"),
+                "observability": spec.get("observability") or _observability_metadata(str(spec.get("type") or node_id)),
                 "status": status,
                 "elapsedMs": summary_node.get("durationMs"),
                 "route": summary_node.get("route"),

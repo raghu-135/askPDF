@@ -3533,12 +3533,23 @@ class TestAgentRunService:
             attrs.get("askpdf.node.id") == "retrieval_1"
             and attrs.get("askpdf.node.type") == "retrieval_worker"
             and attrs.get("askpdf.node.name") == "Document Retrieval"
+            and attrs.get("askpdf.node.category") == "retrieval"
+            and attrs.get("askpdf.node.capabilities") == ["retrieval.document"]
+            and attrs.get("askpdf.observability.span_kind") == "tool_worker"
+            and attrs.get("askpdf.observability.event_prefix") == "retrieval_worker"
+            and attrs.get("askpdf.observability.summary_fields") == [
+                "document_source_count",
+                "web_source_count",
+                "evidence_chars",
+            ]
             for attrs in span_attrs
         )
         graph_nodes = (run.debug_trace_json or {}).get("graph", {}).get("nodes", [])
         debug_retrieval_node = next(node for node in graph_nodes if node.get("id") == "retrieval_1")
         assert debug_retrieval_node["label"] == "Document Retrieval"
         assert debug_retrieval_node["category"] == "retrieval"
+        assert debug_retrieval_node["capabilities"] == ["retrieval.document"]
+        assert debug_retrieval_node["observability"]["span_kind"] == "tool_worker"
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_plan_execute_rag_when_selected(self, engine, sample_thread, monkeypatch):
