@@ -2128,12 +2128,30 @@ class TemplateCompiler:
         config = materialized.get("config") if isinstance(materialized.get("config"), dict) else {}
         graph_spec = config.get("graph") if isinstance(config.get("graph"), dict) else {}
         hitl_policy = config.get("hitl_policy") if isinstance(config.get("hitl_policy"), dict) else {}
-        config["graph"] = self._with_hitl_policy_gates(
+        compiled_graph = self._with_hitl_policy_gates(
             graph_spec,
             hitl_policy=hitl_policy,
         )
+        config["graph"] = self._with_catalog_node_metadata(compiled_graph)
         materialized["config"] = config
         return materialized
+
+    def _with_catalog_node_metadata(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
+        nodes = []
+        for raw_node in graph_spec.get("nodes", []):
+            if not isinstance(raw_node, dict):
+                continue
+            node = dict(raw_node)
+            node_type = node.get("type")
+            metadata = get_node_type_metadata(str(node_type)) if isinstance(node_type, str) else {}
+            display_name = metadata.get("display_name")
+            category = metadata.get("category")
+            if isinstance(display_name, str) and display_name and not node.get("label"):
+                node["label"] = display_name
+            if isinstance(category, str) and category and not node.get("category"):
+                node["category"] = category
+            nodes.append(node)
+        return {**graph_spec, "nodes": nodes}
 
     def _with_hitl_policy_gates(self, graph_spec: Dict[str, Any], *, hitl_policy: Dict[str, Any]) -> Dict[str, Any]:
         nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]

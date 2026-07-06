@@ -666,7 +666,10 @@ class TestRouterRagTemplateValidator:
         TemplateValidator().validate(materialized)
         graph_spec = materialized["config"]["graph"]
 
-        assert {"id": "review_before_documents", "type": "hitl_gate"} in graph_spec["nodes"]
+        review_gate = next(node for node in graph_spec["nodes"] if node.get("id") == "review_before_documents")
+        assert review_gate["type"] == "hitl_gate"
+        assert review_gate["label"] == "HITL Gate"
+        assert review_gate["category"] == "human_review"
         router_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "router")
         assert router_edge["routes"]["document"] == "review_before_documents"
         gate_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "review_before_documents")
@@ -702,7 +705,10 @@ class TestRouterRagTemplateValidator:
         TemplateValidator().validate(materialized)
         graph_spec = materialized["config"]["graph"]
 
-        assert {"id": "research_source_choice", "type": "hitl_gate"} in graph_spec["nodes"]
+        choice_gate = next(node for node in graph_spec["nodes"] if node.get("id") == "research_source_choice")
+        assert choice_gate["type"] == "hitl_gate"
+        assert choice_gate["label"] == "HITL Gate"
+        assert choice_gate["category"] == "human_review"
         planner_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "planner")
         assert planner_edge["routes"]["execute"] == "research_source_choice"
         gate_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "research_source_choice")
@@ -737,7 +743,10 @@ class TestRouterRagTemplateValidator:
 
         assert config["hitl_policy"]["enabled"] is True
         assert config["hitl_policy"]["gates"]["human_review_gate"]["mode"] == "review"
-        assert {"id": "human_review_gate", "type": "hitl_gate"} in graph_spec["nodes"]
+        review_gate = next(node for node in graph_spec["nodes"] if node.get("id") == "human_review_gate")
+        assert review_gate["type"] == "hitl_gate"
+        assert review_gate["label"] == "HITL Gate"
+        assert review_gate["category"] == "human_review"
         assert {"from": "finalizer", "to": "human_review_gate"} in graph_spec["edges"]
         gate_edge = next(
             edge
@@ -2576,7 +2585,7 @@ class TestAgentRunService:
         assert run.metrics_json["tool_elapsed_ms"] == 9.25
         assert run.debug_trace_json["version"] == 1
         assert run.debug_trace_json["trace"]["run_id"] == run.id
-        assert "graph" not in run.debug_trace_json
+        assert any(node["id"] == "router" for node in run.debug_trace_json["graph"]["nodes"])
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_can_load_v2_preview_version_when_opted_in(self, engine, sample_thread, monkeypatch):
@@ -3131,9 +3140,16 @@ class TestAgentRunService:
 
         assert result["agent_pattern_id"] == "internal_e2e_custom_rag_agent"
         assert fallback_result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
-        assert run.resolved_spec_json["config"]["graph"]["nodes"][2] == {
+        retrieval_node = next(
+            node
+            for node in run.resolved_spec_json["config"]["graph"]["nodes"]
+            if node.get("id") == "retrieval_1"
+        )
+        assert retrieval_node == {
             "id": "retrieval_1",
             "type": "retrieval_worker",
+            "label": "Document Retrieval",
+            "category": "retrieval",
         }
         assert any(
             event.get("node") == "retrieval_1" and event.get("node_type") == "retrieval_worker"
@@ -3151,8 +3167,13 @@ class TestAgentRunService:
         assert any(
             attrs.get("askpdf.node.id") == "retrieval_1"
             and attrs.get("askpdf.node.type") == "retrieval_worker"
+            and attrs.get("askpdf.node.name") == "Document Retrieval"
             for attrs in span_attrs
         )
+        graph_nodes = (run.debug_trace_json or {}).get("graph", {}).get("nodes", [])
+        debug_retrieval_node = next(node for node in graph_nodes if node.get("id") == "retrieval_1")
+        assert debug_retrieval_node["label"] == "Document Retrieval"
+        assert debug_retrieval_node["category"] == "retrieval"
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_plan_execute_rag_when_selected(self, engine, sample_thread, monkeypatch):
@@ -3221,7 +3242,7 @@ class TestAgentRunService:
         assert run.metrics_json["document_source_count"] == 1
         assert run.metrics_json["used_chat_id_count"] == 1
         assert run.debug_trace_json["summary"]["route"] == "execute"
-        assert "graph" not in run.debug_trace_json
+        assert any(node["id"] == "planner" for node in run.debug_trace_json["graph"]["nodes"])
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_evaluator_replanner_rag_when_selected(self, engine, sample_thread, monkeypatch):
@@ -3297,7 +3318,7 @@ class TestAgentRunService:
         assert run.metrics_json["replan_count"] == 0
         assert run.metrics_json["evaluation_confidence"] == 0.8
         assert run.debug_trace_json["summary"]["evaluatorRoute"] == "answer"
-        assert "graph" not in run.debug_trace_json
+        assert any(node["id"] == "evidence_evaluator" for node in run.debug_trace_json["graph"]["nodes"])
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_pauses_before_web_and_resumes_from_checkpoint_once(self, engine, sample_thread, monkeypatch):
@@ -4137,7 +4158,7 @@ class TestAgentRunService:
         assert run.metrics_json["node_event_count"] == 1
         assert run.metrics_json["error_count"] == 1
         assert run.debug_trace_json["trace"]["status"] == "failed"
-        assert "graph" not in run.debug_trace_json
+        assert any(node["id"] == "router" for node in run.debug_trace_json["graph"]["nodes"])
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")

@@ -189,10 +189,11 @@ def _otel_status(status: str) -> Status:
     return Status(StatusCode.ERROR if status == "error" else StatusCode.OK)
 
 
-def _node_kind(node: str) -> str:
-    if node in {"router", "planner", "evidence_evaluator", "replanner"}:
+def _node_kind(node: str, node_type: Optional[str] = None) -> str:
+    kind_source = node_type or node
+    if kind_source in {"router", "planner", "evidence_evaluator", "replanner"}:
         return OpenInferenceSpanKindValues.AGENT.value
-    if node in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker"}:
+    if kind_source in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker"}:
         return OpenInferenceSpanKindValues.RETRIEVER.value
     return OpenInferenceSpanKindValues.CHAIN.value
 
@@ -855,7 +856,11 @@ def merge_debug_payloads(
 
     _rebuild_trace_refs(base_trace)
     summary = _build_summary_from_trace(base_trace, resolved_spec)
-    return {**base_payload, "trace": base_trace, "summary": summary}
+    payload = {**base_payload, "trace": base_trace, "summary": summary}
+    graph_spec = _as_dict(_as_dict(resolved_spec.get("config")).get("graph"))
+    if _as_list(graph_spec.get("nodes")):
+        payload["graph"] = build_debug_graph(resolved_spec=resolved_spec, summary=summary)
+    return payload
 
 
 class AgentTraceRecorder:
@@ -872,6 +877,11 @@ class AgentTraceRecorder:
         self._spans_by_id: Dict[str, Any] = {}
         self._sidecars: Dict[str, Dict[str, Any]] = {}
         self._node_span_by_node: Dict[str, str] = {}
+        self._node_spec_by_id = {
+            str(node.get("id")): node
+            for node in _as_list(_as_dict(_as_dict(self.resolved_spec.get("config")).get("graph")).get("nodes"))
+            if isinstance(node.get("id"), str)
+        }
         self._node_index = 0
         self._tool_index = 0
         self._finalized = False
@@ -891,6 +901,15 @@ class AgentTraceRecorder:
             order=0,
             end_immediately=False,
         )
+
+    def _node_display_name(self, node: str, node_type: Optional[str] = None) -> str:
+        spec = _as_dict(self._node_spec_by_id.get(node))
+        label = spec.get("label")
+        if isinstance(label, str) and label:
+            return label
+        if isinstance(node_type, str) and node_type:
+            return _node_display_name(node_type)
+        return _node_display_name(node)
 
     def _run_base_attributes(
         self,
@@ -987,6 +1006,7 @@ class AgentTraceRecorder:
         self._node_index += 1
         node = str(event.get("node") or event.get("name") or f"node_{index}")
         node_type = str(event.get("node_type") or node)
+        node_display_name = self._node_display_name(node, node_type)
         status = _span_status(event)
         span_id = f"node:{node}:{index}"
         llm_summary = _as_dict(_as_dict(event.get("llm_result_summary")).get("llm"))
@@ -1012,11 +1032,11 @@ class AgentTraceRecorder:
         attributes = _clean_dict(
             {
                 SpanAttributes.GRAPH_NODE_ID: node,
-                SpanAttributes.GRAPH_NODE_NAME: _node_display_name(node),
+                SpanAttributes.GRAPH_NODE_NAME: node_display_name,
                 "askpdf.node.id": node,
                 "askpdf.node.type": node_type,
                 "askpdf.node.visit_index": event.get("visit_index"),
-                "askpdf.node.name": _node_display_name(node),
+                "askpdf.node.name": node_display_name,
                 "askpdf.route": event.get("route"),
                 "askpdf.route_reason": event.get("route_reason"),
                 "askpdf.evaluator_route": event.get("evaluator_route"),
@@ -1059,8 +1079,8 @@ class AgentTraceRecorder:
         self._start_span(
             span_id=span_id,
             parent_span_id=self.run_span_id,
-            name=_node_display_name(node),
-            kind=_node_kind(node),
+            name=node_display_name,
+            kind=_node_kind(node, node_type),
             status=status,
             start_time=event.get("start_time"),
             end_time=event.get("end_time"),
@@ -1075,12 +1095,22 @@ class AgentTraceRecorder:
         if node not in self._node_span_by_node:
             self._node_span_by_node[node] = span_id
         if llm_summary:
-            self._record_llm_span(node=node, parent_span_id=span_id, index=index, event=event, llm_summary=llm_summary)
+            self._record_llm_span(
+                node=node,
+                node_type=node_type,
+                node_display_name=node_display_name,
+                parent_span_id=span_id,
+                index=index,
+                event=event,
+                llm_summary=llm_summary,
+            )
 
     def _record_llm_span(
         self,
         *,
         node: str,
+        node_type: str,
+        node_display_name: str,
         parent_span_id: str,
         index: int,
         event: Mapping[str, Any],
@@ -1108,12 +1138,13 @@ class AgentTraceRecorder:
                 "llm.reasoning_format": llm_summary.get("reasoning_format"),
                 "llm.reasoning_chars": llm_summary.get("reasoning_chars"),
                 "askpdf.node.id": node,
+                "askpdf.node.type": node_type,
             }
         )
         self._start_span(
             span_id=span_id,
             parent_span_id=parent_span_id,
-            name=f"{_node_display_name(node)} LLM",
+            name=f"{node_display_name} LLM",
             kind=OpenInferenceSpanKindValues.LLM.value,
             status=status,
             start_time=event.get("start_time"),
@@ -1280,11 +1311,15 @@ class AgentTraceRecorder:
             self._finalized = True
         trace = self._build_trace(run=run, chat_turn_id=chat_turn_id, metrics=metrics)
         summary = self._build_summary(trace)
-        return {
+        payload = {
             "version": DEBUG_PAYLOAD_VERSION,
             "trace": trace,
             "summary": summary,
         }
+        graph_spec = _as_dict(_as_dict(self.resolved_spec.get("config")).get("graph"))
+        if _as_list(graph_spec.get("nodes")):
+            payload["graph"] = build_debug_graph(resolved_spec=self.resolved_spec, summary=summary)
+        return payload
 
     def _span_to_dict(self, span: ReadableSpan) -> Dict[str, Any]:
         attrs = dict(span.attributes or {})
@@ -1371,6 +1406,7 @@ def _summary_node(span: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "id": node_id,
         "type": attributes.get("askpdf.node.type"),
+        "label": attributes.get("askpdf.node.name"),
         "visitIndex": attributes.get("askpdf.node.visit_index"),
         "status": span.get("status"),
         "skipped": span.get("status") == "skipped",
@@ -1554,6 +1590,7 @@ def build_debug_graph(
                 "id": node_id,
                 "type": str(spec.get("type") or node_id),
                 "label": str(spec.get("label") or _node_display_name(node_id)),
+                "category": spec.get("category"),
                 "description": spec.get("description"),
                 "status": status,
                 "elapsedMs": summary_node.get("durationMs"),

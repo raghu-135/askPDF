@@ -105,14 +105,17 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
     summary = debug.get("summary") if isinstance(debug.get("summary"), dict) else None
     if trace is None or summary is None:
         return None
+    graph = debug.get("graph") if isinstance(debug.get("graph"), dict) else None
+    if graph is None:
+        graph = build_debug_graph(
+            resolved_spec=run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {},
+            summary=summary,
+        )
     return {
         **debug,
         "trace": trace,
         "summary": summary,
-        "graph": build_debug_graph(
-            resolved_spec=run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {},
-            summary=summary,
-        ),
+        "graph": graph,
     }
 
 
