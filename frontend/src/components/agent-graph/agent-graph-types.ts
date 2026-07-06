@@ -1,5 +1,14 @@
 export type AgentGraphMode = 'run-debug' | 'builder';
 
+export interface AgentNodeCatalogEntry {
+  displayName?: string;
+  display_name?: string;
+  category?: string;
+  [key: string]: unknown;
+}
+
+export type AgentNodeCatalog = Record<string, AgentNodeCatalogEntry>;
+
 export type AgentGraphNodeStatus = 'active' | 'planned' | 'skipped' | 'inactive' | 'error';
 
 export interface AgentPatternGraphNodeSpec {
@@ -103,6 +112,7 @@ export interface AgentGraphRuntimeOverlay {
   toolRows?: Record<string, any>[];
   errors?: Record<string, any>[];
   metrics?: Record<string, any>;
+  nodeCatalog?: AgentNodeCatalog;
 }
 
 export type AgentGraphSelection =

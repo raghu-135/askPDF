@@ -7,23 +7,8 @@ import type {
   AgentTraceRefs,
   AgentPatternGraphSpec,
 } from './agent-graph-types';
-
-const NODE_LABELS: Record<string, string> = {
-  context_loader: 'Context Loader',
-  router: 'Router',
-  planner: 'Planner',
-  evidence_evaluator: 'Evidence Evaluator',
-  replanner: 'Replanner',
-  retrieval_worker: 'Document Retrieval',
-  memory_worker: 'Memory Retrieval',
-  timeline_worker: 'Timeline Retrieval',
-  web_approval_gate: 'Web Approval',
-  web_worker: 'Web Retrieval',
-  direct_answer: 'Direct Answer',
-  synthesizer: 'Synthesizer',
-  finalizer: 'Finalizer',
-  hitl_gate: 'HITL Gate',
-};
+export { formatNodeLabel, formatNodeInstanceLabel } from './agent-node-labels.js';
+import { formatNodeLabel, formatNodeInstanceLabel } from './agent-node-labels.js';
 
 const BUILTIN_GRAPHS: Record<string, AgentPatternGraphSpec> = {
   router_rag_agent: {
@@ -148,14 +133,6 @@ const asArray = (value: any): Record<string, any>[] => (
 
 const unique = (items: string[]) => Array.from(new Set(items.filter(Boolean)));
 
-export const formatNodeLabel = (id: string, type?: string) => (
-  NODE_LABELS[id] || NODE_LABELS[type || ''] || id.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
-);
-
-export const formatNodeInstanceLabel = (id: string, type?: string) => (
-  type && id !== type ? `${id} · ${type}` : id
-);
-
 const getNodeIdFromEvent = (event: Record<string, any>) => (
   typeof event.node === 'string' ? event.node : typeof event.name === 'string' ? event.name : ''
 );
@@ -231,6 +208,7 @@ export const buildAgentGraph = (
 ) => {
   const nodeRows = asArray(overlay.nodeRows);
   const toolRows = asArray(overlay.toolRows);
+  const nodeCatalog = overlay.nodeCatalog;
   const executionPlan = getExecutionPlan(overlay, nodeRows);
   const selectedRoute = overlay.route || overlay.metrics?.route;
 
@@ -262,7 +240,7 @@ export const buildAgentGraph = (
       return {
         id: node.id,
         type: node.type,
-        label: formatNodeLabel(node.id, node.type),
+        label: formatNodeLabel(node.id, node.type, nodeCatalog),
         instanceId: node.id,
         instanceLabel: formatNodeInstanceLabel(node.id, node.type),
         description: typeof node.description === 'string' ? node.description : undefined,

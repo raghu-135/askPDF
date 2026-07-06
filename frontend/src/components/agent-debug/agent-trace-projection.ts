@@ -1,5 +1,9 @@
 import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails } from '../../lib/api';
-import type { AgentGraphEdge, AgentGraphNode } from '../agent-graph/agent-graph-types';
+import {
+  formatNodeInstanceLabel,
+  formatNodeLabel,
+} from '../agent-graph/agent-node-labels.js';
+import type { AgentGraphEdge, AgentGraphNode, AgentNodeCatalog } from '../agent-graph/agent-graph-types';
 
 export interface TraceNodeView {
   id: string;
@@ -75,31 +79,6 @@ const asNumber = (value: any): number | undefined => {
   return Number.isFinite(numberValue) ? numberValue : undefined;
 };
 
-const NODE_LABELS: Record<string, string> = {
-  context_loader: 'Context Loader',
-  router: 'Router',
-  planner: 'Planner',
-  evidence_evaluator: 'Evidence Evaluator',
-  replanner: 'Replanner',
-  retrieval_worker: 'Document Retrieval',
-  memory_worker: 'Memory Retrieval',
-  timeline_worker: 'Timeline Retrieval',
-  web_approval_gate: 'Web Approval',
-  web_worker: 'Web Retrieval',
-  direct_answer: 'Direct Answer',
-  synthesizer: 'Synthesizer',
-  finalizer: 'Finalizer',
-  hitl_gate: 'HITL Gate',
-};
-
-const formatNodeLabel = (id: string, type?: string) => (
-  NODE_LABELS[id] || NODE_LABELS[type || ''] || id.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
-);
-
-const formatNodeInstanceLabel = (id: string, type?: string) => (
-  type && id !== type ? `${id} · ${type}` : id
-);
-
 export const getRunDebug = (runDetails: AgentRunDetails): AgentRunDebug | undefined => {
   const debug = runDetails.debug;
   if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return undefined;
@@ -123,7 +102,7 @@ export const getRunDebugMetrics = (runDetails: AgentRunDetails) => {
   return runDetails.metrics_json || {};
 };
 
-const nodeViewFromSummary = (row: Record<string, any>): TraceNodeView => {
+const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCatalog): TraceNodeView => {
   const raw = asObject(row.raw);
   const id = String(row.id || row.node || row.name || raw.node || 'unknown_node');
   const type = typeof row.type === 'string'
@@ -136,7 +115,7 @@ const nodeViewFromSummary = (row: Record<string, any>): TraceNodeView => {
   return {
     id,
     type,
-    label: formatNodeLabel(id, type),
+    label: formatNodeLabel(id, type, nodeCatalog),
     instanceLabel: formatNodeInstanceLabel(id, type),
     status: typeof row.status === 'string' ? row.status : undefined,
     skipped: row.skipped === true || row.status === 'skipped',
@@ -175,7 +154,7 @@ const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
   };
 };
 
-const getRunGraph = (debug?: AgentRunDebug): TraceGraphView | undefined => {
+const getRunGraph = (debug?: AgentRunDebug, nodeCatalog?: AgentNodeCatalog): TraceGraphView | undefined => {
   const graph = asObject(debug?.graph);
   const nodes = (asArray(graph.nodes) as AgentGraphNode[]).map((node) => {
     const id = String(node.id || 'unknown_node');
@@ -184,7 +163,7 @@ const getRunGraph = (debug?: AgentRunDebug): TraceGraphView | undefined => {
       ...node,
       id,
       type,
-      label: formatNodeLabel(id, type),
+      label: formatNodeLabel(id, type, nodeCatalog),
       instanceId: id,
       instanceLabel: formatNodeInstanceLabel(id, type),
     };
@@ -199,19 +178,22 @@ const getRunGraph = (debug?: AgentRunDebug): TraceGraphView | undefined => {
   };
 };
 
-export const buildRunTraceView = (runDetails: AgentRunDetails): TraceRunView | undefined => {
+export const buildRunTraceView = (
+  runDetails: AgentRunDetails,
+  options: { nodeCatalog?: AgentNodeCatalog } = {},
+): TraceRunView | undefined => {
   const debug = getRunDebug(runDetails);
   if (!debug) return undefined;
   const summary = asObject(debug.summary);
   const metrics = getRunDebugMetrics(runDetails);
-  const nodes = asArray(summary.nodes).map(nodeViewFromSummary);
+  const nodes = asArray(summary.nodes).map((node) => nodeViewFromSummary(node, options.nodeCatalog));
   const tools = asArray(summary.tools).map(toolViewFromSummary);
   const usedNodeCount = asNumber(summary.usedNodeCount) ?? nodes.filter((node) => !node.skipped).length;
   const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
   return {
     debug,
     trace: getRunTrace(runDetails),
-    graph: getRunGraph(debug),
+    graph: getRunGraph(debug, options.nodeCatalog),
     route: typeof summary.route === 'string' ? summary.route : typeof metrics.route === 'string' ? metrics.route : undefined,
     routeReason: typeof summary.routeReason === 'string' ? summary.routeReason : undefined,
     metrics,

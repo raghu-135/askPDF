@@ -157,6 +157,9 @@ test('graph mapper labels custom node instances by catalog type while preserving
       ],
     },
     {
+      nodeCatalog: {
+        retrieval_worker: { display_name: 'Catalog Document Retrieval' },
+      },
       route: 'document',
       nodeRows: [
         { node: 'router_1', node_type: 'router', route: 'document', elapsed_ms: 4 },
@@ -177,7 +180,7 @@ test('graph mapper labels custom node instances by catalog type while preserving
   const retrievalNode = graph.nodes.find((node) => node.id === 'retrieval_1');
   const selectedEdge = graph.edges.find((edge) => edge.route === 'document');
 
-  assert.equal(retrievalNode?.label, 'Document Retrieval');
+  assert.equal(retrievalNode?.label, 'Catalog Document Retrieval');
   assert.equal(retrievalNode?.instanceLabel, 'retrieval_1 · retrieval_worker');
   assert.equal(retrievalNode?.toolSummaries[0]?.callerNode, 'retrieval_1');
   assert.equal(retrievalNode?.toolSummaries[0]?.callerNodeType, 'retrieval_worker');

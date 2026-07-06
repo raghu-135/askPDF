@@ -246,15 +246,18 @@ test('trace projection preserves custom node type metadata and normalizes graph 
     },
   };
 
-  const view = buildRunTraceView({ ...traceBackedRun, id: 'run-custom', debug: customDebug });
+  const view = buildRunTraceView(
+    { ...traceBackedRun, id: 'run-custom', debug: customDebug },
+    { nodeCatalog: { retrieval_worker: { display_name: 'Catalog Document Retrieval' } } },
+  );
 
   assert.equal(view.nodes[0].id, 'retrieval_1');
   assert.equal(view.nodes[0].type, 'retrieval_worker');
-  assert.equal(view.nodes[0].label, 'Document Retrieval');
+  assert.equal(view.nodes[0].label, 'Catalog Document Retrieval');
   assert.equal(view.nodes[0].instanceLabel, 'retrieval_1 · retrieval_worker');
   assert.equal(view.tools[0].callerNode, 'retrieval_1');
   assert.equal(view.tools[0].callerNodeType, 'retrieval_worker');
-  assert.equal(view.graph?.nodes[0].label, 'Document Retrieval');
+  assert.equal(view.graph?.nodes[0].label, 'Catalog Document Retrieval');
   assert.equal(view.graph?.nodes[0].instanceLabel, 'retrieval_1 · retrieval_worker');
 });
 
