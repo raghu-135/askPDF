@@ -327,6 +327,11 @@ Environment variables are now managed using a `.env` file for better security an
 | `WEAVIATE_URL` | `http://weaviate:8080` | Weaviate vector database endpoint |
 | `WEAVIATE_HYBRID_ALPHA` | `0.7` | Hybrid search balance (0.0=pure vector, 1.0=pure keyword) |
 | `CAPTURE_SERVICE_URL` | `http://browser-capture:8080` | Browser capture service endpoint |
+| `ASKPDF_AGENT_CHECKPOINTER` | `postgres` | LangGraph checkpointer backend for resumable agent runs (`postgres` or `memory`) |
+| `AGENT_CHECKPOINT_DATABASE_URL` | unset | Optional Postgres URL override for LangGraph checkpoints; falls back to `DATABASE_URL` |
+| `ASKPDF_AGENT_CHECKPOINTER_SETUP` | `true` | Run LangGraph Postgres checkpointer setup on startup/use |
+| `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK` | unset | Explicit opt-in to memory fallback when `ASKPDF_AGENT_CHECKPOINTER=postgres` is misconfigured |
+| `ASKPDF_AGENT_HITL_FINAL_REVIEW` | unset | Enables the initial checkpointed final-answer review gate when set to `true` |
 
 ### Setup Instructions
 
@@ -423,6 +428,7 @@ run for debugging.
 - `--db` / `--db-tests` / `--db-only` - Run PostgreSQL database tests
 - `--api` - Run API endpoint tests
 - `--integration` - Run integration tests
+- `--agent-checkpoint` - Run the Postgres checkpoint/resume hardening test
 - `--schema` - Run schema guardrail tests
 - `--standalone` - Run standalone verification scripts
 - `--all` / `--all-tests` - Run the full pytest suite plus standalone checks
@@ -434,7 +440,8 @@ run for debugging.
 
 ### CI and Merge Gates
 
-GitHub Actions runs Docker build and test jobs on pull requests and pushes to
+GitHub Actions runs Docker build, the default Docker test runner, and a focused
+Postgres checkpoint/resume hardening lane on pull requests and pushes to
 `main`. To block merges unless CI passes, configure a branch ruleset in GitHub:
 
 1. Go to **Settings → Rules → Rulesets**.

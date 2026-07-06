@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.router_runtime import handle_router_rag_chat
 from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result_metadata
 from app.agent_patterns.graph import build_planner_prompt, infer_required_plan_steps, normalize_execution_plan
@@ -27,7 +28,7 @@ from app.agent_patterns.templates import (
     builtin_router_rag_spec,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
-from app.db.models_sqlmodel import AgentRun, ChatTurn
+from app.db.models_sqlmodel import AgentRun, ChatTurn, Thread
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z, utc_now
 
@@ -76,6 +77,19 @@ async def create_agent_run_record(
         repo_session.add(run)
         await repo_session.commit()
         return run
+
+
+class TestAgentCheckpointing:
+    @pytest.mark.asyncio
+    async def test_explicit_postgres_checkpointer_fails_without_database_url(self, monkeypatch):
+        monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "postgres")
+        monkeypatch.delenv("AGENT_CHECKPOINT_DATABASE_URL", raising=False)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK", raising=False)
+
+        with pytest.raises(RuntimeError, match="requires AGENT_CHECKPOINT_DATABASE_URL or DATABASE_URL"):
+            async with open_agent_checkpointer():
+                pass
 
 
 class TestModelRetry:
@@ -1107,6 +1121,77 @@ class TestAgentPatternRepository:
             await repo.prune_runs_before(utc_now(), statuses=[])
 
     @pytest.mark.asyncio
+    async def test_prune_checkpoints_for_terminal_runs_only(self, repo, sample_thread):
+        class FakeCheckpointer:
+            def __init__(self):
+                self.deleted_thread_ids = []
+
+            async def adelete_thread(self, thread_id):
+                self.deleted_thread_ids.append(thread_id)
+
+        await repo.seed_builtin_templates()
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        old_completed = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_completed"},
+        )
+        old_failed = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_failed"},
+        )
+        old_awaiting = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_awaiting"},
+        )
+        recent_completed = await repo.create_run(
+            thread_id=sample_thread.id,
+            template_id=template.id,
+            template_version_id=version.id,
+            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "recent_completed"},
+        )
+        old_at = utc_now() - timedelta(days=45)
+        recent_at = utc_now() - timedelta(days=1)
+
+        session = await repo._get_session()
+        async with session.begin():
+            old_completed_row = await session.get(AgentRun, old_completed.id)
+            old_failed_row = await session.get(AgentRun, old_failed.id)
+            old_awaiting_row = await session.get(AgentRun, old_awaiting.id)
+            recent_completed_row = await session.get(AgentRun, recent_completed.id)
+            old_completed_row.started_at = old_at
+            old_completed_row.status = "completed"
+            old_failed_row.started_at = old_at
+            old_failed_row.status = "failed"
+            old_awaiting_row.started_at = old_at
+            old_awaiting_row.status = "awaiting_human"
+            recent_completed_row.started_at = recent_at
+            recent_completed_row.status = "completed"
+
+        fake_checkpointer = FakeCheckpointer()
+        deleted_checkpoint_thread_ids = await repo.prune_checkpoints_for_runs_before(
+            utc_now() - timedelta(days=30),
+            statuses=["completed", "failed"],
+            thread_id=sample_thread.id,
+            checkpointer=fake_checkpointer,
+        )
+
+        assert set(deleted_checkpoint_thread_ids) == {old_completed.checkpoint_thread_id, old_failed.checkpoint_thread_id}
+        assert set(fake_checkpointer.deleted_thread_ids) == set(deleted_checkpoint_thread_ids)
+
+        with pytest.raises(ValueError, match="terminal run statuses"):
+            await repo.prune_checkpoints_for_runs_before(
+                utc_now(),
+                statuses=["completed", "awaiting_human"],
+                checkpointer=fake_checkpointer,
+            )
+
+    @pytest.mark.asyncio
     async def test_fail_stale_running_runs_marks_only_old_running_rows_failed(self, repo, sample_thread):
         await repo.seed_builtin_templates()
         template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
@@ -1223,7 +1308,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_pattern": {"template_id": "simple_rag_agent"}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_context.update(agent_run_context or {})
                 return {
                     "answer": "router fallback",
@@ -1280,7 +1365,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 return {
                     "answer": "router default",
                     "document_sources": [],
@@ -1330,7 +1415,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 node_event = {"node": "router", "elapsed_ms": 3.5, "route": "direct"}
                 tool_event = {
@@ -1404,7 +1489,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_pattern": {"template_id": PLAN_EXECUTE_RAG_AGENT_ID}}
 
-            async def fake_handle_plan_execute_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
+            async def fake_handle_plan_execute_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 node_event = {"node": "planner", "elapsed_ms": 2.0, "route": "execute", "execution_plan": ["retrieval_worker"]}
                 trace_recorder.record_node_event(node_event)
@@ -1457,6 +1542,502 @@ class TestAgentRunService:
         assert "graph" not in run.debug_trace_json
 
     @pytest.mark.asyncio
+    async def test_run_thread_chat_pauses_and_resumes_from_checkpoint_once(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        class FakeLlm:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages):
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(content='{"route":"direct","reason":"test direct route","clarification_options":null}')
+                return SimpleNamespace(content="Checkpointed final answer.")
+
+        fake_llm = FakeLlm()
+        created_turn_ids = []
+
+        async def fake_get_thread_settings(_thread_id):
+            return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
+
+        async def fake_prefetch_context(**kwargs):
+            return {
+                "recent_history_text": "",
+                "semantic_history_text": "",
+                "document_evidence_text": "",
+                "web_evidence_text": "",
+                "stats": {"total_messages": 0, "estimated_history_tokens": 0},
+                "documents": [],
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+            }
+
+        async def fake_create_chat_turn(
+            *,
+            thread_id,
+            question,
+            answer,
+            rewritten_question=None,
+            status="completed",
+            reasoning="",
+            reasoning_available=False,
+            reasoning_format="none",
+            web_sources=None,
+            document_sources=None,
+            used_chat_ids=None,
+            clarification_options=None,
+            error=None,
+            metadata=None,
+            agent_run_id=None,
+            agent_run_turn_kind=None,
+            agent_run_sequence=None,
+            agent_trace_refs_json=None,
+        ):
+            turn = ChatTurn(
+                id=str(uuid.uuid4()),
+                thread_id=thread_id,
+                agent_run_id=agent_run_id,
+                agent_run_turn_kind=agent_run_turn_kind,
+                agent_run_sequence=agent_run_sequence,
+                agent_trace_refs_json=agent_trace_refs_json,
+                status=status,
+                payload={
+                    "question": question,
+                    "rewritten_question": rewritten_question,
+                    "answer": answer,
+                    "reasoning": reasoning,
+                    "reasoning_available": reasoning_available,
+                    "reasoning_format": reasoning_format,
+                    "web_sources": web_sources or [],
+                    "document_sources": document_sources or [],
+                    "used_chat_ids": used_chat_ids or [],
+                    "clarification_options": clarification_options,
+                    "error": error,
+                    "metadata": metadata or {},
+                },
+            )
+            async with session_factory() as write_session:
+                write_session.add(turn)
+                await write_session.commit()
+                await write_session.refresh(turn)
+            created_turn_ids.append(turn.id)
+            return turn
+
+        async def fake_index_chat_memory_for_thread(**kwargs):
+            return {}
+
+        async def fake_update_message_context_compact(_turn_id, _compact_text):
+            return None
+
+        async def fake_increment_qa_stats(_thread_id, _qa_chars):
+            return None
+
+        monkeypatch.setenv("ASKPDF_AGENT_HITL_FINAL_REVIEW", "true")
+        monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+        monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            service = AgentRunService(repository=repo)
+            req = SimpleNamespace(
+                question="Pause before saving?",
+                llm_model="test-llm",
+                use_web_search=False,
+                use_reranker=False,
+                context_window=8192,
+                max_iterations=1,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+                client_timezone="America/Chicago",
+                client_locale="en-US",
+                client_now_iso="2026-07-05T12:00:00.000Z",
+            )
+
+            paused = await service.run_thread_chat(sample_thread.id, req, sample_thread.embed_model)
+            run = await repo.get_run(paused["agent_run_id"])
+            pending = run.pending_interrupt_json
+            paused_run_status = run.status
+            paused_completed_at = run.completed_at
+            paused_checkpoint_thread_id = run.checkpoint_thread_id
+            resumed = await service.resume_agent_run(
+                run.id,
+                interrupt_id=pending["interrupt_id"],
+                action="approve",
+                resume_version=pending["resume_version"],
+                expected_thread_id=sample_thread.id,
+            )
+            duplicate = await service.resume_agent_run(
+                run.id,
+                interrupt_id=pending["interrupt_id"],
+                action="approve",
+                resume_version=pending["resume_version"],
+                expected_thread_id=sample_thread.id,
+            )
+            turns = await repo.list_chat_turns_for_run(run.id)
+
+        assert paused["status"] == "awaiting_human"
+        assert "chat_turn_id" not in paused
+        assert paused_run_status == "awaiting_human"
+        assert paused_completed_at is None
+        assert paused_checkpoint_thread_id == run.id
+        assert pending["checkpoint_resume"] is True
+        assert pending["checkpoint_thread_id"] == paused_checkpoint_thread_id
+        assert pending["type"] == "final_answer_review"
+        assert pending["proposed_final_answer"] == "Checkpointed final answer."
+        assert fake_llm.calls == 2
+
+        assert resumed is not None
+        assert resumed.duplicate is False
+        assert resumed.run.status == "completed"
+        assert resumed.run.pending_interrupt_json["status"] == "resumed"
+        assert resumed.run.metrics_json["interrupt_resolution_count"] == 1
+        assert duplicate is not None
+        assert duplicate.duplicate is True
+        assert duplicate.run.status == "completed"
+        assert len(created_turn_ids) == 1
+        assert len(turns) == 1
+        assert turns[0].payload["answer"] == "Checkpointed final answer."
+        assert turns[0].agent_run_id == run.id
+
+        root_events = [
+            event
+            for span in resumed.run.debug_trace_json["trace"]["spans"]
+            if span["span_id"] == f"run:{run.id}"
+            for event in span["events"]
+        ]
+        root_event_names = [event["name"] for event in root_events]
+        interrupt_events = [event for event in root_events if event["name"].startswith("interrupt.")]
+        assert [event["name"] for event in interrupt_events] == ["interrupt.requested", "interrupt.resumed"]
+        for event_name in ["checkpoint.created", "resume.requested", "resume.applied", "graph.resumed"]:
+            assert event_name in root_event_names
+        node_span_ids = {
+            span["attributes"]["askpdf.node.id"]
+            for span in resumed.run.debug_trace_json["trace"]["spans"]
+            if span.get("attributes", {}).get("askpdf.node.id")
+        }
+        assert "human_review_gate" in node_span_ids
+        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] == 5
+        assert any(node["id"] == "human_review_gate" for node in resumed.run.debug_trace_json["summary"]["nodes"])
+        assert resumed.run.debug_trace_json["trace"]["status"] == "completed"
+        assert resumed.run.debug_trace_json["trace"]["chat_turn_id"] == turns[0].id
+        assert resumed.run.debug_trace_json["summary"]["lastInterruptStatus"] == "resumed"
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        os.getenv("ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST") != "1",
+        reason="set ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST=1 to run the Postgres checkpoint persistence test",
+    )
+    async def test_run_thread_chat_resumes_after_postgres_checkpointer_reopen(
+        self,
+        engine,
+        test_database_url,
+        monkeypatch,
+    ):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        class FakeLlm:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, messages):
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(content='{"route":"direct","reason":"test direct route","clarification_options":null}')
+                return SimpleNamespace(content="Postgres checkpoint answer.")
+
+        fake_llm = FakeLlm()
+        created_turn_ids = []
+
+        async def fake_get_thread_settings(_thread_id):
+            return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
+
+        async def fake_prefetch_context(**kwargs):
+            return {
+                "recent_history_text": "",
+                "semantic_history_text": "",
+                "document_evidence_text": "",
+                "web_evidence_text": "",
+                "stats": {"total_messages": 0, "estimated_history_tokens": 0},
+                "documents": [],
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+            }
+
+        async def fake_create_chat_turn(
+            *,
+            thread_id,
+            question,
+            answer,
+            rewritten_question=None,
+            status="completed",
+            reasoning="",
+            reasoning_available=False,
+            reasoning_format="none",
+            web_sources=None,
+            document_sources=None,
+            used_chat_ids=None,
+            clarification_options=None,
+            error=None,
+            metadata=None,
+            agent_run_id=None,
+            agent_run_turn_kind=None,
+            agent_run_sequence=None,
+            agent_trace_refs_json=None,
+        ):
+            turn = ChatTurn(
+                id=str(uuid.uuid4()),
+                thread_id=thread_id,
+                agent_run_id=agent_run_id,
+                agent_run_turn_kind=agent_run_turn_kind,
+                agent_run_sequence=agent_run_sequence,
+                agent_trace_refs_json=agent_trace_refs_json,
+                status=status,
+                payload={
+                    "question": question,
+                    "rewritten_question": rewritten_question,
+                    "answer": answer,
+                    "reasoning": reasoning,
+                    "reasoning_available": reasoning_available,
+                    "reasoning_format": reasoning_format,
+                    "web_sources": web_sources or [],
+                    "document_sources": document_sources or [],
+                    "used_chat_ids": used_chat_ids or [],
+                    "clarification_options": clarification_options,
+                    "error": error,
+                    "metadata": metadata or {},
+                },
+            )
+            async with session_factory() as write_session:
+                write_session.add(turn)
+                await write_session.commit()
+                await write_session.refresh(turn)
+            created_turn_ids.append(turn.id)
+            return turn
+
+        async def fake_index_chat_memory_for_thread(**kwargs):
+            return {}
+
+        async def fake_update_message_context_compact(_turn_id, _compact_text):
+            return None
+
+        async def fake_increment_qa_stats(_thread_id, _qa_chars):
+            return None
+
+        async with session_factory() as setup_session:
+            thread = Thread(
+                id=str(uuid.uuid4()),
+                name="Postgres checkpoint test",
+                embed_model="BAAI/bge-m3",
+                settings={},
+            )
+            setup_session.add(thread)
+            await setup_session.commit()
+            await setup_session.refresh(thread)
+            thread_id = thread.id
+            embed_model = thread.embed_model
+
+        monkeypatch.setenv("ASKPDF_AGENT_HITL_FINAL_REVIEW", "true")
+        monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "postgres")
+        monkeypatch.setenv("AGENT_CHECKPOINT_DATABASE_URL", test_database_url)
+        monkeypatch.delenv("ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK", raising=False)
+        monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+
+        async with session_factory() as first_session:
+            first_repo = AgentPatternRepository(first_session)
+            await first_repo.seed_builtin_templates()
+            req = SimpleNamespace(
+                question="Pause and survive restart?",
+                llm_model="test-llm",
+                use_web_search=False,
+                use_reranker=False,
+                context_window=8192,
+                max_iterations=1,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+                client_timezone="America/Chicago",
+                client_locale="en-US",
+                client_now_iso="2026-07-05T12:00:00.000Z",
+            )
+            paused = await AgentRunService(repository=first_repo).run_thread_chat(
+                thread_id,
+                req,
+                embed_model,
+            )
+            paused_run = await first_repo.get_run(paused["agent_run_id"])
+            pending = paused_run.pending_interrupt_json
+            checkpoint_thread_id = paused_run.checkpoint_thread_id
+
+        async with session_factory() as second_session:
+            second_repo = AgentPatternRepository(second_session)
+            resumed = await AgentRunService(repository=second_repo).resume_agent_run(
+                paused_run.id,
+                interrupt_id=pending["interrupt_id"],
+                action="approve",
+                resume_version=pending["resume_version"],
+                expected_thread_id=thread_id,
+            )
+            duplicate = await AgentRunService(repository=second_repo).resume_agent_run(
+                paused_run.id,
+                interrupt_id=pending["interrupt_id"],
+                action="approve",
+                resume_version=pending["resume_version"],
+                expected_thread_id=thread_id,
+            )
+            turns = await second_repo.list_chat_turns_for_run(paused_run.id)
+            deleted_checkpoint_thread_ids = await second_repo.prune_checkpoints_for_runs_before(
+                utc_now() + timedelta(seconds=1),
+                statuses=["completed"],
+                thread_id=thread_id,
+            )
+
+        assert paused["status"] == "awaiting_human"
+        assert pending["checkpoint_resume"] is True
+        assert pending["checkpoint_thread_id"] == checkpoint_thread_id
+        assert checkpoint_thread_id == paused_run.id
+        assert resumed is not None
+        assert resumed.duplicate is False
+        assert resumed.run.status == "completed"
+        assert duplicate is not None
+        assert duplicate.duplicate is True
+        assert len(created_turn_ids) == 1
+        assert len(turns) == 1
+        assert turns[0].payload["answer"] == "Postgres checkpoint answer."
+        assert fake_llm.calls == 2
+        assert deleted_checkpoint_thread_ids == [checkpoint_thread_id]
+
+    @pytest.mark.asyncio
+    async def test_resume_that_pauses_again_preserves_trace_continuity(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+
+        monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            run = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                template_version=version.version,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            debug_payload = build_debug_payload(
+                run=run,
+                node_events=[],
+                tool_events=[],
+                metrics={"duration_ms": 1.0, "tool_warning_count": 0, "error_count": 0},
+            )
+            await repo.mark_run_awaiting_human(
+                run.id,
+                {
+                    "interrupt_id": "interrupt-1",
+                    "allowed_actions": ["approve", "reject"],
+                    "checkpoint_resume": True,
+                    "checkpoint_thread_id": run.checkpoint_thread_id,
+                    "resume_version": 1,
+                },
+                debug_trace_json=debug_payload,
+            )
+
+            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder):
+                trace_recorder.record_runtime_event(
+                    "graph.resumed",
+                    attributes={
+                        "askpdf.run.id": run.id,
+                        "askpdf.thread.id": run.thread_id,
+                        "askpdf.interrupt.id": interrupt.get("interrupt_id"),
+                        "askpdf.resume.action": "approve",
+                        "askpdf.checkpoint.thread_id": run.checkpoint_thread_id,
+                    },
+                )
+                return {
+                    "status": "awaiting_human",
+                    "pending_interrupt": {
+                        "interrupt_id": "interrupt-2",
+                        "allowed_actions": ["approve", "reject"],
+                        "checkpoint_resume": True,
+                        "checkpoint_thread_id": run.checkpoint_thread_id,
+                        "resume_version": 2,
+                    },
+                    "duration_ms": 2.0,
+                    "route": "direct",
+                    "route_reason": "second review gate",
+                    "node_events": [],
+                    "tool_events": [],
+                }
+
+            monkeypatch.setattr("app.agent_patterns.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
+
+            result = await AgentRunService(repository=repo).resume_agent_run(
+                run.id,
+                interrupt_id="interrupt-1",
+                action="approve",
+                resume_version=1,
+                expected_thread_id=sample_thread.id,
+            )
+            updated_run = await repo.get_run(run.id)
+
+        assert result is not None
+        assert result.duplicate is False
+        assert updated_run.status == "awaiting_human"
+        assert updated_run.pending_interrupt_json["interrupt_id"] == "interrupt-2"
+        assert updated_run.pending_interrupt_json["status"] == "pending"
+        root_events = [
+            event
+            for span in updated_run.debug_trace_json["trace"]["spans"]
+            if span["span_id"] == f"run:{run.id}"
+            for event in span["events"]
+        ]
+        root_event_names = [event["name"] for event in root_events]
+        requested_interrupt_ids = [
+            event["attributes"]["askpdf.interrupt.id"]
+            for event in root_events
+            if event["name"] == "interrupt.requested"
+        ]
+        assert requested_interrupt_ids == ["interrupt-1", "interrupt-2"]
+        assert "interrupt.resumed" in root_event_names
+        assert "resume.requested" in root_event_names
+        assert "resume.applied" in root_event_names
+        assert "graph.resumed" in root_event_names
+        assert "checkpoint.created" in root_event_names
+        assert updated_run.debug_trace_json["trace"]["status"] == "awaiting_human"
+        assert updated_run.debug_trace_json["summary"]["lastInterruptStatus"] == "pending"
+
+    @pytest.mark.asyncio
     async def test_run_thread_chat_persists_failed_run_metrics(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
@@ -1472,7 +2053,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 node_event = {"node": "router", "elapsed_ms": 4.0, "route": "document"}
                 trace_recorder.record_node_event(node_event)
                 return {

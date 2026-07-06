@@ -81,7 +81,16 @@ export default function AgentRunDebugPanel({
         client_metadata: { source: 'agent_run_debug_panel' },
       });
       onRunDetailsChange?.(response.agent_run);
-      setResumeMessage(response.duplicate ? 'Decision already recorded.' : 'Decision recorded.');
+      const status = response.agent_run?.status;
+      setResumeMessage(
+        response.duplicate
+          ? 'Decision already recorded.'
+          : status === 'completed' || status === 'clarification'
+            ? 'Decision applied. Run resumed.'
+            : status === 'failed'
+              ? 'Decision applied. Resume failed.'
+              : 'Decision applied.'
+      );
     } catch (err: any) {
       setResumeError(err?.message || 'Unable to submit decision.');
     } finally {

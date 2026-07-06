@@ -182,7 +182,11 @@
                 "examples": [
                   "decision.made",
                   "tool.called",
+                  "checkpoint.created",
                   "interrupt.requested",
+                  "resume.requested",
+                  "resume.applied",
+                  "graph.resumed",
                   "interrupt.resumed",
                   "interrupt.rejected",
                   "interrupt.expired"

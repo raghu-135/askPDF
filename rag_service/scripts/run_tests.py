@@ -59,11 +59,16 @@ API_TEST_FILES = [
 ]
 
 INTEGRATION_TEST_FILES = [
+    "test_agent_patterns_pytest.py",
     "test_api_integration_pytest.py",
     "test_model_aware_integration.py",
 ]
 
 SCHEMA_TEST_FILES = ["test_schema_guardrails.py"]
+
+AGENT_CHECKPOINT_TEST_TARGETS = [
+    "/app/tests/test_agent_patterns_pytest.py::TestAgentRunService::test_run_thread_chat_resumes_after_postgres_checkpointer_reopen",
+]
 
 
 def _test_path(name: str) -> str:
@@ -106,6 +111,13 @@ async def _drop_database(admin_url: str, db_name: str) -> None:
         await conn.execute(f"DROP DATABASE IF EXISTS {_quote_ident(db_name)}")
     finally:
         await conn.close()
+
+
+async def _setup_agent_checkpointer(database_url: str) -> None:
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    async with AsyncPostgresSaver.from_conn_string(_postgres_driver_url(database_url)) as checkpointer:
+        await checkpointer.setup()
 
 
 def _run(command: list[str], env: dict[str, str] | None = None) -> None:
@@ -156,6 +168,8 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
         group = "db"
     elif args.integration:
         group = "integration"
+    elif args.agent_checkpoint:
+        group = "agent-checkpoint"
     elif args.api:
         group = "api"
     elif args.schema:
@@ -171,6 +185,8 @@ def _pytest_targets(args: argparse.Namespace) -> list[str]:
         return [_test_path(name) for name in API_TEST_FILES]
     if group == "integration":
         return [_test_path(name) for name in INTEGRATION_TEST_FILES]
+    if group == "agent-checkpoint":
+        return AGENT_CHECKPOINT_TEST_TARGETS
     if group == "schema":
         return [_test_path(name) for name in SCHEMA_TEST_FILES]
     if group == "standalone":
@@ -188,14 +204,18 @@ def _should_run_standalone(args: argparse.Namespace) -> bool:
         return True
     if args.file or args.test:
         return False
-    if args.unit or args.db or args.db_tests or args.db_only or args.integration or args.api or args.schema:
+    if args.unit or args.db or args.db_tests or args.db_only or args.integration or args.agent_checkpoint or args.api or args.schema:
         return False
     return args.group == "all" or args.all or args.all_tests
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run askPDF tests inside Docker.")
-    parser.add_argument("--group", choices=["unit", "db", "api", "integration", "schema", "standalone", "all"], default=os.environ.get("TEST_GROUP", "all"))
+    parser.add_argument(
+        "--group",
+        choices=["unit", "db", "api", "integration", "agent-checkpoint", "schema", "standalone", "all"],
+        default=os.environ.get("TEST_GROUP", "all"),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--file")
     parser.add_argument("--test")
@@ -207,6 +227,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--db-tests", action="store_true")
     parser.add_argument("--db-only", action="store_true")
     parser.add_argument("--integration", action="store_true")
+    parser.add_argument("--agent-checkpoint", action="store_true")
     parser.add_argument("--api", action="store_true")
     parser.add_argument("--schema", action="store_true")
     parser.add_argument("--all", action="store_true")
@@ -217,6 +238,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     targets = _pytest_targets(args)
+    agent_checkpoint_run = args.agent_checkpoint or args.group == "agent-checkpoint"
 
     base_database_url = os.environ.get("DATABASE_URL")
     if not base_database_url:
@@ -233,12 +255,21 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Test data directory: {data_dir}", flush=True)
 
     asyncio.run(_create_database(admin_url, test_db_name))
+    if agent_checkpoint_run:
+        print("Preparing LangGraph Postgres checkpointer schema", flush=True)
+        asyncio.run(_setup_agent_checkpointer(test_db_url))
 
     env = os.environ.copy()
     env["DATABASE_URL"] = test_db_url
     env["TEST_DATABASE_URL"] = test_db_url
     env["DATA_DIR"] = data_dir
     env["PYTHONPATH"] = str(APP_DIR)
+    if agent_checkpoint_run:
+        env["ASKPDF_AGENT_CHECKPOINTER"] = "postgres"
+        env["ASKPDF_AGENT_HITL_FINAL_REVIEW"] = "true"
+        env["AGENT_CHECKPOINT_DATABASE_URL"] = test_db_url
+        env["ASKPDF_AGENT_CHECKPOINTER_SETUP"] = "false"
+        env["ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST"] = "1"
 
     try:
         if targets:

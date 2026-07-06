@@ -168,8 +168,14 @@ Generic event names:
 - `warning`: real runtime/tool warning codes.
 - `skipped`: skipped node status and `askpdf.skip_reason`.
 - `exception`: failed runtime/tool information.
+- `checkpoint.created`: a LangGraph checkpoint was created for a resumable
+  paused run.
 - `interrupt.requested`: a HITL gate paused the run and requested a human
   decision.
+- `resume.requested`: a human decision was accepted by the API/runtime layer.
+- `resume.applied`: the accepted decision was stored on the pending interrupt
+  and is ready to drive graph continuation.
+- `graph.resumed`: the compiled graph continued from the stored checkpoint.
 - `interrupt.resumed`: a human decision allowed execution to continue.
 - `interrupt.rejected`: a human decision rejected the proposed action and ended
   the run.

@@ -50,6 +50,9 @@ jobs:
       - name: Run Docker test runner
         run: ./run_tests.sh
 
+      - name: Run Postgres checkpoint/resume test
+        run: ./run_tests.sh --agent-checkpoint
+
       - name: Stop test services
         if: always()
         run: docker compose -p askpdf-test -f docker-compose.test.yml down --volumes --remove-orphans

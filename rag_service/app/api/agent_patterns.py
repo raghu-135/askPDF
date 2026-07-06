@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.agent_patterns.debug_trace import build_debug_graph
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
+from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
     PLAN_EXECUTE_RAG_AGENT_ID,
@@ -285,9 +286,9 @@ async def get_agent_run(run_id: str):
 
 @router.post("/agent-runs/{run_id}/resume")
 async def resume_agent_run(run_id: str, req: AgentRunResumeRequest):
-    repo = AgentPatternRepository()
+    service = AgentRunService()
     try:
-        result = await repo.resolve_pending_interrupt(
+        result = await service.resume_agent_run(
             run_id,
             interrupt_id=req.interrupt_id,
             action=req.action,
@@ -304,6 +305,7 @@ async def resume_agent_run(run_id: str, req: AgentRunResumeRequest):
         ) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
+    repo = AgentPatternRepository()
     turns = await repo.list_chat_turns_for_run(result.run.id)
     return {
         "agent_run": _run_payload(result.run, turns),

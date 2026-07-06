@@ -10,7 +10,8 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.agent_patterns.debug_trace import append_interrupt_event_to_debug_payload
+from app.agent_patterns.checkpointing import delete_agent_checkpoints
+from app.agent_patterns.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
 from app.agent_patterns.templates import SUPPORTED_BUILTIN_TEMPLATE_IDS, builtin_templates
 from app.agent_patterns.validator import TemplateValidator
 from app.db.connection_sqlmodel import async_session_maker
@@ -26,8 +27,18 @@ from app.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_AWAITING_HUMAN = "awaiting_human"
+RUN_STATUS_COMPLETED = "completed"
+RUN_STATUS_CLARIFICATION = "clarification"
+RUN_STATUS_FAILED = "failed"
 RUN_STATUS_REJECTED = "rejected"
 RUN_STATUS_EXPIRED = "expired"
+CHECKPOINT_PRUNABLE_RUN_STATUSES = {
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_CLARIFICATION,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_REJECTED,
+    RUN_STATUS_EXPIRED,
+}
 
 INTERRUPT_STATUS_PENDING = "pending"
 INTERRUPT_STATUS_RESUMED = "resumed"
@@ -287,6 +298,43 @@ class AgentPatternRepository:
             await session.execute(delete(AgentRun).where(AgentRun.id.in_(run_ids)))
             return run_ids
 
+    async def prune_checkpoints_for_runs_before(
+        self,
+        cutoff: datetime,
+        *,
+        statuses: Optional[list[str]] = None,
+        thread_id: Optional[str] = None,
+        limit: int = 1000,
+        checkpointer: Any = None,
+    ) -> list[str]:
+        """Delete LangGraph checkpoints for old terminal runs only."""
+
+        requested_statuses = statuses or sorted(CHECKPOINT_PRUNABLE_RUN_STATUSES)
+        if not requested_statuses:
+            raise ValueError("statuses must contain at least one status")
+        invalid_statuses = sorted(set(requested_statuses) - CHECKPOINT_PRUNABLE_RUN_STATUSES)
+        if invalid_statuses:
+            raise ValueError(
+                "checkpoint cleanup is only allowed for terminal run statuses; "
+                f"invalid statuses: {', '.join(invalid_statuses)}"
+            )
+        bounded_limit = max(1, min(int(limit), 1000))
+        session = await self._get_session()
+        async with session.begin():
+            query = (
+                select(AgentRun.checkpoint_thread_id)
+                .where(AgentRun.started_at < cutoff)
+                .where(AgentRun.status.in_(requested_statuses))
+                .where(AgentRun.checkpoint_thread_id.isnot(None))
+            )
+            if thread_id is not None:
+                query = query.where(AgentRun.thread_id == thread_id)
+            result = await session.execute(
+                query.order_by(AgentRun.started_at.asc(), AgentRun.id.asc()).limit(bounded_limit)
+            )
+            checkpoint_thread_ids = list(result.scalars().all())
+        return await delete_agent_checkpoints(checkpoint_thread_ids, checkpointer=checkpointer)
+
     async def fail_stale_running_runs(
         self,
         cutoff: datetime,
@@ -346,18 +394,21 @@ class AgentPatternRepository:
         template_version: Optional[int] = None,
         resolved_spec_json: Dict[str, Any],
         user_id: Optional[str] = None,
+        checkpoint_thread_id: Optional[str] = None,
     ) -> AgentRun:
+        run_id = str(uuid.uuid4())
         run_metadata_json: Dict[str, Any] = {"template_version_id": template_version_id}
         if template_version is not None:
             run_metadata_json["template_version"] = template_version
         run = AgentRun(
-            id=str(uuid.uuid4()),
+            id=run_id,
             thread_id=thread_id,
             user_id=user_id,
             template_id=template_id,
             run_metadata_json=run_metadata_json,
             resolved_spec_json=resolved_spec_json,
             status=RUN_STATUS_RUNNING,
+            checkpoint_thread_id=checkpoint_thread_id or run_id,
             started_at=utc_now(),
         )
         session = await self._get_session()
@@ -545,6 +596,21 @@ class AgentPatternRepository:
                 client_metadata=client_metadata,
                 resume_version=resume_version,
             )
+            if isinstance(run.debug_trace_json, dict):
+                replace_jsonb_field(
+                    run,
+                    "debug_trace_json",
+                    append_runtime_event_to_debug_payload(
+                        run.debug_trace_json,
+                        "resume.requested",
+                        attributes={
+                            "askpdf.interrupt.id": interrupt_id,
+                            "askpdf.resume.action": action,
+                            "askpdf.interrupt.resume_version": resume_version or interrupt.get("resume_version"),
+                            "askpdf.checkpoint.thread_id": run.checkpoint_thread_id,
+                        },
+                    ),
+                )
 
             if _interrupt_expired(interrupt, now):
                 interrupt["status"] = INTERRUPT_STATUS_EXPIRED
@@ -593,16 +659,26 @@ class AgentPatternRepository:
             replace_jsonb_field(run, "metrics_json", metrics)
             replace_jsonb_field(run, "pending_interrupt_json", interrupt)
             if isinstance(run.debug_trace_json, dict):
-                replace_jsonb_field(
-                    run,
-                    "debug_trace_json",
-                    append_interrupt_event_to_debug_payload(
-                        run.debug_trace_json,
-                        interrupt,
+                debug_payload = append_interrupt_event_to_debug_payload(
+                    run.debug_trace_json,
+                    interrupt,
+                    run_status=run.status,
+                    completed_at=run.completed_at,
+                )
+                if outcome == INTERRUPT_STATUS_RESUMED:
+                    debug_payload = append_runtime_event_to_debug_payload(
+                        debug_payload,
+                        "resume.applied",
+                        attributes={
+                            "askpdf.interrupt.id": interrupt_id,
+                            "askpdf.resume.action": action,
+                            "askpdf.interrupt.resume_version": resume_version or interrupt.get("resume_version"),
+                            "askpdf.checkpoint.thread_id": run.checkpoint_thread_id,
+                        },
                         run_status=run.status,
                         completed_at=run.completed_at,
-                    ),
-                )
+                    )
+                replace_jsonb_field(run, "debug_trace_json", debug_payload)
             await session.flush()
             await session.refresh(run)
             return InterruptResolutionResult(run=run, outcome=outcome, interrupt=interrupt)

@@ -14,6 +14,11 @@ Flexible chat content lives in JSONB only where the fields vary per interaction.
   - `payload JSONB` stores flexible turn content such as question, rewritten question, answer, reasoning, sources, clarification options, and structured errors.
   - API compatibility expands one turn into user/assistant message bubbles at the boundary.
 
+- `agent_runs`
+  - One row per agent execution, including `checkpoint_thread_id` for resumable LangGraph runs.
+  - HITL pauses keep the run in `awaiting_human`; stale-running cleanup must not mark these rows failed.
+  - Old terminal runs can have their LangGraph checkpoints pruned through the checkpointer API before or alongside run-retention cleanup.
+
 - `files`
   - One row per unique content object, keyed by `file_hash`.
   - Stores global file metadata, parsing output, and status.
@@ -39,6 +44,14 @@ Flexible chat content lives in JSONB only where the fields vary per interaction.
 
 - `thread_file_annotations`
   - Merged into `thread_files`.
+
+## LangGraph Checkpoint Tables
+
+When `ASKPDF_AGENT_CHECKPOINTER=postgres`, LangGraph owns its checkpoint tables
+(`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, and
+`checkpoint_migrations`). askPDF should clean these through the configured
+checkpointer (`adelete_thread`) instead of raw SQL so LangGraph schema changes
+remain isolated.
 
 ## Simplification Rules
 

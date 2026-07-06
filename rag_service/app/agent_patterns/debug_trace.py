@@ -28,6 +28,13 @@ INTERRUPT_EVENT_NAMES = {
     "expired": "interrupt.expired",
 }
 
+ROOT_LIFECYCLE_EVENT_NAMES = {
+    "checkpoint.created",
+    "resume.requested",
+    "resume.applied",
+    "graph.resumed",
+}
+
 
 class _BufferedSpanExporter(SpanExporter):
     """Local OpenTelemetry exporter used to normalize one agent run."""
@@ -455,6 +462,60 @@ def _interrupt_event_key(event: Mapping[str, Any]) -> tuple[Any, Any, Any]:
     )
 
 
+def _root_event_key(event: Mapping[str, Any]) -> tuple[Any, Any, Any, Any]:
+    if _is_interrupt_event(event):
+        return (*_interrupt_event_key(event), None)
+    attrs = _as_dict(event.get("attributes"))
+    output = _as_dict(event.get("output"))
+    return (
+        event.get("name"),
+        attrs.get("askpdf.interrupt.id") or output.get("interrupt_id"),
+        attrs.get("askpdf.checkpoint.thread_id"),
+        attrs.get("askpdf.resume.action") or attrs.get("askpdf.status"),
+    )
+
+
+def build_runtime_trace_event(
+    name: str,
+    *,
+    attributes: Optional[Mapping[str, Any]] = None,
+    input_data: Any = None,
+    output_data: Any = None,
+) -> Dict[str, Any]:
+    """Build a bounded root-span lifecycle event."""
+
+    event = {
+        "name": name,
+        "attributes": _clean_dict(dict(attributes or {})),
+        "input": _bounded_value(input_data),
+        "output": _bounded_value(output_data),
+    }
+    return {key: value for key, value in event.items() if value not in (None, "", [], {})}
+
+
+def _find_root_span(spans: List[Any]) -> Optional[Dict[str, Any]]:
+    return next(
+        (
+            span
+            for span in spans
+            if isinstance(span, dict)
+            and (span.get("parent_span_id") is None or str(span.get("span_id") or "").startswith("run:"))
+        ),
+        spans[0] if spans and isinstance(spans[0], dict) else None,
+    )
+
+
+def _append_root_event(trace: Dict[str, Any], event: Mapping[str, Any]) -> None:
+    spans = trace.get("spans") if isinstance(trace.get("spans"), list) else []
+    root_span = _find_root_span(spans)
+    if root_span is None:
+        return
+    existing = _as_list(root_span.get("events"))
+    event_key = _root_event_key(event)
+    if not any(_root_event_key(item) == event_key for item in existing if isinstance(item, dict)):
+        root_span["events"] = [*existing, dict(event)]
+
+
 def _interrupt_events_from_trace(trace: Mapping[str, Any]) -> List[Dict[str, Any]]:
     return [
         dict(event)
@@ -504,22 +565,11 @@ def append_interrupt_event_to_debug_payload(
         return debug_payload
 
     event = build_interrupt_trace_event(interrupt, event_name=event_name)
-    event_key = _interrupt_event_key(event)
-    root_span = next(
-        (
-            span
-            for span in spans
-            if isinstance(span, dict)
-            and (span.get("parent_span_id") is None or str(span.get("span_id") or "").startswith("run:"))
-        ),
-        spans[0] if isinstance(spans[0], dict) else None,
-    )
+    root_span = _find_root_span(spans)
     if root_span is None:
         return debug_payload
 
-    existing = _as_list(root_span.get("events"))
-    if not any(_interrupt_event_key(item) == event_key for item in existing if isinstance(item, dict)):
-        root_span["events"] = [*existing, event]
+    _append_root_event(trace, event)
 
     if run_status:
         trace["status"] = run_status
@@ -540,6 +590,174 @@ def append_interrupt_event_to_debug_payload(
         summary["status"] = run_status
     summary.update(_interrupt_summary(trace))
     return {**debug_payload, "trace": trace, "summary": summary}
+
+
+def append_runtime_event_to_debug_payload(
+    debug_payload: Any,
+    event_name: str,
+    *,
+    attributes: Optional[Mapping[str, Any]] = None,
+    input_data: Any = None,
+    output_data: Any = None,
+    run_status: Optional[str] = None,
+    completed_at: Any = None,
+) -> Any:
+    """Append a generic root lifecycle event to a stored v1 debug payload."""
+
+    if not isinstance(debug_payload, dict) or debug_payload.get("version") != DEBUG_PAYLOAD_VERSION:
+        return debug_payload
+    trace = debug_payload.get("trace") if isinstance(debug_payload.get("trace"), dict) else None
+    if trace is None:
+        return debug_payload
+    event = build_runtime_trace_event(
+        event_name,
+        attributes=attributes,
+        input_data=input_data,
+        output_data=output_data,
+    )
+    _append_root_event(trace, event)
+
+    spans = trace.get("spans") if isinstance(trace.get("spans"), list) else []
+    root_span = _find_root_span(spans)
+    if run_status:
+        trace["status"] = run_status
+        if root_span is not None:
+            root_span["status"] = run_status
+            root_attrs = dict(root_span.get("attributes") or {})
+            root_attrs["askpdf.status"] = run_status
+            root_span["attributes"] = root_attrs
+        trace_attrs = dict(trace.get("attributes") or {})
+        trace_attrs["askpdf.status"] = run_status
+        trace["attributes"] = trace_attrs
+    if completed_at is not None or run_status == "running":
+        value = iso_utc_z(completed_at) if completed_at is not None else None
+        trace["completed_at"] = value
+        if root_span is not None:
+            root_span["end_time"] = value
+
+    summary = dict(debug_payload.get("summary") or {})
+    if run_status:
+        summary["status"] = run_status
+    summary.update(_interrupt_summary(trace))
+    return {**debug_payload, "trace": trace, "summary": summary}
+
+
+def _rebuild_trace_refs(trace: Dict[str, Any]) -> None:
+    links: List[Dict[str, Any]] = []
+    artifacts: List[Dict[str, Any]] = []
+    for span in _as_list(trace.get("spans")):
+        if not isinstance(span, dict):
+            continue
+        for link in _as_list(span.get("links")):
+            if isinstance(link, dict):
+                links.append({"span_id": span.get("span_id"), **link})
+        artifacts.extend(_artifacts_from_refs(_as_dict(span.get("output")).get("refs"), span_id=str(span.get("span_id") or "")))
+    trace["links"] = links
+    trace["artifacts"] = artifacts
+
+
+def _merge_root_span(base_root: Dict[str, Any], incoming_root: Mapping[str, Any]) -> None:
+    for event in _as_list(incoming_root.get("events")):
+        if isinstance(event, dict):
+            existing = _as_list(base_root.get("events"))
+            if not any(_root_event_key(item) == _root_event_key(event) for item in existing if isinstance(item, dict)):
+                base_root["events"] = [*existing, dict(event)]
+    attrs = dict(base_root.get("attributes") or {})
+    attrs.update(_as_dict(incoming_root.get("attributes")))
+    base_root["attributes"] = attrs
+    output = dict(base_root.get("output") or {})
+    output.update(_as_dict(incoming_root.get("output")))
+    base_root["output"] = output
+
+
+def merge_debug_payloads(
+    base_payload: Any,
+    incoming_payload: Any,
+    *,
+    resolved_spec: Mapping[str, Any],
+    run_status: Optional[str] = None,
+    completed_at: Any = None,
+    chat_turn_id: Optional[str] = None,
+    metrics: Optional[Mapping[str, Any]] = None,
+) -> Any:
+    """Merge a later execution phase into an already-stored debug payload."""
+
+    if not isinstance(base_payload, dict) or base_payload.get("version") != DEBUG_PAYLOAD_VERSION:
+        return base_payload
+    if not isinstance(incoming_payload, dict) or incoming_payload.get("version") != DEBUG_PAYLOAD_VERSION:
+        return base_payload
+    base_trace = base_payload.get("trace") if isinstance(base_payload.get("trace"), dict) else None
+    incoming_trace = incoming_payload.get("trace") if isinstance(incoming_payload.get("trace"), dict) else None
+    if base_trace is None or incoming_trace is None:
+        return base_payload
+
+    base_spans = base_trace.get("spans") if isinstance(base_trace.get("spans"), list) else []
+    incoming_spans = incoming_trace.get("spans") if isinstance(incoming_trace.get("spans"), list) else []
+    base_root = _find_root_span(base_spans)
+    incoming_root = _find_root_span(incoming_spans)
+    if base_root is not None and incoming_root is not None:
+        _merge_root_span(base_root, incoming_root)
+
+    existing_ids = {str(span.get("span_id")) for span in base_spans if isinstance(span, dict)}
+    id_map: Dict[str, str] = {}
+    appended: List[Dict[str, Any]] = []
+    for span in incoming_spans:
+        if not isinstance(span, dict):
+            continue
+        span_id = str(span.get("span_id") or "")
+        if not span_id or span is incoming_root:
+            continue
+        new_id = span_id
+        if new_id in existing_ids:
+            suffix = 1
+            while f"{span_id}:resume:{suffix}" in existing_ids:
+                suffix += 1
+            new_id = f"{span_id}:resume:{suffix}"
+        id_map[span_id] = new_id
+        existing_ids.add(new_id)
+
+    for span in incoming_spans:
+        if not isinstance(span, dict):
+            continue
+        span_id = str(span.get("span_id") or "")
+        if not span_id or span is incoming_root:
+            continue
+        merged_span = dict(span)
+        merged_span["span_id"] = id_map.get(span_id, span_id)
+        parent_id = merged_span.get("parent_span_id")
+        if isinstance(parent_id, str) and parent_id in id_map:
+            merged_span["parent_span_id"] = id_map[parent_id]
+        appended.append(merged_span)
+    base_trace["spans"] = [*base_spans, *appended]
+
+    merged_metrics = {
+        **_as_dict(base_trace.get("metrics")),
+        **_as_dict(incoming_trace.get("metrics")),
+        **dict(metrics or {}),
+    }
+    base_trace["metrics"] = merged_metrics
+    if run_status:
+        base_trace["status"] = run_status
+    if completed_at is not None or run_status == "running":
+        base_trace["completed_at"] = iso_utc_z(completed_at) if completed_at is not None else None
+    if chat_turn_id is not None:
+        base_trace["chat_turn_id"] = chat_turn_id
+
+    if base_root is not None:
+        if run_status:
+            base_root["status"] = run_status
+            root_attrs = dict(base_root.get("attributes") or {})
+            root_attrs["askpdf.status"] = run_status
+            base_root["attributes"] = root_attrs
+            trace_attrs = dict(base_trace.get("attributes") or {})
+            trace_attrs["askpdf.status"] = run_status
+            base_trace["attributes"] = trace_attrs
+        if completed_at is not None or run_status == "running":
+            base_root["end_time"] = iso_utc_z(completed_at) if completed_at is not None else None
+
+    _rebuild_trace_refs(base_trace)
+    summary = _build_summary_from_trace(base_trace, resolved_spec)
+    return {**base_payload, "trace": base_trace, "summary": summary}
 
 
 class AgentTraceRecorder:
@@ -883,12 +1101,39 @@ class AgentTraceRecorder:
         if root_sidecar is None:
             return
         existing = _as_list(root_sidecar.get("events"))
-        if not any(_interrupt_event_key(item) == _interrupt_event_key(event) for item in existing if isinstance(item, dict)):
+        if not any(_root_event_key(item) == _root_event_key(event) for item in existing if isinstance(item, dict)):
             root_sidecar["events"] = [*existing, event]
             if not self._finalized:
                 attrs = _as_dict(event.get("attributes"))
                 self._root_span.add_event(
                     event.get("name") or "interrupt",
+                    attributes={k: v for k, v in ((_key, _otel_attr_value(_value)) for _key, _value in attrs.items()) if v is not None},
+                )
+
+    def record_runtime_event(
+        self,
+        event_name: str,
+        *,
+        attributes: Optional[Mapping[str, Any]] = None,
+        input_data: Any = None,
+        output_data: Any = None,
+    ) -> None:
+        event = build_runtime_trace_event(
+            event_name,
+            attributes=attributes,
+            input_data=input_data,
+            output_data=output_data,
+        )
+        root_sidecar = self._sidecars.get(self.run_span_id)
+        if root_sidecar is None:
+            return
+        existing = _as_list(root_sidecar.get("events"))
+        if not any(_root_event_key(item) == _root_event_key(event) for item in existing if isinstance(item, dict)):
+            root_sidecar["events"] = [*existing, event]
+            if not self._finalized:
+                attrs = _as_dict(event.get("attributes"))
+                self._root_span.add_event(
+                    event.get("name") or "runtime.event",
                     attributes={k: v for k, v in ((_key, _otel_attr_value(_value)) for _key, _value in attrs.items()) if v is not None},
                 )
 
@@ -995,40 +1240,7 @@ class AgentTraceRecorder:
         }
 
     def _build_summary(self, trace: Dict[str, Any]) -> Dict[str, Any]:
-        metrics = _as_dict(trace.get("metrics"))
-        spans = _as_list(trace.get("spans"))
-        node_spans = [span for span in spans if _as_dict(span.get("attributes")).get("askpdf.node.id") and span.get("kind") != OpenInferenceSpanKindValues.LLM.value]
-        tool_spans = [span for span in spans if span.get("kind") == OpenInferenceSpanKindValues.TOOL.value]
-        errors = [
-            _as_dict(event.get("attributes"))
-            for span in spans
-            for event in _as_list(span.get("events"))
-            if isinstance(event, dict) and event.get("name") == "exception"
-        ]
-        nodes = [_summary_node(span) for span in node_spans]
-        tools = [_summary_tool(span) for span in tool_spans]
-        used_node_count = sum(1 for node in nodes if not node.get("skipped"))
-        warning_count = sum(len(node.get("warningCodes") or []) for node in nodes) + sum(len(tool.get("warningCodes") or []) for tool in tools)
-        error_count = int(metrics.get("error_count") or 0)
-        if errors:
-            error_count = max(error_count, len(errors))
-        return {
-            "status": trace.get("status"),
-            "route": _as_dict(trace.get("attributes")).get("askpdf.route") or metrics.get("route"),
-            "routeReason": _as_dict(trace.get("attributes")).get("askpdf.route_reason"),
-            "durationMs": trace.get("duration_ms"),
-            "metrics": metrics,
-            "nodes": nodes,
-            "tools": tools,
-            "usedNodeCount": used_node_count,
-            "availableNodeCount": len(_as_list(_as_dict(_as_dict(self.resolved_spec.get("config")).get("graph")).get("nodes"))) or None,
-            "usedToolCount": int(metrics.get("tool_event_count") or len(tools)),
-            "availableToolCount": len(set(_as_list(_as_dict(self.resolved_spec.get("config")).get("allowed_tool_ids")))) or None,
-            "warningCount": int(metrics.get("tool_warning_count") or warning_count),
-            "errorCount": error_count,
-            "errors": [error for error in errors if error],
-            **_interrupt_summary(trace),
-        }
+        return _build_summary_from_trace(trace, self.resolved_spec)
 
 
 def _summary_node(span: Mapping[str, Any]) -> Dict[str, Any]:
@@ -1083,6 +1295,49 @@ def _summary_tool(span: Mapping[str, Any]) -> Dict[str, Any]:
         "warningCodes": [str(warning) for warning in warning_events if warning],
         "span": dict(span),
         "raw": raw,
+    }
+
+
+def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str, Any]) -> Dict[str, Any]:
+    metrics = _as_dict(trace.get("metrics"))
+    spans = _as_list(trace.get("spans"))
+    node_spans = [
+        span
+        for span in spans
+        if _as_dict(_as_dict(span).get("attributes")).get("askpdf.node.id")
+        and _as_dict(span).get("kind") != OpenInferenceSpanKindValues.LLM.value
+    ]
+    tool_spans = [span for span in spans if _as_dict(span).get("kind") == OpenInferenceSpanKindValues.TOOL.value]
+    errors = [
+        _as_dict(event.get("attributes"))
+        for span in spans
+        for event in _as_list(_as_dict(span).get("events"))
+        if isinstance(event, dict) and event.get("name") == "exception"
+    ]
+    nodes = [_summary_node(span) for span in node_spans if isinstance(span, dict)]
+    tools = [_summary_tool(span) for span in tool_spans if isinstance(span, dict)]
+    used_node_count = sum(1 for node in nodes if not node.get("skipped"))
+    warning_count = sum(len(node.get("warningCodes") or []) for node in nodes) + sum(len(tool.get("warningCodes") or []) for tool in tools)
+    error_count = int(metrics.get("error_count") or 0)
+    if errors:
+        error_count = max(error_count, len(errors))
+    config = _as_dict(resolved_spec.get("config"))
+    return {
+        "status": trace.get("status"),
+        "route": _as_dict(trace.get("attributes")).get("askpdf.route") or metrics.get("route"),
+        "routeReason": _as_dict(trace.get("attributes")).get("askpdf.route_reason"),
+        "durationMs": trace.get("duration_ms"),
+        "metrics": metrics,
+        "nodes": nodes,
+        "tools": tools,
+        "usedNodeCount": used_node_count,
+        "availableNodeCount": len(_as_list(_as_dict(config.get("graph")).get("nodes"))) or None,
+        "usedToolCount": int(metrics.get("tool_event_count") or len(tools)),
+        "availableToolCount": len(set(_as_list(config.get("allowed_tool_ids")))) or None,
+        "warningCount": int(metrics.get("tool_warning_count") or warning_count),
+        "errorCount": error_count,
+        "errors": [error for error in errors if error],
+        **_interrupt_summary(trace),
     }
 
 

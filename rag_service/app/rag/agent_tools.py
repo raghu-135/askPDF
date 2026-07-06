@@ -173,7 +173,7 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
     tool_name = "get_thread_shape"
     try:
         conf = config.get("configurable", {}) if config else {}
-        thread_id = conf.get("thread_id")
+        thread_id = conf.get("app_thread_id") or conf.get("thread_id")
         if not thread_id:
             return make_tool_result(
                 tool_name=tool_name,
@@ -250,7 +250,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
     tool_name = "search_documents"
     try:
         conf = config.get("configurable", {}) if config else {}
-        thread_id = conf.get("thread_id")
+        thread_id = conf.get("app_thread_id") or conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         context_window = conf.get("context_window", DEFAULT_TOKEN_BUDGET)
         use_reranker = conf.get("use_reranker", True)
@@ -424,7 +424,7 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
     tool_name = "search_conversation_history"
     try:
         conf = config.get("configurable", {}) if config else {}
-        thread_id = conf.get("thread_id")
+        thread_id = conf.get("app_thread_id") or conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         use_reranker = conf.get("use_reranker", True)
 
@@ -494,7 +494,7 @@ async def search_thread_timeline(
     tool_name = "search_thread_timeline"
     try:
         conf = config.get("configurable", {}) if config else {}
-        thread_id = conf.get("thread_id")
+        thread_id = conf.get("app_thread_id") or conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
         use_reranker = conf.get("use_reranker", True)
         if not thread_id or not embedding_model:

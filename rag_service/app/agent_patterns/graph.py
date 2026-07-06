@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, TypedDict
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 
 from app.agent.reasoning import normalize_ai_response
 from app.agent.tool_contract import compact_tool_event, normalize_tool_result
@@ -95,6 +96,7 @@ class RouterRagState(TypedDict, total=False):
     reasoning: str
     reasoning_available: bool
     reasoning_format: str
+    human_review_decision: Dict[str, Any]
     node_events: List[Dict[str, Any]]
     tool_events: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
@@ -555,6 +557,7 @@ class NodeRegistry:
             "direct_answer": self.direct_answer,
             "synthesizer": self.synthesizer,
             "finalizer": self.finalizer,
+            "human_review_gate": self.human_review_gate,
         }
 
     def get(self, node_type: str) -> Callable[..., Any]:
@@ -1076,6 +1079,62 @@ class NodeRegistry:
         _log_node_end(state, "finalizer", started, data)
         return {"node_events": _append_event(state, "finalizer", data, started=started, config=config)}
 
+    async def human_review_gate(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        """Pause after final answer synthesis so a human can approve before persistence."""
+
+        started = time.perf_counter()
+        decision = interrupt(
+            {
+                "gate_id": "final_answer_review",
+                "node_id": "human_review_gate",
+                "type": "final_answer_review",
+                "title": "Review final answer",
+                "prompt": "Approve this answer before it is saved to the thread.",
+                "allowed_actions": ["approve", "edit", "continue_without", "reject"],
+                "default_action": "approve",
+                "checkpoint_resume": True,
+                "input_summary": {
+                    "question": compact_preview(state.get("question")),
+                    "route": state.get("route"),
+                    "route_reason": compact_preview(state.get("route_reason")),
+                    "document_source_count": len(state.get("document_sources") or []),
+                    "web_source_count": len(state.get("web_sources") or []),
+                    "used_chat_id_count": len(state.get("used_chat_ids") or []),
+                },
+                "proposed_final_answer": compact_preview(state.get("final_answer"), limit=2000),
+            }
+        )
+        decision = decision if isinstance(decision, dict) else {"action": str(decision or "approve")}
+        action = str(decision.get("action") or "approve")
+        update: Dict[str, Any] = {"human_review_decision": decision}
+
+        edited_payload = decision.get("edited_payload") if isinstance(decision.get("edited_payload"), dict) else {}
+        edited_answer = edited_payload.get("final_answer") or edited_payload.get("answer")
+        if action == "edit" and isinstance(edited_answer, str) and edited_answer.strip():
+            update["final_answer"] = edited_answer.strip()
+
+        data = {
+            "status": "completed",
+            "action": action,
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "proposed_final_answer": compact_preview(state.get("final_answer")),
+            },
+            "output_preview": {
+                "decision": {
+                    key: value
+                    for key, value in decision.items()
+                    if key not in {"resume_token"}
+                },
+                "final_answer": compact_preview(update.get("final_answer") or state.get("final_answer")),
+            },
+        }
+        _log_node_end(state, "human_review_gate", started, data)
+        return {
+            **update,
+            "node_events": _append_event(state, "human_review_gate", data, started=started, config=config),
+        }
+
 
 def router_route(state: RouterRagState) -> str:
     return state.get("route") or "document"
@@ -1092,11 +1151,13 @@ class TemplateCompiler:
     def __init__(self, registry: Optional[NodeRegistry] = None):
         self.registry = registry or NodeRegistry()
 
-    def compile(self, spec: Dict[str, Any]):
+    def compile(self, spec: Dict[str, Any], *, checkpointer: Any = None, enable_hitl_final_review: bool = False):
         from app.agent_patterns.validator import TemplateValidator
 
         TemplateValidator().validate(spec)
         graph_spec = (spec.get("config") or {}).get("graph") or {}
+        if enable_hitl_final_review:
+            graph_spec = self._with_final_review_gate(graph_spec)
         workflow = StateGraph(RouterRagState)
         for node in graph_spec.get("nodes", []):
             workflow.add_node(node["id"], self.registry.get(node["type"]))
@@ -1112,4 +1173,23 @@ class TemplateCompiler:
             target_ref = END if target == "END" else target
             workflow.add_edge(source_ref, target_ref)
 
-        return workflow.compile()
+        return workflow.compile(checkpointer=checkpointer)
+
+    def _with_final_review_gate(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
+        nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
+        edges = [dict(edge) for edge in graph_spec.get("edges", []) if isinstance(edge, dict)]
+        if not any(node.get("id") == "human_review_gate" for node in nodes):
+            nodes.append({"id": "human_review_gate", "type": "human_review_gate"})
+
+        updated_edges: List[Dict[str, Any]] = []
+        inserted = False
+        for edge in edges:
+            if edge.get("from") == "finalizer" and edge.get("to") == "END":
+                updated_edges.append({"from": "finalizer", "to": "human_review_gate"})
+                updated_edges.append({"from": "human_review_gate", "to": "END"})
+                inserted = True
+            else:
+                updated_edges.append(edge)
+        if not inserted:
+            updated_edges.append({"from": "human_review_gate", "to": "END"})
+        return {"nodes": nodes, "edges": updated_edges}

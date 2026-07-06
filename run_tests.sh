@@ -7,6 +7,7 @@
 #   ./run_tests.sh --db                     # Run PostgreSQL database tests
 #   ./run_tests.sh --api                    # Run API endpoint tests
 #   ./run_tests.sh --integration            # Run integration tests
+#   ./run_tests.sh --agent-checkpoint       # Run Postgres checkpoint/resume hardening test
 #   ./run_tests.sh --schema                 # Run schema validation tests
 #   ./run_tests.sh --standalone             # Run standalone proactive collection script
 #   ./run_tests.sh --frontend               # Run frontend tests only

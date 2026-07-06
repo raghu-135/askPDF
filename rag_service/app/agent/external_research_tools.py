@@ -132,7 +132,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         use_reranker = conf.get("use_reranker", True)
 
         logger.info(f"--- WEB SEARCH INITIATED --- Query: '{query}'")
-        thread_id = conf.get("thread_id")
+        thread_id = conf.get("app_thread_id") or conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
 
         result = await _run_web_search(query, max_results=6)

@@ -104,7 +104,7 @@ def tool_trace(tool_name: str, config: RunnableConfig = None) -> ToolTrace:
         tool_name=tool_name,
         caller_node=conf.get("caller_node"),
         agent_run_id=conf.get("agent_run_id"),
-        thread_id=conf.get("thread_id"),
+        thread_id=conf.get("app_thread_id") or conf.get("thread_id"),
         route=conf.get("route"),
         tool_call_id=conf.get("tool_call_id"),
     )

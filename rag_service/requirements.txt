@@ -13,6 +13,8 @@ opentelemetry-sdk
 openinference-semantic-conventions
 
 langgraph==1.2.6
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
 langchain-core==1.4.8
 langchain-community==0.4.2
 ddgs==9.14.4
