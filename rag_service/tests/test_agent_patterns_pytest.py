@@ -4469,6 +4469,68 @@ class TestAgentPatternApi:
         }
         assert detail.status_code == 404
 
+    def test_internal_agent_pattern_endpoint_creates_and_fetches_custom_v2_spec(self, api_client):
+        spec = builtin_router_rag_v2_spec()
+        spec["pattern_type"] = "internal_api_agent"
+
+        created = api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": "internal_api_agent",
+                "name": "Internal API Agent",
+                "description": "JSON-authored internal pattern.",
+                "changelog": "Initial internal API version.",
+                "spec_json": spec,
+            },
+        )
+        fetched = api_client.get("/api/internal/agent-patterns/internal_api_agent")
+        public_detail = api_client.get("/api/agent-patterns/internal_api_agent")
+
+        assert created.status_code == 200
+        created_payload = created.json()
+        assert created_payload["agent_pattern"]["id"] == "internal_api_agent"
+        assert created_payload["agent_pattern"]["visibility"] == "internal"
+        assert created_payload["version"]["id"] == "internal_api_agent:v1"
+        assert created_payload["version"]["schema_version"] == 2
+        assert created_payload["version"]["validation"]["valid"] is True
+        assert created_payload["version"]["validation_result_json"] == {"valid": True, "errors": []}
+        assert fetched.status_code == 200
+        assert fetched.json()["current_version"]["id"] == "internal_api_agent:v1"
+        assert public_detail.status_code == 404
+
+    def test_internal_agent_pattern_endpoint_rejects_invalid_specs_without_storing(self, api_client):
+        invalid_spec = builtin_router_rag_v2_spec()
+        invalid_spec["pattern_type"] = "internal_api_invalid_agent"
+        invalid_spec["config"]["graph"]["edges"][2].pop("route_fn")
+
+        invalid = api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": "internal_api_invalid_agent",
+                "name": "Internal API Invalid Agent",
+                "spec_json": invalid_spec,
+            },
+        )
+        fetched = api_client.get("/api/internal/agent-patterns/internal_api_invalid_agent")
+
+        assert invalid.status_code == 400
+        assert "must declare route_fn" in invalid.json()["detail"]
+        assert fetched.status_code == 404
+
+    def test_internal_agent_pattern_endpoint_rejects_builtin_ids(self, api_client):
+        spec = builtin_router_rag_v2_spec()
+        rejected = api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": ROUTER_RAG_AGENT_ID,
+                "name": "Not Allowed",
+                "spec_json": spec,
+            },
+        )
+
+        assert rejected.status_code == 400
+        assert "built-in agent pattern templates cannot be authored" in rejected.json()["detail"]
+
     def test_validate_agent_pattern_endpoint(self, api_client):
         valid = api_client.post(
             "/api/agent-patterns/validate",

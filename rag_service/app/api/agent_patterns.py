@@ -38,6 +38,17 @@ class ThreadAgentConfigValidationRequest(BaseModel):
     overrides: Dict[str, Any] = Field(default_factory=dict)
 
 
+class InternalAgentPatternCreateRequest(BaseModel):
+    template_id: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    description: str = ""
+    owner_id: Optional[str] = None
+    version: Optional[int] = Field(default=None, ge=1)
+    changelog: Optional[str] = None
+    spec_json: Dict[str, Any] = Field(default_factory=dict)
+    set_current: bool = True
+
+
 class AgentRunResumeRequest(BaseModel):
     action: str = Field(..., min_length=1)
     interrupt_id: str = Field(..., min_length=1)
@@ -208,6 +219,40 @@ async def get_agent_pattern(template_id: str):
 async def validate_agent_pattern(req: TemplateValidationRequest):
     validator = TemplateValidator()
     return validator.report(req.spec)
+
+
+@router.post("/internal/agent-patterns")
+async def create_internal_agent_pattern(req: InternalAgentPatternCreateRequest):
+    repo = AgentPatternRepository()
+    try:
+        template, version = await repo.create_internal_template_version(
+            template_id=req.template_id,
+            name=req.name,
+            description=req.description,
+            owner_id=req.owner_id,
+            version=req.version,
+            changelog=req.changelog,
+            spec_json=req.spec_json,
+            set_current=req.set_current,
+        )
+    except (TemplateValidationError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_pattern": _template_payload(template),
+        "version": _version_payload(version),
+    }
+
+
+@router.get("/internal/agent-patterns/{template_id}")
+async def get_internal_agent_pattern(template_id: str):
+    repo = AgentPatternRepository()
+    template, version = await repo.get_template_with_current_version(template_id, include_custom=True)
+    if not template or not version or template.is_builtin:
+        raise HTTPException(status_code=404, detail="Internal agent pattern not found")
+    return {
+        "agent_pattern": _template_payload(template),
+        "current_version": _version_payload(version),
+    }
 
 
 @router.post("/threads/{thread_id}/agent-config/validate")
