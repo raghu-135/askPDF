@@ -13,7 +13,7 @@ from sqlalchemy.future import select
 from app.agent_patterns.checkpointing import delete_agent_checkpoints
 from app.agent_patterns.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
 from app.agent_patterns.templates import SUPPORTED_BUILTIN_TEMPLATE_IDS, builtin_templates
-from app.agent_patterns.validator import TemplateValidator
+from app.agent_patterns.validator import TemplateValidationError, TemplateValidator
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
@@ -286,6 +286,93 @@ class AgentPatternRepository:
                 .limit(1)
             )
             return template, result.scalar_one_or_none()
+
+    async def create_internal_template_version(
+        self,
+        *,
+        template_id: str,
+        name: str,
+        spec_json: Dict[str, Any],
+        description: str = "",
+        owner_id: Optional[str] = None,
+        version: Optional[int] = None,
+        changelog: Optional[str] = None,
+        visibility: str = "internal",
+        set_current: bool = True,
+    ) -> tuple[AgentPatternTemplate, AgentPatternTemplateVersion]:
+        """Create a validated internal/custom v2 pattern version.
+
+        This is intentionally repository-only for now. Public APIs continue to
+        expose only supported built-ins until the custom-pattern surface is
+        explicitly designed.
+        """
+        if not isinstance(template_id, str) or not template_id:
+            raise ValueError("template_id must be a non-empty string")
+        if template_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            raise ValueError("built-in agent pattern templates cannot be authored through the internal path")
+        if not isinstance(name, str) or not name:
+            raise ValueError("name must be a non-empty string")
+        if not isinstance(spec_json, dict):
+            raise TemplateValidationError("spec must be an object")
+        if spec_json.get("schema_version") != 2:
+            raise TemplateValidationError("internal custom agent pattern specs must use schema_version 2")
+
+        validation_result = TemplateValidator().validate(spec_json)
+        session = await self._get_session()
+        async with session.begin():
+            template = await session.get(AgentPatternTemplate, template_id)
+            if template is None:
+                template = AgentPatternTemplate(
+                    id=template_id,
+                    name=name,
+                    description=description,
+                    visibility=visibility,
+                    owner_id=owner_id,
+                    is_builtin=False,
+                )
+                session.add(template)
+            else:
+                if template.is_builtin:
+                    raise ValueError("built-in agent pattern templates cannot be authored through the internal path")
+                template.name = name
+                template.description = description
+                template.visibility = visibility
+                template.owner_id = owner_id
+                template.is_builtin = False
+                template.updated_at = utc_now()
+
+            if version is None:
+                result = await session.execute(
+                    select(AgentPatternTemplateVersion.version)
+                    .where(AgentPatternTemplateVersion.template_id == template_id)
+                    .order_by(AgentPatternTemplateVersion.version.desc())
+                    .limit(1)
+                )
+                latest_version = result.scalar_one_or_none()
+                version = int(latest_version or 0) + 1
+            if version < 1:
+                raise ValueError("version must be a positive integer")
+
+            version_id = f"{template_id}:v{version}"
+            existing_version = await session.get(AgentPatternTemplateVersion, version_id)
+            if existing_version is not None:
+                raise ValueError(f"agent pattern template version already exists: {version_id}")
+
+            template_version = AgentPatternTemplateVersion(
+                id=version_id,
+                template_id=template_id,
+                version=version,
+                schema_version=2,
+                spec_json=spec_json,
+                validation_result_json=validation_result,
+                changelog=changelog,
+            )
+            session.add(template_version)
+            if set_current:
+                template.current_version_id = version_id
+                template.updated_at = utc_now()
+            await session.flush()
+            return template, template_version
 
     async def get_run(self, run_id: str) -> Optional[AgentRun]:
         session = await self._get_session()

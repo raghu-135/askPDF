@@ -1625,6 +1625,60 @@ class TestAgentPatternRepository:
             TemplateValidator().validate(version.spec_json)
 
     @pytest.mark.asyncio
+    async def test_create_internal_custom_v2_template_version_validates_and_stores_current_version(self, repo):
+        spec = builtin_router_rag_v2_spec()
+        spec["pattern_type"] = "internal_custom_rag_agent"
+
+        template, version = await repo.create_internal_template_version(
+            template_id="internal_custom_rag_agent",
+            name="Internal Custom RAG Agent",
+            description="Internal JSON-authored custom pattern.",
+            spec_json=spec,
+            changelog="Initial internal custom pattern.",
+        )
+        public_template = await repo.get_template("internal_custom_rag_agent")
+        loaded_template, loaded_version = await repo.get_template_with_current_version(
+            "internal_custom_rag_agent",
+            include_custom=True,
+        )
+
+        assert template.id == "internal_custom_rag_agent"
+        assert template.visibility == "internal"
+        assert template.is_builtin is False
+        assert template.current_version_id == "internal_custom_rag_agent:v1"
+        assert version.schema_version == 2
+        assert version.validation_result_json == {"valid": True, "errors": []}
+        assert public_template is None
+        assert loaded_template.id == template.id
+        assert loaded_version.id == version.id
+        assert TemplateCompiler().compile(loaded_version.spec_json) is not None
+
+    @pytest.mark.asyncio
+    async def test_create_internal_custom_template_rejects_invalid_or_non_v2_specs(self, repo):
+        invalid_spec = builtin_router_rag_v2_spec()
+        invalid_spec["config"]["graph"]["edges"][2].pop("route_fn")
+        with pytest.raises(TemplateValidationError, match="must declare route_fn"):
+            await repo.create_internal_template_version(
+                template_id="internal_invalid_agent",
+                name="Internal Invalid Agent",
+                spec_json=invalid_spec,
+            )
+
+        with pytest.raises(TemplateValidationError, match="schema_version 2"):
+            await repo.create_internal_template_version(
+                template_id="internal_v1_agent",
+                name="Internal v1 Agent",
+                spec_json=builtin_router_rag_spec(),
+            )
+
+        missing_template, missing_version = await repo.get_template_with_current_version(
+            "internal_invalid_agent",
+            include_custom=True,
+        )
+        assert missing_template is None
+        assert missing_version is None
+
+    @pytest.mark.asyncio
     async def test_run_lifecycle_persists_resolved_spec(self, repo, sample_thread):
         await repo.seed_builtin_templates()
         template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
@@ -2593,6 +2647,133 @@ class TestAgentRunService:
         assert run.resolved_spec_json["schema_version"] == 2
         assert router_edge["route_fn"] == "router_route"
         assert captured_spec["config"]["loop_policy"]["max_total_visits"] == 9
+
+    @pytest.mark.asyncio
+    async def test_run_thread_chat_falls_back_for_custom_db_pattern_without_opt_in(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        captured_spec = {}
+
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            custom_spec = builtin_router_rag_v2_spec()
+            custom_spec["pattern_type"] = "internal_custom_rag_agent"
+            await repo.create_internal_template_version(
+                template_id="internal_custom_rag_agent",
+                name="Internal Custom RAG Agent",
+                spec_json=custom_spec,
+            )
+
+            async def fake_get_thread_settings(_thread_id):
+                return {"agent_pattern": {"template_id": "internal_custom_rag_agent"}}
+
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+                captured_spec.update(resolved_spec)
+                return {
+                    "answer": "router fallback",
+                    "document_sources": [],
+                    "web_sources": [],
+                    "used_chat_ids": [],
+                    "clarification_options": None,
+                    "route": "direct",
+                    "node_events": [],
+                    **agent_run_context,
+                }
+
+            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+
+            req = SimpleNamespace(
+                question="What is this about?",
+                llm_model="test-llm",
+                use_web_search=False,
+                use_reranker=True,
+                replans=1,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+            )
+            result = await AgentRunService(repository=repo).run_thread_chat(
+                sample_thread.id,
+                req,
+                sample_thread.embed_model,
+            )
+            run = await repo.get_run(result["agent_run_id"])
+
+        assert result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
+        assert captured_spec["pattern_type"] == ROUTER_RAG_AGENT_ID
+        assert run.template_id == ROUTER_RAG_AGENT_ID
+
+    @pytest.mark.asyncio
+    async def test_run_thread_chat_can_load_custom_db_pattern_when_opted_in(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        captured_spec = {}
+
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            custom_spec = builtin_router_rag_v2_spec()
+            custom_spec["pattern_type"] = "internal_custom_rag_agent"
+            await repo.create_internal_template_version(
+                template_id="internal_custom_rag_agent",
+                name="Internal Custom RAG Agent",
+                spec_json=custom_spec,
+            )
+
+            async def fake_get_thread_settings(_thread_id):
+                return {"agent_pattern": {"template_id": "internal_custom_rag_agent"}}
+
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+                captured_spec.update(resolved_spec)
+                return {
+                    "answer": "custom ok",
+                    "document_sources": [],
+                    "web_sources": [],
+                    "used_chat_ids": [],
+                    "clarification_options": None,
+                    "route": "direct",
+                    "node_events": [],
+                    **agent_run_context,
+                }
+
+            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+
+            req = SimpleNamespace(
+                question="What is this about?",
+                llm_model="test-llm",
+                use_web_search=False,
+                use_reranker=True,
+                replans=1,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+            )
+            result = await AgentRunService(
+                repository=repo,
+                allow_custom_agent_patterns=True,
+            ).run_thread_chat(
+                sample_thread.id,
+                req,
+                sample_thread.embed_model,
+            )
+            run = await repo.get_run(result["agent_run_id"])
+
+        assert result["agent_pattern_id"] == "internal_custom_rag_agent"
+        assert result["agent_pattern_version"] == 1
+        assert run.template_version_id == "internal_custom_rag_agent:v1"
+        assert run.resolved_spec_json["schema_version"] == 2
+        assert captured_spec["pattern_type"] == "internal_custom_rag_agent"
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_plan_execute_rag_when_selected(self, engine, sample_thread, monkeypatch):
@@ -4266,6 +4447,27 @@ class TestAgentPatternApi:
 
         stale_detail = api_client.get("/api/agent-patterns/simple_rag_agent")
         assert stale_detail.status_code == 404
+
+    def test_internal_custom_agent_pattern_is_not_publicly_exposed(self, api_client):
+        async def seed_internal_pattern():
+            spec = builtin_router_rag_v2_spec()
+            spec["pattern_type"] = "internal_api_hidden_agent"
+            await AgentPatternRepository().create_internal_template_version(
+                template_id="internal_api_hidden_agent",
+                name="Internal API Hidden Agent",
+                spec_json=spec,
+            )
+
+        asyncio.run(seed_internal_pattern())
+
+        listed = api_client.get("/api/agent-patterns")
+        detail = api_client.get("/api/agent-patterns/internal_api_hidden_agent")
+
+        assert listed.status_code == 200
+        assert "internal_api_hidden_agent" not in {
+            item["id"] for item in listed.json()["agent_patterns"]
+        }
+        assert detail.status_code == 404
 
     def test_validate_agent_pattern_endpoint(self, api_client):
         valid = api_client.post(
