@@ -22,6 +22,7 @@ from app.agent_patterns.graph import (
 )
 from app.agent_patterns.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace, build_runtime_trace_event
 from app.agent_patterns.metrics import build_run_metrics
+from app.agent_patterns.node_catalog import collect_node_catalog_errors, get_node_catalog
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
@@ -621,6 +622,29 @@ class TestRouterRagTemplateValidator:
         result = TemplateValidator().validate(builtin_evaluator_replanner_rag_v2_spec())
 
         assert result == {"valid": True, "errors": []}
+
+    def test_node_catalog_exposes_required_authoring_metadata(self):
+        catalog = get_node_catalog()
+
+        assert collect_node_catalog_errors(catalog) == []
+        retrieval = catalog["retrieval_worker"]
+        assert retrieval["state_reads"]
+        assert "evidence_packets" in retrieval["state_writes"]
+        assert retrieval["prompt_slots"] == []
+        assert retrieval["context_policy"]["mode"] == "append_evidence"
+        assert retrieval["observability"]["span_kind"] == "tool_worker"
+        assert retrieval["max_instances"] >= 1
+
+    def test_node_catalog_shape_validation_reports_bad_metadata(self):
+        catalog = get_node_catalog()
+        catalog["retrieval_worker"].pop("state_reads")
+        catalog["router"]["max_instances"] = 0
+
+        errors = collect_node_catalog_errors(catalog)
+
+        assert "retrieval_worker missing catalog keys: state_reads" in errors
+        assert "retrieval_worker.state_reads must be a list of non-empty strings" in errors
+        assert "router.max_instances must be a positive integer" in errors
 
     def test_rejects_router_rag_graph_topology_changes(self):
         spec = builtin_router_rag_v2_spec()
@@ -4963,6 +4987,10 @@ class TestAgentPatternApi:
         assert "document_evidence" in node_catalog["retrieval_worker"]["allowed_tool_contract_ids"]
         assert "router_route" in node_catalog["router"]["allowed_route_functions"]
         assert node_catalog["hitl_gate"]["category"] == "human_review"
+        assert node_catalog["retrieval_worker"]["context_policy"]["mode"] == "append_evidence"
+        assert node_catalog["retrieval_worker"]["observability"]["span_kind"] == "tool_worker"
+        assert "evidence_packets" in node_catalog["retrieval_worker"]["state_writes"]
+        assert node_catalog["retrieval_worker"]["max_instances"] >= 1
         assert "implementation" not in node_catalog["retrieval_worker"]
         assert "callable" not in node_catalog["retrieval_worker"]
 
