@@ -4531,6 +4531,41 @@ class TestAgentPatternApi:
         assert rejected.status_code == 400
         assert "built-in agent pattern templates cannot be authored" in rejected.json()["detail"]
 
+    def test_internal_agent_pattern_catalog_endpoint_exposes_safe_authoring_metadata(self, api_client):
+        response = api_client.get("/api/internal/agent-patterns/catalog")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["schema_version"] == 1
+        assert payload["spec_schema_version"] == 2
+        assert payload["graph_spec"]["requires_explicit_route_fn"] is True
+        assert payload["graph_spec"]["reserved_node_ids"] == ["START", "END"]
+
+        node_catalog = payload["node_catalog"]
+        assert node_catalog["retrieval_worker"]["display_name"] == "Document Retrieval"
+        assert "document_evidence" in node_catalog["retrieval_worker"]["allowed_tool_contract_ids"]
+        assert "router_route" in node_catalog["router"]["allowed_route_functions"]
+        assert node_catalog["hitl_gate"]["category"] == "human_review"
+        assert "implementation" not in node_catalog["retrieval_worker"]
+        assert "callable" not in node_catalog["retrieval_worker"]
+
+        route_functions = payload["route_functions"]
+        assert route_functions["router_route"]["allowed_source_types"] == ["router"]
+        assert "document" in route_functions["router_route"]["route_labels"]
+        assert route_functions["planner_route"]["route_labels"] == ["execute", "direct", "clarify"]
+        assert route_functions["evaluator_route"]["allowed_source_types"] == ["evidence_evaluator"]
+        assert route_functions["hitl_gate_route"]["route_labels"] is None
+
+        tool_contracts = payload["tool_contracts"]
+        document_contract = tool_contracts["document_evidence"]
+        assert "search_documents" in document_contract["canonical_tools"]
+        assert document_contract["allowed_node_types"] == ["retrieval_worker"]
+        assert document_contract["required_node_capabilities"] == ["retrieval.document"]
+        assert "document_sources" in document_contract["artifact_keys"]
+        assert "allowed_caller_nodes" not in document_contract
+        assert "default_prompt" not in document_contract
+        assert "tool_name" not in document_contract
+
     def test_validate_agent_pattern_endpoint(self, api_client):
         valid = api_client.post(
             "/api/agent-patterns/validate",

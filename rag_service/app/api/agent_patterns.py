@@ -5,9 +5,12 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.agent.tool_registry import tool_contracts_by_id
 from app.agent_patterns.debug_trace import build_debug_graph
 from app.agent_patterns.graph import normalize_hitl_policy_for_thread_settings
+from app.agent_patterns.node_catalog import get_node_catalog
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
+from app.agent_patterns.route_registry import get_route_function_registry
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
@@ -193,6 +196,57 @@ def _capabilities_for_pattern(template_id: str) -> Dict[str, Any]:
     }
 
 
+def _agent_pattern_tool_contract_catalog() -> Dict[str, Any]:
+    contracts: Dict[str, Any] = {}
+    for contract_id, records in sorted(tool_contracts_by_id().items()):
+        canonical_tools = sorted(
+            str(record.get("tool_name"))
+            for record in records
+            if isinstance(record.get("tool_name"), str) and record.get("tool_name")
+        )
+        first = records[0] if records else {}
+        contracts[contract_id] = {
+            "id": contract_id,
+            "category": first.get("category"),
+            "display_name": first.get("display_name"),
+            "description": first.get("description"),
+            "canonical_tools": canonical_tools,
+            "allowed_node_types": sorted(
+                {
+                    str(node_type)
+                    for record in records
+                    for node_type in record.get("allowed_node_types", [])
+                    if node_type
+                }
+            ),
+            "required_node_capabilities": sorted(
+                {
+                    str(capability)
+                    for record in records
+                    for capability in record.get("required_node_capabilities", [])
+                    if capability
+                }
+            ),
+            "artifact_keys": sorted(
+                {
+                    str(artifact_key)
+                    for record in records
+                    for artifact_key in record.get("artifact_keys", [])
+                    if artifact_key
+                }
+            ),
+            "warning_codes": sorted(
+                {
+                    str(warning_code)
+                    for record in records
+                    for warning_code in record.get("warning_codes", [])
+                    if warning_code
+                }
+            ),
+        }
+    return contracts
+
+
 @router.get("/agent-patterns")
 async def list_agent_patterns():
     repo = AgentPatternRepository()
@@ -240,6 +294,34 @@ async def create_internal_agent_pattern(req: InternalAgentPatternCreateRequest):
     return {
         "agent_pattern": _template_payload(template),
         "version": _version_payload(version),
+    }
+
+
+@router.get("/internal/agent-patterns/catalog")
+async def get_internal_agent_pattern_catalog():
+    return {
+        "schema_version": 1,
+        "spec_schema_version": 2,
+        "graph_spec": {
+            "required_schema_version": 2,
+            "requires_explicit_route_fn": True,
+            "reserved_node_ids": ["START", "END"],
+            "start_node": "START",
+            "end_node": "END",
+        },
+        "node_catalog": get_node_catalog(),
+        "route_functions": get_route_function_registry(),
+        "tool_contracts": _agent_pattern_tool_contract_catalog(),
+        "defaults": {
+            "context_policy": {
+                "evidence_packet_limit": 12,
+                "evidence_packet_content_limit": 2000,
+                "final_prompt_assembly": "legacy_evidence",
+            },
+            "loop_policy": {
+                "default_max_node_visits": 1,
+            },
+        },
     }
 
 
