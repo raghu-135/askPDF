@@ -28,6 +28,8 @@ from app.agent_patterns.prompting import (
     build_replanner_prompt,
     build_router_prompt,
 )
+from app.agent_patterns.node_catalog import get_node_type_metadata, node_type_capabilities
+from app.agent_patterns.route_registry import route_function_allowed_for_node_type
 from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES, WEB_APPROVAL_GATE_ID
 from app.agent_patterns.trace import (
     available_document_refs,
@@ -49,6 +51,7 @@ RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarif
 
 logger = logging.getLogger(__name__)
 FINAL_REVIEW_GATE_ID = "human_review_gate"
+NODE_RUNTIME_CONFIG_KEY = "agent_pattern_node_runtime"
 
 
 TEMPORAL_PLAN_RE = re.compile(
@@ -75,6 +78,57 @@ DOCUMENT_PLAN_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+
+
+def _node_runtime(config: Optional[RunnableConfig]) -> Dict[str, Any]:
+    configurable = ((config or {}).get("configurable") or {})
+    runtime = configurable.get(NODE_RUNTIME_CONFIG_KEY)
+    return runtime if isinstance(runtime, dict) else {}
+
+
+def _runtime_node_id(config: Optional[RunnableConfig], fallback: str) -> str:
+    runtime = _node_runtime(config)
+    node_id = runtime.get("node_id")
+    return str(node_id) if isinstance(node_id, str) and node_id else fallback
+
+
+def _runtime_node_type(config: Optional[RunnableConfig], fallback: str) -> str:
+    runtime = _node_runtime(config)
+    node_type = runtime.get("node_type")
+    return str(node_type) if isinstance(node_type, str) and node_type else fallback
+
+
+def _runtime_node_capabilities(config: Optional[RunnableConfig]) -> List[str]:
+    runtime = _node_runtime(config)
+    capabilities = runtime.get("capabilities")
+    return [str(item) for item in capabilities] if isinstance(capabilities, list) else []
+
+
+def _with_node_runtime_config(
+    config: Optional[RunnableConfig],
+    *,
+    node_id: str,
+    node_type: str,
+    capabilities: List[str],
+) -> RunnableConfig:
+    updated = dict(config or {})
+    configurable = dict(updated.get("configurable") or {})
+    configurable[NODE_RUNTIME_CONFIG_KEY] = {
+        "node_id": node_id,
+        "node_type": node_type,
+        "capabilities": list(capabilities),
+    }
+    updated["configurable"] = configurable
+    metadata = dict(updated.get("metadata") or {})
+    metadata.update(
+        {
+            "node_id": node_id,
+            "node_type": node_type,
+            "node_capabilities": list(capabilities),
+        }
+    )
+    updated["metadata"] = metadata
+    return updated
 
 
 class RouterRagState(TypedDict, total=False):
@@ -135,7 +189,11 @@ def _append_event(
     started: Optional[float] = None,
     config: Optional[RunnableConfig] = None,
 ) -> List[Dict[str, Any]]:
-    event = {"node": node, **(data or {})}
+    event = {
+        "node": _runtime_node_id(config, node),
+        "node_type": _runtime_node_type(config, node),
+        **(data or {}),
+    }
     if started is not None:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
         completed_at = utc_now()
@@ -159,6 +217,9 @@ def _append_tool_event(
     config: Optional[RunnableConfig] = None,
 ) -> List[Dict[str, Any]]:
     event = compact_tool_event(payload, tool_input=tool_input)
+    caller_node_type = event.get("caller_node_type") or _runtime_node_type(config, str(event.get("caller_node") or ""))
+    if caller_node_type:
+        event["caller_node_type"] = caller_node_type
     telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
     if isinstance(telemetry_sink, dict):
         telemetry_sink.setdefault("tool_events", []).append(dict(event))
@@ -256,7 +317,15 @@ async def _invoke_tool_for_node(
 
 
 def _tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: str, tool_name: str) -> RunnableConfig:
-    validate_tool_call_allowed(tool_name, caller_node)
+    caller_node_id = _runtime_node_id(config, caller_node)
+    caller_node_type = _runtime_node_type(config, caller_node)
+    caller_capabilities = _runtime_node_capabilities(config) or node_type_capabilities(caller_node_type)
+    validate_tool_call_allowed(
+        tool_name,
+        caller_node_id,
+        caller_node_type=caller_node_type,
+        caller_capabilities=caller_capabilities,
+    )
     contract_id = get_tool_contract_id(tool_name)
     allowed_tool_ids = state.get("allowed_tool_ids")
     if not isinstance(allowed_tool_ids, list) or contract_id not in allowed_tool_ids:
@@ -268,7 +337,9 @@ def _tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: 
     configurable.update(
         {
             "agent_run_id": state.get("agent_run_id"),
-            "caller_node": caller_node,
+            "caller_node": caller_node_id,
+            "caller_node_type": caller_node_type,
+            "caller_capabilities": caller_capabilities,
             "route": state.get("route"),
             "tool_name": tool_name,
         }
@@ -278,7 +349,9 @@ def _tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: 
     metadata.update(
         {
             "agent_run_id": state.get("agent_run_id"),
-            "caller_node": caller_node,
+            "caller_node": caller_node_id,
+            "caller_node_type": caller_node_type,
+            "caller_capabilities": caller_capabilities,
             "route": state.get("route"),
             "tool_name": tool_name,
         }
@@ -788,14 +861,23 @@ class NodeRegistry:
 
     def get_for_spec(self, node_spec: Dict[str, Any]) -> Callable[..., Any]:
         node_type = str(node_spec.get("type") or "")
-        if node_type != "hitl_gate":
-            return self.get(node_type)
         node_id = str(node_spec.get("id") or node_type)
+        metadata = get_node_type_metadata(node_type)
+        capabilities = list(metadata.get("capabilities") or node_type_capabilities(node_type))
+        node_impl = self.get(node_type)
 
-        async def _bound_hitl_gate(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-            return await self.hitl_gate(state, config, node_id=node_id)
+        async def _bound_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+            runtime_config = _with_node_runtime_config(
+                config,
+                node_id=node_id,
+                node_type=node_type,
+                capabilities=capabilities,
+            )
+            if node_type == "hitl_gate":
+                return await self.hitl_gate(state, runtime_config, node_id=node_id)
+            return await node_impl(state, runtime_config)
 
-        return _bound_hitl_gate
+        return _bound_node
 
     async def context_loader(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
@@ -1719,6 +1801,39 @@ def hitl_gate_route_for(gate_id: str) -> Callable[[RouterRagState], Any]:
     return _route
 
 
+def _route_function_for_edge(
+    edge: Dict[str, Any],
+    *,
+    source: str,
+    node_types: Dict[str, str],
+    schema_version: Any,
+) -> Callable[[RouterRagState], Any]:
+    route_fn_id = edge.get("route_fn")
+    source_type = node_types.get(source)
+    if isinstance(route_fn_id, str) and route_fn_id:
+        if source_type and not route_function_allowed_for_node_type(route_fn_id, source_type):
+            raise ValueError(f"Route function {route_fn_id} is not allowed from node type {source_type}")
+        if route_fn_id == "hitl_gate_route":
+            return hitl_gate_route_for(str(source))
+        if route_fn_id == "planner_route":
+            return planner_route
+        if route_fn_id == "evaluator_route":
+            return evaluator_route
+        if route_fn_id == "router_route":
+            return router_route
+        raise ValueError(f"Unknown route function: {route_fn_id}")
+
+    if schema_version == 2:
+        raise ValueError(f"Conditional edge from {source} must declare route_fn")
+    if source == "planner":
+        return planner_route
+    if source == "evidence_evaluator":
+        return evaluator_route
+    if source_type == "hitl_gate":
+        return hitl_gate_route_for(str(source))
+    return router_route
+
+
 class TemplateCompiler:
     """Compile validated v2 template specs into LangGraph StateGraph instances."""
 
@@ -1734,10 +1849,12 @@ class TemplateCompiler:
         from app.agent_patterns.validator import TemplateValidator
 
         graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
+        schema_version = spec.get("schema_version") if isinstance(spec, dict) else None
         if not graph_spec.get("hitl_compiled"):
             TemplateValidator().validate(spec)
             spec = self.materialize_spec(spec)
             graph_spec = (spec.get("config") or {}).get("graph") or {}
+            schema_version = spec.get("schema_version") if isinstance(spec, dict) else None
         workflow = StateGraph(RouterRagState)
         node_types: Dict[str, str] = {}
         for node in graph_spec.get("nodes", []):
@@ -1748,14 +1865,12 @@ class TemplateCompiler:
             source = edge.get("from")
             target = edge.get("to")
             if edge.get("conditional"):
-                if source == "planner":
-                    route_fn = planner_route
-                elif source == "evidence_evaluator":
-                    route_fn = evaluator_route
-                elif node_types.get(source) == "hitl_gate":
-                    route_fn = hitl_gate_route_for(str(source))
-                else:
-                    route_fn = router_route
+                route_fn = _route_function_for_edge(
+                    edge,
+                    source=str(source),
+                    node_types=node_types,
+                    schema_version=schema_version,
+                )
                 routes = {
                     key: END if value == "END" else value
                     for key, value in dict(edge["routes"]).items()
@@ -1818,7 +1933,7 @@ class TemplateCompiler:
                 edges = self._insert_after_gate(edges, gate_id, target_node_id)
             else:
                 continue
-            edges.append({"from": gate_id, "conditional": True, "routes": routes})
+            edges.append({"from": gate_id, "conditional": True, "route_fn": "hitl_gate_route", "routes": routes})
 
         return {"nodes": nodes, "edges": edges, "hitl_compiled": True}
 

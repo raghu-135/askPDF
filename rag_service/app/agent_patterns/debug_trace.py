@@ -986,6 +986,7 @@ class AgentTraceRecorder:
         index = self._node_index
         self._node_index += 1
         node = str(event.get("node") or event.get("name") or f"node_{index}")
+        node_type = str(event.get("node_type") or node)
         status = _span_status(event)
         span_id = f"node:{node}:{index}"
         llm_summary = _as_dict(_as_dict(event.get("llm_result_summary")).get("llm"))
@@ -1013,6 +1014,7 @@ class AgentTraceRecorder:
                 SpanAttributes.GRAPH_NODE_ID: node,
                 SpanAttributes.GRAPH_NODE_NAME: _node_display_name(node),
                 "askpdf.node.id": node,
+                "askpdf.node.type": node_type,
                 "askpdf.node.name": _node_display_name(node),
                 "askpdf.route": event.get("route"),
                 "askpdf.route_reason": event.get("route_reason"),
@@ -1130,6 +1132,7 @@ class AgentTraceRecorder:
         enriched = enrich_tool_event(event)
         tool_name = str(enriched.get("tool_name") or f"tool_{index}")
         caller_node = enriched.get("caller_node")
+        caller_node_type = enriched.get("caller_node_type")
         parent_span_id = self._node_span_by_node.get(str(caller_node)) or self.run_span_id
         status = "error" if enriched.get("ok") is False or enriched.get("error") else "completed"
         span_id = f"tool:{tool_name}:{index}"
@@ -1166,6 +1169,7 @@ class AgentTraceRecorder:
                 SpanAttributes.TOOL_DESCRIPTION: enriched.get("tool_display_name"),
                 "askpdf.tool.category": enriched.get("tool_category"),
                 "askpdf.caller_node": caller_node,
+                "askpdf.caller_node_type": caller_node_type,
                 "askpdf.result_chars": enriched.get("result_chars"),
                 "askpdf.source_count": enriched.get("source_count"),
                 "askpdf.artifact_keys": enriched.get("artifact_keys"),
@@ -1364,6 +1368,7 @@ def _summary_node(span: Mapping[str, Any]) -> Dict[str, Any]:
     node_id = str(attributes.get("askpdf.node.id") or attributes.get(SpanAttributes.GRAPH_NODE_ID) or span.get("name") or "unknown_node")
     return {
         "id": node_id,
+        "type": attributes.get("askpdf.node.type"),
         "status": span.get("status"),
         "skipped": span.get("status") == "skipped",
         "durationMs": span.get("duration_ms"),
@@ -1394,6 +1399,7 @@ def _summary_tool(span: Mapping[str, Any]) -> Dict[str, Any]:
         "category": attributes.get("askpdf.tool.category"),
         "displayName": attributes.get(SpanAttributes.TOOL_DESCRIPTION) or span.get("name"),
         "callerNode": attributes.get("askpdf.caller_node"),
+        "callerNodeType": attributes.get("askpdf.caller_node_type"),
         "ok": span.get("status") != "error",
         "durationMs": span.get("duration_ms"),
         "sourceCount": attributes.get("askpdf.source_count"),

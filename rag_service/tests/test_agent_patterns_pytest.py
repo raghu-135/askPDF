@@ -941,6 +941,152 @@ class TestRouterRagGraphToolConsumers:
                 tool_name="search_documents",
             )
 
+    def test_v2_custom_graph_validates_and_compiles_with_instance_ids(self):
+        spec = {
+            "schema_version": 2,
+            "pattern_type": "custom_rag_agent",
+            "config": {
+                "allowed_tool_ids": ["document_evidence", "clarify_intent"],
+                "graph": {
+                    "nodes": [
+                        {"id": "context_1", "type": "context_loader"},
+                        {"id": "router_1", "type": "router"},
+                        {"id": "retrieval_1", "type": "retrieval_worker"},
+                        {"id": "final_1", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_1"},
+                        {"from": "context_1", "to": "router_1"},
+                        {
+                            "from": "router_1",
+                            "conditional": True,
+                            "route_fn": "router_route",
+                            "routes": {
+                                "document": "retrieval_1",
+                                "clarify": "final_1",
+                            },
+                        },
+                        {"from": "retrieval_1", "to": "final_1"},
+                        {"from": "final_1", "to": "END"},
+                    ],
+                },
+            },
+        }
+
+        assert TemplateValidator().validate(spec)["valid"] is True
+        assert TemplateCompiler().compile(spec) is not None
+
+    @pytest.mark.parametrize(
+        "edge_update,match",
+        [
+            ({"route_fn": None}, "must declare route_fn"),
+            ({"route_fn": "evaluator_route"}, "route_fn evaluator_route is not allowed"),
+            ({"routes": {"document": "missing_node"}}, "target is unknown: missing_node"),
+        ],
+    )
+    def test_v2_custom_graph_rejects_unsafe_conditional_edges(self, edge_update, match):
+        edge = {
+            "from": "router_1",
+            "conditional": True,
+            "route_fn": "router_route",
+            "routes": {"document": "retrieval_1"},
+        }
+        if edge_update.get("route_fn") is None:
+            edge.pop("route_fn")
+        else:
+            edge.update(edge_update)
+        if "routes" in edge_update:
+            edge["routes"] = edge_update["routes"]
+        spec = {
+            "schema_version": 2,
+            "pattern_type": "custom_rag_agent",
+            "config": {
+                "allowed_tool_ids": ["document_evidence", "clarify_intent"],
+                "graph": {
+                    "nodes": [
+                        {"id": "context_1", "type": "context_loader"},
+                        {"id": "router_1", "type": "router"},
+                        {"id": "retrieval_1", "type": "retrieval_worker"},
+                        {"id": "final_1", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_1"},
+                        {"from": "context_1", "to": "router_1"},
+                        edge,
+                        {"from": "retrieval_1", "to": "final_1"},
+                        {"from": "final_1", "to": "END"},
+                    ],
+                },
+            },
+        }
+
+        with pytest.raises(TemplateValidationError, match=match):
+            TemplateValidator().validate(spec)
+
+    def test_v2_custom_graph_rejects_tool_ids_not_supported_by_graph_nodes(self):
+        spec = {
+            "schema_version": 2,
+            "pattern_type": "custom_rag_agent",
+            "config": {
+                "allowed_tool_ids": ["document_evidence"],
+                "graph": {
+                    "nodes": [
+                        {"id": "context_1", "type": "context_loader"},
+                        {"id": "router_1", "type": "router"},
+                        {"id": "memory_1", "type": "memory_worker"},
+                        {"id": "final_1", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_1"},
+                        {"from": "context_1", "to": "router_1"},
+                        {
+                            "from": "router_1",
+                            "conditional": True,
+                            "route_fn": "router_route",
+                            "routes": {"memory": "memory_1"},
+                        },
+                        {"from": "memory_1", "to": "final_1"},
+                        {"from": "final_1", "to": "END"},
+                    ],
+                },
+            },
+        }
+
+        with pytest.raises(TemplateValidationError, match="not supported by any node"):
+            TemplateValidator().validate(spec)
+
+    @pytest.mark.asyncio
+    async def test_bound_node_spec_emits_instance_id_and_node_type(self, monkeypatch):
+        class FakeTool:
+            async def ainvoke(self, _args, config=None):
+                return {
+                    "content": "Document evidence.",
+                    "artifacts": {"document_sources": [{"file_hash": "file-1"}]},
+                }
+
+        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool())
+        bound = NodeRegistry().get_for_spec({"id": "retrieval_1", "type": "retrieval_worker"})
+        update = await bound(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "What does the document say?",
+                "route": "document",
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+                "node_events": [],
+                "tool_events": [],
+                "allowed_tool_ids": ["document_evidence"],
+            },
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        assert update["node_events"][-1]["node"] == "retrieval_1"
+        assert update["node_events"][-1]["node_type"] == "retrieval_worker"
+        assert update["tool_events"][0]["caller_node"] == "retrieval_1"
+        assert update["tool_events"][0]["caller_node_type"] == "retrieval_worker"
+
     @pytest.mark.asyncio
     async def test_workers_consume_tool_artifacts_without_legacy_fields(self, monkeypatch):
         class FakeTool:

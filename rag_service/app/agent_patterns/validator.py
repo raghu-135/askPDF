@@ -4,6 +4,16 @@ from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from app.agent.tool_registry import known_tool_contract_ids, tool_contracts_by_id
+from app.agent_patterns.node_catalog import (
+    get_node_catalog,
+    node_type_allowed_tool_contract_ids,
+    known_node_types,
+)
+from app.agent_patterns.route_registry import (
+    known_route_function_ids,
+    route_function_allowed_for_node_type,
+    route_function_labels,
+)
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
     EVALUATOR_REPLANNER_RAG_AGENT_ID,
@@ -87,8 +97,11 @@ class TemplateValidator:
         if not isinstance(spec, dict):
             return ["spec must be an object"]
 
+        if spec.get("schema_version") == 2:
+            return GenericGraphValidator().collect_errors(spec)
+
         if spec.get("schema_version") != 1:
-            errors.append("schema_version must be 1")
+            errors.append("schema_version must be 1 or 2")
         pattern_type = spec.get("pattern_type")
         if pattern_type not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
             errors.append(f"pattern_type must be one of: {', '.join(sorted(SUPPORTED_BUILTIN_TEMPLATE_IDS))}")
@@ -177,11 +190,11 @@ class TemplateValidator:
             "warnings": [],
             "schema_version": spec.get("schema_version") if isinstance(spec, dict) else None,
             "pattern_type": spec.get("pattern_type") if isinstance(spec, dict) else None,
-            "supported_pattern_types": sorted(SUPPORTED_BUILTIN_TEMPLATE_IDS),
+            "supported_pattern_types": sorted([*SUPPORTED_BUILTIN_TEMPLATE_IDS, "custom_rag_agent"]),
             "allowed_tool_ids": allowed_tool_ids,
-            "required_tool_ids": sorted(PATTERN_REQUIRED_TOOL_IDS.get(spec.get("pattern_type"), ROUTER_RAG_REQUIRED_TOOL_IDS)),
+            "required_tool_ids": sorted(PATTERN_REQUIRED_TOOL_IDS.get(spec.get("pattern_type"), set())),
             "missing_required_tool_ids": sorted(
-                PATTERN_REQUIRED_TOOL_IDS.get(spec.get("pattern_type"), ROUTER_RAG_REQUIRED_TOOL_IDS) - set(allowed_tool_ids)
+                PATTERN_REQUIRED_TOOL_IDS.get(spec.get("pattern_type"), set()) - set(allowed_tool_ids)
             ),
             "unknown_allowed_tool_ids": sorted(set(allowed_tool_ids) - known_tool_ids),
         }
@@ -617,6 +630,187 @@ class TemplateValidator:
         unreachable_gates = sorted(hitl_gate_ids - gate_incoming)
         if unreachable_gates:
             errors.append(f"{pattern_type} HITL gates are not reachable from the base graph: {', '.join(unreachable_gates)}")
+        return errors
+
+
+class GenericGraphValidator:
+    """Catalog-backed validator for schema v2 graph specs."""
+
+    def collect_errors(self, spec: Dict[str, Any]) -> list[str]:
+        errors: list[str] = []
+        if not isinstance(spec, dict):
+            return ["spec must be an object"]
+        if spec.get("schema_version") != 2:
+            errors.append("schema_version must be 2")
+
+        pattern_type = spec.get("pattern_type")
+        if not isinstance(pattern_type, str) or not pattern_type:
+            errors.append("pattern_type must be a non-empty string")
+
+        config = spec.get("config")
+        if not isinstance(config, dict):
+            errors.append("config must be an object")
+            return errors
+
+        allowed_tool_ids = config.get("allowed_tool_ids", [])
+        known_tool_ids = _known_tool_ids()
+        if not isinstance(allowed_tool_ids, list) or not all(isinstance(item, str) for item in allowed_tool_ids):
+            errors.append("allowed_tool_ids must be a list of strings")
+            allowed_tool_ids = []
+        else:
+            unknown_tool_ids = sorted(set(allowed_tool_ids) - known_tool_ids)
+            if unknown_tool_ids:
+                errors.append(f"unknown allowed_tool_ids: {', '.join(unknown_tool_ids)}")
+
+        graph = config.get("graph")
+        if not isinstance(graph, dict):
+            errors.append("graph must be an object")
+            return errors
+        nodes = graph.get("nodes")
+        edges = graph.get("edges")
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            errors.append("graph.nodes and graph.edges must be lists")
+            return errors
+
+        node_catalog = get_node_catalog()
+        node_ids: set[str] = set()
+        node_types_by_id: dict[str, str] = {}
+        graph_supported_tool_ids: set[str] = set()
+        known_types = known_node_types()
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                errors.append("graph node entries must be objects")
+                continue
+            node_id = node.get("id")
+            node_type = node.get("type")
+            if not isinstance(node_id, str) or not node_id:
+                errors.append("graph node entries require non-empty string id")
+                continue
+            if node_id in {"START", "END"}:
+                errors.append(f"graph node id is reserved: {node_id}")
+            if node_id in node_ids:
+                errors.append(f"duplicate graph node id: {node_id}")
+            node_ids.add(node_id)
+
+            if not isinstance(node_type, str) or not node_type:
+                errors.append(f"graph node {node_id} requires non-empty string type")
+                continue
+            if node_type not in known_types:
+                errors.append(f"graph node {node_id} has unknown type: {node_type}")
+                continue
+            node_types_by_id[node_id] = node_type
+            graph_supported_tool_ids.update(node_type_allowed_tool_contract_ids(node_type))
+
+            node_tool_ids = node.get("tool_contract_ids", [])
+            if node_tool_ids in (None, []):
+                continue
+            if not isinstance(node_tool_ids, list) or not all(isinstance(item, str) for item in node_tool_ids):
+                errors.append(f"graph node {node_id}.tool_contract_ids must be a list of strings")
+                continue
+            unsupported_for_node = sorted(set(node_tool_ids) - node_type_allowed_tool_contract_ids(node_type))
+            if unsupported_for_node:
+                errors.append(
+                    f"graph node {node_id} type {node_type} does not allow tool contracts: {', '.join(unsupported_for_node)}"
+                )
+            disabled_for_graph = sorted(set(node_tool_ids) - set(allowed_tool_ids))
+            if disabled_for_graph:
+                errors.append(f"graph node {node_id} uses disabled tool contracts: {', '.join(disabled_for_graph)}")
+
+        disallowed_enabled_tools = sorted(set(allowed_tool_ids) - graph_supported_tool_ids)
+        if disallowed_enabled_tools:
+            errors.append(
+                "allowed_tool_ids are not supported by any node in this graph: "
+                + ", ".join(disallowed_enabled_tools)
+            )
+
+        valid_sources = set(node_ids) | {"START"}
+        valid_targets = set(node_ids) | {"END"}
+        adjacency: dict[str, set[str]] = {}
+        for edge in edges:
+            if not isinstance(edge, dict):
+                errors.append("graph edge entries must be objects")
+                continue
+            source = edge.get("from")
+            if not isinstance(source, str) or source not in valid_sources:
+                errors.append(f"graph edge source is unknown: {source}")
+                continue
+
+            if edge.get("conditional"):
+                routes = edge.get("routes")
+                if not isinstance(routes, dict) or not routes:
+                    errors.append(f"graph conditional edge from {source} must define routes")
+                    continue
+                route_fn = edge.get("route_fn")
+                source_type = node_types_by_id.get(source)
+                if not isinstance(route_fn, str) or not route_fn:
+                    errors.append(f"graph conditional edge from {source} must declare route_fn")
+                elif route_fn not in known_route_function_ids():
+                    errors.append(f"graph conditional edge from {source} has unknown route_fn: {route_fn}")
+                elif source_type and not route_function_allowed_for_node_type(route_fn, source_type):
+                    errors.append(f"route_fn {route_fn} is not allowed from node {source} type {source_type}")
+                labels = route_function_labels(route_fn) if isinstance(route_fn, str) else None
+                for route_name, route_target in routes.items():
+                    if not isinstance(route_name, str) or not isinstance(route_target, str):
+                        errors.append(f"graph conditional edge from {source} routes keys and values must be strings")
+                        continue
+                    if labels is not None and route_name not in labels:
+                        errors.append(f"graph conditional edge from {source} has invalid route label: {route_name}")
+                    if route_target not in valid_targets:
+                        errors.append(f"graph conditional edge from {source} route {route_name} target is unknown: {route_target}")
+                        continue
+                    adjacency.setdefault(source, set()).add(route_target)
+                    errors.extend(self._collect_edge_compatibility_errors(source, route_target, node_types_by_id, node_catalog))
+                continue
+
+            target = edge.get("to")
+            if not isinstance(target, str) or target not in valid_targets:
+                errors.append(f"graph edge target is unknown: {target}")
+                continue
+            adjacency.setdefault(source, set()).add(target)
+            errors.extend(self._collect_edge_compatibility_errors(source, target, node_types_by_id, node_catalog))
+
+        errors.extend(self._collect_reachability_errors(adjacency, node_ids))
+        return errors
+
+    def _collect_edge_compatibility_errors(
+        self,
+        source: str,
+        target: str,
+        node_types_by_id: dict[str, str],
+        node_catalog: Dict[str, Dict[str, Any]],
+    ) -> list[str]:
+        if source == "START" or target == "END":
+            return []
+        source_type = node_types_by_id.get(source)
+        target_type = node_types_by_id.get(target)
+        if not source_type or not target_type:
+            return []
+        allowed_children = set((node_catalog.get(source_type) or {}).get("allowed_child_types") or [])
+        if target_type not in allowed_children:
+            return [f"node {source} type {source_type} cannot connect to {target} type {target_type}"]
+        return []
+
+    def _collect_reachability_errors(self, adjacency: dict[str, set[str]], node_ids: set[str]) -> list[str]:
+        errors: list[str] = []
+        if "START" not in adjacency:
+            errors.append("graph must have an edge from START")
+            return errors
+        visited: set[str] = set()
+        stack = list(adjacency.get("START") or [])
+        while stack:
+            node = stack.pop()
+            if node in visited:
+                continue
+            visited.add(node)
+            if node == "END":
+                continue
+            stack.extend(adjacency.get(node) or [])
+        unreachable = sorted(node_ids - visited)
+        if unreachable:
+            errors.append(f"graph contains unreachable nodes: {', '.join(unreachable)}")
+        if "END" not in visited:
+            errors.append("graph must be able to reach END from START")
         return errors
 
 

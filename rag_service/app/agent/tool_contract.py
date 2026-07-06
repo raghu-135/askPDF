@@ -66,6 +66,7 @@ class ToolMetrics(BaseModel):
 class ToolTrace(BaseModel):
     tool_name: str
     caller_node: Optional[str] = None
+    caller_node_type: Optional[str] = None
     agent_run_id: Optional[str] = None
     thread_id: Optional[str] = None
     route: Optional[str] = None
@@ -103,6 +104,7 @@ def tool_trace(tool_name: str, config: RunnableConfig = None) -> ToolTrace:
     return ToolTrace(
         tool_name=tool_name,
         caller_node=conf.get("caller_node"),
+        caller_node_type=conf.get("caller_node_type"),
         agent_run_id=conf.get("agent_run_id"),
         thread_id=conf.get("app_thread_id") or conf.get("thread_id"),
         route=conf.get("route"),
@@ -296,6 +298,7 @@ def compact_tool_event(payload: Dict[str, Any], *, tool_input: Any = None) -> Di
     event = {
         "tool_name": trace.get("tool_name"),
         "caller_node": trace.get("caller_node"),
+        "caller_node_type": trace.get("caller_node_type"),
         "ok": bool(payload.get("ok", True)),
         "elapsed_ms": metrics.get("elapsed_ms"),
         "result_chars": metrics.get("result_chars"),

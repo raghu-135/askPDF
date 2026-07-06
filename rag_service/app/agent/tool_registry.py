@@ -19,6 +19,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "thread_shape",
         "category": "context",
         "allowed_caller_nodes": ["context_loader", "router", "retrieval_worker", "memory_worker", "timeline_worker"],
+        "allowed_node_types": ["context_loader", "router", "retrieval_worker", "memory_worker", "timeline_worker"],
+        "required_node_capabilities": ["context.prefetch", "route.intent", "retrieval.document", "retrieval.memory", "retrieval.timeline"],
         "artifact_keys": ["thread_shape"],
         "warning_codes": ["missing_thread_id"],
     },
@@ -26,6 +28,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "document_evidence",
         "category": "retrieval",
         "allowed_caller_nodes": ["retrieval_worker"],
+        "allowed_node_types": ["retrieval_worker"],
+        "required_node_capabilities": ["retrieval.document"],
         "artifact_keys": ["document_sources", "web_sources"],
         "warning_codes": [
             "missing_thread_context",
@@ -38,6 +42,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "focused_document_evidence",
         "category": "retrieval",
         "allowed_caller_nodes": ["retrieval_worker"],
+        "allowed_node_types": ["retrieval_worker"],
+        "required_node_capabilities": ["retrieval.document"],
         "artifact_keys": ["document_sources"],
         "warning_codes": ["missing_thread_context", "missing_document_vectors", "no_relevant_content"],
     },
@@ -45,6 +51,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "deep_memory",
         "category": "memory",
         "allowed_caller_nodes": ["memory_worker"],
+        "allowed_node_types": ["memory_worker"],
+        "required_node_capabilities": ["retrieval.memory"],
         "artifact_keys": ["used_chat_ids"],
         "warning_codes": ["missing_thread_context", "no_relevant_conversation_history"],
     },
@@ -52,6 +60,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "thread_timeline",
         "category": "timeline",
         "allowed_caller_nodes": ["timeline_worker"],
+        "allowed_node_types": ["timeline_worker"],
+        "required_node_capabilities": ["retrieval.timeline"],
         "artifact_keys": ["timeline_events"],
         "warning_codes": ["missing_thread_context", "no_timeline_events"],
     },
@@ -59,6 +69,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "live_web_recon",
         "category": "web",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["retrieval.web"],
         "artifact_keys": ["web_sources"],
         "warning_codes": ["web_search_disabled", "no_usable_web_results"],
     },
@@ -66,6 +78,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "wikipedia_reference",
         "category": "external_research",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["external_research"],
         "artifact_keys": ["provider_tool"],
         "warning_codes": ["empty_external_tool_result"],
     },
@@ -73,6 +87,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "wikidata_reference",
         "category": "external_research",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["external_research"],
         "artifact_keys": ["provider_tool"],
         "warning_codes": ["empty_external_tool_result"],
     },
@@ -80,6 +96,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "arxiv_research",
         "category": "external_research",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["external_research"],
         "artifact_keys": ["provider_tool"],
         "warning_codes": ["empty_external_tool_result"],
     },
@@ -87,6 +105,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "pubmed_research",
         "category": "external_research",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["external_research"],
         "artifact_keys": ["provider_tool"],
         "warning_codes": ["empty_external_tool_result"],
     },
@@ -94,6 +114,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "pubmed_research",
         "category": "external_research",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["external_research"],
         "artifact_keys": ["provider_tool"],
         "warning_codes": ["empty_external_tool_result"],
     },
@@ -101,6 +123,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "semantic_scholar_research",
         "category": "external_research",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["external_research"],
         "artifact_keys": ["provider_tool"],
         "warning_codes": ["empty_external_tool_result"],
     },
@@ -108,6 +132,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "semantic_scholar_research",
         "category": "external_research",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["external_research"],
         "artifact_keys": ["provider_tool"],
         "warning_codes": ["empty_external_tool_result"],
     },
@@ -115,6 +141,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "stackexchange_reference",
         "category": "external_research",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["external_research"],
         "artifact_keys": ["provider_tool"],
         "warning_codes": ["empty_external_tool_result"],
     },
@@ -122,6 +150,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "yahoo_finance_news",
         "category": "external_research",
         "allowed_caller_nodes": ["web_worker"],
+        "allowed_node_types": ["web_worker"],
+        "required_node_capabilities": ["external_research"],
         "artifact_keys": ["provider_tool"],
         "warning_codes": ["empty_external_tool_result"],
     },
@@ -129,6 +159,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "id": "clarify_intent",
         "category": "control",
         "allowed_caller_nodes": ["router", "planner", "evidence_evaluator", "replanner", "finalizer"],
+        "allowed_node_types": ["router", "planner", "evidence_evaluator", "replanner", "finalizer"],
+        "required_node_capabilities": ["clarify"],
         "artifact_keys": [],
         "warning_codes": [],
     },
@@ -189,18 +221,35 @@ def tool_contracts_by_id() -> Dict[str, List[Dict[str, Any]]]:
     return records
 
 
-def validate_tool_call_allowed(tool_name: str, caller_node: str) -> None:
+def validate_tool_call_allowed(
+    tool_name: str,
+    caller_node: str,
+    *,
+    caller_node_type: str | None = None,
+    caller_capabilities: List[str] | None = None,
+) -> None:
     """Raise when a graph node attempts to call a tool outside its contract."""
 
     contract = TOOL_CONTRACT_METADATA.get(tool_name)
     if not contract:
         raise ValueError(f"Unknown tool contract: {tool_name}")
     allowed_nodes = contract.get("allowed_caller_nodes") or []
-    if caller_node not in allowed_nodes:
-        raise ValueError(
-            f"Tool {tool_name} is not allowed from caller node {caller_node}; "
-            f"allowed caller nodes: {', '.join(allowed_nodes) or 'none'}"
-        )
+    if caller_node in allowed_nodes:
+        return
+
+    allowed_node_types = contract.get("allowed_node_types") or []
+    if caller_node_type and caller_node_type in allowed_node_types:
+        return
+
+    required_capabilities = set(contract.get("required_node_capabilities") or [])
+    capabilities = set(caller_capabilities or [])
+    if required_capabilities and capabilities.intersection(required_capabilities):
+        return
+
+    raise ValueError(
+        f"Tool {tool_name} is not allowed from caller node {caller_node}; "
+        f"allowed caller nodes: {', '.join(allowed_nodes) or 'none'}"
+    )
 
 
 TOOL_FRIENDLY_CONFIG = {
