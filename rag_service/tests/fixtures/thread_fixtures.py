@@ -13,7 +13,7 @@ def sample_thread_data():
         "name": "Test Thread",
         "embed_model": "BAAI/bge-m3",
         "settings": {
-            "max_iterations": 10,
+            "replans": 10,
             "token_budget": 8192,
             "temperature": 0.7
         }
@@ -26,7 +26,7 @@ def sample_thread_with_complex_settings():
         "name": "Complex Settings Thread",
         "embed_model": "openai/text-embedding-3-small",
         "settings": {
-            "max_iterations": 20,
+            "replans": 20,
             "token_budget": 16384,
             "nested": {
                 "level1": {
@@ -53,7 +53,7 @@ def sample_threads_list(count=3):
             "name": f"Thread {i}",
             "embed_model": models[i % len(models)],
             "settings": {
-                "max_iterations": 10 + i,
+                "replans": 10 + i,
                 "token_budget": 8192 * (i + 1)
             }
         })
@@ -72,7 +72,7 @@ def sample_thread_settings_variations():
             "name": "Conservative Thread",
             "embed_model": "BAAI/bge-m3",
             "settings": {
-                "max_iterations": 5,
+                "replans": 5,
                 "token_budget": 4096,
                 "temperature": 0.3
             }
@@ -81,7 +81,7 @@ def sample_thread_settings_variations():
             "name": "Aggressive Thread",
             "embed_model": "BAAI/bge-m3",
             "settings": {
-                "max_iterations": 30,
+                "replans": 30,
                 "token_budget": 32768,
                 "temperature": 1.0
             }

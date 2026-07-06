@@ -48,7 +48,7 @@ def merge_jsonb_field(
     
     Usage:
         thread = Thread(id="t1", name="Test")
-        merge_jsonb_field(thread, "settings", {"max_iterations": 10})
+        merge_jsonb_field(thread, "settings", {"replans": 10})
     """
     current = getattr(obj, field_name) or {}
     new_value = {**current, **updates}

@@ -139,7 +139,7 @@ export interface ThreadMetadata {
 }
 
 export interface ThreadSettings {
-  max_iterations: number;
+  replans: number;
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
@@ -158,9 +158,7 @@ export interface PromptToolDefinition {
 }
 
 export interface PromptDefaults {
-  max_iterations: number;
-  min_max_iterations: number;
-  max_max_iterations: number;
+  replans_limit: number;
   context_window: number;
   system_role: string;
   tool_instructions: Record<string, string>;
@@ -701,7 +699,7 @@ export async function threadChat(
   useWebSearch: boolean = false,
   useReranker: boolean = true,
   contextWindowSize: number = 4096,
-  maxIterations?: number,
+  replans?: number,
   systemRoleOverride?: string,
   toolInstructionsOverride?: Record<string, string>,
   customInstructionsOverride?: string
@@ -738,8 +736,8 @@ export async function threadChat(
     context_window: contextWindowSize,
     ...getBrowserRuntimeContext()
   };
-  if (typeof maxIterations === "number") {
-    payload.max_iterations = maxIterations;
+  if (typeof replans === "number") {
+    payload.replans = replans;
   }
   if (typeof systemRoleOverride === "string") {
     payload.system_role_override = systemRoleOverride;

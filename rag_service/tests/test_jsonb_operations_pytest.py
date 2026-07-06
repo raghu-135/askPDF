@@ -33,7 +33,7 @@ class TestJSONBOperations:
         """Test JSONB insert operations."""
         import uuid
         settings = {
-            "max_iterations": 10,
+            "replans": 10,
             "token_budget": 8192,
             "nested": {"key": "value"}
         }
@@ -56,7 +56,7 @@ class TestJSONBOperations:
     async def test_jsonb_update_merge(self, session, sample_thread):
         """Test JSONB merge updates."""
         # Initial settings
-        initial = {"max_iterations": 10}
+        initial = {"replans": 10}
         result = await session.execute(
             select(Thread).where(Thread.id == sample_thread.id)
         )
@@ -72,7 +72,7 @@ class TestJSONBOperations:
         await session.commit()
         await session.refresh(thread)
         
-        assert "max_iterations" in thread.settings
+        assert "replans" in thread.settings
         assert "token_budget" in thread.settings
         assert thread.settings["token_budget"] == 8192
 

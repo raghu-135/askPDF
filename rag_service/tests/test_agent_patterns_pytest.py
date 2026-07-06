@@ -38,6 +38,7 @@ from app.agent_patterns.templates import (
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
 from app.db.models_sqlmodel import AgentRun, ChatTurn, Thread
+from app.models.llm_server_client import REPLANS_LIMIT
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z, utc_now
 
@@ -549,7 +550,7 @@ class TestRouterRagTemplateValidator:
             (lambda spec: spec.update({"pattern_type": "simple_rag_agent"}), "pattern_type must be one of:"),
             (lambda spec: spec["config"].update({"surprise": True}), "unknown config keys: surprise"),
             (lambda spec: spec["config"].update({"allowed_tool_ids": ["not_a_tool"]}), "unknown allowed_tool_ids: not_a_tool"),
-            (lambda spec: spec["config"].update({"max_iterations": 999}), "max_iterations must be between"),
+            (lambda spec: spec["config"].update({"replans": 999}), "replans is only supported"),
         ],
     )
     def test_rejects_invalid_router_rag_specs(self, mutate, expected):
@@ -564,13 +565,26 @@ class TestRouterRagTemplateValidator:
     def test_resolver_freezes_thread_and_request_overrides(self):
         resolved = TemplateResolver().resolve(
             builtin_router_rag_spec(),
-            thread_settings={"max_iterations": 3, "use_reranker": False},
+            thread_settings={"replans": 3, "use_reranker": False},
             request_overrides={"use_web_search": True},
         )
 
-        assert resolved["config"]["max_iterations"] == 3
+        assert "replans" not in resolved["config"]
         assert resolved["config"]["use_reranker"] is False
         assert resolved["config"]["use_web_search"] is True
+
+        evaluator_resolved = TemplateResolver().resolve(
+            builtin_evaluator_replanner_rag_spec(),
+            thread_settings={"replans": 3, "use_reranker": False},
+            request_overrides={"use_web_search": True},
+        )
+        assert evaluator_resolved["config"]["replans"] == 3
+
+    def test_accepts_zero_replan_budget(self):
+        spec = builtin_evaluator_replanner_rag_spec()
+        spec["config"]["replans"] = 0
+
+        assert TemplateValidator().validate(spec)["valid"] is True
 
     def test_accepts_builtin_router_rag_spec(self):
         result = TemplateValidator().validate(builtin_router_rag_spec())
@@ -756,12 +770,12 @@ class TestRouterRagTemplateValidator:
 
     def test_rejects_evaluator_replanner_unbounded_replans(self):
         spec = builtin_evaluator_replanner_rag_spec()
-        spec["config"]["max_replans"] = 9
+        spec["config"]["replans"] = REPLANS_LIMIT + 1
 
         with pytest.raises(TemplateValidationError) as exc:
             TemplateValidator().validate(spec)
 
-        assert "max_replans must be between" in str(exc.value)
+        assert "replans must be between" in str(exc.value)
 
     def test_normalize_execution_plan_clamps_invalid_plans_to_document_execution(self):
         normalized = normalize_execution_plan(
@@ -1083,7 +1097,7 @@ class TestRouterRagGraphToolConsumers:
                 "node_events": [],
                 "tool_events": [],
                 "replan_count": 0,
-                "max_replans": 1,
+                "replans": 1,
             },
             {"configurable": {"thread_id": "thread-1"}},
         )
@@ -1125,7 +1139,7 @@ class TestRouterRagGraphToolConsumers:
             "used_chat_ids": [],
             "node_events": [],
             "tool_events": [],
-            "max_replans": 1,
+            "replans": 1,
         }
 
         replan_update = await NodeRegistry().evidence_evaluator(
@@ -1175,7 +1189,7 @@ class TestRouterRagGraphToolConsumers:
                 "node_events": [],
                 "tool_events": [],
                 "replan_count": 0,
-                "max_replans": 1,
+                "replans": 1,
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
             },
             {"configurable": {"thread_id": "thread-1"}},
@@ -1734,7 +1748,7 @@ class TestAgentRunService:
             use_web_search=True,
             use_reranker=False,
             context_window=8192,
-            max_iterations=1,
+            replans=1,
             system_role_override="",
             tool_instructions_override={},
             custom_instructions_override="",
@@ -1980,7 +1994,7 @@ class TestAgentRunService:
                 llm_model="test-llm",
                 use_web_search=False,
                 use_reranker=True,
-                max_iterations=1,
+                replans=1,
                 system_role_override="",
                 tool_instructions_override={},
                 custom_instructions_override="",
@@ -2036,7 +2050,7 @@ class TestAgentRunService:
                 llm_model="test-llm",
                 use_web_search=False,
                 use_reranker=True,
-                max_iterations=1,
+                replans=1,
                 system_role_override="",
                 tool_instructions_override={},
                 custom_instructions_override="",
@@ -2098,7 +2112,7 @@ class TestAgentRunService:
                 llm_model="test-llm",
                 use_web_search=False,
                 use_reranker=True,
-                max_iterations=1,
+                replans=1,
                 system_role_override="",
                 tool_instructions_override={},
                 custom_instructions_override="",
@@ -2167,7 +2181,7 @@ class TestAgentRunService:
                 llm_model="test-llm",
                 use_web_search=False,
                 use_reranker=True,
-                max_iterations=1,
+                replans=1,
                 system_role_override="",
                 tool_instructions_override={},
                 custom_instructions_override="",
@@ -2244,7 +2258,7 @@ class TestAgentRunService:
                 llm_model="test-llm",
                 use_web_search=False,
                 use_reranker=True,
-                max_iterations=1,
+                replans=1,
                 system_role_override="",
                 tool_instructions_override={},
                 custom_instructions_override="",
@@ -2414,7 +2428,7 @@ class TestAgentRunService:
                 use_web_search=True,
                 use_reranker=False,
                 context_window=8192,
-                max_iterations=1,
+                replans=1,
                 system_role_override="",
                 tool_instructions_override={},
                 custom_instructions_override="",
@@ -2688,7 +2702,7 @@ class TestAgentRunService:
 
         async def fake_get_thread_settings(_thread_id):
             return {
-                "agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID},
+                "agent_pattern": {"template_id": EVALUATOR_REPLANNER_RAG_AGENT_ID},
                 "hitl_web_approval": True,
             }
 
@@ -2799,7 +2813,7 @@ class TestAgentRunService:
                 use_web_search=True,
                 use_reranker=False,
                 context_window=8192,
-                max_iterations=1,
+                replans=1,
                 system_role_override="",
                 tool_instructions_override={},
                 custom_instructions_override="",
@@ -3087,7 +3101,7 @@ class TestAgentRunService:
                 llm_model="test-llm",
                 use_web_search=False,
                 use_reranker=True,
-                max_iterations=1,
+                replans=1,
                 system_role_override="",
                 tool_instructions_override={},
                 custom_instructions_override="",
@@ -3831,7 +3845,7 @@ class TestAgentPatternApi:
     def test_validate_thread_agent_config_endpoint_resolves_without_running_chat(self, api_client, sample_thread, monkeypatch):
         async def fake_get_thread_settings(_thread_id):
             return {
-                "agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID},
+                "agent_pattern": {"template_id": EVALUATOR_REPLANNER_RAG_AGENT_ID},
                 "hitl_web_approval": True,
             }
 
@@ -3839,17 +3853,17 @@ class TestAgentPatternApi:
 
         response = api_client.post(
             f"/api/threads/{sample_thread.id}/agent-config/validate",
-            json={"overrides": {"use_web_search": True, "max_iterations": 2}},
+            json={"overrides": {"use_web_search": True, "replans": 2}},
         )
 
         assert response.status_code == 200
         payload = response.json()
         assert payload["valid"] is True
-        assert payload["template_id"] == ROUTER_RAG_AGENT_ID
-        assert payload["template_version"] == ROUTER_RAG_AGENT_VERSION
+        assert payload["template_id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert payload["template_version"] == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
         assert payload["validation"]["valid"] is True
         assert payload["resolved_spec_json"]["config"]["use_web_search"] is True
-        assert payload["resolved_spec_json"]["config"]["max_iterations"] == 2
+        assert payload["resolved_spec_json"]["config"]["replans"] == 2
         gates = payload["resolved_spec_json"]["config"]["hitl_policy"]["gates"]
         assert gates["web_approval_gate"]["target"] == {"node_id": "web_worker", "node_type": "web_worker"}
 

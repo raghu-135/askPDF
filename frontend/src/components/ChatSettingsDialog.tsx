@@ -25,9 +25,8 @@ interface ChatSettingsDialogProps {
     saving: boolean;
     
     // Settings values
-    maxIterations: number;
-    minMaxIterations: number | null;
-    maxMaxIterations: number | null;
+    replans: number;
+    replansLimit: number | null;
     hitlWebApproval: boolean;
     useReranker: boolean;
     agentPatternId: string;
@@ -39,7 +38,7 @@ interface ChatSettingsDialogProps {
     promptPreview: string;
     
     // Change handlers
-    onMaxIterationsChange: (value: number) => void;
+    onReplansChange: (value: number) => void;
     onHitlWebApprovalChange: (checked: boolean) => void;
     onRerankerChange: (checked: boolean) => void;
     onAgentPatternChange: (value: string) => void;
@@ -59,9 +58,8 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onClose,
     onSave,
     saving,
-    maxIterations,
-    minMaxIterations,
-    maxMaxIterations,
+    replans,
+    replansLimit,
     hitlWebApproval,
     useReranker,
     agentPatternId,
@@ -71,7 +69,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     toolCatalog,
     effectiveToolInstructions,
     promptPreview,
-    onMaxIterationsChange,
+    onReplansChange,
     onHitlWebApprovalChange,
     onRerankerChange,
     onAgentPatternChange,
@@ -83,6 +81,8 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onResetToolInstruction,
     onResetCustomInstructions,
 }) => {
+    const replansEnabled = agentPatternId === 'evaluator_replanner_rag_agent';
+
     return (
         <Dialog
             open={open}
@@ -111,18 +111,6 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                         </IconButton>
                     </Tooltip>
                 </Box>
-                {minMaxIterations !== null && maxMaxIterations !== null ? (
-                    <TextField
-                        label="Max tool iterations"
-                        type="number"
-                        value={maxIterations}
-                        onChange={(e) => onMaxIterationsChange(Math.max(minMaxIterations, Math.min(maxMaxIterations, parseInt(e.target.value) || minMaxIterations)))}
-                        slotProps={{ htmlInput: { min: minMaxIterations, max: maxMaxIterations } }}
-                        helperText="Lower is faster; higher allows deeper research."
-                    />
-                ) : (
-                    <Typography variant="caption" color="error">Iteration limits not loaded from server.</Typography>
-                )}
                 <TextField
                     select
                     label="Agent pattern"
@@ -134,6 +122,23 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     <MenuItem value="plan_execute_rag_agent">Plan-and-Execute RAG Agent</MenuItem>
                     <MenuItem value="evaluator_replanner_rag_agent">Evaluator/Replanner RAG Agent</MenuItem>
                 </TextField>
+                {replansEnabled ? (
+                    replansLimit !== null ? (
+                        <TextField
+                            label="Replans"
+                            type="number"
+                            value={replans}
+                            onChange={(e) => {
+                                const parsed = parseInt(e.target.value, 10);
+                                onReplansChange(Math.max(0, Math.min(replansLimit, Number.isNaN(parsed) ? 0 : parsed)));
+                            }}
+                            slotProps={{ htmlInput: { min: 0, max: replansLimit } }}
+                            helperText="0 runs once without replanning; higher values allow retry loops."
+                        />
+                    ) : (
+                        <Typography variant="caption" color="error">Replan limit not loaded from server.</Typography>
+                    )
+                ) : null}
                 <Divider />
                 <Box>
                     <FormControlLabel

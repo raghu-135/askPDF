@@ -5,7 +5,8 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
 
   rag-service:
-    env_file: []
+    env_file:
+      - .env
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
@@ -23,9 +24,6 @@ services:
       - RERANKER_DEVICE=cpu
       - LLM_API_URL=http://host.docker.internal:1234/v1
       - DEFAULT_TOKEN_BUDGET=8192
-      - DEFAULT_MAX_ITERATIONS=10
-      - MIN_MAX_ITERATIONS=1
-      - MAX_MAX_ITERATIONS=30
       - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
       - MAX_SYSTEM_ROLE_CHARS=500
       - MAX_TOOL_INSTRUCTION_CHARS=500
@@ -40,7 +38,8 @@ services:
       - DOCLING_DO_FORMULA_ENRICHMENT=False
 
   db-migrate:
-    env_file: []
+    env_file:
+      - .env
     environment:
       - LOG_LEVEL=INFO
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgresql:5432/askpdf
@@ -58,9 +57,6 @@ services:
       - RERANKER_DEVICE=cpu
       - LLM_API_URL=http://host.docker.internal:1234/v1
       - DEFAULT_TOKEN_BUDGET=8192
-      - DEFAULT_MAX_ITERATIONS=10
-      - MIN_MAX_ITERATIONS=1
-      - MAX_MAX_ITERATIONS=30
       - MAX_CUSTOM_INSTRUCTIONS_CHARS=2000
       - MAX_SYSTEM_ROLE_CHARS=500
       - MAX_TOOL_INSTRUCTION_CHARS=500

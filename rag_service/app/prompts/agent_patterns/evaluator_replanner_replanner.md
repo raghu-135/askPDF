@@ -42,7 +42,7 @@ Live web search enabled: {USE_WEB_SEARCH}
 
 Replan count: {REPLAN_COUNT}
 
-Max replans: {MAX_REPLANS}
+Replans: {REPLANS}
 
 ## Question
 

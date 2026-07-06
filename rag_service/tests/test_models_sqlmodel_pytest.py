@@ -36,14 +36,14 @@ class TestThreadModel:
             id=thread_id,
             name="Test Thread",
             embed_model="BAAI/bge-m3",
-            settings={"max_iterations": 10},
+            settings={"replans": 10},
             created_at=datetime.utcnow()
         )
         
         assert thread.id == thread_id
         assert thread.name == "Test Thread"
         assert thread.embed_model == "BAAI/bge-m3"
-        assert thread.settings == {"max_iterations": 10}
+        assert thread.settings == {"replans": 10}
         assert isinstance(thread.created_at, datetime)
 
     def test_thread_model_defaults(self):
@@ -232,7 +232,7 @@ class TestJSONBFields:
         """Verify settings field can handle complex JSON."""
         import uuid
         settings = {
-            "max_iterations": 10,
+            "replans": 10,
             "token_budget": 8192,
             "nested": {
                 "key": "value",

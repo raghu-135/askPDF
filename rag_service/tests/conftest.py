@@ -218,7 +218,7 @@ def thread_data():
     return {
         "name": fake.sentence(nb_words=4),
         "embed_model": "BAAI/bge-m3",
-        "settings": {"max_iterations": 10, "token_budget": 8192}
+        "settings": {"replans": 10, "token_budget": 8192}
     }
 
 

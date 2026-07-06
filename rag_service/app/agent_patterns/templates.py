@@ -69,14 +69,13 @@ PLAN_EXECUTE_WORKER_NODES = [
 ALLOWED_ROUTER_RAG_CONFIG_KEYS = {
     "use_web_search",
     "use_reranker",
-    "max_iterations",
     "system_role",
     "tool_instructions",
     "custom_instructions",
     "allowed_tool_ids",
     "prefetch_policy",
     "hitl_policy",
-    "max_replans",
+    "replans",
     "graph",
 }
 
@@ -87,7 +86,6 @@ BUILTIN_ROUTER_RAG_SPEC: Dict[str, Any] = {
     "config": {
         "use_web_search": False,
         "use_reranker": True,
-        "max_iterations": 1,
         "system_role": "",
         "tool_instructions": {},
         "custom_instructions": "",
@@ -175,7 +173,6 @@ BUILTIN_PLAN_EXECUTE_RAG_SPEC: Dict[str, Any] = {
     "config": {
         "use_web_search": False,
         "use_reranker": True,
-        "max_iterations": 1,
         "system_role": "",
         "tool_instructions": {},
         "custom_instructions": "",
@@ -236,8 +233,7 @@ BUILTIN_EVALUATOR_REPLANNER_RAG_SPEC: Dict[str, Any] = {
     "config": {
         "use_web_search": False,
         "use_reranker": True,
-        "max_iterations": 1,
-        "max_replans": 1,
+        "replans": 1,
         "system_role": "",
         "tool_instructions": {},
         "custom_instructions": "",

@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.agent.prompting import normalize_tool_instructions
 from app.agent_patterns.service import AgentRunService
+from app.agent_patterns.templates import EVALUATOR_REPLANNER_RAG_AGENT_ID
 from app.db import (
     MessageRole,
     delete_message_pair,
@@ -29,6 +30,13 @@ from app.models.llm_server_client import merge_thread_settings
 from app.models.requests import ThreadChatRequest
 
 router = APIRouter(tags=["messages"])
+
+
+def _is_evaluator_replanner_settings(settings: dict) -> bool:
+    agent_pattern = settings.get("agent_pattern")
+    if not isinstance(agent_pattern, dict):
+        return False
+    return agent_pattern.get("template_id") == EVALUATOR_REPLANNER_RAG_AGENT_ID
 
 
 def _agent_message_metadata(message) -> dict:
@@ -191,8 +199,8 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
         # Override thread_id from path
         req.thread_id = thread_id
         thread_settings = merge_thread_settings(await get_thread_settings(thread_id))
-        if req.max_iterations is None:
-            req.max_iterations = thread_settings["max_iterations"]
+        if req.replans is None and _is_evaluator_replanner_settings(thread_settings):
+            req.replans = thread_settings["replans"]
         if req.system_role_override is None:
             req.system_role_override = thread_settings["system_role"]
         if req.tool_instructions_override is None:

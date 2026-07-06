@@ -63,7 +63,7 @@ class AgentRunService:
         request_overrides = {
             "use_web_search": getattr(req, "use_web_search", None),
             "use_reranker": getattr(req, "use_reranker", None),
-            "max_iterations": getattr(req, "max_iterations", None),
+            "replans": getattr(req, "replans", None),
             "system_role": getattr(req, "system_role_override", None),
             "tool_instructions": getattr(req, "tool_instructions_override", None),
             "custom_instructions": getattr(req, "custom_instructions_override", None),

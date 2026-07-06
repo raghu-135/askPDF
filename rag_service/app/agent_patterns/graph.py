@@ -117,7 +117,7 @@ class RouterRagState(TypedDict, total=False):
     allowed_tool_ids: List[str]
     pattern_type: str
     execution_plan: List[str]
-    max_replans: int
+    replans: int
     replan_count: int
     replan_reason: str
     replan_history: List[Dict[str, Any]]
@@ -697,7 +697,7 @@ def _bounded_confidence(value: Any) -> float:
 
 def _replan_budget(state: RouterRagState) -> int:
     try:
-        return max(0, int(state.get("max_replans", 1)))
+        return max(0, int(state.get("replans", 1)))
     except (TypeError, ValueError):
         return 1
 
@@ -1237,11 +1237,11 @@ class NodeRegistry:
         parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
         report = normalize_evaluator_report(parsed, state)
         replan_count = _current_replan_count(state)
-        max_replans = _replan_budget(state)
+        replans = _replan_budget(state)
         if report["sufficient"]:
             next_route = "answer"
             event_name = "evaluation.completed"
-        elif replan_count < max_replans:
+        elif replan_count < replans:
             next_route = "replan"
             event_name = "replan.requested"
         else:
@@ -1269,7 +1269,7 @@ class NodeRegistry:
             "evaluation_confidence": report["confidence"],
             "evidence_gaps": report["missing_evidence"],
             "replan_count": replan_count,
-            "max_replans": max_replans,
+            "replans": replans,
             "event_name": event_name,
             "input_refs": _state_evidence_refs(state),
             "input_preview": {

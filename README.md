@@ -285,16 +285,14 @@ Environment variables are now managed using a `.env` file for better security an
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEFAULT_TOKEN_BUDGET` | `8192` | Context window size for AI responses |
-| `DEFAULT_MAX_ITERATIONS` | `10` | Maximum tool-call rounds for AI reasoning |
-| `MIN_MAX_ITERATIONS` | `1` | Minimum allowed iterations |
-| `MAX_MAX_ITERATIONS` | `30` | Maximum allowed iterations |
+| `REPLANS_LIMIT` | `3` | Maximum allowed replans |
 | `MAX_CUSTOM_INSTRUCTIONS_CHARS` | `2000` | Maximum custom instruction length |
 | `MAX_SYSTEM_ROLE_CHARS` | `500` | Maximum system role description length |
 | `MAX_TOOL_INSTRUCTION_CHARS` | `500` | Maximum tool instruction length |
-| `INTENT_AGENT_MAX_ITERATIONS` | `1` | Maximum iterations for intent agent |
+| `INTENT_AGENT_MAX_ITERATIONS` | `1` | Maximum replans for intent agent |
 | `MAX_ITERATIONS_SUFFICIENT_COVERAGE` | `2` | Iteration bonus for sufficient coverage |
 | `MAX_ITERATIONS_PROBABLY_SUFFICIENT_COVERAGE` | `4` | Iteration bonus for probable sufficient coverage |
-| `WEB_SEARCH_ITERATION_BONUS` | `2` | Extra iterations when web search is enabled |
+| `WEB_SEARCH_ITERATION_BONUS` | `2` | Extra replans when web search is enabled |
 
 **Document Processing (Docling)**
 | Variable | Default | Description |

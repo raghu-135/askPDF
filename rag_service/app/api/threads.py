@@ -27,7 +27,11 @@ from app.agent.prompting import (
     normalize_tool_instructions,
 )
 from app.agent_patterns.prompting import build_agent_pattern_prompt_preview
-from app.agent_patterns.templates import ROUTER_RAG_AGENT_ID, SUPPORTED_BUILTIN_TEMPLATE_IDS
+from app.agent_patterns.templates import (
+    EVALUATOR_REPLANNER_RAG_AGENT_ID,
+    ROUTER_RAG_AGENT_ID,
+    SUPPORTED_BUILTIN_TEMPLATE_IDS,
+)
 from app.time_utils import iso_utc_z
 from app.db import (
     ProcessStatus,
@@ -69,6 +73,13 @@ from app.services.thread_management_service import (
 )
 
 router = APIRouter(tags=["threads"])
+
+
+def _is_evaluator_replanner_settings(settings: dict) -> bool:
+    agent_pattern = settings.get("agent_pattern")
+    if not isinstance(agent_pattern, dict):
+        return False
+    return agent_pattern.get("template_id") == EVALUATOR_REPLANNER_RAG_AGENT_ID
 
 
 def _empty_thread_stats() -> dict:
@@ -393,6 +404,8 @@ async def update_thread_settings_endpoint(
         current = merge_thread_settings(await get_thread_settings(thread_id))
         updates = req.dict(exclude_none=True)
         next_settings = {**current, **updates}
+        if not _is_evaluator_replanner_settings(next_settings):
+            next_settings.pop("replans", None)
         next_settings["tool_instructions"] = normalize_tool_instructions(
             next_settings.get("tool_instructions", {})
         )

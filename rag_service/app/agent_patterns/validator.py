@@ -20,9 +20,8 @@ from app.agent_patterns.templates import (
 )
 from app.models.llm_server_client import (
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
-    MAX_MAX_ITERATIONS,
+    REPLANS_LIMIT,
     MAX_SYSTEM_ROLE_CHARS,
-    MIN_MAX_ITERATIONS,
 )
 
 
@@ -45,9 +44,6 @@ PATTERN_NODE_TOOL_REQUIREMENTS = {
     PLAN_EXECUTE_RAG_AGENT_ID: PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
     EVALUATOR_REPLANNER_RAG_AGENT_ID: EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS,
 }
-
-MIN_MAX_REPLANS = 0
-MAX_MAX_REPLANS = 2
 
 HITL_ACTIONS = {"approve", "approve_selected", "continue_without", "reject", "edit"}
 HITL_PHASES = {"before", "after", "inside_tool"}
@@ -110,18 +106,14 @@ class TemplateValidator:
             if key in config and not isinstance(config[key], bool):
                 errors.append(f"{key} must be a boolean")
 
-        max_iterations = config.get("max_iterations")
-        if not isinstance(max_iterations, int):
-            errors.append("max_iterations must be an integer")
-        elif max_iterations < MIN_MAX_ITERATIONS or max_iterations > MAX_MAX_ITERATIONS:
-            errors.append(f"max_iterations must be between {MIN_MAX_ITERATIONS} and {MAX_MAX_ITERATIONS}")
-
-        if "max_replans" in config:
-            max_replans = config.get("max_replans")
-            if not isinstance(max_replans, int):
-                errors.append("max_replans must be an integer")
-            elif max_replans < MIN_MAX_REPLANS or max_replans > MAX_MAX_REPLANS:
-                errors.append(f"max_replans must be between {MIN_MAX_REPLANS} and {MAX_MAX_REPLANS}")
+        if "replans" in config and pattern_type != EVALUATOR_REPLANNER_RAG_AGENT_ID:
+            errors.append("replans is only supported for evaluator_replanner_rag_agent")
+        elif "replans" in config:
+            replans = config.get("replans")
+            if not isinstance(replans, int):
+                errors.append("replans must be an integer")
+            elif replans < 0 or replans > REPLANS_LIMIT:
+                errors.append(f"replans must be between 0 and {REPLANS_LIMIT}")
 
         system_role = config.get("system_role", "")
         if not isinstance(system_role, str) or len(system_role) > MAX_SYSTEM_ROLE_CHARS:
@@ -646,6 +638,8 @@ class TemplateResolver:
 
         for source in (thread_settings or {}, request_overrides or {}):
             for key in ALLOWED_ROUTER_RAG_CONFIG_KEYS:
+                if key == "replans" and resolved.get("pattern_type") != EVALUATOR_REPLANNER_RAG_AGENT_ID:
+                    continue
                 if key in source and source[key] is not None:
                     config[key] = source[key]
 

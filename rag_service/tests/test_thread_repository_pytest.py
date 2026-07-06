@@ -42,7 +42,7 @@ class TestThreadRepository:
             id=thread_id,
             name="Test Thread",
             embed_model="BAAI/bge-m3",
-            settings={"max_iterations": 10},
+            settings={"replans": 10},
             created_at=datetime.utcnow()
         )
         repo.add(thread)
@@ -58,7 +58,7 @@ class TestThreadRepository:
         assert persisted is not None
         assert persisted.name == "Test Thread"
         assert persisted.embed_model == "BAAI/bge-m3"
-        assert persisted.settings == {"max_iterations": 10}
+        assert persisted.settings == {"replans": 10}
 
     @pytest.mark.asyncio
     async def test_get_thread_by_id(self, repo, sample_thread):
@@ -84,12 +84,12 @@ class TestThreadRepository:
         
         assert thread is not None
         assert isinstance(thread.settings, dict)
-        assert "max_iterations" in thread.settings or len(thread.settings) >= 0
+        assert "replans" in thread.settings or len(thread.settings) >= 0
 
     @pytest.mark.asyncio
     async def test_update_thread_settings(self, repo, sample_thread):
         """Update settings, verify persistence."""
-        new_settings = {"max_iterations": 20, "token_budget": 16384}
+        new_settings = {"replans": 20, "token_budget": 16384}
         
         result = await repo.execute(
             select(Thread).where(Thread.id == sample_thread.id)
@@ -100,7 +100,7 @@ class TestThreadRepository:
         await repo.refresh(thread)
         
         assert thread.settings == new_settings
-        assert thread.settings["max_iterations"] == 20
+        assert thread.settings["replans"] == 20
 
     @pytest.mark.asyncio
     async def test_list_threads_with_counts(self, repo, sample_thread, multiple_messages):
@@ -186,7 +186,7 @@ class TestThreadRepository:
         """Test thread with nested settings structure."""
         import uuid
         complex_settings = {
-            "max_iterations": 10,
+            "replans": 10,
             "token_budget": 8192,
             "nested": {
                 "level1": {

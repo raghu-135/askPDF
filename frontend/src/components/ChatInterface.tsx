@@ -102,6 +102,10 @@ const normalizeAgentPatternForUi = (templateId?: string | null) => (
         : 'router_rag_agent'
 );
 
+const isEvaluatorReplannerPattern = (templateId?: string | null) => (
+    normalizeAgentPatternForUi(templateId) === 'evaluator_replanner_rag_agent'
+);
+
 interface ChatInterfaceProps {
     ragApiUrl?: string;
     activeThread: Thread | null;
@@ -147,10 +151,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'blocked' | 'error'>('checking');
     const [useWebSearch, setUseWebSearch] = useState(false);
     const [contextWindow, setContextWindow] = useState<number>(0);
-    const [maxIterations, setMaxIterations] = useState(0);
-    const [defaultMaxIterations, setDefaultMaxIterations] = useState(0);
-    const [minMaxIterations, setMinMaxIterations] = useState<number | null>(null);
-    const [maxMaxIterations, setMaxMaxIterations] = useState<number | null>(null);
+    const [replans, setReplans] = useState(1);
+    const [replansLimit, setReplansLimit] = useState<number | null>(null);
     const [defaultSystemRole, setDefaultSystemRole] = useState('');
     const [defaultCustomInstructions, setDefaultCustomInstructions] = useState('');
     const [systemRole, setSystemRole] = useState('');
@@ -205,7 +207,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     });
 
     const applyThreadSettingsToState = useCallback((settings?: Thread['settings']) => {
-        setMaxIterations(settings?.max_iterations ?? defaultMaxIterations);
+        setReplans(settings?.replans ?? 1);
         setSystemRole(settings?.system_role ?? defaultSystemRole);
         setToolInstructions(settings?.tool_instructions ?? {});
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
@@ -214,7 +216,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setAgentPatternId(normalizeAgentPatternForUi(settings?.agent_pattern?.template_id));
     }, [
         defaultCustomInstructions,
-        defaultMaxIterations,
         defaultSystemRole,
         defaultHitlWebApproval,
         defaultUseReranker,
@@ -359,9 +360,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 const res = await getPromptTools();
                 setToolCatalog(res.tools || []);
                 if (res.defaults) {
-                    setDefaultMaxIterations(res.defaults.max_iterations);
-                    setMinMaxIterations(res.defaults.min_max_iterations);
-                    setMaxMaxIterations(res.defaults.max_max_iterations);
+                    setReplansLimit(res.defaults.replans_limit);
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultHitlWebApproval(res.defaults.hitl_web_approval ?? false);
@@ -370,7 +369,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         setContextWindow(res.defaults.context_window);
                     }
                     if (!activeThread) {
-                        setMaxIterations(res.defaults.max_iterations);
+                        setReplans(Math.min(1, res.defaults.replans_limit));
                         setSystemRole(res.defaults.system_role ?? '');
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
                         setHitlWebApproval(res.defaults.hitl_web_approval ?? false);
@@ -607,7 +606,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         toolCatalog.forEach((toolDef) => {
             defaults[toolDef.id] = toolDef.default_prompt;
         });
-        setMaxIterations(defaultMaxIterations);
+        setReplans(Math.min(1, replansLimit ?? 1));
         setSystemRole(defaultSystemRole);
         setToolInstructions(defaults);
         setCustomInstructions(defaultCustomInstructions);
@@ -963,7 +962,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 useWebSearch,
                 useReranker,
                 contextWindow,
-                maxIterations,
+                isEvaluatorReplannerPattern(agentPatternId) ? replans : undefined,
                 systemRole,
                 effectiveToolInstructions,
                 customInstructions
@@ -1232,15 +1231,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!activeThread) return;
         try {
             setSavingSettings(true);
-            const saved = await updateThreadSettings(activeThread.id, {
-                max_iterations: Math.max(minMaxIterations ?? 1, Math.min(maxMaxIterations ?? 30, maxIterations)),
+            const nextSettings: Record<string, any> = {
                 system_role: systemRole,
                 tool_instructions: effectiveToolInstructions,
                 custom_instructions: customInstructions,
                 hitl_web_approval: hitlWebApproval,
                 use_reranker: useReranker,
                 agent_pattern: { template_id: normalizeAgentPatternForUi(agentPatternId) },
-            });
+            };
+            if (isEvaluatorReplannerPattern(agentPatternId)) {
+                nextSettings.replans = Math.max(0, Math.min(replansLimit ?? 3, replans));
+            }
+            const saved = await updateThreadSettings(activeThread.id, nextSettings);
             applyThreadSettingsToState(saved);
             setSettingsDialogOpen(false);
         } catch (error) {
@@ -2175,9 +2177,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onClose={handleCloseThreadSettings}
                 onSave={handleSaveThreadSettings}
                 saving={savingSettings}
-                maxIterations={maxIterations}
-                minMaxIterations={minMaxIterations}
-                maxMaxIterations={maxMaxIterations}
+                replans={replans}
+                replansLimit={replansLimit}
                 hitlWebApproval={hitlWebApproval}
                 useReranker={useReranker}
                 agentPatternId={agentPatternId}
@@ -2187,7 +2188,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 toolCatalog={toolCatalog}
                 effectiveToolInstructions={effectiveToolInstructions}
                 promptPreview={promptPreview}
-                onMaxIterationsChange={(value) => setMaxIterations(value)}
+                onReplansChange={(value) => setReplans(value)}
                 onHitlWebApprovalChange={(checked) => setHitlWebApproval(checked)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
                 onAgentPatternChange={(value) => setAgentPatternId(value)}

@@ -89,28 +89,14 @@ def get_default_token_budget():
         raise ValueError("DEFAULT_TOKEN_BUDGET environment variable is not set")
     return int(budget)
 
-def get_default_max_iterations():
-    val = os.getenv("DEFAULT_MAX_ITERATIONS")
+def get_replans_limit():
+    val = os.getenv("REPLANS_LIMIT")
     if val is None:
-        raise ValueError("DEFAULT_MAX_ITERATIONS environment variable is not set")
-    return int(val)
-
-def get_min_max_iterations():
-    val = os.getenv("MIN_MAX_ITERATIONS")
-    if val is None:
-        raise ValueError("MIN_MAX_ITERATIONS environment variable is not set")
-    return int(val)
-
-def get_max_max_iterations():
-    val = os.getenv("MAX_MAX_ITERATIONS")
-    if val is None:
-        raise ValueError("MAX_MAX_ITERATIONS environment variable is not set")
+        raise ValueError("REPLANS_LIMIT environment variable is not set")
     return int(val)
 
 DEFAULT_TOKEN_BUDGET = get_default_token_budget()
-DEFAULT_MAX_ITERATIONS = get_default_max_iterations()
-MIN_MAX_ITERATIONS = get_min_max_iterations()
-MAX_MAX_ITERATIONS = get_max_max_iterations()
+REPLANS_LIMIT = get_replans_limit()
 
 def get_env_int(name: str, default: int | None = None) -> int:
     val = os.getenv(name)
@@ -191,9 +177,8 @@ def compute_prefetch_budget(context_window: int) -> dict:
 def default_thread_settings():
     """Default persisted settings for a thread."""
     return {
-        "max_iterations": DEFAULT_MAX_ITERATIONS,
-        "min_max_iterations": MIN_MAX_ITERATIONS,
-        "max_max_iterations": MAX_MAX_ITERATIONS,
+        "replans": min(1, REPLANS_LIMIT),
+        "replans_limit": REPLANS_LIMIT,
         "context_window": DEFAULT_TOKEN_BUDGET,
         "system_role": DEFAULT_SYSTEM_ROLE,
         "tool_instructions": {},
@@ -208,6 +193,11 @@ def merge_thread_settings(overrides=None):
     """Merge arbitrary overrides onto defaults while preserving known keys."""
     merged = default_thread_settings()
     if isinstance(overrides, dict):
+        if "replans" not in overrides:
+            if "max_replans" in overrides:
+                overrides = {**overrides, "replans": overrides.get("max_replans")}
+            elif "max_iterations" in overrides:
+                overrides = {**overrides, "replans": overrides.get("max_iterations")}
         merged.update({k: overrides.get(k) for k in merged.keys() if k in overrides})
     return merged
 

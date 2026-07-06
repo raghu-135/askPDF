@@ -6,12 +6,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.llm_server_client import (
     LOCAL_EMBEDDING_MODEL,
-    DEFAULT_MAX_ITERATIONS,
     DEFAULT_TOKEN_BUDGET,
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
-    MAX_MAX_ITERATIONS,
+    REPLANS_LIMIT,
     MAX_SYSTEM_ROLE_CHARS,
-    MIN_MAX_ITERATIONS,
 )
 
 
@@ -96,9 +94,7 @@ class ThreadChatRequest(BaseModel):
     use_web_search: bool = False
     use_reranker: Optional[bool] = None
     context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size
-    max_iterations: Optional[int] = Field(
-        default=None, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS
-    )
+    replans: Optional[int] = Field(default=None, ge=0, le=REPLANS_LIMIT)
     system_role_override: Optional[str] = Field(
         default=None, max_length=MAX_SYSTEM_ROLE_CHARS
     )
@@ -112,9 +108,7 @@ class ThreadChatRequest(BaseModel):
 
 
 class ThreadSettingsResponse(BaseModel):
-    max_iterations: int = Field(
-        default=DEFAULT_MAX_ITERATIONS, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS
-    )
+    replans: int = Field(default=min(1, REPLANS_LIMIT), ge=0, le=REPLANS_LIMIT)
     system_role: str = Field(default="", max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Dict[str, str] = Field(default_factory=dict)
     custom_instructions: str = Field(
@@ -126,9 +120,7 @@ class ThreadSettingsResponse(BaseModel):
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
-    max_iterations: Optional[int] = Field(
-        default=None, ge=MIN_MAX_ITERATIONS, le=MAX_MAX_ITERATIONS
-    )
+    replans: Optional[int] = Field(default=None, ge=0, le=REPLANS_LIMIT)
     system_role: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Optional[Dict[str, str]] = None
     custom_instructions: Optional[str] = Field(
@@ -147,9 +139,7 @@ class ToolCatalogEntry(BaseModel):
 
 
 class PromptDefaults(BaseModel):
-    max_iterations: int
-    min_max_iterations: int
-    max_max_iterations: int
+    replans_limit: int
     context_window: int
     system_role: str
     tool_instructions: Dict[str, str]

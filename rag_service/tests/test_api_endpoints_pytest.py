@@ -267,7 +267,7 @@ class TestThreadEndpoints:
         response = client.put(
             f"/api/threads/{thread_id}/settings",
             json={
-                "max_iterations": 20,
+                "replans": 2,
                 "token_budget": 16384,
                 "hitl_web_approval": True,
                 "agent_pattern": {"template_id": "router_rag_agent"},
@@ -283,7 +283,7 @@ class TestThreadEndpoints:
         """Test updating settings for a thread that doesn't exist."""
         response = client.put(
             "/api/threads/nonexistent-id/settings",
-            json={"max_iterations": 20}
+            json={"replans": 2}
         )
         assert response.status_code == 404
 
@@ -372,7 +372,7 @@ class TestThreadEndpoints:
             id="forked-thread",
             name="Source Thread (Fork)",
             embed_model="BAAI/bge-m3",
-            settings={"max_iterations": 3},
+            settings={"replans": 3},
             thread_metadata={
                 "fork": {
                     "parent_thread_id": "source-thread",
@@ -511,9 +511,9 @@ class TestThreadEndpoints:
             assert "reasoning_mode" not in model.model_fields
 
         filtered = threads_api._public_thread_settings(
-            {"max_iterations": 3, "reasoning_mode": True, "unknown": "value"}
+            {"replans": 3, "reasoning_mode": True, "unknown": "value"}
         )
-        assert filtered == {"max_iterations": 3}
+        assert filtered == {"replans": 3}
 
 
 class TestMessageEndpoints:

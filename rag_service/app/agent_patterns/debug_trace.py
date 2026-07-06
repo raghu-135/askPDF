@@ -372,7 +372,7 @@ def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
                         "askpdf.evaluator_route": event.get("evaluator_route"),
                         "askpdf.evaluation_confidence": event.get("evaluation_confidence"),
                         "askpdf.replan_count": event.get("replan_count"),
-                        "askpdf.max_replans": event.get("max_replans"),
+                        "askpdf.replans": event.get("replans"),
                     }
                 ),
                 "output": _clean_dict(
@@ -398,7 +398,7 @@ def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
                         "askpdf.evaluator_route": event.get("evaluator_route"),
                         "askpdf.evaluation_confidence": event.get("evaluation_confidence"),
                         "askpdf.replan_count": event.get("replan_count"),
-                        "askpdf.max_replans": event.get("max_replans"),
+                        "askpdf.replans": event.get("replans"),
                         "askpdf.replan_reason": event.get("replan_reason"),
                     }
                 ),
@@ -1019,7 +1019,7 @@ class AgentTraceRecorder:
                 "askpdf.evaluator_route": event.get("evaluator_route"),
                 "askpdf.evaluation_confidence": event.get("evaluation_confidence"),
                 "askpdf.replan_count": event.get("replan_count"),
-                "askpdf.max_replans": event.get("max_replans"),
+                "askpdf.replans": event.get("replans"),
                 "askpdf.skip_reason": event.get("skip_reason"),
                 "askpdf.execution_plan": event.get("execution_plan"),
                 "askpdf.evidence_chars": event.get("evidence_chars"),

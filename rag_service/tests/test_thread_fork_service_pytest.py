@@ -37,7 +37,7 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
                     id="source-thread",
                     name="Source Thread",
                     embed_model="BAAI/bge-m3",
-                    settings={"max_iterations": 3},
+                    settings={"replans": 3},
                     thread_metadata={"existing": True},
                     created_at=created_at,
                 )
@@ -133,7 +133,7 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
         ).scalar_one()
 
     assert forked.name == "Forked Thread"
-    assert forked.settings == {"max_iterations": 3}
+    assert forked.settings == {"replans": 3}
     assert forked.thread_metadata["existing"] is True
     assert "fork_children" not in forked.thread_metadata
     assert forked.thread_metadata["fork"]["parent_thread_id"] == "source-thread"

@@ -136,7 +136,7 @@ def _evaluator_prompt_context(state: Dict[str, Any]) -> Dict[str, Any]:
         "WEB_SOURCE_COUNT": len(state.get("web_sources") or []),
         "USED_CHAT_ID_COUNT": len(state.get("used_chat_ids") or []),
         "REPLAN_COUNT": state.get("replan_count", 0),
-        "MAX_REPLANS": state.get("max_replans", 1),
+        "REPLANS": state.get("replans", 1),
     }
 
 
