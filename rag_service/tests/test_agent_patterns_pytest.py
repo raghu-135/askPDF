@@ -1454,6 +1454,60 @@ class TestRouterRagGraphToolConsumers:
         assert update["node_events"][-1]["skip_reason"] == "hitl_interrupt_limit_exhausted"
 
     @pytest.mark.asyncio
+    async def test_hitl_gate_interrupt_limit_is_visit_scoped_in_loops(self, monkeypatch):
+        interrupt_payloads = []
+
+        def fake_interrupt(payload):
+            interrupt_payloads.append(payload)
+            return {"action": "approve"}
+
+        monkeypatch.setattr("app.agent_patterns.graph.interrupt", fake_interrupt)
+        bound = NodeRegistry().get_for_spec({"id": "approval_1", "type": "hitl_gate"})
+        update = await bound(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "Should web run again?",
+                "route": "web",
+                "node_events": [],
+                "tool_events": [],
+                "node_visit_counts": {"approval_1": 1},
+                "node_visit_sequence": [{"node": "approval_1", "node_type": "hitl_gate", "visit_index": 1}],
+                "hitl_interrupt_counts": {"approval_1": 1, "approval_1:visit:1": 1},
+                "hitl_policy": {
+                    "enabled": True,
+                    "gates": {
+                        "approval_1": {
+                            "enabled": True,
+                            "mode": "approval",
+                            "target": {"node_id": "web_worker", "node_type": "web_worker"},
+                            "allowed_actions": ["approve", "continue_without"],
+                            "default_action": "continue_without",
+                            "max_interrupts_per_run": 1,
+                            "routes": {"approve": "web_worker", "continue_without": "synthesizer"},
+                        }
+                    },
+                },
+                "loop_policy": {
+                    "max_total_visits": 6,
+                    "default_max_node_visits": 2,
+                    "node_visit_limits": {"approval_1": 2},
+                },
+            },
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        assert interrupt_payloads[0]["visit_index"] == 2
+        assert interrupt_payloads[0]["interrupt_count_key"] == "approval_1:visit:2"
+        assert update["hitl_gate_route"] == "approve"
+        assert update["hitl_interrupt_counts"]["approval_1"] == 2
+        assert update["hitl_interrupt_counts"]["approval_1:visit:1"] == 1
+        assert update["hitl_interrupt_counts"]["approval_1:visit:2"] == 1
+        assert update["hitl_decisions"][-1]["visit_index"] == 2
+        assert update["hitl_decisions"][-1]["interrupt_count_key"] == "approval_1:visit:2"
+        assert update["node_events"][-1]["visit_index"] == 2
+
+    @pytest.mark.asyncio
     async def test_bound_node_spec_emits_instance_id_and_node_type(self, monkeypatch):
         class FakeTool:
             async def ainvoke(self, _args, config=None):

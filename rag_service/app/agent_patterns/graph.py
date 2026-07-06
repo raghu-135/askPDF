@@ -252,6 +252,20 @@ def _hitl_interrupt_limit(policy: Dict[str, Any], gate_policy: Dict[str, Any]) -
         return 1
 
 
+def _hitl_interrupt_count_key(gate_id: str, visit_index: Optional[int]) -> str:
+    if isinstance(visit_index, int) and visit_index >= 1:
+        return f"{gate_id}:visit:{visit_index}"
+    return gate_id
+
+
+def _hitl_visit_interrupt_count(counts: Dict[str, int], *, gate_id: str, visit_index: Optional[int]) -> int:
+    visit_key = _hitl_interrupt_count_key(gate_id, visit_index)
+    has_visit_counts = any(key.startswith(f"{gate_id}:visit:") for key in counts)
+    if visit_key != gate_id and has_visit_counts:
+        return counts.get(visit_key, 0)
+    return counts.get(gate_id, 0)
+
+
 class RouterRagState(TypedDict, total=False):
     agent_run_id: Optional[str]
     thread_id: str
@@ -2023,10 +2037,12 @@ class NodeRegistry:
         if default_action not in allowed_actions:
             default_action = "continue_without" if "continue_without" in allowed_actions else allowed_actions[0]
         routes_by_action = gate_policy.get("routes") if isinstance(gate_policy.get("routes"), dict) else {}
+        visit_index = _runtime_visit_index(config)
+        interrupt_count_key = _hitl_interrupt_count_key(node_id, visit_index)
 
         interrupt_counts = _hitl_interrupt_counts(state)
         interrupt_limit = _hitl_interrupt_limit(policy, gate_policy)
-        if interrupt_limit is not None and interrupt_counts.get(node_id, 0) >= interrupt_limit:
+        if interrupt_limit is not None and _hitl_visit_interrupt_count(interrupt_counts, gate_id=node_id, visit_index=visit_index) >= interrupt_limit:
             route = "continue_without" if "continue_without" in allowed_actions or "continue_without" in routes_by_action else default_action
             gate_routes = dict(state.get("hitl_gate_routes") or {})
             gate_routes[node_id] = route
@@ -2072,6 +2088,8 @@ class NodeRegistry:
                 "node_id": node_id,
                 "target_node_id": target_node_id,
                 "target_node_type": target_node_type,
+                "visit_index": visit_index,
+                "interrupt_count_key": interrupt_count_key,
                 "phase": phase,
                 "mode": mode,
                 "type": interrupt_type,
@@ -2124,13 +2142,19 @@ class NodeRegistry:
             "hitl_gate_route": route,
             "hitl_gate_routes": gate_routes,
             "hitl_selected_options": selected_options_by_gate,
-            "hitl_interrupt_counts": {**interrupt_counts, node_id: interrupt_counts.get(node_id, 0) + 1},
+            "hitl_interrupt_counts": {
+                **interrupt_counts,
+                node_id: interrupt_counts.get(node_id, 0) + 1,
+                interrupt_count_key: interrupt_counts.get(interrupt_count_key, 0) + 1,
+            },
             "hitl_decisions": [
                 *(state.get("hitl_decisions") if isinstance(state.get("hitl_decisions"), list) else []),
                 {
                     "gate_id": node_id,
                     "node_id": node_id,
                     "target_node_id": target_node_id,
+                    "visit_index": visit_index,
+                    "interrupt_count_key": interrupt_count_key,
                     "phase": phase,
                     "mode": mode,
                     "type": interrupt_type,
