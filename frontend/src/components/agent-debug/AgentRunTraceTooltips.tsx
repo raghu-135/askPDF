@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Typography } from '@mui/material';
 import { formatSkipReason } from '../../lib/agentDebugLabels';
 import { formatDurationMs } from '../../lib/formatDuration';
+import { formatNodeInstanceLabel } from '../agent-graph/agent-graph-mapper';
 import { formatTraceError } from './agent-debug-utils';
 import type { TraceNodeView, TraceToolView } from './agent-trace-projection';
 
@@ -49,11 +50,17 @@ export const TraceNodesTooltip = ({
         const status = node.status || (node.skipped ? 'skipped' : 'completed');
         const skipReason = formatSkipReason(node.raw?.skip_reason);
         const error = formatTraceError(node.error);
+        const instanceLabel = node.instanceLabel || formatNodeInstanceLabel(node.id, node.type);
         return (
           <Box key={`${node.id}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
             <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-              {index + 1}. {node.id}
+              {index + 1}. {node.label}
             </Typography>
+            {instanceLabel !== node.label && (
+              <Typography variant="caption" sx={{ display: 'block', opacity: 0.78 }}>
+                {instanceLabel}
+              </Typography>
+            )}
             <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
               {[status, elapsed, node.route ? `route ${node.route}` : null, skipReason].filter(Boolean).join(' · ')}
             </Typography>
@@ -86,6 +93,9 @@ export const TraceToolsTooltip = ({ tools }: { tools: TraceToolView[] }) => (
           : 0;
       const warningCount = tool.warningCodes.length;
       const error = formatTraceError(raw.error);
+      const callerLabel = tool.callerNode
+        ? formatNodeInstanceLabel(tool.callerNode, tool.callerNodeType)
+        : undefined;
       return (
         <Box key={`${tool.name}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
           <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
@@ -93,7 +103,7 @@ export const TraceToolsTooltip = ({ tools }: { tools: TraceToolView[] }) => (
           </Typography>
           <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
             {[
-              tool.callerNode ? `from ${tool.callerNode}` : null,
+              callerLabel ? `from ${callerLabel}` : null,
               tool.ok ? 'ok' : 'failed',
               elapsed,
               Number.isFinite(Number(tool.sourceCount)) ? `${Number(tool.sourceCount)} sources` : null,

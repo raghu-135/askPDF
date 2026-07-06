@@ -3,6 +3,9 @@ import type { AgentGraphEdge, AgentGraphNode } from '../agent-graph/agent-graph-
 
 export interface TraceNodeView {
   id: string;
+  type?: string;
+  label: string;
+  instanceLabel: string;
   status?: string;
   skipped: boolean;
   durationMs?: number;
@@ -21,6 +24,7 @@ export interface TraceToolView {
   category?: string;
   displayName?: string;
   callerNode?: string;
+  callerNodeType?: string;
   ok: boolean;
   durationMs?: number;
   sourceCount?: number;
@@ -71,6 +75,31 @@ const asNumber = (value: any): number | undefined => {
   return Number.isFinite(numberValue) ? numberValue : undefined;
 };
 
+const NODE_LABELS: Record<string, string> = {
+  context_loader: 'Context Loader',
+  router: 'Router',
+  planner: 'Planner',
+  evidence_evaluator: 'Evidence Evaluator',
+  replanner: 'Replanner',
+  retrieval_worker: 'Document Retrieval',
+  memory_worker: 'Memory Retrieval',
+  timeline_worker: 'Timeline Retrieval',
+  web_approval_gate: 'Web Approval',
+  web_worker: 'Web Retrieval',
+  direct_answer: 'Direct Answer',
+  synthesizer: 'Synthesizer',
+  finalizer: 'Finalizer',
+  hitl_gate: 'HITL Gate',
+};
+
+const formatNodeLabel = (id: string, type?: string) => (
+  NODE_LABELS[id] || NODE_LABELS[type || ''] || id.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+);
+
+const formatNodeInstanceLabel = (id: string, type?: string) => (
+  type && id !== type ? `${id} · ${type}` : id
+);
+
 export const getRunDebug = (runDetails: AgentRunDetails): AgentRunDebug | undefined => {
   const debug = runDetails.debug;
   if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return undefined;
@@ -94,37 +123,72 @@ export const getRunDebugMetrics = (runDetails: AgentRunDetails) => {
   return runDetails.metrics_json || {};
 };
 
-const nodeViewFromSummary = (row: Record<string, any>): TraceNodeView => ({
-  id: String(row.id || row.node || row.name || 'unknown_node'),
-  status: typeof row.status === 'string' ? row.status : undefined,
-  skipped: row.skipped === true || row.status === 'skipped',
-  durationMs: asNumber(row.durationMs ?? row.duration_ms),
-  route: typeof row.route === 'string' ? row.route : undefined,
-  routeReason: typeof row.routeReason === 'string' ? row.routeReason : typeof row.route_reason === 'string' ? row.route_reason : undefined,
-  executionPlan: asStringArray(row.executionPlan ?? row.execution_plan),
-  warningCodes: asStringArray(row.warningCodes ?? row.warnings),
-  error: row.error && typeof row.error === 'object' ? row.error : undefined,
-  span: row.span && typeof row.span === 'object' ? row.span : undefined,
-  raw: asObject(row.raw),
-});
+const nodeViewFromSummary = (row: Record<string, any>): TraceNodeView => {
+  const raw = asObject(row.raw);
+  const id = String(row.id || row.node || row.name || raw.node || 'unknown_node');
+  const type = typeof row.type === 'string'
+    ? row.type
+    : typeof row.node_type === 'string'
+      ? row.node_type
+      : typeof raw.node_type === 'string'
+        ? raw.node_type
+        : undefined;
+  return {
+    id,
+    type,
+    label: formatNodeLabel(id, type),
+    instanceLabel: formatNodeInstanceLabel(id, type),
+    status: typeof row.status === 'string' ? row.status : undefined,
+    skipped: row.skipped === true || row.status === 'skipped',
+    durationMs: asNumber(row.durationMs ?? row.duration_ms),
+    route: typeof row.route === 'string' ? row.route : undefined,
+    routeReason: typeof row.routeReason === 'string' ? row.routeReason : typeof row.route_reason === 'string' ? row.route_reason : undefined,
+    executionPlan: asStringArray(row.executionPlan ?? row.execution_plan),
+    warningCodes: asStringArray(row.warningCodes ?? row.warnings),
+    error: row.error && typeof row.error === 'object' ? row.error : undefined,
+    span: row.span && typeof row.span === 'object' ? row.span : undefined,
+    raw,
+  };
+};
 
-const toolViewFromSummary = (row: Record<string, any>): TraceToolView => ({
-  name: String(row.name || row.tool_name || 'tool'),
-  id: typeof row.id === 'string' ? row.id : typeof row.tool_id === 'string' ? row.tool_id : undefined,
-  category: typeof row.category === 'string' ? row.category : typeof row.tool_category === 'string' ? row.tool_category : undefined,
-  displayName: typeof row.displayName === 'string' ? row.displayName : typeof row.tool_display_name === 'string' ? row.tool_display_name : undefined,
-  callerNode: typeof row.callerNode === 'string' ? row.callerNode : typeof row.caller_node === 'string' ? row.caller_node : undefined,
-  ok: row.ok !== false,
-  durationMs: asNumber(row.durationMs ?? row.elapsed_ms),
-  sourceCount: asNumber(row.sourceCount ?? row.source_count),
-  warningCodes: asStringArray(row.warningCodes ?? row.warnings),
-  span: row.span && typeof row.span === 'object' ? row.span : undefined,
-  raw: asObject(row.raw),
-});
+const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
+  const raw = asObject(row.raw);
+  return {
+    name: String(row.name || row.tool_name || raw.tool_name || 'tool'),
+    id: typeof row.id === 'string' ? row.id : typeof row.tool_id === 'string' ? row.tool_id : undefined,
+    category: typeof row.category === 'string' ? row.category : typeof row.tool_category === 'string' ? row.tool_category : undefined,
+    displayName: typeof row.displayName === 'string' ? row.displayName : typeof row.tool_display_name === 'string' ? row.tool_display_name : undefined,
+    callerNode: typeof row.callerNode === 'string' ? row.callerNode : typeof row.caller_node === 'string' ? row.caller_node : typeof raw.caller_node === 'string' ? raw.caller_node : undefined,
+    callerNodeType: typeof row.callerNodeType === 'string'
+      ? row.callerNodeType
+      : typeof row.caller_node_type === 'string'
+        ? row.caller_node_type
+        : typeof raw.caller_node_type === 'string'
+          ? raw.caller_node_type
+          : undefined,
+    ok: row.ok !== false,
+    durationMs: asNumber(row.durationMs ?? row.elapsed_ms),
+    sourceCount: asNumber(row.sourceCount ?? row.source_count),
+    warningCodes: asStringArray(row.warningCodes ?? row.warnings),
+    span: row.span && typeof row.span === 'object' ? row.span : undefined,
+    raw,
+  };
+};
 
 const getRunGraph = (debug?: AgentRunDebug): TraceGraphView | undefined => {
   const graph = asObject(debug?.graph);
-  const nodes = asArray(graph.nodes) as AgentGraphNode[];
+  const nodes = (asArray(graph.nodes) as AgentGraphNode[]).map((node) => {
+    const id = String(node.id || 'unknown_node');
+    const type = typeof node.type === 'string' ? node.type : id;
+    return {
+      ...node,
+      id,
+      type,
+      label: formatNodeLabel(id, type),
+      instanceId: id,
+      instanceLabel: formatNodeInstanceLabel(id, type),
+    };
+  });
   const edges = asArray(graph.edges) as AgentGraphEdge[];
   if (nodes.length === 0 && edges.length === 0) return undefined;
   return {

@@ -184,6 +184,80 @@ test('trace projection reads backend-provided summary and graph', () => {
   assert.equal(view.graph?.nodes[1].toolSummaries.length, 1);
 });
 
+test('trace projection preserves custom node type metadata and normalizes graph labels', () => {
+  const customDebug = {
+    ...backendDebug,
+    summary: {
+      ...backendDebug.summary,
+      nodes: [
+        {
+          id: 'retrieval_1',
+          type: 'retrieval_worker',
+          status: 'completed',
+          skipped: false,
+          durationMs: 8,
+          warningCodes: [],
+          span: { span_id: 'node:retrieval_1:0' },
+          raw: {
+            node: 'retrieval_1',
+            node_type: 'retrieval_worker',
+            output_preview: { evidence: 'Found custom document evidence.' },
+          },
+        },
+      ],
+      tools: [
+        {
+          name: 'search_documents',
+          id: 'document_evidence',
+          displayName: 'Document Evidence',
+          callerNode: 'retrieval_1',
+          callerNodeType: 'retrieval_worker',
+          ok: true,
+          durationMs: 7,
+          sourceCount: 1,
+          warningCodes: [],
+          span: { span_id: 'tool:search_documents:0' },
+          raw: {
+            tool_name: 'search_documents',
+            caller_node: 'retrieval_1',
+            caller_node_type: 'retrieval_worker',
+            artifact_keys: ['document_sources'],
+          },
+        },
+      ],
+    },
+    graph: {
+      ...backendDebug.graph,
+      nodes: [
+        {
+          id: 'retrieval_1',
+          type: 'retrieval_worker',
+          label: 'Retrieval 1',
+          status: 'active',
+          toolSummaries: [],
+          warningCount: 0,
+          errorCount: 0,
+          sourceCount: 1,
+          artifactCount: 1,
+          rawEvents: [],
+        },
+      ],
+      edges: [],
+    },
+  };
+
+  const view = buildRunTraceView({ ...traceBackedRun, id: 'run-custom', debug: customDebug });
+
+  assert.equal(view.nodes[0].id, 'retrieval_1');
+  assert.equal(view.nodes[0].type, 'retrieval_worker');
+  assert.equal(view.nodes[0].label, 'Document Retrieval');
+  assert.equal(view.nodes[0].instanceLabel, 'retrieval_1 · retrieval_worker');
+  assert.equal(view.tools[0].callerNode, 'retrieval_1');
+  assert.equal(view.tools[0].callerNodeType, 'retrieval_worker');
+  assert.equal(view.graph?.nodes[0].label, 'Document Retrieval');
+  assert.equal(view.graph?.nodes[0].instanceLabel, 'retrieval_1 · retrieval_worker');
+});
+
 test('trace projection uses backend counts without inferring from spans', () => {
   const view = buildRunTraceView(traceBackedRun);
 

@@ -148,8 +148,12 @@ const asArray = (value: any): Record<string, any>[] => (
 
 const unique = (items: string[]) => Array.from(new Set(items.filter(Boolean)));
 
-const formatNodeLabel = (id: string, type?: string) => (
+export const formatNodeLabel = (id: string, type?: string) => (
   NODE_LABELS[id] || NODE_LABELS[type || ''] || id.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+);
+
+export const formatNodeInstanceLabel = (id: string, type?: string) => (
+  type && id !== type ? `${id} · ${type}` : id
 );
 
 const getNodeIdFromEvent = (event: Record<string, any>) => (
@@ -169,6 +173,7 @@ const summarizeTool = (event: Record<string, any>): AgentGraphToolSummary => ({
   toolName: String(event.tool_name || 'tool'),
   displayName: typeof event.tool_display_name === 'string' ? event.tool_display_name : undefined,
   callerNode: typeof event.caller_node === 'string' ? event.caller_node : undefined,
+  callerNodeType: typeof event.caller_node_type === 'string' ? event.caller_node_type : undefined,
   ok: event.ok !== false,
   elapsedMs: Number.isFinite(Number(event.elapsed_ms)) ? Number(event.elapsed_ms) : undefined,
   sourceCount: Number.isFinite(Number(event.source_count)) ? Number(event.source_count) : undefined,
@@ -258,6 +263,8 @@ export const buildAgentGraph = (
         id: node.id,
         type: node.type,
         label: formatNodeLabel(node.id, node.type),
+        instanceId: node.id,
+        instanceLabel: formatNodeInstanceLabel(node.id, node.type),
         description: typeof node.description === 'string' ? node.description : undefined,
         status,
         elapsedMs: elapsedMs > 0 ? elapsedMs : undefined,

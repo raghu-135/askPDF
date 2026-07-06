@@ -25,6 +25,7 @@ export interface AgentGraphToolSummary {
   toolName: string;
   displayName?: string;
   callerNode?: string;
+  callerNodeType?: string;
   ok: boolean;
   elapsedMs?: number;
   sourceCount?: number;
@@ -50,6 +51,8 @@ export interface AgentGraphNode {
   id: string;
   type: string;
   label: string;
+  instanceId?: string;
+  instanceLabel?: string;
   description?: string;
   status: AgentGraphNodeStatus;
   focused?: boolean;

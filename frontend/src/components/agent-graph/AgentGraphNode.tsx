@@ -30,8 +30,10 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
   const skipReason = formatSkipReason(data.skipReason);
   const statusLabel = data.status === 'skipped' ? skipReason || 'Skipped' : data.status;
   const isFocused = data.focused === true;
+  const instanceLabel = data.instanceLabel || data.id;
   const tooltip = [
     data.label,
+    instanceLabel !== data.label ? instanceLabel : null,
     isFocused ? 'focused by message' : null,
     data.route ? `route: ${data.route}` : null,
     elapsed ? `elapsed: ${elapsed}` : null,
@@ -63,7 +65,7 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
           {data.label}
         </Typography>
         <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', lineHeight: 1.3, mt: 0.1 }}>
-          {data.type}
+          {instanceLabel}
         </Typography>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, mt: 0.8 }}>
           <Chip size="small" label={statusLabel} sx={{ height: 22, fontSize: '0.72rem' }} />

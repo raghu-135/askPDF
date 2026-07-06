@@ -135,6 +135,56 @@ test('graph mapper accepts trace-native graph rows', () => {
   assert.equal(graph.nodes.find((node) => node.id === 'router')?.llmSummary?.token_counts.total, 42);
 });
 
+test('graph mapper labels custom node instances by catalog type while preserving instance ids', () => {
+  const graph = buildAgentGraph(
+    {
+      nodes: [
+        { id: 'context_1', type: 'context_loader' },
+        { id: 'router_1', type: 'router' },
+        { id: 'retrieval_1', type: 'retrieval_worker' },
+        { id: 'final_1', type: 'finalizer' },
+      ],
+      edges: [
+        { from: 'START', to: 'context_1' },
+        { from: 'context_1', to: 'router_1' },
+        {
+          from: 'router_1',
+          conditional: true,
+          routes: { document: 'retrieval_1', direct: 'final_1' },
+        },
+        { from: 'retrieval_1', to: 'final_1' },
+        { from: 'final_1', to: 'END' },
+      ],
+    },
+    {
+      route: 'document',
+      nodeRows: [
+        { node: 'router_1', node_type: 'router', route: 'document', elapsed_ms: 4 },
+        { node: 'retrieval_1', node_type: 'retrieval_worker', elapsed_ms: 9 },
+      ],
+      toolRows: [
+        {
+          tool_name: 'search_documents',
+          caller_node: 'retrieval_1',
+          caller_node_type: 'retrieval_worker',
+          ok: true,
+          source_count: 1,
+        },
+      ],
+    },
+  );
+
+  const retrievalNode = graph.nodes.find((node) => node.id === 'retrieval_1');
+  const selectedEdge = graph.edges.find((edge) => edge.route === 'document');
+
+  assert.equal(retrievalNode?.label, 'Document Retrieval');
+  assert.equal(retrievalNode?.instanceLabel, 'retrieval_1 · retrieval_worker');
+  assert.equal(retrievalNode?.toolSummaries[0]?.callerNode, 'retrieval_1');
+  assert.equal(retrievalNode?.toolSummaries[0]?.callerNodeType, 'retrieval_worker');
+  assert.equal(selectedEdge?.selected, true);
+  assert.equal(selectedEdge?.target, 'retrieval_1');
+});
+
 test('graph mapper applies node and span focus refs', () => {
   const graph = buildAgentGraph(
     getAgentGraphSpec({ pattern_type: 'plan_execute_rag_agent' }),

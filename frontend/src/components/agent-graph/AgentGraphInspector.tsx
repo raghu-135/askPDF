@@ -64,6 +64,7 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
   const nodeElapsed = formatDurationMs(node.elapsedMs);
   const skipReason = formatSkipReason(node.skipReason);
   const statusLabel = node.status === 'skipped' ? skipReason || 'Skipped' : node.status;
+  const instanceLabel = node.instanceLabel || node.id;
   const llmSummary = node.llmSummary || {};
   const tokenCounts = llmSummary.token_counts && typeof llmSummary.token_counts === 'object'
     ? llmSummary.token_counts as Record<string, unknown>
@@ -87,6 +88,11 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
         Node: {node.label}
       </Typography>
+      {instanceLabel && (
+        <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', mt: 0.25 }}>
+          {instanceLabel}
+        </Typography>
+      )}
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
         <Chip size="small" label={statusLabel} variant="outlined" />
         {nodeElapsed && <Chip size="small" label={nodeElapsed} variant="outlined" />}
@@ -107,6 +113,8 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
       </Tabs>
       {tab === 'details' ? (
         <>
+          <DetailLine label="Instance" value={node.id} />
+          <DetailLine label="Type" value={node.type} />
           <DetailLine label="Route reason" value={node.routeReason} />
           {node.status !== 'skipped' && <DetailLine label="Skip reason" value={skipReason} />}
           <DetailLine label="Execution plan" value={node.executionPlan?.length ? node.executionPlan.join(' -> ') : undefined} />

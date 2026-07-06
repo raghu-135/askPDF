@@ -157,8 +157,13 @@ function AgentGraphCanvasInner({
       baseGraph = buildAgentGraph(graphSpec, mode === 'run-debug' && traceView ? {
         route: traceView.route,
         metrics: traceView.metrics,
-        nodeRows: traceView.nodes.map((node) => ({ ...node.raw, node: node.id })),
-        toolRows: traceView.tools.map((tool) => ({ ...tool.raw, tool_name: tool.name, caller_node: tool.callerNode })),
+        nodeRows: traceView.nodes.map((node) => ({ ...node.raw, node: node.id, node_type: node.type })),
+        toolRows: traceView.tools.map((tool) => ({
+          ...tool.raw,
+          tool_name: tool.name,
+          caller_node: tool.callerNode,
+          caller_node_type: tool.callerNodeType,
+        })),
       } : {});
     }
     return applyTraceFocusToGraph(baseGraph, focusedTraceRefs);
