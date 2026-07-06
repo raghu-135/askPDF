@@ -790,11 +790,19 @@ class GenericGraphValidator:
             errors.append("context_policy must be an object")
         else:
             unknown_context_keys = sorted(
-                set(context_policy) - {"evidence_packet_limit", "evidence_packet_content_limit", "final_prompt_assembly"}
+                set(context_policy)
+                - {
+                    "evidence_packet_limit",
+                    "evidence_packet_content_limit",
+                    "final_prompt_assembly",
+                    "evidence_dedupe",
+                    "evidence_compression",
+                    "final_context_char_limit",
+                }
             )
             if unknown_context_keys:
                 errors.append(f"context_policy has unknown keys: {', '.join(unknown_context_keys)}")
-            for key in ("evidence_packet_limit", "evidence_packet_content_limit"):
+            for key in ("evidence_packet_limit", "evidence_packet_content_limit", "final_context_char_limit"):
                 if key in context_policy:
                     try:
                         value = int(context_policy[key])
@@ -804,6 +812,10 @@ class GenericGraphValidator:
                         errors.append(f"context_policy.{key} must be a positive integer")
             if "final_prompt_assembly" in context_policy and not isinstance(context_policy["final_prompt_assembly"], str):
                 errors.append("context_policy.final_prompt_assembly must be a string")
+            if "evidence_dedupe" in context_policy and not isinstance(context_policy["evidence_dedupe"], bool):
+                errors.append("context_policy.evidence_dedupe must be a boolean")
+            if "evidence_compression" in context_policy and not isinstance(context_policy["evidence_compression"], str):
+                errors.append("context_policy.evidence_compression must be a string")
         return errors
 
     def _collect_catalog_route_function_errors(

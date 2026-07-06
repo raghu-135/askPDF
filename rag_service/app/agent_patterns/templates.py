@@ -334,6 +334,9 @@ def _with_v2_contract(spec: Dict[str, Any], *, max_total_visits: int) -> Dict[st
             "evidence_packet_limit": 12,
             "evidence_packet_content_limit": 2000,
             "final_prompt_assembly": "legacy_evidence",
+            "evidence_dedupe": True,
+            "evidence_compression": "compact",
+            "final_context_char_limit": 25536,
         },
     )
     graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}

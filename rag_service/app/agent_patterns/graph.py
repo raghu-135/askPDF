@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import hashlib
 import time
 from copy import deepcopy
 from datetime import timedelta
@@ -650,6 +651,7 @@ def _combine_evidence(existing: Any, addition: Any, *, label: str, limit: Option
 EVIDENCE_PACKET_LIMIT = 12
 EVIDENCE_PACKET_CONTENT_LIMIT = 2_000
 EVIDENCE_TEXT_LIMIT = EVIDENCE_PACKET_LIMIT * (EVIDENCE_PACKET_CONTENT_LIMIT + 128)
+FINAL_CONTEXT_CHAR_LIMIT = EVIDENCE_TEXT_LIMIT
 
 
 def _context_policy(state: RouterRagState) -> Dict[str, Any]:
@@ -681,9 +683,94 @@ def _evidence_text_limit(state: RouterRagState) -> int:
     return max(1, packet_limit * (content_limit + 128))
 
 
+def _final_context_char_limit(state: RouterRagState) -> int:
+    return _context_policy_int(state, "final_context_char_limit", _evidence_text_limit(state) or FINAL_CONTEXT_CHAR_LIMIT)
+
+
+def _evidence_dedupe_enabled(state: RouterRagState) -> bool:
+    value = _context_policy(state).get("evidence_dedupe", True)
+    return value is not False
+
+
+def _evidence_compression_mode(state: RouterRagState) -> str:
+    mode = _context_policy(state).get("evidence_compression", "compact")
+    return str(mode or "compact")
+
+
+def _canonical_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
+    except Exception:
+        return json.dumps(str(value), ensure_ascii=True)
+
+
+def _normalized_evidence_text(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _short_hash(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()[:16]
+
+
+def _packet_fingerprint(*, kind: str, content: str, refs: Dict[str, Any]) -> str:
+    return _short_hash(
+        {
+            "kind": kind,
+            "content": _normalized_evidence_text(content),
+            "refs": refs or {},
+        }
+    )
+
+
+def _dedupe_evidence_packets(packets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen: set[str] = set()
+    deduped_reversed: List[Dict[str, Any]] = []
+    for packet in reversed(packets):
+        fingerprint = str(packet.get("fingerprint") or "")
+        if not fingerprint:
+            fingerprint = _packet_fingerprint(
+                kind=str(packet.get("kind") or packet.get("producer_node_type") or "evidence"),
+                content=str(packet.get("content") or ""),
+                refs=packet.get("refs") if isinstance(packet.get("refs"), dict) else {},
+            )
+            packet = {**packet, "fingerprint": fingerprint}
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        deduped_reversed.append(packet)
+    return list(reversed(deduped_reversed))
+
+
+def _compact_context_text(text: str, *, limit: int, mode: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    if mode == "compact":
+        lines: List[str] = []
+        seen_lines: set[str] = set()
+        for raw_line in value.splitlines():
+            line = " ".join(raw_line.split())
+            if not line:
+                if lines and lines[-1]:
+                    lines.append("")
+                continue
+            key = line.lower()
+            if key in seen_lines:
+                continue
+            seen_lines.add(key)
+            lines.append(line)
+        value = "\n".join(lines).strip()
+    if isinstance(limit, int) and limit > 0 and len(value) > limit:
+        return value[-limit:].lstrip()
+    return value
+
+
 def _evidence_packets(state: RouterRagState) -> List[Dict[str, Any]]:
     packets = state.get("evidence_packets")
-    return [item for item in packets if isinstance(item, dict)] if isinstance(packets, list) else []
+    normalized = [item for item in packets if isinstance(item, dict)] if isinstance(packets, list) else []
+    if _evidence_dedupe_enabled(state):
+        normalized = _dedupe_evidence_packets(normalized)
+    return normalized
 
 
 def _evidence_context_from_packets(state: RouterRagState) -> str:
@@ -695,7 +782,11 @@ def _evidence_context_from_packets(state: RouterRagState) -> str:
         kind = str(packet.get("kind") or packet.get("producer_node_type") or "evidence")
         producer = str(packet.get("producer_node_id") or packet.get("producer_node_type") or "unknown")
         parts.append(f"[{kind} evidence from {producer}]\n{content}")
-    return "\n\n".join(parts).strip()
+    return _compact_context_text(
+        "\n\n".join(parts).strip(),
+        limit=_final_context_char_limit(state),
+        mode=_evidence_compression_mode(state),
+    )
 
 
 def _final_context_from_state(state: RouterRagState) -> tuple[str, str]:
@@ -705,8 +796,16 @@ def _final_context_from_state(state: RouterRagState) -> tuple[str, str]:
         if packet_context:
             return packet_context, "evidence_packets"
     if state.get("evidence"):
-        return str(state.get("evidence") or ""), "worker_evidence"
-    return _format_prefetch_summary(state.get("pre_fetch_bundle") or {}), "prefetch"
+        return _compact_context_text(
+            str(state.get("evidence") or ""),
+            limit=_final_context_char_limit(state),
+            mode=_evidence_compression_mode(state),
+        ), "worker_evidence"
+    return _compact_context_text(
+        _format_prefetch_summary(state.get("pre_fetch_bundle") or {}),
+        limit=_final_context_char_limit(state),
+        mode=_evidence_compression_mode(state),
+    ), "prefetch"
 
 
 def _append_evidence_packet(
@@ -723,17 +822,24 @@ def _append_evidence_packet(
     node_id = _runtime_node_id(config, kind)
     node_type = _runtime_node_type(config, kind)
     visit_index = _runtime_visit_index(config) or 1
+    refs = refs or {}
+    fingerprint = _packet_fingerprint(kind=kind, content=text, refs=refs)
+    existing_packets = _evidence_packets(state)
+    if _evidence_dedupe_enabled(state):
+        existing_packets = [packet for packet in existing_packets if packet.get("fingerprint") != fingerprint]
     packet = {
-        "id": f"{node_id}:visit:{visit_index}:{kind}:{len(_evidence_packets(state)) + 1}",
+        "id": f"{node_id}:visit:{visit_index}:{kind}:{len(existing_packets) + 1}",
         "producer_node_id": node_id,
         "producer_node_type": node_type,
         "visit_index": visit_index,
         "kind": kind,
         "content": text,
-        "refs": refs or {},
+        "content_hash": _short_hash(_normalized_evidence_text(text)),
+        "fingerprint": fingerprint,
+        "refs": refs,
         "created_at": iso_utc_z(utc_now()),
     }
-    return [*_evidence_packets(state), packet][-_evidence_packet_limit(state):]
+    return [*existing_packets, packet][-_evidence_packet_limit(state):]
 
 
 def _should_skip_worker(state: RouterRagState, worker_node: str) -> bool:

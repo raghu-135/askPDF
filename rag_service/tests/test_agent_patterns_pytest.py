@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.tool_registry import collect_tool_contract_metadata_errors, tool_contracts_by_id
 from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.router_runtime import handle_router_rag_chat
-from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result_metadata, _route_function_for_edge
+from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _final_context_from_state, _llm_result_metadata, _route_function_for_edge
 from app.agent_patterns.graph import (
     build_planner_prompt,
     infer_required_plan_steps,
@@ -1531,6 +1531,80 @@ class TestRouterRagGraphToolConsumers:
         assert [packet["id"] for packet in update["evidence_packets"]][0] == "old-2"
         assert len(update["evidence_packets"][-1]["content"]) <= 27
         assert len(update["evidence"]) <= 2 * (24 + 128)
+
+    @pytest.mark.asyncio
+    async def test_context_policy_dedupes_evidence_packets_by_content_and_refs(self, monkeypatch):
+        class FakeTool:
+            async def ainvoke(self, _args, config=None):
+                return {
+                    "content": "duplicate evidence paragraph",
+                    "artifacts": {"document_sources": [{"file_hash": "file-1", "page": 1}]},
+                }
+
+        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool())
+        bound = NodeRegistry().get_for_spec({"id": "retrieval_1", "type": "retrieval_worker"})
+        update = await bound(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "What does the document say?",
+                "route": "document",
+                "evidence": "",
+                "evidence_packets": [
+                    {
+                        "id": "old-duplicate",
+                        "kind": "document",
+                        "content": "duplicate evidence paragraph",
+                        "refs": {"document_matches": [{"file_hash": "file-1"}]},
+                    },
+                    {"id": "old-unique", "kind": "document", "content": "unique evidence"},
+                ],
+                "context_policy": {
+                    "evidence_packet_limit": 5,
+                    "evidence_packet_content_limit": 200,
+                    "evidence_dedupe": True,
+                },
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+                "node_events": [],
+                "tool_events": [],
+                "allowed_tool_ids": ["document_evidence"],
+            },
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        contents = [packet["content"] for packet in update["evidence_packets"]]
+        assert contents.count("duplicate evidence paragraph") == 1
+        assert "unique evidence" in contents
+        assert update["evidence_packets"][-1]["content_hash"]
+        assert update["evidence_packets"][-1]["fingerprint"]
+
+    def test_final_context_from_packets_compacts_duplicate_lines_and_bounds_context(self):
+        context, source = _final_context_from_state(
+            {
+                "evidence_packets": [
+                    {
+                        "id": "packet-1",
+                        "producer_node_id": "retrieval_1",
+                        "producer_node_type": "retrieval_worker",
+                        "kind": "document",
+                        "content": "repeat sentence\nrepeat sentence\n" + "\n".join(f"unique line {index}" for index in range(30)),
+                    }
+                ],
+                "context_policy": {
+                    "evidence_packet_limit": 3,
+                    "evidence_packet_content_limit": 1000,
+                    "final_prompt_assembly": "evidence_packets",
+                    "evidence_compression": "compact",
+                    "final_context_char_limit": 180,
+                },
+            }
+        )
+
+        assert source == "evidence_packets"
+        assert len(context) <= 180
+        assert context.count("repeat sentence") <= 1
 
     @pytest.mark.asyncio
     async def test_final_answer_can_assemble_context_from_bounded_evidence_packets(self, monkeypatch):
