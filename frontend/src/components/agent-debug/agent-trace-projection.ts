@@ -79,6 +79,10 @@ const asNumber = (value: any): number | undefined => {
   return Number.isFinite(numberValue) ? numberValue : undefined;
 };
 
+const asNonEmptyString = (value: any): string | undefined => (
+  typeof value === 'string' && value.length > 0 ? value : undefined
+);
+
 export const getRunDebug = (runDetails: AgentRunDetails): AgentRunDebug | undefined => {
   const debug = runDetails.debug;
   if (!debug || typeof debug !== 'object' || Array.isArray(debug)) return undefined;
@@ -115,7 +119,11 @@ const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCa
   return {
     id,
     type,
-    label: formatNodeLabel(id, type, nodeCatalog),
+    label: asNonEmptyString(row.label)
+      || asNonEmptyString(row.node_name)
+      || asNonEmptyString(raw.label)
+      || asNonEmptyString(raw.node_name)
+      || formatNodeLabel(id, type, nodeCatalog),
     instanceLabel: formatNodeInstanceLabel(id, type),
     status: typeof row.status === 'string' ? row.status : undefined,
     skipped: row.skipped === true || row.status === 'skipped',
@@ -159,11 +167,12 @@ const getRunGraph = (debug?: AgentRunDebug, nodeCatalog?: AgentNodeCatalog): Tra
   const nodes = (asArray(graph.nodes) as AgentGraphNode[]).map((node) => {
     const id = String(node.id || 'unknown_node');
     const type = typeof node.type === 'string' ? node.type : id;
+    const storedLabel = asNonEmptyString(node.label);
     return {
       ...node,
       id,
       type,
-      label: formatNodeLabel(id, type, nodeCatalog),
+      label: storedLabel || formatNodeLabel(id, type, nodeCatalog),
       instanceId: id,
       instanceLabel: formatNodeInstanceLabel(id, type),
     };
