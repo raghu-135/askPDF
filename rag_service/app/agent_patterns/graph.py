@@ -585,15 +585,15 @@ def _hitl_option_targets(gate: Dict[str, Any], selected_option_ids: List[str]) -
     return targets
 
 
-def with_final_review_hitl_policy(policy: Any) -> Dict[str, Any]:
-    """Return a policy with the compatibility final-answer review gate enabled."""
+def with_web_approval_hitl_policy(policy: Any) -> Dict[str, Any]:
+    """Return a policy with the reusable before-web approval gate enabled."""
 
     normalized = deepcopy(policy) if isinstance(policy, dict) else {}
     normalized["enabled"] = True
     gates = dict(normalized.get("gates") or {})
-    gates[FINAL_REVIEW_GATE_ID] = _normalize_hitl_gate_policy(
-        FINAL_REVIEW_GATE_ID,
-        gates.get(FINAL_REVIEW_GATE_ID),
+    gates[WEB_APPROVAL_GATE_ID] = _normalize_hitl_gate_policy(
+        WEB_APPROVAL_GATE_ID,
+        gates.get(WEB_APPROVAL_GATE_ID),
     )
     normalized["gates"] = gates
     return normalized
@@ -665,7 +665,6 @@ class NodeRegistry:
             "synthesizer": self.synthesizer,
             "finalizer": self.finalizer,
             "hitl_gate": self.hitl_gate,
-            "human_review_gate": self.human_review_gate,
         }
 
     def get(self, node_type: str) -> Callable[..., Any]:
@@ -1378,63 +1377,6 @@ class NodeRegistry:
             "node_events": _append_event(state, node_id, data, started=started, config=config),
         }
 
-    async def human_review_gate(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        """Pause after final answer synthesis so a human can approve before persistence."""
-
-        started = time.perf_counter()
-        decision = interrupt(
-            {
-                "gate_id": "final_answer_review",
-                "node_id": "human_review_gate",
-                "type": "final_answer_review",
-                "title": "Review final answer",
-                "prompt": "Approve this answer before it is saved to the thread.",
-                "allowed_actions": ["approve", "edit", "continue_without", "reject"],
-                "default_action": "approve",
-                "checkpoint_resume": True,
-                "input_summary": {
-                    "question": compact_preview(state.get("question")),
-                    "route": state.get("route"),
-                    "route_reason": compact_preview(state.get("route_reason")),
-                    "document_source_count": len(state.get("document_sources") or []),
-                    "web_source_count": len(state.get("web_sources") or []),
-                    "used_chat_id_count": len(state.get("used_chat_ids") or []),
-                },
-                "proposed_final_answer": compact_preview(state.get("final_answer"), limit=2000),
-            }
-        )
-        decision = decision if isinstance(decision, dict) else {"action": str(decision or "approve")}
-        action = str(decision.get("action") or "approve")
-        update: Dict[str, Any] = {"human_review_decision": decision}
-
-        edited_payload = decision.get("edited_payload") if isinstance(decision.get("edited_payload"), dict) else {}
-        edited_answer = edited_payload.get("final_answer") or edited_payload.get("answer")
-        if action == "edit" and isinstance(edited_answer, str) and edited_answer.strip():
-            update["final_answer"] = edited_answer.strip()
-
-        data = {
-            "status": "completed",
-            "action": action,
-            "input_preview": {
-                "question": compact_preview(state.get("question")),
-                "proposed_final_answer": compact_preview(state.get("final_answer")),
-            },
-            "output_preview": {
-                "decision": {
-                    key: value
-                    for key, value in decision.items()
-                    if key not in {"resume_token"}
-                },
-                "final_answer": compact_preview(update.get("final_answer") or state.get("final_answer")),
-            },
-        }
-        _log_node_end(state, "human_review_gate", started, data)
-        return {
-            **update,
-            "node_events": _append_event(state, "human_review_gate", data, started=started, config=config),
-        }
-
-
 def router_route(state: RouterRagState) -> str:
     return state.get("route") or "document"
 
@@ -1464,16 +1406,23 @@ class TemplateCompiler:
     def __init__(self, registry: Optional[NodeRegistry] = None):
         self.registry = registry or NodeRegistry()
 
-    def compile(self, spec: Dict[str, Any], *, checkpointer: Any = None, enable_hitl_final_review: bool = False):
+    def compile(
+        self,
+        spec: Dict[str, Any],
+        *,
+        checkpointer: Any = None,
+        enable_hitl_web_approval: bool = False,
+    ):
         from app.agent_patterns.validator import TemplateValidator
 
         graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
         if not graph_spec.get("hitl_compiled"):
             TemplateValidator().validate(spec)
-            spec = self.materialize_spec(spec)
+            spec = self.materialize_spec(
+                spec,
+                enable_hitl_web_approval=enable_hitl_web_approval,
+            )
             graph_spec = (spec.get("config") or {}).get("graph") or {}
-        if enable_hitl_final_review:
-            graph_spec = self._with_final_review_gate(graph_spec)
         workflow = StateGraph(RouterRagState)
         node_types: Dict[str, str] = {}
         for node in graph_spec.get("nodes", []):
@@ -1502,13 +1451,18 @@ class TemplateCompiler:
 
         return workflow.compile(checkpointer=checkpointer)
 
-    def materialize_spec(self, spec: Dict[str, Any], *, enable_hitl_final_review: bool = False) -> Dict[str, Any]:
+    def materialize_spec(
+        self,
+        spec: Dict[str, Any],
+        *,
+        enable_hitl_web_approval: bool = False,
+    ) -> Dict[str, Any]:
         materialized = deepcopy(spec)
         config = materialized.get("config") if isinstance(materialized.get("config"), dict) else {}
         graph_spec = config.get("graph") if isinstance(config.get("graph"), dict) else {}
         hitl_policy = config.get("hitl_policy") if isinstance(config.get("hitl_policy"), dict) else {}
-        if enable_hitl_final_review:
-            hitl_policy = with_final_review_hitl_policy(hitl_policy)
+        if enable_hitl_web_approval:
+            hitl_policy = with_web_approval_hitl_policy(hitl_policy)
             config["hitl_policy"] = hitl_policy
         config["graph"] = self._with_hitl_policy_gates(
             graph_spec,
@@ -1629,42 +1583,3 @@ class TemplateCompiler:
             updated.append(edge)
         updated.append({"from": target_node_id, "to": gate_id})
         return updated
-
-    def _with_final_review_gate(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
-        nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
-        edges = [dict(edge) for edge in graph_spec.get("edges", []) if isinstance(edge, dict)]
-        if not any(node.get("id") == FINAL_REVIEW_GATE_ID for node in nodes):
-            nodes.append({"id": FINAL_REVIEW_GATE_ID, "type": "hitl_gate"})
-        else:
-            for node in nodes:
-                if node.get("id") == FINAL_REVIEW_GATE_ID:
-                    node["type"] = "hitl_gate"
-
-        updated_edges: List[Dict[str, Any]] = []
-        inserted = False
-        for edge in edges:
-            if edge.get("from") == "finalizer" and edge.get("to") == "END":
-                updated_edges.append({"from": "finalizer", "to": FINAL_REVIEW_GATE_ID})
-                inserted = True
-            elif edge.get("from") == FINAL_REVIEW_GATE_ID:
-                continue
-            else:
-                updated_edges.append(edge)
-        if not inserted and not any(edge.get("from") == "finalizer" and edge.get("to") == FINAL_REVIEW_GATE_ID for edge in updated_edges):
-            updated_edges.append({"from": "finalizer", "to": FINAL_REVIEW_GATE_ID})
-        if not any(edge.get("from") == FINAL_REVIEW_GATE_ID and edge.get("conditional") is True for edge in updated_edges):
-            updated_edges.append(
-                {
-                    "from": FINAL_REVIEW_GATE_ID,
-                    "conditional": True,
-                    "routes": {
-                        "approve": "END",
-                        "edit": "END",
-                        "continue_without": "END",
-                    },
-                }
-            )
-        result = {"nodes": nodes, "edges": updated_edges}
-        if graph_spec.get("hitl_compiled"):
-            result["hitl_compiled"] = True
-        return result

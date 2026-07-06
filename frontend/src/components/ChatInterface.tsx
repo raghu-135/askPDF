@@ -163,6 +163,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
     const [clarificationPanelRatio, setClarificationPanelRatio] = useState(0.3);
     const [isClarificationResizing, setIsClarificationResizing] = useState(false);
+    const [hitlWebApproval, setHitlWebApproval] = useState(false);
+    const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
     const [agentPatternId, setAgentPatternId] = useState('router_rag_agent');
@@ -203,12 +205,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setSystemRole(settings?.system_role ?? defaultSystemRole);
         setToolInstructions(settings?.tool_instructions ?? {});
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
+        setHitlWebApproval(settings?.hitl_web_approval ?? defaultHitlWebApproval);
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
         setAgentPatternId(normalizeAgentPatternForUi(settings?.agent_pattern?.template_id));
     }, [
         defaultCustomInstructions,
         defaultMaxIterations,
         defaultSystemRole,
+        defaultHitlWebApproval,
         defaultUseReranker,
     ]);
 
@@ -355,6 +359,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setMaxMaxIterations(res.defaults.max_max_iterations);
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
+                    setDefaultHitlWebApproval(res.defaults.hitl_web_approval ?? false);
                     setDefaultUseReranker(res.defaults.use_reranker ?? true);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
@@ -363,6 +368,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         setMaxIterations(res.defaults.max_iterations);
                         setSystemRole(res.defaults.system_role ?? '');
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
+                        setHitlWebApproval(res.defaults.hitl_web_approval ?? false);
                         setUseReranker(res.defaults.use_reranker ?? true);
                     }
                 }
@@ -532,6 +538,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setSystemRole(defaultSystemRole);
         setToolInstructions(defaults);
         setCustomInstructions(defaultCustomInstructions);
+        setHitlWebApproval(defaultHitlWebApproval);
         setUseReranker(defaultUseReranker);
         setAgentPatternId('router_rag_agent');
     };
@@ -918,7 +925,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         {
                             id: localAssistantMessageId,
                             role: 'assistant',
-                            content: response.pending_interrupt.title || 'Human review required before saving the final answer.',
+                            content: response.pending_interrupt.title || 'Human review required before the agent can continue.',
                             agent_run_id: response.agent_run_id,
                             agent_run_turn_kind: 'assistant_pending_review',
                             agent_trace_refs: response.agent_trace_refs,
@@ -1151,6 +1158,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 system_role: systemRole,
                 tool_instructions: effectiveToolInstructions,
                 custom_instructions: customInstructions,
+                hitl_web_approval: hitlWebApproval,
                 use_reranker: useReranker,
                 agent_pattern: { template_id: normalizeAgentPatternForUi(agentPatternId) },
             });
@@ -1271,6 +1279,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const pendingReviewActions = Array.isArray(pendingReviewInterrupt?.allowed_actions)
         ? pendingReviewInterrupt.allowed_actions.map(String)
         : [];
+    const pendingReviewTitle = pendingReviewInterrupt?.title
+        || (pendingReviewInterrupt?.proposed_tool ? 'Approve tool use?' : 'Human review required');
+    const pendingReviewProposedTool = pendingReviewInterrupt?.proposed_tool;
+    const pendingReviewIsWebApproval = pendingReviewInterrupt?.target_node_id === 'web_worker'
+        || pendingReviewInterrupt?.node_id === 'web_approval_gate'
+        || (
+            typeof pendingReviewProposedTool === 'object'
+            && pendingReviewProposedTool !== null
+            && pendingReviewProposedTool.name === 'search_web'
+        );
+    const approveLabel = pendingReviewIsWebApproval ? 'Approve web search' : 'Approve';
+    const continueWithoutLabel = pendingReviewIsWebApproval ? 'Continue without web search' : 'Continue';
     const showDecisionPanel = Boolean(clarificationOptions || pendingHumanReview);
 
     return (
@@ -1827,7 +1847,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             <Typography variant="caption" sx={{ flex: 1, textAlign: 'center', color: 'text.secondary', fontWeight: 'bold' }}>
                                 {clarificationOptions
                                     ? 'I need a bit more clarification. Did you mean one of these?'
-                                    : 'Review the final answer before it is saved.'}
+                                    : pendingReviewTitle}
                             </Typography>
                             {clarificationOptions && (
                                 <Tooltip title="Close clarification options">
@@ -1932,7 +1952,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                 disabled={Boolean(humanReviewSubmitting)}
                                                 onClick={() => handleHumanReviewAction('approve')}
                                             >
-                                                {humanReviewSubmitting === 'approve' ? 'Approving...' : 'Approve'}
+                                                {humanReviewSubmitting === 'approve' ? 'Approving...' : approveLabel}
                                             </Button>
                                         )}
                                         {pendingReviewActions.includes('edit') && (
@@ -1954,7 +1974,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                 disabled={Boolean(humanReviewSubmitting)}
                                                 onClick={() => handleHumanReviewAction('continue_without')}
                                             >
-                                                {humanReviewSubmitting === 'continue_without' ? 'Continuing...' : 'Continue'}
+                                                {humanReviewSubmitting === 'continue_without' ? 'Continuing...' : continueWithoutLabel}
                                             </Button>
                                         )}
                                         {pendingReviewActions.includes('reject') && (
@@ -2079,6 +2099,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 maxIterations={maxIterations}
                 minMaxIterations={minMaxIterations}
                 maxMaxIterations={maxMaxIterations}
+                hitlWebApproval={hitlWebApproval}
                 useReranker={useReranker}
                 agentPatternId={agentPatternId}
                 systemRole={systemRole}
@@ -2088,6 +2109,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions={effectiveToolInstructions}
                 promptPreview={promptPreview}
                 onMaxIterationsChange={(value) => setMaxIterations(value)}
+                onHitlWebApprovalChange={(checked) => setHitlWebApproval(checked)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
                 onAgentPatternChange={(value) => setAgentPatternId(value)}
                 onSystemRoleChange={(value) => setSystemRole(value)}

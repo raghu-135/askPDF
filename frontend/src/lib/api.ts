@@ -143,6 +143,7 @@ export interface ThreadSettings {
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
+  hitl_web_approval: boolean;
   use_reranker: boolean;
   agent_pattern?: {
     template_id: 'router_rag_agent' | string;
@@ -164,6 +165,7 @@ export interface PromptDefaults {
   system_role: string;
   tool_instructions: Record<string, string>;
   custom_instructions: string;
+  hitl_web_approval?: boolean;
   use_reranker?: boolean;
 }
 

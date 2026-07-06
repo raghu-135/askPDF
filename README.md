@@ -331,7 +331,6 @@ Environment variables are now managed using a `.env` file for better security an
 | `AGENT_CHECKPOINT_DATABASE_URL` | unset | Optional Postgres URL override for LangGraph checkpoints; falls back to `DATABASE_URL` |
 | `ASKPDF_AGENT_CHECKPOINTER_SETUP` | `true` | Run LangGraph Postgres checkpointer setup on startup/use |
 | `ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK` | unset | Explicit opt-in to memory fallback when `ASKPDF_AGENT_CHECKPOINTER=postgres` is misconfigured |
-| `ASKPDF_AGENT_HITL_FINAL_REVIEW` | unset | Enables the initial checkpointed final-answer review gate when set to `true` |
 
 ### Setup Instructions
 

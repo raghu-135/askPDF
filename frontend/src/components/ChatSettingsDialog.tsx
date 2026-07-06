@@ -28,6 +28,7 @@ interface ChatSettingsDialogProps {
     maxIterations: number;
     minMaxIterations: number | null;
     maxMaxIterations: number | null;
+    hitlWebApproval: boolean;
     useReranker: boolean;
     agentPatternId: string;
     systemRole: string;
@@ -39,6 +40,7 @@ interface ChatSettingsDialogProps {
     
     // Change handlers
     onMaxIterationsChange: (value: number) => void;
+    onHitlWebApprovalChange: (checked: boolean) => void;
     onRerankerChange: (checked: boolean) => void;
     onAgentPatternChange: (value: string) => void;
     onSystemRoleChange: (value: string) => void;
@@ -60,6 +62,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     maxIterations,
     minMaxIterations,
     maxMaxIterations,
+    hitlWebApproval,
     useReranker,
     agentPatternId,
     systemRole,
@@ -69,6 +72,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     effectiveToolInstructions,
     promptPreview,
     onMaxIterationsChange,
+    onHitlWebApprovalChange,
     onRerankerChange,
     onAgentPatternChange,
     onSystemRoleChange,
@@ -130,6 +134,24 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     <MenuItem value="plan_execute_rag_agent">Plan-and-Execute RAG Agent</MenuItem>
                 </TextField>
                 <Divider />
+                <Box>
+                    <FormControlLabel
+                        control={
+                            <Switch
+                                checked={hitlWebApproval}
+                                onChange={(e) => onHitlWebApprovalChange(e.target.checked)}
+                            />
+                        }
+                        label={
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <Typography variant="body2" sx={{ fontWeight: 500 }}>Approve web search</Typography>
+                            </Box>
+                        }
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
+                        Pauses before live web search so you can approve it or continue from existing context.
+                    </Typography>
+                </Box>
                 <Box>
                     <FormControlLabel
                         control={

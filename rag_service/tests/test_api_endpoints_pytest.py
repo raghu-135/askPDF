@@ -248,6 +248,7 @@ class TestThreadEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, dict)
+        assert data["hitl_web_approval"] is False
 
     def test_get_settings_nonexistent_thread(self, client):
         """Test getting settings for a thread that doesn't exist."""
@@ -265,11 +266,17 @@ class TestThreadEndpoints:
         
         response = client.put(
             f"/api/threads/{thread_id}/settings",
-            json={"max_iterations": 20, "token_budget": 16384, "agent_pattern": {"template_id": "router_rag_agent"}}
+            json={
+                "max_iterations": 20,
+                "token_budget": 16384,
+                "hitl_web_approval": True,
+                "agent_pattern": {"template_id": "router_rag_agent"},
+            }
         )
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, dict)
+        assert data["hitl_web_approval"] is True
         assert data["agent_pattern"]["template_id"] == "router_rag_agent"
 
     def test_update_settings_nonexistent_thread(self, client):

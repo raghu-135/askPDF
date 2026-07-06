@@ -18,12 +18,6 @@ def _truthy_env(name: str, default: str = "") -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def final_review_hitl_enabled() -> bool:
-    """Return whether the runtime should inject the first checkpointed HITL gate."""
-
-    return _truthy_env("ASKPDF_AGENT_HITL_FINAL_REVIEW")
-
-
 def _postgres_checkpoint_url() -> str:
     url = os.environ.get("AGENT_CHECKPOINT_DATABASE_URL") or os.environ.get("DATABASE_URL") or ""
     if url.startswith("postgresql+asyncpg://"):

@@ -198,6 +198,7 @@ def default_thread_settings():
         "system_role": DEFAULT_SYSTEM_ROLE,
         "tool_instructions": {},
         "custom_instructions": "",
+        "hitl_web_approval": False,
         "use_reranker": True,
         "agent_pattern": {"template_id": "router_rag_agent"},
     }

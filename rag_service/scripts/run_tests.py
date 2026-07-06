@@ -266,7 +266,6 @@ def main(argv: list[str] | None = None) -> int:
     env["PYTHONPATH"] = str(APP_DIR)
     if agent_checkpoint_run:
         env["ASKPDF_AGENT_CHECKPOINTER"] = "postgres"
-        env["ASKPDF_AGENT_HITL_FINAL_REVIEW"] = "true"
         env["AGENT_CHECKPOINT_DATABASE_URL"] = test_db_url
         env["ASKPDF_AGENT_CHECKPOINTER_SETUP"] = "false"
         env["ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST"] = "1"

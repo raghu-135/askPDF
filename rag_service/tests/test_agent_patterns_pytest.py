@@ -608,10 +608,23 @@ class TestRouterRagTemplateValidator:
         }
 
     def test_materializes_final_review_as_hitl_policy_overlay(self):
-        materialized = TemplateCompiler().materialize_spec(
-            builtin_router_rag_spec(),
-            enable_hitl_final_review=True,
-        )
+        spec = builtin_router_rag_spec()
+        spec["config"]["hitl_policy"] = {
+            "enabled": True,
+            "gates": {
+                "human_review_gate": {
+                    "enabled": True,
+                    "mode": "review",
+                    "phase": "after",
+                    "target": {"node_id": "finalizer", "node_type": "finalizer"},
+                    "allowed_actions": ["approve", "edit", "continue_without"],
+                    "default_action": "approve",
+                    "routes": {"approve": "END", "edit": "END", "continue_without": "END"},
+                    "editable_fields": ["final_answer"],
+                },
+            },
+        }
+        materialized = TemplateCompiler().materialize_spec(spec)
         config = materialized["config"]
         graph_spec = config["graph"]
 
@@ -1463,7 +1476,7 @@ class TestAgentRunService:
         monkeypatch,
         *,
         action: str,
-        enable_final_review: bool = False,
+        enable_web_approval: bool = True,
         duplicate_after_resume: bool = True,
     ):
         class FakeLlm:
@@ -1511,7 +1524,10 @@ class TestAgentRunService:
         index_calls = []
 
         async def fake_get_thread_settings(_thread_id):
-            return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
+            return {
+                "agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID},
+                "hitl_web_approval": enable_web_approval,
+            }
 
         async def fake_prefetch_context(**kwargs):
             return {
@@ -1588,10 +1604,6 @@ class TestAgentRunService:
             stats_calls.append((thread_id, qa_chars))
 
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-        if enable_final_review:
-            monkeypatch.setenv("ASKPDF_AGENT_HITL_FINAL_REVIEW", "true")
-        else:
-            monkeypatch.delenv("ASKPDF_AGENT_HITL_FINAL_REVIEW", raising=False)
         monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
@@ -1907,7 +1919,7 @@ class TestAgentRunService:
         assert "graph" not in run.debug_trace_json
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_pauses_and_resumes_from_checkpoint_once(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_pauses_before_web_and_resumes_from_checkpoint_once(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -1922,14 +1934,42 @@ class TestAgentRunService:
             async def ainvoke(self, messages):
                 self.calls += 1
                 if self.calls == 1:
-                    return SimpleNamespace(content='{"route":"direct","reason":"test direct route","clarification_options":null}')
+                    return SimpleNamespace(content='{"route":"web","reason":"Needs live evidence.","clarification_options":null}')
                 return SimpleNamespace(content="Checkpointed final answer.")
 
+        class FakeWebTool:
+            name = "search_web"
+
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, tool_input, config=None):
+                self.calls += 1
+                return {
+                    "content": "Checkpointed web evidence.",
+                    "sources": [{"url": "https://example.test/checkpoint", "title": "Checkpoint"}],
+                    "artifacts": {
+                        "web_sources": [
+                            {
+                                "url": "https://example.test/checkpoint",
+                                "title": "Checkpoint",
+                                "preview": "Checkpointed web evidence.",
+                            }
+                        ]
+                    },
+                    "trace": {"tool_name": "search_web", "caller_node": "web_worker"},
+                    "metrics": {"result_chars": 27, "source_count": 1, "warning_count": 0},
+                }
+
         fake_llm = FakeLlm()
+        fake_web = FakeWebTool()
         created_turn_ids = []
 
         async def fake_get_thread_settings(_thread_id):
-            return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
+            return {
+                "agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID},
+                "hitl_web_approval": True,
+            }
 
         async def fake_prefetch_context(**kwargs):
             return {
@@ -2004,11 +2044,11 @@ class TestAgentRunService:
         async def fake_increment_qa_stats(_thread_id, _qa_chars):
             return None
 
-        monkeypatch.setenv("ASKPDF_AGENT_HITL_FINAL_REVIEW", "true")
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
         monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_patterns.graph.search_web", fake_web)
         monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
@@ -2019,9 +2059,9 @@ class TestAgentRunService:
             await repo.seed_builtin_templates()
             service = AgentRunService(repository=repo)
             req = SimpleNamespace(
-                question="Pause before saving?",
+                question="Pause before web?",
                 llm_model="test-llm",
-                use_web_search=False,
+                use_web_search=True,
                 use_reranker=False,
                 context_window=8192,
                 max_iterations=1,
@@ -2062,8 +2102,10 @@ class TestAgentRunService:
         assert paused_checkpoint_thread_id == run.id
         assert pending["checkpoint_resume"] is True
         assert pending["checkpoint_thread_id"] == paused_checkpoint_thread_id
-        assert pending["type"] == "final_answer_review"
-        assert pending["proposed_final_answer"] == "Checkpointed final answer."
+        assert pending["type"] == "tool_approval"
+        assert pending["gate_id"] == "web_approval_gate"
+        assert pending["proposed_tool"]["name"] == "search_web"
+        assert pending["enable_hitl_web_approval"] is True
         assert fake_llm.calls == 2
 
         assert resumed is not None
@@ -2077,7 +2119,15 @@ class TestAgentRunService:
         assert len(created_turn_ids) == 1
         assert len(turns) == 1
         assert turns[0].payload["answer"] == "Checkpointed final answer."
+        assert turns[0].payload["web_sources"] == [
+            {
+                "url": "https://example.test/checkpoint",
+                "title": "Checkpoint",
+                "preview": "Checkpointed web evidence.",
+            }
+        ]
         assert turns[0].agent_run_id == run.id
+        assert fake_web.calls == 1
 
         root_events = [
             event
@@ -2095,9 +2145,10 @@ class TestAgentRunService:
             for span in resumed.run.debug_trace_json["trace"]["spans"]
             if span.get("attributes", {}).get("askpdf.node.id")
         }
-        assert "human_review_gate" in node_span_ids
-        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] == 5
-        assert any(node["id"] == "human_review_gate" for node in resumed.run.debug_trace_json["summary"]["nodes"])
+        assert "web_approval_gate" in node_span_ids
+        assert "web_worker" in node_span_ids
+        assert resumed.run.debug_trace_json["summary"]["usedNodeCount"] == 6
+        assert any(node["id"] == "web_approval_gate" for node in resumed.run.debug_trace_json["summary"]["nodes"])
         assert resumed.run.debug_trace_json["trace"]["status"] == "completed"
         assert resumed.run.debug_trace_json["trace"]["chat_turn_id"] == turns[0].id
         assert resumed.run.debug_trace_json["summary"]["lastInterruptStatus"] == "resumed"
@@ -2120,7 +2171,6 @@ class TestAgentRunService:
         assert result["pending"]["gate_id"] == "web_approval_gate"
         assert result["pending"]["allowed_actions"] == ["approve", "continue_without"]
         assert result["pending"]["proposed_tool"]["name"] == "search_web"
-        assert result["pending"]["enable_hitl_final_review"] is False
         assert any(
             event.get("node") == "web_approval_gate" and event.get("status") == "interrupted"
             for event in result["paused"]["node_events"]
@@ -2206,7 +2256,7 @@ class TestAgentRunService:
         assert gate_spans[-1]["output"]["value"]["next"] == "synthesizer"
 
     @pytest.mark.asyncio
-    async def test_hitl_web_gate_preserves_final_review_compile_option_on_resume(self, engine, sample_thread, monkeypatch):
+    async def test_hitl_web_gate_thread_setting_does_not_add_final_review_on_resume(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -2219,19 +2269,15 @@ class TestAgentRunService:
             sample_thread,
             monkeypatch,
             action="approve",
-            enable_final_review=True,
+            enable_web_approval=True,
             duplicate_after_resume=False,
         )
 
         assert result["pending"]["gate_id"] == "web_approval_gate"
-        assert result["pending"]["enable_hitl_final_review"] is True
+        assert result["pending"]["enable_hitl_web_approval"] is True
         assert result["fake_web"].calls == 1
-        assert result["resumed"].run.status == "awaiting_human"
-        next_pending = result["resumed"].run.pending_interrupt_json
-        assert next_pending["node_id"] == "human_review_gate"
-        assert next_pending["type"] == "final_answer_review"
-        assert next_pending["enable_hitl_final_review"] is True
-        assert result["turns"] == []
+        assert result["resumed"].run.status == "completed"
+        assert result["turns"][0].payload["answer"] == "Answer with approved web evidence."
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(
@@ -2258,14 +2304,42 @@ class TestAgentRunService:
             async def ainvoke(self, messages):
                 self.calls += 1
                 if self.calls == 1:
-                    return SimpleNamespace(content='{"route":"direct","reason":"test direct route","clarification_options":null}')
+                    return SimpleNamespace(content='{"route":"web","reason":"Needs live evidence.","clarification_options":null}')
                 return SimpleNamespace(content="Postgres checkpoint answer.")
 
+        class FakeWebTool:
+            name = "search_web"
+
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, tool_input, config=None):
+                self.calls += 1
+                return {
+                    "content": "Postgres web evidence.",
+                    "sources": [{"url": "https://example.test/postgres", "title": "Postgres"}],
+                    "artifacts": {
+                        "web_sources": [
+                            {
+                                "url": "https://example.test/postgres",
+                                "title": "Postgres",
+                                "preview": "Postgres web evidence.",
+                            }
+                        ]
+                    },
+                    "trace": {"tool_name": "search_web", "caller_node": "web_worker"},
+                    "metrics": {"result_chars": 22, "source_count": 1, "warning_count": 0},
+                }
+
         fake_llm = FakeLlm()
+        fake_web = FakeWebTool()
         created_turn_ids = []
 
         async def fake_get_thread_settings(_thread_id):
-            return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
+            return {
+                "agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID},
+                "hitl_web_approval": True,
+            }
 
         async def fake_prefetch_context(**kwargs):
             return {
@@ -2353,13 +2427,13 @@ class TestAgentRunService:
             thread_id = thread.id
             embed_model = thread.embed_model
 
-        monkeypatch.setenv("ASKPDF_AGENT_HITL_FINAL_REVIEW", "true")
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "postgres")
         monkeypatch.setenv("AGENT_CHECKPOINT_DATABASE_URL", test_database_url)
         monkeypatch.delenv("ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK", raising=False)
         monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
         monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_patterns.graph.search_web", fake_web)
         monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
         monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
@@ -2371,7 +2445,7 @@ class TestAgentRunService:
             req = SimpleNamespace(
                 question="Pause and survive restart?",
                 llm_model="test-llm",
-                use_web_search=False,
+                use_web_search=True,
                 use_reranker=False,
                 context_window=8192,
                 max_iterations=1,
@@ -2426,6 +2500,7 @@ class TestAgentRunService:
         assert len(created_turn_ids) == 1
         assert len(turns) == 1
         assert turns[0].payload["answer"] == "Postgres checkpoint answer."
+        assert fake_web.calls == 1
         assert fake_llm.calls == 2
         assert deleted_checkpoint_thread_ids == [checkpoint_thread_id]
 

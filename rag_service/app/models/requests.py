@@ -120,6 +120,7 @@ class ThreadSettingsResponse(BaseModel):
     custom_instructions: str = Field(
         default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
+    hitl_web_approval: bool = False
     use_reranker: bool = True
     agent_pattern: Dict[str, str] = Field(default_factory=lambda: {"template_id": "router_rag_agent"})
 
@@ -133,6 +134,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     custom_instructions: Optional[str] = Field(
         default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
+    hitl_web_approval: Optional[bool] = None
     use_reranker: Optional[bool] = None
     agent_pattern: Optional[Dict[str, str]] = None
 
@@ -152,6 +154,7 @@ class PromptDefaults(BaseModel):
     system_role: str
     tool_instructions: Dict[str, str]
     custom_instructions: str
+    hitl_web_approval: bool = False
     use_reranker: bool = True
 
 

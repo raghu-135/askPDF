@@ -4,7 +4,7 @@ import time
 import logging
 from typing import Any, Dict, Optional
 
-from app.agent_patterns.checkpointing import final_review_hitl_enabled, open_agent_checkpointer
+from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository, InterruptResolutionResult
@@ -70,10 +70,10 @@ class AgentRunService:
         )
         from app.agent_patterns.graph import TemplateCompiler
 
-        enable_hitl_final_review = final_review_hitl_enabled()
+        enable_hitl_web_approval = bool(thread_settings.get("hitl_web_approval")) if isinstance(thread_settings, dict) else False
         stored_resolved_spec = TemplateCompiler().materialize_spec(
             resolved_spec,
-            enable_hitl_final_review=enable_hitl_final_review,
+            enable_hitl_web_approval=enable_hitl_web_approval,
         )
 
         run = await self.repository.create_run(
@@ -108,7 +108,7 @@ class AgentRunService:
                     agent_run_context=context,
                     trace_recorder=trace_recorder,
                     checkpointer=checkpointer,
-                    enable_hitl_final_review=enable_hitl_final_review,
+                    enable_hitl_web_approval=enable_hitl_web_approval,
                 )
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
