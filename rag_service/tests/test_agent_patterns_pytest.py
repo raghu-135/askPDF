@@ -2980,6 +2980,181 @@ class TestAgentRunService:
         assert captured_spec["pattern_type"] == "internal_custom_rag_agent_v1"
 
     @pytest.mark.asyncio
+    async def test_internal_custom_pattern_create_select_and_run_keeps_instance_node_identity(
+        self,
+        async_api_client,
+        monkeypatch,
+    ):
+        custom_spec = {
+            "schema_version": 2,
+            "pattern_type": "internal_e2e_custom_rag_agent",
+            "config": {
+                "allowed_tool_ids": ["document_evidence"],
+                "graph": {
+                    "nodes": [
+                        {"id": "context_1", "type": "context_loader"},
+                        {"id": "router_1", "type": "router"},
+                        {"id": "retrieval_1", "type": "retrieval_worker"},
+                        {"id": "synth_1", "type": "synthesizer"},
+                        {"id": "final_1", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_1"},
+                        {"from": "context_1", "to": "router_1"},
+                        {
+                            "from": "router_1",
+                            "conditional": True,
+                            "route_fn": "router_route",
+                            "routes": {
+                                "document": "retrieval_1",
+                                "direct": "final_1",
+                            },
+                        },
+                        {"from": "retrieval_1", "to": "synth_1"},
+                        {"from": "synth_1", "to": "final_1"},
+                        {"from": "final_1", "to": "END"},
+                    ],
+                },
+            },
+        }
+
+        class FakeLlm:
+            def __init__(self):
+                self.calls = 0
+
+            async def ainvoke(self, _messages):
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(content='{"route":"document","reason":"Need document evidence."}')
+                return SimpleNamespace(content="Custom graph answer from retrieval_1.")
+
+        class FakeDocumentTool:
+            name = "search_documents"
+
+            async def ainvoke(self, tool_input, config=None):
+                return {
+                    "content": "Document evidence for the custom graph.",
+                    "sources": [{"id": "doc-1", "title": "Custom Doc"}],
+                    "artifacts": {
+                        "document_sources": [
+                            {"id": "doc-1", "title": "Custom Doc", "snippet": "Document evidence."}
+                        ]
+                    },
+                    "trace": {
+                        "tool_name": "search_documents",
+                        "caller_node": (config or {}).get("configurable", {}).get("caller_node"),
+                        "caller_node_type": (config or {}).get("configurable", {}).get("caller_node_type"),
+                    },
+                    "metrics": {"result_chars": 39, "source_count": 1, "warning_count": 0},
+                }
+
+        fake_llm = FakeLlm()
+
+        async def fake_prefetch_context(**_kwargs):
+            return {
+                "recent_history_text": "",
+                "semantic_history_text": "",
+                "document_evidence_text": "",
+                "web_evidence_text": "",
+                "stats": {"total_messages": 0, "estimated_history_tokens": 0},
+                "documents": [],
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+            }
+
+        async def fake_index_chat_memory_for_thread(**_kwargs):
+            return {}
+
+        async def fake_update_message_context_compact(_turn_id, _compact_text):
+            return None
+
+        async def fake_increment_qa_stats(_thread_id, _qa_chars):
+            return None
+
+        monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeDocumentTool())
+        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+
+        thread_response = await async_api_client.post(
+            "/api/threads",
+            json={"name": "Custom Pattern Thread", "embed_model": "BAAI/bge-m3"},
+        )
+        other_thread_response = await async_api_client.post(
+            "/api/threads",
+            json={"name": "Default Pattern Thread", "embed_model": "BAAI/bge-m3"},
+        )
+        created = await async_api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": "internal_e2e_custom_rag_agent",
+                "name": "Internal E2E Custom RAG Agent",
+                "spec_json": custom_spec,
+            },
+        )
+
+        assert thread_response.status_code == 200
+        assert other_thread_response.status_code == 200
+        assert created.status_code == 200
+
+        thread_id = thread_response.json()["id"]
+        other_thread_id = other_thread_response.json()["id"]
+        selected = await async_api_client.post(
+            f"/api/internal/threads/{thread_id}/agent-pattern",
+            json={"template_id": "internal_e2e_custom_rag_agent"},
+        )
+
+        assert selected.status_code == 200
+        assert selected.json()["agent_pattern"] == {
+            "template_id": "internal_e2e_custom_rag_agent",
+            "allow_custom": True,
+            "source": "internal",
+        }
+
+        service = AgentRunService(allow_custom_agent_patterns=True)
+        result = await service.run_thread_chat(
+            thread_id,
+            self._agent_req("What does the custom document say?"),
+            "BAAI/bge-m3",
+        )
+        fallback_result = await service.run_thread_chat(
+            other_thread_id,
+            self._agent_req("Should use the default pattern."),
+            "BAAI/bge-m3",
+        )
+        repo = AgentPatternRepository()
+        run = await repo.get_run(result["agent_run_id"])
+
+        assert result["agent_pattern_id"] == "internal_e2e_custom_rag_agent"
+        assert fallback_result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
+        assert run.resolved_spec_json["config"]["graph"]["nodes"][2] == {
+            "id": "retrieval_1",
+            "type": "retrieval_worker",
+        }
+        assert any(
+            event.get("node") == "retrieval_1" and event.get("node_type") == "retrieval_worker"
+            for event in result["node_events"]
+        )
+        assert any(
+            event.get("caller_node") == "retrieval_1"
+            and event.get("caller_node_type") == "retrieval_worker"
+            for event in result["tool_events"]
+        )
+        span_attrs = [
+            span.get("attributes") or {}
+            for span in (run.debug_trace_json or {}).get("trace", {}).get("spans", [])
+        ]
+        assert any(
+            attrs.get("askpdf.node.id") == "retrieval_1"
+            and attrs.get("askpdf.node.type") == "retrieval_worker"
+            for attrs in span_attrs
+        )
+
+    @pytest.mark.asyncio
     async def test_run_thread_chat_uses_plan_execute_rag_when_selected(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
