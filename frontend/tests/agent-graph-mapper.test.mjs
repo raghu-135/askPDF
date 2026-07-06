@@ -158,7 +158,17 @@ test('graph mapper labels custom node instances by catalog type while preserving
     },
     {
       nodeCatalog: {
-        retrieval_worker: { display_name: 'Catalog Document Retrieval' },
+        retrieval_worker: {
+          display_name: 'Catalog Document Retrieval',
+          category: 'retrieval',
+          capabilities: ['retrieval.document'],
+          observability: { span_kind: 'tool_worker', event_prefix: 'retrieval_worker' },
+        },
+        router: {
+          display_name: 'Router',
+          capabilities: 'malformed',
+          observability: ['bad'],
+        },
       },
       route: 'document',
       nodeRows: [
@@ -181,9 +191,14 @@ test('graph mapper labels custom node instances by catalog type while preserving
   const selectedEdge = graph.edges.find((edge) => edge.route === 'document');
 
   assert.equal(retrievalNode?.label, 'Catalog Document Retrieval');
+  assert.equal(retrievalNode?.category, 'retrieval');
+  assert.deepEqual(retrievalNode?.capabilities, ['retrieval.document']);
+  assert.equal(retrievalNode?.observability?.span_kind, 'tool_worker');
   assert.equal(retrievalNode?.instanceLabel, 'retrieval_1 · retrieval_worker');
   assert.equal(retrievalNode?.toolSummaries[0]?.callerNode, 'retrieval_1');
   assert.equal(retrievalNode?.toolSummaries[0]?.callerNodeType, 'retrieval_worker');
+  assert.equal(graph.nodes.find((node) => node.id === 'router_1')?.capabilities, undefined);
+  assert.equal(graph.nodes.find((node) => node.id === 'router_1')?.observability, undefined);
   assert.equal(selectedEdge?.selected, true);
   assert.equal(selectedEdge?.target, 'retrieval_1');
 });

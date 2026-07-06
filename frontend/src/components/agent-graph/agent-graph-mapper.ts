@@ -131,6 +131,16 @@ const asArray = (value: any): Record<string, any>[] => (
   Array.isArray(value) ? value.filter((item): item is Record<string, any> => item && typeof item === 'object') : []
 );
 
+const asObject = (value: any): Record<string, any> | undefined => (
+  value && typeof value === 'object' && !Array.isArray(value) ? value : undefined
+);
+
+const asStringArray = (value: any): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+  return items.length > 0 ? items : undefined;
+};
+
 const unique = (items: string[]) => Array.from(new Set(items.filter(Boolean)));
 
 const getNodeIdFromEvent = (event: Record<string, any>) => (
@@ -237,10 +247,19 @@ export const buildAgentGraph = (
       const traceSpans = rawEvents
         .map((event) => event.__trace_span)
         .filter((span): span is Record<string, any> => span && typeof span === 'object');
+      const catalogEntry = nodeCatalog?.[node.type];
+      const category = typeof node.category === 'string'
+        ? node.category
+        : typeof catalogEntry?.category === 'string'
+          ? catalogEntry.category
+          : undefined;
       return {
         id: node.id,
         type: node.type,
         label: formatNodeLabel(node.id, node.type, nodeCatalog),
+        category,
+        capabilities: asStringArray(node.capabilities) || asStringArray(catalogEntry?.capabilities),
+        observability: asObject(node.observability) || asObject(catalogEntry?.observability),
         instanceId: node.id,
         instanceLabel: formatNodeInstanceLabel(node.id, node.type),
         description: typeof node.description === 'string' ? node.description : undefined,

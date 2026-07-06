@@ -233,6 +233,8 @@ test('trace projection preserves custom node type metadata and normalizes graph 
           id: 'retrieval_1',
           type: 'retrieval_worker',
           label: 'Retrieval 1',
+          capabilities: ['retrieval.document'],
+          observability: { span_kind: 'tool_worker' },
           status: 'active',
           toolSummaries: [],
           warningCount: 0,
@@ -248,7 +250,16 @@ test('trace projection preserves custom node type metadata and normalizes graph 
 
   const view = buildRunTraceView(
     { ...traceBackedRun, id: 'run-custom', debug: customDebug },
-    { nodeCatalog: { retrieval_worker: { display_name: 'Catalog Document Retrieval' } } },
+    {
+      nodeCatalog: {
+        retrieval_worker: {
+          display_name: 'Catalog Document Retrieval',
+          category: 'retrieval',
+          capabilities: ['catalog.capability'],
+          observability: { event_prefix: 'retrieval_worker' },
+        },
+      },
+    },
   );
 
   assert.equal(view.nodes[0].id, 'retrieval_1');
@@ -258,6 +269,9 @@ test('trace projection preserves custom node type metadata and normalizes graph 
   assert.equal(view.tools[0].callerNode, 'retrieval_1');
   assert.equal(view.tools[0].callerNodeType, 'retrieval_worker');
   assert.equal(view.graph?.nodes[0].label, 'Catalog Document Retrieval');
+  assert.equal(view.graph?.nodes[0].category, 'retrieval');
+  assert.deepEqual(view.graph?.nodes[0].capabilities, ['retrieval.document']);
+  assert.equal(view.graph?.nodes[0].observability?.span_kind, 'tool_worker');
   assert.equal(view.graph?.nodes[0].instanceLabel, 'retrieval_1 · retrieval_worker');
 });
 

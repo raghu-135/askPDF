@@ -4,6 +4,8 @@ export interface AgentNodeCatalogEntry {
   displayName?: string;
   display_name?: string;
   category?: string;
+  capabilities?: unknown;
+  observability?: unknown;
   [key: string]: unknown;
 }
 
@@ -60,6 +62,9 @@ export interface AgentGraphNode {
   id: string;
   type: string;
   label: string;
+  category?: string;
+  capabilities?: string[];
+  observability?: Record<string, unknown>;
   instanceId?: string;
   instanceLabel?: string;
   description?: string;

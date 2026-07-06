@@ -74,6 +74,11 @@ const asStringArray = (value: any): string[] => (
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 );
 
+const asOptionalStringArray = (value: any): string[] | undefined => {
+  const items = asStringArray(value).filter((item) => item.length > 0);
+  return items.length > 0 ? items : undefined;
+};
+
 const asNumber = (value: any): number | undefined => {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : undefined;
@@ -167,11 +172,20 @@ const getRunGraph = (debug?: AgentRunDebug, nodeCatalog?: AgentNodeCatalog): Tra
   const nodes = (asArray(graph.nodes) as AgentGraphNode[]).map((node) => {
     const id = String(node.id || 'unknown_node');
     const type = typeof node.type === 'string' ? node.type : id;
+    const catalogEntry = asObject(nodeCatalog?.[type]);
+    const category = typeof node.category === 'string'
+      ? node.category
+      : typeof catalogEntry.category === 'string'
+        ? catalogEntry.category
+        : undefined;
     return {
       ...node,
       id,
       type,
       label: formatNodeLabel(id, type, nodeCatalog) || asNonEmptyString(node.label) || id,
+      category,
+      capabilities: asOptionalStringArray(node.capabilities) || asOptionalStringArray(catalogEntry.capabilities),
+      observability: asObject(node.observability) || asObject(catalogEntry.observability),
       instanceId: id,
       instanceLabel: formatNodeInstanceLabel(id, type),
     };

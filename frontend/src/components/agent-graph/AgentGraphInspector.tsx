@@ -66,6 +66,12 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
   const statusLabel = node.status === 'skipped' ? skipReason || 'Skipped' : node.status;
   const instanceLabel = node.instanceLabel || node.id;
   const llmSummary = node.llmSummary || {};
+  const observability = node.observability && typeof node.observability === 'object'
+    ? node.observability as Record<string, unknown>
+    : {};
+  const capabilities = Array.isArray(node.capabilities)
+    ? node.capabilities.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    : [];
   const tokenCounts = llmSummary.token_counts && typeof llmSummary.token_counts === 'object'
     ? llmSummary.token_counts as Record<string, unknown>
     : {};
@@ -97,6 +103,7 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
         <Chip size="small" label={statusLabel} variant="outlined" />
         {nodeElapsed && <Chip size="small" label={nodeElapsed} variant="outlined" />}
         {node.route && <Chip size="small" label={`route ${node.route}`} variant="outlined" />}
+        {node.category && <Chip size="small" label={node.category} variant="outlined" />}
         {node.sourceCount > 0 && <Chip size="small" label={`${node.sourceCount} sources`} variant="outlined" />}
         {node.artifactCount > 0 && <Chip size="small" label={`${node.artifactCount} artifacts`} variant="outlined" />}
         {node.warningCount > 0 && <Chip size="small" color="warning" label={`${node.warningCount} warnings`} />}
@@ -115,6 +122,14 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
         <>
           <DetailLine label="Instance" value={node.id} />
           <DetailLine label="Type" value={node.type} />
+          {(node.category || capabilities.length > 0 || hasValue(observability)) && (
+            <InspectorSection title="Metadata">
+              <DetailLine label="Category" value={node.category} />
+              <DetailLine label="Capabilities" value={capabilities.length ? capabilities.join(', ') : undefined} />
+              <DetailLine label="Span kind" value={typeof observability.span_kind === 'string' ? observability.span_kind : undefined} />
+              <DetailLine label="Event prefix" value={typeof observability.event_prefix === 'string' ? observability.event_prefix : undefined} />
+            </InspectorSection>
+          )}
           <DetailLine label="Route reason" value={node.routeReason} />
           {node.status !== 'skipped' && <DetailLine label="Skip reason" value={skipReason} />}
           <DetailLine label="Execution plan" value={node.executionPlan?.length ? node.executionPlan.join(' -> ') : undefined} />
