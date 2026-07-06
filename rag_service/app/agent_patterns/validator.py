@@ -348,53 +348,12 @@ class TemplateValidator:
             node_type = node.get("type")
             if isinstance(node_id, str) and isinstance(node_type, str):
                 actual_nodes[node_id] = node_type
-        expected_hitl_nodes = {
-            "context_loader": "context_loader",
-            "router": "router",
-            "retrieval_worker": "retrieval_worker",
-            "memory_worker": "memory_worker",
-            "timeline_worker": "timeline_worker",
-            WEB_APPROVAL_GATE_ID: "hitl_gate",
-            "web_worker": "web_worker",
-            "direct_answer": "direct_answer",
-            "synthesizer": "synthesizer",
-            "finalizer": "finalizer",
-        }
-        if actual_nodes == expected_hitl_nodes:
-            expected_hitl_edges = [
-                {"from": "START", "to": "context_loader"},
-                {"from": "context_loader", "to": "router"},
-                {
-                    "from": "router",
-                    "conditional": True,
-                    "routes": {
-                        "document": "retrieval_worker",
-                        "memory": "memory_worker",
-                        "timeline": "timeline_worker",
-                        "web": WEB_APPROVAL_GATE_ID,
-                        "direct": "direct_answer",
-                        "clarify": "finalizer",
-                    },
-                },
-                {"from": "retrieval_worker", "to": "synthesizer"},
-                {"from": "memory_worker", "to": "synthesizer"},
-                {"from": "timeline_worker", "to": "synthesizer"},
-                {
-                    "from": WEB_APPROVAL_GATE_ID,
-                    "conditional": True,
-                    "routes": {
-                        "approve": "web_worker",
-                        "continue_without": "synthesizer",
-                    },
-                },
-                {"from": "web_worker", "to": "synthesizer"},
-                {"from": "direct_answer", "to": "finalizer"},
-                {"from": "synthesizer", "to": "finalizer"},
-                {"from": "finalizer", "to": "END"},
-            ]
-            if edges != expected_hitl_edges:
-                errors.append("router_rag_agent HITL web graph edges must match the built-in fixed topology")
-            return errors
+        if graph.get("hitl_compiled"):
+            return self._collect_hitl_compiled_graph_errors(
+                graph,
+                expected_nodes=expected_nodes,
+                pattern_type=ROUTER_RAG_AGENT_ID,
+            )
 
         if actual_nodes != expected_nodes:
             errors.append("router_rag_agent graph nodes must match the built-in Router RAG topology")
@@ -455,6 +414,12 @@ class TemplateValidator:
             node_type = node.get("type")
             if isinstance(node_id, str) and isinstance(node_type, str):
                 actual_nodes[node_id] = node_type
+        if graph.get("hitl_compiled"):
+            return self._collect_hitl_compiled_graph_errors(
+                graph,
+                expected_nodes=expected_nodes,
+                pattern_type=PLAN_EXECUTE_RAG_AGENT_ID,
+            )
         if actual_nodes != expected_nodes:
             errors.append("plan_execute_rag_agent graph nodes must match the built-in Plan-and-Execute RAG topology")
 
@@ -481,6 +446,92 @@ class TemplateValidator:
         if edges != expected_edges:
             errors.append("plan_execute_rag_agent graph edges must match the built-in fixed execution topology")
 
+        return errors
+
+    def _collect_hitl_compiled_graph_errors(
+        self,
+        graph: Dict[str, Any],
+        *,
+        expected_nodes: dict[str, str],
+        pattern_type: str,
+    ) -> list[str]:
+        """Validate materialized HITL overlays without hard-coding one gate topology."""
+
+        errors: list[str] = []
+        nodes = graph.get("nodes")
+        edges = graph.get("edges")
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            return ["graph.nodes and graph.edges must be lists"]
+
+        actual_nodes: dict[str, str] = {}
+        for node in nodes:
+            if not isinstance(node, dict):
+                errors.append("graph node entries must be objects")
+                continue
+            node_id = node.get("id")
+            node_type = node.get("type")
+            if isinstance(node_id, str) and isinstance(node_type, str):
+                actual_nodes[node_id] = node_type
+
+        for node_id, node_type in expected_nodes.items():
+            if actual_nodes.get(node_id) != node_type:
+                errors.append(f"{pattern_type} HITL graph missing base node: {node_id}")
+
+        hitl_gate_ids = {
+            node_id
+            for node_id, node_type in actual_nodes.items()
+            if node_id not in expected_nodes and node_type == "hitl_gate"
+        }
+        unexpected_nodes = sorted(
+            node_id
+            for node_id, node_type in actual_nodes.items()
+            if node_id not in expected_nodes and node_type != "hitl_gate"
+        )
+        if unexpected_nodes:
+            errors.append(f"{pattern_type} HITL graph contains unsupported non-HITL nodes: {', '.join(unexpected_nodes)}")
+        if not hitl_gate_ids:
+            errors.append(f"{pattern_type} HITL graph must include at least one hitl_gate node")
+
+        valid_sources = set(actual_nodes) | {"START"}
+        valid_targets = set(actual_nodes) | {"END"}
+        conditional_gate_sources: set[str] = set()
+        gate_incoming: set[str] = set()
+        for edge in edges:
+            if not isinstance(edge, dict):
+                errors.append("graph edge entries must be objects")
+                continue
+            source = edge.get("from")
+            if source not in valid_sources:
+                errors.append(f"{pattern_type} HITL graph edge source is unknown: {source}")
+
+            if edge.get("conditional"):
+                routes = edge.get("routes")
+                if not isinstance(routes, dict) or not routes:
+                    errors.append(f"{pattern_type} HITL graph conditional edge must define routes")
+                    continue
+                if source in hitl_gate_ids:
+                    conditional_gate_sources.add(str(source))
+                for route_name, route_target in routes.items():
+                    if not isinstance(route_name, str) or not isinstance(route_target, str):
+                        errors.append(f"{pattern_type} HITL graph route keys and values must be strings")
+                    elif route_target not in valid_targets:
+                        errors.append(f"{pattern_type} HITL graph route target is unknown: {route_target}")
+                    elif route_target in hitl_gate_ids:
+                        gate_incoming.add(route_target)
+                continue
+
+            target = edge.get("to")
+            if target not in valid_targets:
+                errors.append(f"{pattern_type} HITL graph edge target is unknown: {target}")
+            elif target in hitl_gate_ids:
+                gate_incoming.add(target)
+
+        missing_gate_edges = sorted(hitl_gate_ids - conditional_gate_sources)
+        if missing_gate_edges:
+            errors.append(f"{pattern_type} HITL gates missing conditional route edges: {', '.join(missing_gate_edges)}")
+        unreachable_gates = sorted(hitl_gate_ids - gate_incoming)
+        if unreachable_gates:
+            errors.append(f"{pattern_type} HITL gates are not reachable from the base graph: {', '.join(unreachable_gates)}")
         return errors
 
 

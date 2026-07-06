@@ -15,7 +15,7 @@ from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.router_runtime import handle_router_rag_chat
 from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result_metadata
 from app.agent_patterns.graph import build_planner_prompt, infer_required_plan_steps, normalize_execution_plan
-from app.agent_patterns.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace
+from app.agent_patterns.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace, build_runtime_trace_event
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.service import AgentRunService
@@ -283,7 +283,7 @@ class TestAgentRunMetrics:
         assert summary["reasoning_preview"].startswith("Reasoning detail.")
         assert len(summary["reasoning_preview"]) <= 1803
 
-    def test_build_debug_trace_bounds_preview_values_but_preserves_raw_events(self):
+    def test_build_debug_trace_bounds_preview_values_and_raw_events(self):
         long_text = "A" * 5000
         run = SimpleNamespace(
             id="run-size",
@@ -329,7 +329,74 @@ class TestAgentRunMetrics:
         ref = node_span["output"]["refs"]["document_matches"][0]
         assert len(ref["preview"]) <= 903
         assert len(ref["text"]) <= 903
-        assert node_span["raw"]["output_refs"]["document_matches"][0]["text"] == long_text
+        assert len(node_span["raw"]["output_refs"]["document_matches"][0]["text"]) <= 903
+
+    def test_debug_payload_redacts_sensitive_values_and_trims_oversized_payload(self, monkeypatch):
+        monkeypatch.setenv("ASKPDF_AGENT_DEBUG_TRACE_MAX_BYTES", "12000")
+        long_text = "secret-adjacent context " * 1000
+        run = SimpleNamespace(
+            id="run-redact",
+            thread_id="thread-1",
+            user_id="user-1",
+            template_id=ROUTER_RAG_AGENT_ID,
+            template_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
+            resolved_spec_json=builtin_router_rag_spec(),
+            status="completed",
+            started_at=utc_now(),
+            completed_at=utc_now(),
+        )
+
+        payload = build_debug_payload(
+            run=run,
+            chat_turn_id="turn-1",
+            node_events=[
+                {
+                    "node": "router",
+                    "status": "completed",
+                    "input_preview": {
+                        "question": long_text,
+                        "authorization": "Bearer should-not-survive",
+                    },
+                    "output_preview": {"answer": long_text, "api_key": "sk-should-not-survive"},
+                    "prompt_summary": {
+                        "section": "Router",
+                        "system_message": long_text,
+                        "preview": long_text,
+                    },
+                }
+            ],
+            tool_events=[
+                {
+                    "tool_name": "search_web",
+                    "caller_node": "router",
+                    "ok": True,
+                    "tool_input": {"query": "x", "access_token": "token-should-not-survive"},
+                    "result_preview": long_text,
+                    "artifact_summary": {"cookie": "cookie-should-not-survive", "text": long_text},
+                }
+            ],
+            metrics={"duration_ms": 1.0, "route": "web", "tool_warning_count": 0, "error_count": 0},
+            route="web",
+        )
+
+        encoded = json.dumps(payload, ensure_ascii=True, default=str)
+        assert len(encoded.encode("utf-8")) <= 12000
+        assert "should-not-survive" not in encoded
+        assert payload["summary"]["traceGuardrails"]["truncated"] is True
+
+    def test_runtime_trace_redaction_preserves_token_usage_counters(self):
+        event = build_runtime_trace_event(
+            "llm.completed",
+            attributes={
+                "access_token": "should-not-survive",
+                "token_usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+            },
+        )
+
+        encoded = json.dumps(event, ensure_ascii=True, default=str)
+        assert "should-not-survive" not in encoded
+        assert event["attributes"]["access_token"] == "[redacted]"
+        assert event["attributes"]["token_usage"] == {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 
     def test_build_debug_trace_v1_shape_for_direct_tool_plan_and_failed_runs(self):
         run = SimpleNamespace(
@@ -540,32 +607,33 @@ class TestRouterRagTemplateValidator:
 
         assert graph is not None
 
-    def test_materializes_generic_hitl_gate_overlay(self):
+    def test_materializes_generic_hitl_gate_overlay_for_action_node(self):
         spec = builtin_router_rag_spec()
         spec["config"]["hitl_policy"] = {
             "enabled": True,
             "gates": {
-                "review_before_web": {
+                "review_before_documents": {
                     "enabled": True,
                     "mode": "approval",
                     "phase": "before",
-                    "target": {"node_id": "web_worker"},
+                    "target": {"node_id": "retrieval_worker"},
                     "allowed_actions": ["approve", "continue_without"],
                     "default_action": "continue_without",
-                    "routes": {"approve": "web_worker", "continue_without": "synthesizer"},
+                    "routes": {"approve": "retrieval_worker", "continue_without": "synthesizer"},
                 }
             },
         }
 
         TemplateValidator().validate(spec)
         materialized = TemplateCompiler().materialize_spec(spec)
+        TemplateValidator().validate(materialized)
         graph_spec = materialized["config"]["graph"]
 
-        assert {"id": "review_before_web", "type": "hitl_gate"} in graph_spec["nodes"]
+        assert {"id": "review_before_documents", "type": "hitl_gate"} in graph_spec["nodes"]
         router_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "router")
-        assert router_edge["routes"]["web"] == "review_before_web"
-        gate_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "review_before_web")
-        assert gate_edge["routes"] == {"approve": "web_worker", "continue_without": "synthesizer"}
+        assert router_edge["routes"]["document"] == "review_before_documents"
+        gate_edge = next(edge for edge in graph_spec["edges"] if edge.get("from") == "review_before_documents")
+        assert gate_edge["routes"] == {"approve": "retrieval_worker", "continue_without": "synthesizer"}
 
     def test_materializes_multi_select_choice_gate_overlay(self):
         spec = builtin_plan_execute_rag_spec()
@@ -594,6 +662,7 @@ class TestRouterRagTemplateValidator:
 
         TemplateValidator().validate(spec)
         materialized = TemplateCompiler().materialize_spec(spec)
+        TemplateValidator().validate(materialized)
         graph_spec = materialized["config"]["graph"]
 
         assert {"id": "research_source_choice", "type": "hitl_gate"} in graph_spec["nodes"]
@@ -625,6 +694,7 @@ class TestRouterRagTemplateValidator:
             },
         }
         materialized = TemplateCompiler().materialize_spec(spec)
+        TemplateValidator().validate(materialized)
         config = materialized["config"]
         graph_spec = config["graph"]
 
@@ -2607,6 +2677,93 @@ class TestAgentRunService:
         assert "checkpoint.created" in root_event_names
         assert updated_run.debug_trace_json["trace"]["status"] == "awaiting_human"
         assert updated_run.debug_trace_json["summary"]["lastInterruptStatus"] == "pending"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_resume_submission_does_not_invoke_graph_twice(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        calls = []
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            run = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                template_version=version.version,
+                resolved_spec_json=builtin_router_rag_spec(),
+            )
+            debug_payload = build_debug_payload(
+                run=run,
+                node_events=[],
+                tool_events=[],
+                metrics={"duration_ms": 1.0, "tool_warning_count": 0, "error_count": 0},
+            )
+            await repo.mark_run_awaiting_human(
+                run.id,
+                {
+                    "interrupt_id": "duplicate-interrupt",
+                    "allowed_actions": ["approve", "reject"],
+                    "checkpoint_resume": True,
+                    "checkpoint_thread_id": run.checkpoint_thread_id,
+                    "resume_version": 1,
+                },
+                debug_trace_json=debug_payload,
+            )
+
+            async def fake_resume_compiled_rag_chat(run, *, interrupt, checkpointer, trace_recorder):
+                calls.append(interrupt["interrupt_id"])
+                trace_recorder.record_runtime_event(
+                    "graph.resumed",
+                    attributes={
+                        "askpdf.run.id": run.id,
+                        "askpdf.thread.id": run.thread_id,
+                        "askpdf.interrupt.id": interrupt.get("interrupt_id"),
+                        "askpdf.resume.action": "approve",
+                        "askpdf.checkpoint.thread_id": run.checkpoint_thread_id,
+                    },
+                )
+                return {
+                    "status": "completed",
+                    "duration_ms": 2.0,
+                    "route": "direct",
+                    "route_reason": "approved once",
+                    "node_events": [],
+                    "tool_events": [],
+                    "chat_turn_id": "turn-1",
+                }
+
+            monkeypatch.setattr("app.agent_patterns.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
+
+            service = AgentRunService(repository=repo)
+            first = await service.resume_agent_run(
+                run.id,
+                interrupt_id="duplicate-interrupt",
+                action="approve",
+                resume_version=1,
+                expected_thread_id=sample_thread.id,
+            )
+            second = await service.resume_agent_run(
+                run.id,
+                interrupt_id="duplicate-interrupt",
+                action="approve",
+                resume_version=1,
+                expected_thread_id=sample_thread.id,
+            )
+            updated_run = await repo.get_run(run.id)
+
+        assert first is not None
+        assert first.duplicate is False
+        assert second is not None
+        assert second.duplicate is True
+        assert calls == ["duplicate-interrupt"]
+        assert updated_run.status == "completed"
+        assert updated_run.metrics_json["interrupt_resolution_count"] == 1
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_persists_failed_run_metrics(self, engine, sample_thread, monkeypatch):
