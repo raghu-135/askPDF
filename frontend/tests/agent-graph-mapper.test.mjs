@@ -65,6 +65,40 @@ test('plan execute graph marks planner plan and skipped workers', () => {
   assert.equal(executeEdge?.selected, true);
 });
 
+test('evaluator replanner graph marks evaluator branch and replan plan', () => {
+  const graph = buildAgentGraph(
+    getAgentGraphSpec({ pattern_type: 'evaluator_replanner_rag_agent' }),
+    {
+      route: 'execute',
+      nodeRows: [
+        { node: 'planner', elapsed_ms: 4, route: 'execute', execution_plan: ['retrieval_worker'] },
+        { node: 'retrieval_worker', elapsed_ms: 8 },
+        { node: 'memory_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
+        { node: 'timeline_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
+        { node: 'web_worker', elapsed_ms: 1, skipped: true, skip_reason: 'web_search_disabled' },
+        {
+          node: 'evidence_evaluator',
+          elapsed_ms: 5,
+          evaluator_route: 'replan',
+          evaluator_report: { sufficient: false, confidence: 0.3 },
+        },
+        { node: 'replanner', elapsed_ms: 4, execution_plan: ['timeline_worker'] },
+      ],
+      toolRows: [],
+    },
+  );
+
+  const evaluator = graph.nodes.find((node) => node.id === 'evidence_evaluator');
+  const replanner = graph.nodes.find((node) => node.id === 'replanner');
+  const replanEdge = graph.edges.find((edge) => edge.source === 'evidence_evaluator' && edge.route === 'replan');
+
+  assert.equal(evaluator?.label, 'Evidence Evaluator');
+  assert.equal(evaluator?.status, 'active');
+  assert.equal(replanner?.status, 'active');
+  assert.deepEqual(replanner?.executionPlan, ['timeline_worker']);
+  assert.equal(replanEdge?.selected, true);
+});
+
 test('graph mapper accepts trace-native graph rows', () => {
   const graph = buildAgentGraph(
     getAgentGraphSpec({ pattern_type: 'router_rag_agent' }),

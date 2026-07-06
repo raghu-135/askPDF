@@ -288,6 +288,33 @@ async def handle_plan_execute_rag_chat(
     )
 
 
+async def handle_evaluator_replanner_rag_chat(
+    thread_id: str,
+    req: Any,
+    embed_model: str,
+    *,
+    resolved_spec: Dict[str, Any],
+    agent_run_context: Dict[str, Any],
+    trace_recorder: Any,
+    checkpointer: Any = None,
+) -> Dict[str, Any]:
+    """Execute the compiled Evaluator/Replanner RAG graph and persist a chat turn."""
+    return await _handle_compiled_rag_chat(
+        thread_id,
+        req,
+        embed_model,
+        resolved_spec=resolved_spec,
+        agent_run_context=agent_run_context,
+        trace_recorder=trace_recorder,
+        checkpointer=checkpointer,
+        runtime_label="Evaluator/Replanner RAG",
+        failure_code="evaluator_replanner_rag_execution_failed",
+        failure_reason_prefix="Exception during Evaluator/Replanner RAG execution",
+        success_context="Context retrieved by compiled Evaluator/Replanner RAG Agent pattern.",
+        failure_context="Compiled Evaluator/Replanner RAG Agent execution failed gracefully.",
+    )
+
+
 async def _handle_compiled_rag_chat(
     thread_id: str,
     req: Any,
@@ -320,6 +347,10 @@ async def _handle_compiled_rag_chat(
     allowed_tool_ids = pattern_config.get("allowed_tool_ids")
     allowed_tool_ids = allowed_tool_ids if isinstance(allowed_tool_ids, list) else []
     hitl_policy = pattern_config.get("hitl_policy") if isinstance(pattern_config.get("hitl_policy"), dict) else {}
+    try:
+        max_replans = max(0, int(pattern_config.get("max_replans", 1)))
+    except (TypeError, ValueError):
+        max_replans = 1
     checkpoint_thread_id = str(agent_run_context.get("checkpoint_thread_id") or agent_run_id or thread_id)
 
     started = time.perf_counter()
@@ -353,6 +384,9 @@ async def _handle_compiled_rag_chat(
         "custom_instructions": custom_instructions,
         "allowed_tool_ids": allowed_tool_ids,
         "hitl_policy": hitl_policy,
+        "max_replans": max_replans,
+        "replan_count": 0,
+        "replan_history": [],
         "client_timezone": getattr(req, "client_timezone", None),
         "client_locale": getattr(req, "client_locale", None),
         "client_now_iso": getattr(req, "client_now_iso", None),

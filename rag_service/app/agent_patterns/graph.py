@@ -21,7 +21,13 @@ from app.models.retry import invoke_with_retry
 from app.agent.external_research_tools import search_web
 from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
 from app.rag.chat_service import prefetch_context
-from app.agent_patterns.prompting import build_final_answer_messages, build_planner_prompt, build_router_prompt
+from app.agent_patterns.prompting import (
+    build_evaluator_prompt,
+    build_final_answer_messages,
+    build_planner_prompt,
+    build_replanner_prompt,
+    build_router_prompt,
+)
 from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES, WEB_APPROVAL_GATE_ID
 from app.agent_patterns.trace import (
     available_document_refs,
@@ -111,6 +117,14 @@ class RouterRagState(TypedDict, total=False):
     allowed_tool_ids: List[str]
     pattern_type: str
     execution_plan: List[str]
+    max_replans: int
+    replan_count: int
+    replan_reason: str
+    replan_history: List[Dict[str, Any]]
+    evaluator_report: Dict[str, Any]
+    evidence_gaps: List[str]
+    evaluation_confidence: float
+    evaluator_route: str
 
 
 def _append_event(
@@ -658,6 +672,95 @@ def normalize_execution_plan(
     }
 
 
+def _risk_level(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in {"low", "medium", "high"} else "medium"
+
+
+def _bounded_string_list(value: Any, *, limit: int = 5, chars: int = 240) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    result: List[str] = []
+    for item in value[:limit]:
+        text = compact_preview(str(item), limit=chars)
+        if text:
+            result.append(text)
+    return result
+
+
+def _bounded_confidence(value: Any) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _replan_budget(state: RouterRagState) -> int:
+    try:
+        return max(0, int(state.get("max_replans", 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _current_replan_count(state: RouterRagState) -> int:
+    try:
+        return max(0, int(state.get("replan_count", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_evaluator_report(parsed: Dict[str, Any], state: RouterRagState) -> Dict[str, Any]:
+    sufficient = parsed.get("sufficient")
+    if not isinstance(sufficient, bool):
+        sufficient = bool(state.get("evidence")) and bool(state.get("document_sources") or state.get("web_sources") or state.get("used_chat_ids"))
+    confidence = _bounded_confidence(parsed.get("confidence"))
+    missing_evidence = _bounded_string_list(parsed.get("missing_evidence"))
+    recommended_next_steps = _bounded_string_list(parsed.get("recommended_next_steps"))
+    report = {
+        "sufficient": sufficient,
+        "confidence": confidence,
+        "missing_evidence": missing_evidence,
+        "citation_risk": _risk_level(parsed.get("citation_risk")),
+        "contradiction_risk": _risk_level(parsed.get("contradiction_risk")),
+        "recommended_next_steps": recommended_next_steps,
+        "reason": compact_preview(str(parsed.get("reason") or ""), limit=500),
+    }
+    return report
+
+
+def _normalize_replanner_execution_plan(
+    parsed: Dict[str, Any],
+    *,
+    use_web_search: bool,
+    allowed_tool_ids: Any,
+) -> Dict[str, Any]:
+    normalization_notes: List[str] = []
+    raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
+    steps: List[str] = []
+    if isinstance(raw_steps, list):
+        for step in raw_steps:
+            if isinstance(step, str):
+                node = step
+            elif isinstance(step, dict):
+                node = step.get("node") or step.get("worker") or step.get("id")
+            else:
+                continue
+            if node in PLAN_EXECUTE_WORKER_NODES and node not in steps:
+                steps.append(node)
+    if not use_web_search and "web_worker" in steps:
+        steps = [step for step in steps if step != "web_worker"]
+        normalization_notes.append("web_worker_removed_when_web_search_disabled")
+    allowed_ids = set(allowed_tool_ids if isinstance(allowed_tool_ids, list) else [])
+    if "live_web_recon" not in allowed_ids and "web_worker" in steps:
+        steps = [step for step in steps if step != "web_worker"]
+        normalization_notes.append("web_worker_removed_when_tool_disallowed")
+    return {
+        "execution_plan": _ordered_plan_steps(steps),
+        "reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),
+        "normalization_notes": normalization_notes,
+    }
+
+
 class NodeRegistry:
     """Registry of safe backend node implementations for compiled v2 patterns."""
 
@@ -670,6 +773,8 @@ class NodeRegistry:
             "memory_worker": self.memory_worker,
             "timeline_worker": self.timeline_worker,
             "web_worker": self.web_worker,
+            "evidence_evaluator": self.evidence_evaluator,
+            "replanner": self.replanner,
             "direct_answer": self.direct_answer,
             "synthesizer": self.synthesizer,
             "finalizer": self.finalizer,
@@ -1096,6 +1201,200 @@ class NodeRegistry:
             "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
         }
 
+    async def evidence_evaluator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        started = time.perf_counter()
+        llm = get_llm(state["llm_model"])
+        prompt = build_evaluator_prompt(state)
+        retry_attempts, retry_observer = _llm_retry_observer()
+        prompt_details = prompt_summary(
+            "Evidence Evaluator Prompt",
+            "You are a strict evidence evaluator for a bounded RAG workflow.",
+            prompt,
+        )
+        response = await _invoke_llm_for_node(
+            llm.ainvoke,
+            [
+                SystemMessage(content="You are a strict evidence evaluator for a bounded RAG workflow."),
+                HumanMessage(content=prompt),
+            ],
+            state=state,
+            config=config,
+            node="evidence_evaluator",
+            started=started,
+            retry_observer=retry_observer,
+            retry_attempts=retry_attempts,
+            model_name=state.get("llm_model"),
+            failure_data={
+                "input_refs": _state_evidence_refs(state),
+                "input_preview": {
+                    "question": compact_preview(state.get("question")),
+                    "execution_plan": state.get("execution_plan"),
+                    "evidence": compact_preview(state.get("evidence")),
+                },
+                "prompt_summary": prompt_details,
+            },
+        )
+        parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
+        report = normalize_evaluator_report(parsed, state)
+        replan_count = _current_replan_count(state)
+        max_replans = _replan_budget(state)
+        if report["sufficient"]:
+            next_route = "answer"
+            event_name = "evaluation.completed"
+        elif replan_count < max_replans:
+            next_route = "replan"
+            event_name = "replan.requested"
+        else:
+            next_route = "answer_budget_exhausted"
+            event_name = "replan.budget_exhausted"
+
+        evidence_update = state.get("evidence")
+        if next_route == "answer_budget_exhausted":
+            gaps = "; ".join(report.get("missing_evidence") or []) or "The evaluator found unresolved evidence gaps."
+            evidence_update = _combine_evidence(
+                state.get("evidence"),
+                (
+                    "The evidence evaluator found insufficient evidence, and the replan budget is exhausted. "
+                    f"Answer only from available context and explicitly state unresolved gaps: {gaps}"
+                ),
+                label="Evaluator warning",
+            )
+
+        data = {
+            "status": "completed",
+            "route": state.get("route"),
+            "route_reason": state.get("route_reason"),
+            "evaluator_route": next_route,
+            "evaluator_report": report,
+            "evaluation_confidence": report["confidence"],
+            "evidence_gaps": report["missing_evidence"],
+            "replan_count": replan_count,
+            "max_replans": max_replans,
+            "event_name": event_name,
+            "input_refs": _state_evidence_refs(state),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "execution_plan": state.get("execution_plan"),
+                "evidence": compact_preview(state.get("evidence")),
+            },
+            "prompt_summary": prompt_details,
+            "llm_result_summary": {
+                "parsed": bool(parsed),
+                "evaluator_route": next_route,
+                "evaluator_report": report,
+                "llm": _llm_result_metadata(
+                    response,
+                    model_name=state.get("llm_model"),
+                    retry_attempts=retry_attempts,
+                ),
+            },
+            "output_refs": _state_evidence_refs({**state, "evidence": evidence_update}),
+            "output_preview": {
+                "evaluator_route": next_route,
+                "evaluator_report": report,
+            },
+        }
+        _log_node_end(state, "evidence_evaluator", started, data)
+        return {
+            "evaluator_route": next_route,
+            "evaluator_report": report,
+            "evidence_gaps": report["missing_evidence"],
+            "evaluation_confidence": report["confidence"],
+            "evidence": evidence_update,
+            "node_events": _append_event(state, "evidence_evaluator", data, started=started, config=config),
+        }
+
+    async def replanner(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        started = time.perf_counter()
+        llm = get_llm(state["llm_model"])
+        prompt = build_replanner_prompt(state)
+        retry_attempts, retry_observer = _llm_retry_observer()
+        prompt_details = prompt_summary(
+            "Replanner Prompt",
+            "You are a strict replanner for a bounded RAG workflow.",
+            prompt,
+        )
+        response = await _invoke_llm_for_node(
+            llm.ainvoke,
+            [
+                SystemMessage(content="You are a strict replanner for a bounded RAG workflow."),
+                HumanMessage(content=prompt),
+            ],
+            state=state,
+            config=config,
+            node="replanner",
+            started=started,
+            retry_observer=retry_observer,
+            retry_attempts=retry_attempts,
+            model_name=state.get("llm_model"),
+            failure_data={
+                "input_refs": _state_evidence_refs(state),
+                "input_preview": {
+                    "question": compact_preview(state.get("question")),
+                    "current_execution_plan": state.get("execution_plan"),
+                    "evaluator_report": state.get("evaluator_report"),
+                },
+                "prompt_summary": prompt_details,
+            },
+        )
+        parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
+        normalized = _normalize_replanner_execution_plan(
+            parsed,
+            use_web_search=bool(state.get("use_web_search", False)),
+            allowed_tool_ids=state.get("allowed_tool_ids"),
+        )
+        replan_count = _current_replan_count(state) + 1
+        history_item = {
+            "replan_count": replan_count,
+            "reason": compact_preview(normalized["reason"], limit=500),
+            "execution_plan": normalized["execution_plan"],
+            "evaluator_report": state.get("evaluator_report") or {},
+        }
+        replan_history = [
+            *(state.get("replan_history") if isinstance(state.get("replan_history"), list) else []),
+            history_item,
+        ][-5:]
+        data = {
+            "status": "completed",
+            "route": state.get("route"),
+            "route_reason": state.get("route_reason"),
+            "execution_plan": normalized["execution_plan"],
+            "replan_count": replan_count,
+            "replan_reason": normalized["reason"],
+            "event_name": "replan.requested" if normalized["execution_plan"] else "replan.skipped",
+            "input_refs": _state_evidence_refs(state),
+            "input_preview": {
+                "question": compact_preview(state.get("question")),
+                "current_execution_plan": state.get("execution_plan"),
+                "evaluator_report": state.get("evaluator_report"),
+            },
+            "prompt_summary": prompt_details,
+            "llm_result_summary": {
+                "parsed": bool(parsed),
+                "execution_plan": normalized["execution_plan"],
+                "normalization_notes": normalized.get("normalization_notes") or [],
+                "llm": _llm_result_metadata(
+                    response,
+                    model_name=state.get("llm_model"),
+                    retry_attempts=retry_attempts,
+                ),
+            },
+            "output_refs": _state_evidence_refs(state),
+            "output_preview": {
+                "execution_plan": normalized["execution_plan"],
+                "replan_count": replan_count,
+                "replan_reason": compact_preview(normalized["reason"]),
+            },
+        }
+        _log_node_end(state, "replanner", started, data)
+        return {
+            "execution_plan": normalized["execution_plan"],
+            "replan_count": replan_count,
+            "replan_reason": normalized["reason"],
+            "replan_history": replan_history,
+            "node_events": _append_event(state, "replanner", data, started=started, config=config),
+        }
+
     async def direct_answer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         return await self._answer_from_context(state, config, node_name="direct_answer")
 
@@ -1107,6 +1406,12 @@ class NodeRegistry:
         llm = get_llm(state["llm_model"])
         context = state.get("evidence") or _format_prefetch_summary(state.get("pre_fetch_bundle") or {})
         context_source = "worker_evidence" if state.get("evidence") else "prefetch"
+        if state.get("evaluator_report"):
+            context = _combine_evidence(
+                context,
+                json.dumps(state.get("evaluator_report") or {}, ensure_ascii=True, sort_keys=True),
+                label="Evaluator report",
+            )
         messages = build_final_answer_messages(state, context)
         retry_attempts, retry_observer = _llm_retry_observer()
         prompt_details = prompt_summary(
@@ -1395,6 +1700,11 @@ def planner_route(state: RouterRagState) -> str:
     return route if route in {"execute", "direct", "clarify"} else "execute"
 
 
+def evaluator_route(state: RouterRagState) -> str:
+    route = state.get("evaluator_route")
+    return route if route in {"answer", "replan", "answer_budget_exhausted"} else "answer"
+
+
 def hitl_gate_route(state: RouterRagState) -> str:
     route = state.get("hitl_gate_route")
     return route if route in {"approve", "continue_without"} else "continue_without"
@@ -1440,6 +1750,8 @@ class TemplateCompiler:
             if edge.get("conditional"):
                 if source == "planner":
                     route_fn = planner_route
+                elif source == "evidence_evaluator":
+                    route_fn = evaluator_route
                 elif node_types.get(source) == "hitl_gate":
                     route_fn = hitl_gate_route_for(str(source))
                 else:

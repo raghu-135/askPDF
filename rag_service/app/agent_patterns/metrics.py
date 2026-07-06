@@ -28,11 +28,19 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
     errors = _dict_events(result.get("errors"))
 
     node_elapsed_ms: Dict[str, float] = {}
+    replan_count = 0
+    evaluation_confidence = None
     for event in node_events:
         node = event.get("node") or event.get("name")
         if not isinstance(node, str) or not node:
             continue
         node_elapsed_ms[node] = round(node_elapsed_ms.get(node, 0.0) + _elapsed_ms(event), 2)
+        try:
+            replan_count = max(replan_count, int(event.get("replan_count") or 0))
+        except (TypeError, ValueError):
+            pass
+        if event.get("evaluation_confidence") is not None:
+            evaluation_confidence = event.get("evaluation_confidence")
 
     return {
         "duration_ms": round(float(duration_ms), 2),
@@ -49,4 +57,6 @@ def build_run_metrics(result: Mapping[str, Any], *, duration_ms: float) -> Dict[
         "web_source_count": len(result.get("web_sources") or []),
         "used_chat_id_count": len(result.get("used_chat_ids") or []),
         "clarification": bool(result.get("clarification_options")),
+        "replan_count": replan_count,
+        "evaluation_confidence": evaluation_confidence,
     }

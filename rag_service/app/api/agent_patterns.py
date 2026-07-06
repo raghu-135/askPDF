@@ -11,6 +11,9 @@ from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterr
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
+    EVALUATOR_REPLANNER_RAG_AGENT_ID,
+    EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS,
+    EVALUATOR_REPLANNER_RAG_REQUIRED_TOOL_IDS,
     PLAN_EXECUTE_RAG_AGENT_ID,
     PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
     PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS,
@@ -151,6 +154,8 @@ def _run_summary_payload(run) -> Dict[str, Any]:
             "tool_warning_count": metrics.get("tool_warning_count", 0),
             "tool_error_count": metrics.get("tool_error_count", 0),
             "error_count": metrics.get("error_count", 0),
+            "replan_count": metrics.get("replan_count", 0),
+            "evaluation_confidence": metrics.get("evaluation_confidence"),
         },
         "error": {
             "code": error.get("code"),
@@ -161,6 +166,11 @@ def _run_summary_payload(run) -> Dict[str, Any]:
 
 
 def _capabilities_for_pattern(template_id: str) -> Dict[str, Any]:
+    if template_id == EVALUATOR_REPLANNER_RAG_AGENT_ID:
+        return {
+            "required_tool_ids": sorted(EVALUATOR_REPLANNER_RAG_REQUIRED_TOOL_IDS),
+            "node_tool_requirements": dict(sorted(EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS.items())),
+        }
     if template_id == PLAN_EXECUTE_RAG_AGENT_ID:
         return {
             "required_tool_ids": sorted(PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS),

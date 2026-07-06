@@ -10,7 +10,16 @@ ROUTER_RAG_AGENT_VERSION_ID = f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_VERSION
 PLAN_EXECUTE_RAG_AGENT_ID = "plan_execute_rag_agent"
 PLAN_EXECUTE_RAG_AGENT_VERSION = 1
 PLAN_EXECUTE_RAG_AGENT_VERSION_ID = f"{PLAN_EXECUTE_RAG_AGENT_ID}:v{PLAN_EXECUTE_RAG_AGENT_VERSION}"
-SUPPORTED_BUILTIN_TEMPLATE_IDS = {ROUTER_RAG_AGENT_ID, PLAN_EXECUTE_RAG_AGENT_ID}
+EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
+EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 1
+EVALUATOR_REPLANNER_RAG_AGENT_VERSION_ID = (
+    f"{EVALUATOR_REPLANNER_RAG_AGENT_ID}:v{EVALUATOR_REPLANNER_RAG_AGENT_VERSION}"
+)
+SUPPORTED_BUILTIN_TEMPLATE_IDS = {
+    ROUTER_RAG_AGENT_ID,
+    PLAN_EXECUTE_RAG_AGENT_ID,
+    EVALUATOR_REPLANNER_RAG_AGENT_ID,
+}
 WEB_APPROVAL_GATE_ID = "web_approval_gate"
 
 ROUTER_RAG_REQUIRED_TOOL_IDS = {
@@ -41,6 +50,14 @@ PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS = {
     "finalizer": "clarify_intent",
 }
 
+EVALUATOR_REPLANNER_RAG_REQUIRED_TOOL_IDS = set(PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS)
+
+EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS = {
+    **PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
+    "evidence_evaluator": "clarify_intent",
+    "replanner": "clarify_intent",
+}
+
 PLAN_EXECUTE_WORKER_NODES = [
     "retrieval_worker",
     "memory_worker",
@@ -59,6 +76,7 @@ ALLOWED_ROUTER_RAG_CONFIG_KEYS = {
     "allowed_tool_ids",
     "prefetch_policy",
     "hitl_policy",
+    "max_replans",
     "graph",
 }
 
@@ -212,6 +230,80 @@ BUILTIN_PLAN_EXECUTE_RAG_SPEC: Dict[str, Any] = {
 }
 
 
+BUILTIN_EVALUATOR_REPLANNER_RAG_SPEC: Dict[str, Any] = {
+    "schema_version": 1,
+    "pattern_type": EVALUATOR_REPLANNER_RAG_AGENT_ID,
+    "config": {
+        "use_web_search": False,
+        "use_reranker": True,
+        "max_iterations": 1,
+        "max_replans": 1,
+        "system_role": "",
+        "tool_instructions": {},
+        "custom_instructions": "",
+        "allowed_tool_ids": [
+            "document_evidence",
+            "deep_memory",
+            "thread_timeline",
+            "live_web_recon",
+            "clarify_intent",
+        ],
+        "prefetch_policy": {
+            "enabled": True,
+        },
+        "hitl_policy": {
+            "enabled": False,
+            "gates": {},
+        },
+        "graph": {
+            "nodes": [
+                {"id": "context_loader", "type": "context_loader"},
+                {"id": "planner", "type": "planner"},
+                {"id": "direct_answer", "type": "direct_answer"},
+                {"id": "retrieval_worker", "type": "retrieval_worker"},
+                {"id": "memory_worker", "type": "memory_worker"},
+                {"id": "timeline_worker", "type": "timeline_worker"},
+                {"id": "web_worker", "type": "web_worker"},
+                {"id": "evidence_evaluator", "type": "evidence_evaluator"},
+                {"id": "replanner", "type": "replanner"},
+                {"id": "synthesizer", "type": "synthesizer"},
+                {"id": "finalizer", "type": "finalizer"},
+            ],
+            "edges": [
+                {"from": "START", "to": "context_loader"},
+                {"from": "context_loader", "to": "planner"},
+                {
+                    "from": "planner",
+                    "conditional": True,
+                    "routes": {
+                        "execute": "retrieval_worker",
+                        "direct": "direct_answer",
+                        "clarify": "finalizer",
+                    },
+                },
+                {"from": "direct_answer", "to": "finalizer"},
+                {"from": "retrieval_worker", "to": "memory_worker"},
+                {"from": "memory_worker", "to": "timeline_worker"},
+                {"from": "timeline_worker", "to": "web_worker"},
+                {"from": "web_worker", "to": "evidence_evaluator"},
+                {
+                    "from": "evidence_evaluator",
+                    "conditional": True,
+                    "routes": {
+                        "answer": "synthesizer",
+                        "replan": "replanner",
+                        "answer_budget_exhausted": "synthesizer",
+                    },
+                },
+                {"from": "replanner", "to": "retrieval_worker"},
+                {"from": "synthesizer", "to": "finalizer"},
+                {"from": "finalizer", "to": "END"},
+            ],
+        },
+    },
+}
+
+
 def builtin_router_rag_spec() -> Dict[str, Any]:
     return deepcopy(BUILTIN_ROUTER_RAG_SPEC)
 
@@ -222,6 +314,10 @@ def builtin_router_rag_hitl_web_spec() -> Dict[str, Any]:
 
 def builtin_plan_execute_rag_spec() -> Dict[str, Any]:
     return deepcopy(BUILTIN_PLAN_EXECUTE_RAG_SPEC)
+
+
+def builtin_evaluator_replanner_rag_spec() -> Dict[str, Any]:
+    return deepcopy(BUILTIN_EVALUATOR_REPLANNER_RAG_SPEC)
 
 
 def builtin_templates() -> list[Dict[str, Any]]:
@@ -254,6 +350,21 @@ def builtin_templates() -> list[Dict[str, Any]]:
                 "schema_version": 1,
                 "spec_json": builtin_plan_execute_rag_spec(),
                 "changelog": "Initial scoped Plan-and-Execute RAG Agent pattern.",
+            },
+        },
+        {
+            "id": EVALUATOR_REPLANNER_RAG_AGENT_ID,
+            "name": "Evaluator/Replanner RAG Agent",
+            "description": "A bounded compiled RAG pattern that plans retrieval, evaluates evidence sufficiency, optionally replans once, then synthesizes a final response.",
+            "visibility": "builtin",
+            "is_builtin": True,
+            "current_version_id": EVALUATOR_REPLANNER_RAG_AGENT_VERSION_ID,
+            "version": {
+                "id": EVALUATOR_REPLANNER_RAG_AGENT_VERSION_ID,
+                "version": EVALUATOR_REPLANNER_RAG_AGENT_VERSION,
+                "schema_version": 1,
+                "spec_json": builtin_evaluator_replanner_rag_spec(),
+                "changelog": "Initial bounded Evaluator/Replanner RAG Agent pattern.",
             },
         },
     ]

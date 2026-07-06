@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional
 
 from app.agent.prompting import (
@@ -24,6 +25,7 @@ GRAPH_TOOL_NAMES = [
 QUESTION_PLACEHOLDER = "{{QUESTION}}"
 PREFETCH_PLACEHOLDER = "{{PREFETCH_CONTEXT}}"
 CONTEXT_PLACEHOLDER = "{{EVIDENCE_CONTEXT}}"
+EVALUATOR_REPORT_PLACEHOLDER = "{{EVALUATOR_REPORT}}"
 
 
 class _SafeFormatDict(dict):
@@ -117,6 +119,40 @@ def build_planner_prompt(state: Dict[str, Any]) -> str:
     return _render_prompt("agent_patterns/plan_execute_planner.md", _prompt_context(state))
 
 
+def _json_preview(value: Any, *, limit: int = 4000) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
+    except Exception:
+        text = str(value or "")
+    return text[:limit]
+
+
+def _evaluator_prompt_context(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        **_prompt_context(state),
+        "EVIDENCE_CONTEXT": str(state.get("evidence") or "")[:8000] or CONTEXT_PLACEHOLDER,
+        "EXECUTION_PLAN": _json_preview(state.get("execution_plan") or []),
+        "DOCUMENT_SOURCE_COUNT": len(state.get("document_sources") or []),
+        "WEB_SOURCE_COUNT": len(state.get("web_sources") or []),
+        "USED_CHAT_ID_COUNT": len(state.get("used_chat_ids") or []),
+        "REPLAN_COUNT": state.get("replan_count", 0),
+        "MAX_REPLANS": state.get("max_replans", 1),
+    }
+
+
+def build_evaluator_prompt(state: Dict[str, Any]) -> str:
+    return _render_prompt("agent_patterns/evaluator_replanner_evaluator.md", _evaluator_prompt_context(state))
+
+
+def build_replanner_prompt(state: Dict[str, Any]) -> str:
+    values = {
+        **_evaluator_prompt_context(state),
+        "EVALUATOR_REPORT": _json_preview(state.get("evaluator_report") or {}, limit=5000)
+        or EVALUATOR_REPORT_PLACEHOLDER,
+    }
+    return _render_prompt("agent_patterns/evaluator_replanner_replanner.md", values)
+
+
 def build_final_answer_messages(state: Dict[str, Any], context: str) -> Dict[str, str]:
     system_role = sanitize_system_role(state.get("system_role", ""))
     custom_instructions = sanitize_custom_instructions(state.get("custom_instructions", ""))
@@ -169,7 +205,29 @@ def build_agent_pattern_prompt_preview(
     }
     final_messages = build_final_answer_messages(state, CONTEXT_PLACEHOLDER)
     sections: List[str] = []
-    if pattern_id == "plan_execute_rag_agent":
+    if pattern_id == "evaluator_replanner_rag_agent":
+        sections.append(
+            "# Planner Node Prompt\n\n"
+            "This is the system + human prompt for the planner LLM call. It decides route and initial worker inclusion only.\n\n"
+            "## System Message\n\nYou are a strict planner for a scoped RAG workflow.\n\n"
+            "## Human Message\n\n"
+            + build_planner_prompt(state)
+        )
+        sections.append(
+            "# Evidence Evaluator Prompt\n\n"
+            "This is the system + human prompt for the evidence evaluator LLM call. It decides whether evidence is sufficient or one bounded replan is needed.\n\n"
+            "## System Message\n\nYou are a strict evidence evaluator for a bounded RAG workflow.\n\n"
+            "## Human Message\n\n"
+            + build_evaluator_prompt(state)
+        )
+        sections.append(
+            "# Replanner Prompt\n\n"
+            "This is the system + human prompt for the replanner LLM call. It revises worker inclusion under the remaining replan budget.\n\n"
+            "## System Message\n\nYou are a strict replanner for a bounded RAG workflow.\n\n"
+            "## Human Message\n\n"
+            + build_replanner_prompt(state)
+        )
+    elif pattern_id == "plan_execute_rag_agent":
         sections.append(
             "# Planner Node Prompt\n\n"
             "This is the system + human prompt for the planner LLM call. It decides route and worker inclusion only.\n\n"

@@ -190,7 +190,7 @@ def _otel_status(status: str) -> Status:
 
 
 def _node_kind(node: str) -> str:
-    if node in {"router", "planner"}:
+    if node in {"router", "planner", "evidence_evaluator", "replanner"}:
         return OpenInferenceSpanKindValues.AGENT.value
     if node in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker"}:
         return OpenInferenceSpanKindValues.RETRIEVER.value
@@ -202,6 +202,8 @@ def _node_display_name(node: str) -> str:
         "context_loader": "Context Loader",
         "router": "Router",
         "planner": "Planner",
+        "evidence_evaluator": "Evidence Evaluator",
+        "replanner": "Replanner",
         "retrieval_worker": "Document Retrieval",
         "memory_worker": "Memory Retrieval",
         "timeline_worker": "Timeline Retrieval",
@@ -359,6 +361,54 @@ def _decision_events(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
             {
                 "name": "normalization.applied",
                 "attributes": {"askpdf.normalization.note": str(note)},
+            }
+        )
+    if event.get("evaluator_report"):
+        result.append(
+            {
+                "name": "evaluation.completed",
+                "attributes": _clean_dict(
+                    {
+                        "askpdf.evaluator_route": event.get("evaluator_route"),
+                        "askpdf.evaluation_confidence": event.get("evaluation_confidence"),
+                        "askpdf.replan_count": event.get("replan_count"),
+                        "askpdf.max_replans": event.get("max_replans"),
+                    }
+                ),
+                "output": _clean_dict(
+                    {
+                        "evaluator_report": _bounded_value(event.get("evaluator_report")),
+                        "evidence_gaps": _bounded_value(event.get("evidence_gaps")),
+                    }
+                ),
+            }
+        )
+    event_name = event.get("event_name")
+    if isinstance(event_name, str) and event_name in {
+        "evaluation.completed",
+        "replan.requested",
+        "replan.skipped",
+        "replan.budget_exhausted",
+    } and not (event_name == "evaluation.completed" and event.get("evaluator_report")):
+        result.append(
+            {
+                "name": event_name,
+                "attributes": _clean_dict(
+                    {
+                        "askpdf.evaluator_route": event.get("evaluator_route"),
+                        "askpdf.evaluation_confidence": event.get("evaluation_confidence"),
+                        "askpdf.replan_count": event.get("replan_count"),
+                        "askpdf.max_replans": event.get("max_replans"),
+                        "askpdf.replan_reason": event.get("replan_reason"),
+                    }
+                ),
+                "output": _clean_dict(
+                    {
+                        "evaluator_report": _bounded_value(event.get("evaluator_report")),
+                        "evidence_gaps": _bounded_value(event.get("evidence_gaps")),
+                        "execution_plan": _bounded_value(event.get("execution_plan")),
+                    }
+                ),
             }
         )
     return result
@@ -966,6 +1016,10 @@ class AgentTraceRecorder:
                 "askpdf.node.name": _node_display_name(node),
                 "askpdf.route": event.get("route"),
                 "askpdf.route_reason": event.get("route_reason"),
+                "askpdf.evaluator_route": event.get("evaluator_route"),
+                "askpdf.evaluation_confidence": event.get("evaluation_confidence"),
+                "askpdf.replan_count": event.get("replan_count"),
+                "askpdf.max_replans": event.get("max_replans"),
                 "askpdf.skip_reason": event.get("skip_reason"),
                 "askpdf.execution_plan": event.get("execution_plan"),
                 "askpdf.evidence_chars": event.get("evidence_chars"),
@@ -1315,6 +1369,9 @@ def _summary_node(span: Mapping[str, Any]) -> Dict[str, Any]:
         "durationMs": span.get("duration_ms"),
         "route": attributes.get("askpdf.route"),
         "routeReason": attributes.get("askpdf.route_reason"),
+        "evaluatorRoute": attributes.get("askpdf.evaluator_route"),
+        "evaluationConfidence": attributes.get("askpdf.evaluation_confidence"),
+        "replanCount": attributes.get("askpdf.replan_count"),
         "executionPlan": _as_string_list(attributes.get("askpdf.execution_plan")),
         "warningCodes": [str(warning) for warning in warnings if warning],
         "error": error,
@@ -1370,10 +1427,23 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
     if errors:
         error_count = max(error_count, len(errors))
     config = _as_dict(resolved_spec.get("config"))
+    evaluator_nodes = [node for node in nodes if node.get("id") == "evidence_evaluator"]
+    replanner_nodes = [node for node in nodes if node.get("id") == "replanner"]
+    last_evaluator = evaluator_nodes[-1] if evaluator_nodes else {}
+    last_evaluator_raw = _as_dict(last_evaluator.get("raw"))
+    replan_count = max(
+        [_first_number(node.get("replanCount"), _as_dict(node.get("raw")).get("replan_count")) for node in replanner_nodes + evaluator_nodes]
+        or [0]
+    )
     return {
         "status": trace.get("status"),
         "route": _as_dict(trace.get("attributes")).get("askpdf.route") or metrics.get("route"),
         "routeReason": _as_dict(trace.get("attributes")).get("askpdf.route_reason"),
+        "evaluatorRoute": last_evaluator.get("evaluatorRoute") or last_evaluator_raw.get("evaluator_route"),
+        "evaluationConfidence": last_evaluator.get("evaluationConfidence") or last_evaluator_raw.get("evaluation_confidence"),
+        "evaluatorReport": _bounded_value(last_evaluator_raw.get("evaluator_report")),
+        "evidenceGaps": _as_string_list(last_evaluator_raw.get("evidence_gaps")),
+        "replanCount": replan_count,
         "durationMs": trace.get("duration_ms"),
         "metrics": metrics,
         "nodes": nodes,
@@ -1479,9 +1549,12 @@ def build_debug_graph(
                 "elapsedMs": summary_node.get("durationMs"),
                 "route": summary_node.get("route"),
                 "routeReason": summary_node.get("routeReason"),
+                "evaluatorRoute": summary_node.get("evaluatorRoute"),
+                "evaluationConfidence": summary_node.get("evaluationConfidence"),
+                "replanCount": summary_node.get("replanCount"),
                 "skipped": bool(summary_node.get("skipped")),
                 "skipReason": raw.get("skip_reason"),
-                "executionPlan": execution_plan if node_id == "planner" else None,
+                "executionPlan": execution_plan if node_id in {"planner", "replanner"} else None,
                 "warnings": summary_node.get("warningCodes") or [],
                 "inputRefs": raw.get("input_refs"),
                 "outputRefs": raw.get("output_refs"),
@@ -1507,10 +1580,15 @@ def build_debug_graph(
         if source == "START" or edge.get("to") == "END":
             continue
         if edge.get("conditional") and isinstance(edge.get("routes"), dict):
+            source_node = nodes_by_id.get(str(source), {})
+            source_raw = _as_dict(_as_list(source_node.get("rawEvents"))[-1]) if _as_list(source_node.get("rawEvents")) else {}
             for route, target in edge["routes"].items():
                 if not isinstance(target, str):
                     continue
-                selected = selected_route == route
+                selected = selected_route == route or (
+                    source == "evidence_evaluator"
+                    and (source_node.get("evaluatorRoute") == route or source_raw.get("evaluator_route") == route)
+                )
                 edges.append(
                     {
                         "id": f"{source}-{route}-{target}",

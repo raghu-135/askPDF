@@ -12,6 +12,8 @@ const NODE_LABELS: Record<string, string> = {
   context_loader: 'Context Loader',
   router: 'Router',
   planner: 'Planner',
+  evidence_evaluator: 'Evidence Evaluator',
+  replanner: 'Replanner',
   retrieval_worker: 'Document Retrieval',
   memory_worker: 'Memory Retrieval',
   timeline_worker: 'Timeline Retrieval',
@@ -93,6 +95,51 @@ const BUILTIN_GRAPHS: Record<string, AgentPatternGraphSpec> = {
       { from: 'finalizer', to: 'END' },
     ],
   },
+  evaluator_replanner_rag_agent: {
+    nodes: [
+      { id: 'context_loader', type: 'context_loader' },
+      { id: 'planner', type: 'planner' },
+      { id: 'direct_answer', type: 'direct_answer' },
+      { id: 'retrieval_worker', type: 'retrieval_worker' },
+      { id: 'memory_worker', type: 'memory_worker' },
+      { id: 'timeline_worker', type: 'timeline_worker' },
+      { id: 'web_worker', type: 'web_worker' },
+      { id: 'evidence_evaluator', type: 'evidence_evaluator' },
+      { id: 'replanner', type: 'replanner' },
+      { id: 'synthesizer', type: 'synthesizer' },
+      { id: 'finalizer', type: 'finalizer' },
+    ],
+    edges: [
+      { from: 'START', to: 'context_loader' },
+      { from: 'context_loader', to: 'planner' },
+      {
+        from: 'planner',
+        conditional: true,
+        routes: {
+          execute: 'retrieval_worker',
+          direct: 'direct_answer',
+          clarify: 'finalizer',
+        },
+      },
+      { from: 'direct_answer', to: 'finalizer' },
+      { from: 'retrieval_worker', to: 'memory_worker' },
+      { from: 'memory_worker', to: 'timeline_worker' },
+      { from: 'timeline_worker', to: 'web_worker' },
+      { from: 'web_worker', to: 'evidence_evaluator' },
+      {
+        from: 'evidence_evaluator',
+        conditional: true,
+        routes: {
+          answer: 'synthesizer',
+          replan: 'replanner',
+          answer_budget_exhausted: 'synthesizer',
+        },
+      },
+      { from: 'replanner', to: 'retrieval_worker' },
+      { from: 'synthesizer', to: 'finalizer' },
+      { from: 'finalizer', to: 'END' },
+    ],
+  },
 };
 
 const asArray = (value: any): Record<string, any>[] => (
@@ -153,6 +200,20 @@ const hasActiveNode = (nodeId: string, nodesById: Map<string, AgentGraphNode>) =
   return status === 'active' || status === 'planned' || status === 'skipped' || status === 'error';
 };
 
+const selectedConditionalRoute = (
+  source: string,
+  route: string,
+  selectedRoute: any,
+  eventsByNode: Map<string, Record<string, any>[]>,
+) => {
+  if (selectedRoute === route) return true;
+  const sourceEvents = eventsByNode.get(source) || [];
+  if (source === 'evidence_evaluator') {
+    return sourceEvents.some((event) => event.evaluator_route === route || event.evaluatorRoute === route);
+  }
+  return false;
+};
+
 export const getAgentGraphSpec = (resolvedSpec?: Record<string, any>, templateId?: string): AgentPatternGraphSpec => {
   const graph = resolvedSpec?.config?.graph;
   if (graph && Array.isArray(graph.nodes) && Array.isArray(graph.edges)) return graph;
@@ -204,7 +265,7 @@ export const buildAgentGraph = (
         routeReason: typeof latestEvent.route_reason === 'string' ? latestEvent.route_reason : undefined,
         skipped: latestEvent.skipped === true,
         skipReason: typeof latestEvent.skip_reason === 'string' ? latestEvent.skip_reason : undefined,
-        executionPlan: node.id === 'planner' ? executionPlan : undefined,
+        executionPlan: node.id === 'planner' || node.id === 'replanner' ? executionPlan : undefined,
         warnings: rawEvents.flatMap((event) => (Array.isArray(event.warnings) ? event.warnings.map(String) : [])),
         inputRefs: latestEvent.input_refs && typeof latestEvent.input_refs === 'object' ? latestEvent.input_refs : undefined,
         outputRefs: latestEvent.output_refs && typeof latestEvent.output_refs === 'object' ? latestEvent.output_refs : undefined,
@@ -233,7 +294,7 @@ export const buildAgentGraph = (
     if (edge.conditional && edge.routes && typeof edge.routes === 'object') {
       Object.entries(edge.routes).forEach(([route, target]) => {
         if (typeof target !== 'string') return;
-        const selected = selectedRoute === route;
+        const selected = selectedConditionalRoute(edge.from, route, selectedRoute, eventsByNode);
         edges.push({
           id: `${edge.from}-${route}-${target}`,
           source: edge.from,

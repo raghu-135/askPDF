@@ -14,16 +14,24 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.router_runtime import handle_router_rag_chat
 from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _llm_result_metadata
-from app.agent_patterns.graph import build_planner_prompt, infer_required_plan_steps, normalize_execution_plan
+from app.agent_patterns.graph import (
+    build_planner_prompt,
+    infer_required_plan_steps,
+    normalize_execution_plan,
+    normalize_evaluator_report,
+)
 from app.agent_patterns.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace, build_runtime_trace_event
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
+    EVALUATOR_REPLANNER_RAG_AGENT_ID,
+    EVALUATOR_REPLANNER_RAG_AGENT_VERSION,
     PLAN_EXECUTE_RAG_AGENT_ID,
     PLAN_EXECUTE_RAG_AGENT_VERSION,
     ROUTER_RAG_AGENT_ID,
     ROUTER_RAG_AGENT_VERSION,
+    builtin_evaluator_replanner_rag_spec,
     builtin_plan_execute_rag_spec,
     builtin_router_rag_hitl_web_spec,
     builtin_router_rag_spec,
@@ -579,6 +587,11 @@ class TestRouterRagTemplateValidator:
 
         assert result == {"valid": True, "errors": []}
 
+    def test_accepts_builtin_evaluator_replanner_rag_spec(self):
+        result = TemplateValidator().validate(builtin_evaluator_replanner_rag_spec())
+
+        assert result == {"valid": True, "errors": []}
+
     def test_rejects_router_rag_graph_topology_changes(self):
         spec = builtin_router_rag_spec()
         spec["config"]["graph"]["nodes"].append({"id": "surprise", "type": "retrieval_worker"})
@@ -718,6 +731,11 @@ class TestRouterRagTemplateValidator:
 
         assert graph is not None
 
+    def test_compiles_builtin_evaluator_replanner_rag_spec(self):
+        graph = TemplateCompiler().compile(builtin_evaluator_replanner_rag_spec())
+
+        assert graph is not None
+
     def test_rejects_plan_execute_graph_topology_changes(self):
         spec = builtin_plan_execute_rag_spec()
         spec["config"]["graph"]["edges"].append({"from": "planner", "to": "synthesizer"})
@@ -726,6 +744,24 @@ class TestRouterRagTemplateValidator:
             TemplateValidator().validate(spec)
 
         assert "plan_execute_rag_agent graph edges must match" in str(exc.value)
+
+    def test_rejects_evaluator_replanner_graph_topology_changes(self):
+        spec = builtin_evaluator_replanner_rag_spec()
+        spec["config"]["graph"]["edges"].append({"from": "evidence_evaluator", "to": "finalizer"})
+
+        with pytest.raises(TemplateValidationError) as exc:
+            TemplateValidator().validate(spec)
+
+        assert "evaluator_replanner_rag_agent graph edges must match" in str(exc.value)
+
+    def test_rejects_evaluator_replanner_unbounded_replans(self):
+        spec = builtin_evaluator_replanner_rag_spec()
+        spec["config"]["max_replans"] = 9
+
+        with pytest.raises(TemplateValidationError) as exc:
+            TemplateValidator().validate(spec)
+
+        assert "max_replans must be between" in str(exc.value)
 
     def test_normalize_execution_plan_clamps_invalid_plans_to_document_execution(self):
         normalized = normalize_execution_plan(
@@ -810,6 +846,28 @@ class TestRouterRagTemplateValidator:
             "Do I want an answer based on the timeline or order of events in this thread?",
         ]
         assert all(option.startswith("Do I want") for option in normalized["clarification_options"])
+
+    def test_normalize_evaluator_report_bounds_payload(self):
+        report = normalize_evaluator_report(
+            {
+                "sufficient": False,
+                "confidence": 2,
+                "missing_evidence": ["missing citations"] * 10,
+                "citation_risk": "severe",
+                "contradiction_risk": "high",
+                "recommended_next_steps": ["search documents"] * 10,
+                "reason": "x" * 1000,
+            },
+            {"evidence": ""},
+        )
+
+        assert report["sufficient"] is False
+        assert report["confidence"] == 1.0
+        assert len(report["missing_evidence"]) == 5
+        assert report["citation_risk"] == "medium"
+        assert report["contradiction_risk"] == "high"
+        assert len(report["recommended_next_steps"]) == 5
+        assert len(report["reason"]) <= 503
 
     def test_build_planner_prompt_contains_temporal_memory_document_rules(self):
         prompt = build_planner_prompt(
@@ -989,6 +1047,144 @@ class TestRouterRagGraphToolConsumers:
         assert "warnings" not in update["node_events"][-1]
         assert "tool_events" not in update
 
+    @pytest.mark.asyncio
+    async def test_evidence_evaluator_routes_to_answer_when_sufficient(self, monkeypatch):
+        class FakeLlm:
+            async def ainvoke(self, _messages):
+                return SimpleNamespace(
+                    content=json.dumps(
+                        {
+                            "sufficient": True,
+                            "confidence": 0.9,
+                            "missing_evidence": [],
+                            "citation_risk": "low",
+                            "contradiction_risk": "low",
+                            "recommended_next_steps": [],
+                            "reason": "enough evidence",
+                        }
+                    )
+                )
+
+        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
+
+        update = await NodeRegistry().evidence_evaluator(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "What does the PDF say?",
+                "llm_model": "test-llm",
+                "use_web_search": False,
+                "context_window": 8192,
+                "execution_plan": ["retrieval_worker"],
+                "evidence": "Document evidence.",
+                "document_sources": [{"file_hash": "file-1"}],
+                "web_sources": [],
+                "used_chat_ids": [],
+                "node_events": [],
+                "tool_events": [],
+                "replan_count": 0,
+                "max_replans": 1,
+            },
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        assert update["evaluator_route"] == "answer"
+        assert update["evaluation_confidence"] == 0.9
+        assert update["node_events"][-1]["event_name"] == "evaluation.completed"
+
+    @pytest.mark.asyncio
+    async def test_evidence_evaluator_routes_to_replan_or_budget_exhausted(self, monkeypatch):
+        class FakeLlm:
+            async def ainvoke(self, _messages):
+                return SimpleNamespace(
+                    content=json.dumps(
+                        {
+                            "sufficient": False,
+                            "confidence": 0.3,
+                            "missing_evidence": ["Need timeline evidence."],
+                            "citation_risk": "medium",
+                            "contradiction_risk": "low",
+                            "recommended_next_steps": ["Run timeline_worker."],
+                            "reason": "missing chronology",
+                        }
+                    )
+                )
+
+        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
+        base_state = {
+            "agent_run_id": "run-1",
+            "thread_id": "thread-1",
+            "question": "What changed since the first upload?",
+            "llm_model": "test-llm",
+            "use_web_search": False,
+            "context_window": 8192,
+            "execution_plan": ["retrieval_worker"],
+            "evidence": "Document evidence.",
+            "document_sources": [{"file_hash": "file-1"}],
+            "web_sources": [],
+            "used_chat_ids": [],
+            "node_events": [],
+            "tool_events": [],
+            "max_replans": 1,
+        }
+
+        replan_update = await NodeRegistry().evidence_evaluator(
+            dict(base_state, replan_count=0),
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+        exhausted_update = await NodeRegistry().evidence_evaluator(
+            dict(base_state, replan_count=1),
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        assert replan_update["evaluator_route"] == "replan"
+        assert replan_update["node_events"][-1]["event_name"] == "replan.requested"
+        assert exhausted_update["evaluator_route"] == "answer_budget_exhausted"
+        assert exhausted_update["node_events"][-1]["event_name"] == "replan.budget_exhausted"
+        assert "replan budget is exhausted" in exhausted_update["evidence"]
+
+    @pytest.mark.asyncio
+    async def test_replanner_clamps_web_when_disabled_or_disallowed(self, monkeypatch):
+        class FakeLlm:
+            async def ainvoke(self, _messages):
+                return SimpleNamespace(
+                    content=json.dumps(
+                        {
+                            "reason": "Need broader evidence.",
+                            "execution_plan": ["web_worker", "retrieval_worker"],
+                        }
+                    )
+                )
+
+        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
+
+        update = await NodeRegistry().replanner(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "What is current?",
+                "llm_model": "test-llm",
+                "use_web_search": False,
+                "context_window": 8192,
+                "execution_plan": ["retrieval_worker"],
+                "evaluator_report": {"sufficient": False, "missing_evidence": ["current web evidence"]},
+                "evidence": "Document evidence.",
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+                "node_events": [],
+                "tool_events": [],
+                "replan_count": 0,
+                "max_replans": 1,
+                "allowed_tool_ids": ["document_evidence", "clarify_intent"],
+            },
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        assert update["execution_plan"] == ["retrieval_worker"]
+        assert update["replan_count"] == 1
+        assert "web_worker_removed_when_web_search_disabled" in update["node_events"][-1]["llm_result_summary"]["normalization_notes"]
+
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestAgentPatternRepository:
@@ -1011,14 +1207,22 @@ class TestAgentPatternRepository:
         templates = await repo.list_templates()
         router_template, router_version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
         plan_template, plan_version = await repo.get_template_with_current_version(PLAN_EXECUTE_RAG_AGENT_ID)
+        evaluator_template, evaluator_version = await repo.get_template_with_current_version(EVALUATOR_REPLANNER_RAG_AGENT_ID)
 
-        assert {template.id for template in templates} == {ROUTER_RAG_AGENT_ID, PLAN_EXECUTE_RAG_AGENT_ID}
+        assert {template.id for template in templates} == {
+            ROUTER_RAG_AGENT_ID,
+            PLAN_EXECUTE_RAG_AGENT_ID,
+            EVALUATOR_REPLANNER_RAG_AGENT_ID,
+        }
         assert router_template.current_version_id == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
         assert router_version.validation_result_json == {"valid": True, "errors": []}
         assert plan_template.current_version_id == plan_version.id
         assert plan_version.version == PLAN_EXECUTE_RAG_AGENT_VERSION
         assert plan_version.validation_result_json == {"valid": True, "errors": []}
+        assert evaluator_template.current_version_id == evaluator_version.id
+        assert evaluator_version.version == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
+        assert evaluator_version.validation_result_json == {"valid": True, "errors": []}
 
     @pytest.mark.asyncio
     async def test_run_lifecycle_persists_resolved_spec(self, repo, sample_thread):
@@ -1989,6 +2193,82 @@ class TestAgentRunService:
         assert "graph" not in run.debug_trace_json
 
     @pytest.mark.asyncio
+    async def test_run_thread_chat_uses_evaluator_replanner_rag_when_selected(self, engine, sample_thread, monkeypatch):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        captured_spec = {}
+
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            await repo.seed_builtin_templates()
+
+            async def fake_get_thread_settings(_thread_id):
+                return {"agent_pattern": {"template_id": EVALUATOR_REPLANNER_RAG_AGENT_ID}}
+
+            async def fake_handle_evaluator_replanner_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+                captured_spec.update(resolved_spec)
+                node_event = {
+                    "node": "evidence_evaluator",
+                    "elapsed_ms": 2.0,
+                    "route": "execute",
+                    "evaluator_route": "answer",
+                    "evaluation_confidence": 0.8,
+                    "replan_count": 0,
+                    "evaluator_report": {"sufficient": True, "confidence": 0.8},
+                }
+                trace_recorder.record_node_event(node_event)
+                return {
+                    "answer": "evaluator replanner ok",
+                    "document_sources": [],
+                    "web_sources": [],
+                    "used_chat_ids": [],
+                    "clarification_options": None,
+                    "route": "execute",
+                    "node_events": [node_event],
+                    "tool_events": [],
+                    **agent_run_context,
+                }
+
+            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr(
+                "app.agent_patterns.router_runtime.handle_evaluator_replanner_rag_chat",
+                fake_handle_evaluator_replanner_rag_chat,
+            )
+
+            req = SimpleNamespace(
+                question="What is this about?",
+                llm_model="test-llm",
+                use_web_search=False,
+                use_reranker=True,
+                max_iterations=1,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+            )
+            result = await AgentRunService(repository=repo).run_thread_chat(
+                sample_thread.id,
+                req,
+                sample_thread.embed_model,
+            )
+
+            run = await repo.get_run(result["agent_run_id"])
+
+        assert result["agent_pattern_id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert result["agent_pattern_version"] == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
+        assert captured_spec["pattern_type"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert run.status == "completed"
+        assert run.resolved_spec_json["pattern_type"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert run.metrics_json["route"] == "execute"
+        assert run.metrics_json["replan_count"] == 0
+        assert run.metrics_json["evaluation_confidence"] == 0.8
+        assert run.debug_trace_json["summary"]["evaluatorRoute"] == "answer"
+        assert "graph" not in run.debug_trace_json
+
+    @pytest.mark.asyncio
     async def test_run_thread_chat_pauses_before_web_and_resumes_from_checkpoint_once(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
@@ -2175,7 +2455,7 @@ class TestAgentRunService:
         assert pending["type"] == "tool_approval"
         assert pending["gate_id"] == "web_approval_gate"
         assert pending["proposed_tool"]["name"] == "search_web"
-        gates = paused_run.resolved_spec_json["config"]["hitl_policy"]["gates"]
+        gates = run.resolved_spec_json["config"]["hitl_policy"]["gates"]
         assert gates["web_approval_gate"]["target"] == {"node_id": "web_worker", "node_type": "web_worker"}
         assert fake_llm.calls == 2
 
@@ -3484,6 +3764,7 @@ class TestAgentPatternApi:
         assert {item["id"] for item in listed.json()["agent_patterns"]} == {
             ROUTER_RAG_AGENT_ID,
             PLAN_EXECUTE_RAG_AGENT_ID,
+            EVALUATOR_REPLANNER_RAG_AGENT_ID,
         }
 
         detail = api_client.get(f"/api/agent-patterns/{ROUTER_RAG_AGENT_ID}")
@@ -3502,6 +3783,15 @@ class TestAgentPatternApi:
         assert plan_payload["current_version"]["version"] == PLAN_EXECUTE_RAG_AGENT_VERSION
         assert plan_payload["current_version"]["validation"]["valid"] is True
         assert plan_payload["capabilities"]["node_tool_requirements"]["planner"] == "clarify_intent"
+
+        evaluator_detail = api_client.get(f"/api/agent-patterns/{EVALUATOR_REPLANNER_RAG_AGENT_ID}")
+        assert evaluator_detail.status_code == 200
+        evaluator_payload = evaluator_detail.json()
+        assert evaluator_payload["agent_pattern"]["id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert evaluator_payload["current_version"]["version"] == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
+        assert evaluator_payload["current_version"]["validation"]["valid"] is True
+        assert evaluator_payload["capabilities"]["node_tool_requirements"]["evidence_evaluator"] == "clarify_intent"
+        assert evaluator_payload["capabilities"]["node_tool_requirements"]["replanner"] == "clarify_intent"
 
         stale_detail = api_client.get("/api/agent-patterns/simple_rag_agent")
         assert stale_detail.status_code == 404

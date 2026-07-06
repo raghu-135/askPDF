@@ -6,6 +6,9 @@ from typing import Any, Dict, Optional
 from app.agent.tool_registry import known_tool_contract_ids, tool_contracts_by_id
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
+    EVALUATOR_REPLANNER_RAG_AGENT_ID,
+    EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS,
+    EVALUATOR_REPLANNER_RAG_REQUIRED_TOOL_IDS,
     PLAN_EXECUTE_RAG_AGENT_ID,
     PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
     PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS,
@@ -34,12 +37,17 @@ def _known_tool_ids() -> set[str]:
 PATTERN_REQUIRED_TOOL_IDS = {
     ROUTER_RAG_AGENT_ID: ROUTER_RAG_REQUIRED_TOOL_IDS,
     PLAN_EXECUTE_RAG_AGENT_ID: PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS,
+    EVALUATOR_REPLANNER_RAG_AGENT_ID: EVALUATOR_REPLANNER_RAG_REQUIRED_TOOL_IDS,
 }
 
 PATTERN_NODE_TOOL_REQUIREMENTS = {
     ROUTER_RAG_AGENT_ID: ROUTER_RAG_NODE_TOOL_REQUIREMENTS,
     PLAN_EXECUTE_RAG_AGENT_ID: PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
+    EVALUATOR_REPLANNER_RAG_AGENT_ID: EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS,
 }
+
+MIN_MAX_REPLANS = 0
+MAX_MAX_REPLANS = 2
 
 HITL_ACTIONS = {"approve", "approve_selected", "continue_without", "reject", "edit"}
 HITL_PHASES = {"before", "after", "inside_tool"}
@@ -108,6 +116,13 @@ class TemplateValidator:
         elif max_iterations < MIN_MAX_ITERATIONS or max_iterations > MAX_MAX_ITERATIONS:
             errors.append(f"max_iterations must be between {MIN_MAX_ITERATIONS} and {MAX_MAX_ITERATIONS}")
 
+        if "max_replans" in config:
+            max_replans = config.get("max_replans")
+            if not isinstance(max_replans, int):
+                errors.append("max_replans must be an integer")
+            elif max_replans < MIN_MAX_REPLANS or max_replans > MAX_MAX_REPLANS:
+                errors.append(f"max_replans must be between {MIN_MAX_REPLANS} and {MAX_MAX_REPLANS}")
+
         system_role = config.get("system_role", "")
         if not isinstance(system_role, str) or len(system_role) > MAX_SYSTEM_ROLE_CHARS:
             errors.append(f"system_role must be a string up to {MAX_SYSTEM_ROLE_CHARS} characters")
@@ -151,6 +166,8 @@ class TemplateValidator:
             errors.extend(self._collect_router_graph_errors(config.get("graph")))
         elif pattern_type == PLAN_EXECUTE_RAG_AGENT_ID:
             errors.extend(self._collect_plan_execute_graph_errors(config.get("graph")))
+        elif pattern_type == EVALUATOR_REPLANNER_RAG_AGENT_ID:
+            errors.extend(self._collect_evaluator_replanner_graph_errors(config.get("graph")))
 
         return errors
 
@@ -445,6 +462,82 @@ class TemplateValidator:
         ]
         if edges != expected_edges:
             errors.append("plan_execute_rag_agent graph edges must match the built-in fixed execution topology")
+
+        return errors
+
+    def _collect_evaluator_replanner_graph_errors(self, graph: Any) -> list[str]:
+        errors: list[str] = []
+        if not isinstance(graph, dict):
+            return ["graph must be an object for evaluator_replanner_rag_agent"]
+
+        nodes = graph.get("nodes")
+        edges = graph.get("edges")
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            return ["graph.nodes and graph.edges must be lists"]
+
+        expected_nodes = {
+            "context_loader": "context_loader",
+            "planner": "planner",
+            "direct_answer": "direct_answer",
+            "retrieval_worker": "retrieval_worker",
+            "memory_worker": "memory_worker",
+            "timeline_worker": "timeline_worker",
+            "web_worker": "web_worker",
+            "evidence_evaluator": "evidence_evaluator",
+            "replanner": "replanner",
+            "synthesizer": "synthesizer",
+            "finalizer": "finalizer",
+        }
+        actual_nodes: dict[str, str] = {}
+        for node in nodes:
+            if not isinstance(node, dict):
+                errors.append("graph node entries must be objects")
+                continue
+            node_id = node.get("id")
+            node_type = node.get("type")
+            if isinstance(node_id, str) and isinstance(node_type, str):
+                actual_nodes[node_id] = node_type
+        if graph.get("hitl_compiled"):
+            return self._collect_hitl_compiled_graph_errors(
+                graph,
+                expected_nodes=expected_nodes,
+                pattern_type=EVALUATOR_REPLANNER_RAG_AGENT_ID,
+            )
+        if actual_nodes != expected_nodes:
+            errors.append("evaluator_replanner_rag_agent graph nodes must match the built-in Evaluator/Replanner RAG topology")
+
+        expected_edges = [
+            {"from": "START", "to": "context_loader"},
+            {"from": "context_loader", "to": "planner"},
+            {
+                "from": "planner",
+                "conditional": True,
+                "routes": {
+                    "execute": "retrieval_worker",
+                    "direct": "direct_answer",
+                    "clarify": "finalizer",
+                },
+            },
+            {"from": "direct_answer", "to": "finalizer"},
+            {"from": "retrieval_worker", "to": "memory_worker"},
+            {"from": "memory_worker", "to": "timeline_worker"},
+            {"from": "timeline_worker", "to": "web_worker"},
+            {"from": "web_worker", "to": "evidence_evaluator"},
+            {
+                "from": "evidence_evaluator",
+                "conditional": True,
+                "routes": {
+                    "answer": "synthesizer",
+                    "replan": "replanner",
+                    "answer_budget_exhausted": "synthesizer",
+                },
+            },
+            {"from": "replanner", "to": "retrieval_worker"},
+            {"from": "synthesizer", "to": "finalizer"},
+            {"from": "finalizer", "to": "END"},
+        ]
+        if edges != expected_edges:
+            errors.append("evaluator_replanner_rag_agent graph edges must match the built-in fixed evaluation topology")
 
         return errors
 

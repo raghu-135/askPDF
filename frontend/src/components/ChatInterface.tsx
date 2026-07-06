@@ -97,7 +97,9 @@ type PendingHumanReview = {
 };
 
 const normalizeAgentPatternForUi = (templateId?: string | null) => (
-    templateId === 'router_rag_agent' || templateId === 'plan_execute_rag_agent' ? templateId : 'router_rag_agent'
+    ['router_rag_agent', 'plan_execute_rag_agent', 'evaluator_replanner_rag_agent'].includes(templateId || '')
+        ? String(templateId)
+        : 'router_rag_agent'
 );
 
 interface ChatInterfaceProps {

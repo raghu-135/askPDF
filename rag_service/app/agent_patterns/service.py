@@ -8,7 +8,12 @@ from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository, InterruptResolutionResult
-from app.agent_patterns.templates import PLAN_EXECUTE_RAG_AGENT_ID, ROUTER_RAG_AGENT_ID, SUPPORTED_BUILTIN_TEMPLATE_IDS
+from app.agent_patterns.templates import (
+    EVALUATOR_REPLANNER_RAG_AGENT_ID,
+    PLAN_EXECUTE_RAG_AGENT_ID,
+    ROUTER_RAG_AGENT_ID,
+    SUPPORTED_BUILTIN_TEMPLATE_IDS,
+)
 from app.agent_patterns.validator import TemplateResolver
 from app.db import get_thread_settings
 
@@ -100,9 +105,18 @@ class AgentRunService:
 
         try:
             logger.info("Invoking compiled agent pattern for thread %s | template=%s", thread_id, template.id)
-            from app.agent_patterns.router_runtime import handle_plan_execute_rag_chat, handle_router_rag_chat
+            from app.agent_patterns.router_runtime import (
+                handle_evaluator_replanner_rag_chat,
+                handle_plan_execute_rag_chat,
+                handle_router_rag_chat,
+            )
 
-            handler = handle_plan_execute_rag_chat if template.id == PLAN_EXECUTE_RAG_AGENT_ID else handle_router_rag_chat
+            if template.id == EVALUATOR_REPLANNER_RAG_AGENT_ID:
+                handler = handle_evaluator_replanner_rag_chat
+            elif template.id == PLAN_EXECUTE_RAG_AGENT_ID:
+                handler = handle_plan_execute_rag_chat
+            else:
+                handler = handle_router_rag_chat
             async with open_agent_checkpointer() as checkpointer:
                 result = await handler(
                     thread_id,
