@@ -68,12 +68,16 @@ class AgentRunService:
             thread_settings=thread_settings,
             request_overrides=request_overrides,
         )
-        from app.agent_patterns.graph import TemplateCompiler
+        from app.agent_patterns.graph import TemplateCompiler, normalize_hitl_policy_for_thread_settings
 
-        enable_hitl_web_approval = bool(thread_settings.get("hitl_web_approval")) if isinstance(thread_settings, dict) else False
+        resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
+        resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
+            resolved_config.get("hitl_policy"),
+            thread_settings,
+        )
+        resolved_spec["config"] = resolved_config
         stored_resolved_spec = TemplateCompiler().materialize_spec(
             resolved_spec,
-            enable_hitl_web_approval=enable_hitl_web_approval,
         )
 
         run = await self.repository.create_run(
@@ -108,7 +112,6 @@ class AgentRunService:
                     agent_run_context=context,
                     trace_recorder=trace_recorder,
                     checkpointer=checkpointer,
-                    enable_hitl_web_approval=enable_hitl_web_approval,
                 )
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             error_json = result.get("agent_error") if isinstance(result, dict) else None

@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.agent_patterns.debug_trace import build_debug_graph
+from app.agent_patterns.graph import normalize_hitl_policy_for_thread_settings
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
@@ -245,6 +246,12 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
             "resolved_spec_json": candidate,
         }
 
+    resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
+    resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
+        resolved_config.get("hitl_policy"),
+        thread_settings,
+    )
+    resolved_spec["config"] = resolved_config
     return {
         "valid": True,
         "template_id": template.id,

@@ -599,6 +599,15 @@ def with_web_approval_hitl_policy(policy: Any) -> Dict[str, Any]:
     return normalized
 
 
+def normalize_hitl_policy_for_thread_settings(policy: Any, thread_settings: Any = None) -> Dict[str, Any]:
+    """Normalize legacy thread-level HITL toggles into the reusable policy contract."""
+
+    normalized = deepcopy(policy) if isinstance(policy, dict) else {}
+    if isinstance(thread_settings, dict) and bool(thread_settings.get("hitl_web_approval")):
+        return with_web_approval_hitl_policy(normalized)
+    return normalized
+
+
 def normalize_execution_plan(
     parsed: Dict[str, Any],
     *,

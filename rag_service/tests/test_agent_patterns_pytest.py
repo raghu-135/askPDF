@@ -2175,7 +2175,9 @@ class TestAgentRunService:
         assert pending["type"] == "tool_approval"
         assert pending["gate_id"] == "web_approval_gate"
         assert pending["proposed_tool"]["name"] == "search_web"
-        assert pending["enable_hitl_web_approval"] is True
+        assert "enable_hitl_web_approval" not in pending
+        gates = paused_run.resolved_spec_json["config"]["hitl_policy"]["gates"]
+        assert gates["web_approval_gate"]["target"] == {"node_id": "web_worker", "node_type": "web_worker"}
         assert fake_llm.calls == 2
 
         assert resumed is not None
@@ -2344,7 +2346,8 @@ class TestAgentRunService:
         )
 
         assert result["pending"]["gate_id"] == "web_approval_gate"
-        assert result["pending"]["enable_hitl_web_approval"] is True
+        assert "enable_hitl_web_approval" not in result["pending"]
+        assert "web_approval_gate" in result["paused_run"].resolved_spec_json["config"]["hitl_policy"]["gates"]
         assert result["fake_web"].calls == 1
         assert result["resumed"].run.status == "completed"
         assert result["turns"][0].payload["answer"] == "Answer with approved web evidence."
@@ -3537,7 +3540,15 @@ class TestAgentPatternApi:
         assert stale.status_code == 200
         assert stale.json()["valid"] is False
 
-    def test_validate_thread_agent_config_endpoint_resolves_without_running_chat(self, api_client, sample_thread):
+    def test_validate_thread_agent_config_endpoint_resolves_without_running_chat(self, api_client, sample_thread, monkeypatch):
+        async def fake_get_thread_settings(_thread_id):
+            return {
+                "agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID},
+                "hitl_web_approval": True,
+            }
+
+        monkeypatch.setattr("app.api.agent_patterns.get_thread_settings", fake_get_thread_settings)
+
         response = api_client.post(
             f"/api/threads/{sample_thread.id}/agent-config/validate",
             json={"overrides": {"use_web_search": True, "max_iterations": 2}},
@@ -3551,6 +3562,8 @@ class TestAgentPatternApi:
         assert payload["validation"]["valid"] is True
         assert payload["resolved_spec_json"]["config"]["use_web_search"] is True
         assert payload["resolved_spec_json"]["config"]["max_iterations"] == 2
+        gates = payload["resolved_spec_json"]["config"]["hitl_policy"]["gates"]
+        assert gates["web_approval_gate"]["target"] == {"node_id": "web_worker", "node_type": "web_worker"}
 
     def test_validate_thread_agent_config_endpoint_reports_invalid_overrides(self, api_client, sample_thread):
         response = api_client.post(

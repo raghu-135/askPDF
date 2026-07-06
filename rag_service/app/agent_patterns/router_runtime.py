@@ -68,7 +68,6 @@ def _pending_interrupt_from_result(
     result: Dict[str, Any],
     *,
     checkpoint_thread_id: str,
-    enable_hitl_web_approval: bool,
 ) -> Dict[str, Any] | None:
     interrupt_obj = _first_interrupt(result)
     if not interrupt_obj:
@@ -80,7 +79,6 @@ def _pending_interrupt_from_result(
         payload["interrupt_id"] = str(interrupt_id)
     payload["checkpoint_resume"] = True
     payload["checkpoint_thread_id"] = checkpoint_thread_id
-    payload["enable_hitl_web_approval"] = bool(enable_hitl_web_approval)
     return payload
 
 
@@ -251,7 +249,6 @@ async def handle_router_rag_chat(
     agent_run_context: Dict[str, Any],
     trace_recorder: Any,
     checkpointer: Any = None,
-    enable_hitl_web_approval: bool = False,
 ) -> Dict[str, Any]:
     """Execute the compiled Router RAG v2 graph and persist a chat turn."""
     return await _handle_compiled_rag_chat(
@@ -262,7 +259,6 @@ async def handle_router_rag_chat(
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
-        enable_hitl_web_approval=enable_hitl_web_approval,
         runtime_label="Router RAG",
         failure_code="router_rag_execution_failed",
         failure_reason_prefix="Exception during Router RAG execution",
@@ -280,7 +276,6 @@ async def handle_plan_execute_rag_chat(
     agent_run_context: Dict[str, Any],
     trace_recorder: Any,
     checkpointer: Any = None,
-    enable_hitl_web_approval: bool = False,
 ) -> Dict[str, Any]:
     """Execute the compiled Plan-and-Execute RAG graph and persist a chat turn."""
     return await _handle_compiled_rag_chat(
@@ -291,7 +286,6 @@ async def handle_plan_execute_rag_chat(
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
-        enable_hitl_web_approval=enable_hitl_web_approval,
         runtime_label="Plan-and-Execute RAG",
         failure_code="plan_execute_rag_execution_failed",
         failure_reason_prefix="Exception during Plan-and-Execute RAG execution",
@@ -309,7 +303,6 @@ async def _handle_compiled_rag_chat(
     agent_run_context: Dict[str, Any],
     trace_recorder: Any,
     checkpointer: Any,
-    enable_hitl_web_approval: bool,
     runtime_label: str,
     failure_code: str,
     failure_reason_prefix: str,
@@ -333,15 +326,12 @@ async def _handle_compiled_rag_chat(
     allowed_tool_ids = pattern_config.get("allowed_tool_ids")
     allowed_tool_ids = allowed_tool_ids if isinstance(allowed_tool_ids, list) else []
     hitl_policy = pattern_config.get("hitl_policy") if isinstance(pattern_config.get("hitl_policy"), dict) else {}
-    if enable_hitl_web_approval:
-        hitl_policy = with_web_approval_hitl_policy(hitl_policy)
     checkpoint_thread_id = str(agent_run_context.get("checkpoint_thread_id") or agent_run_id or thread_id)
 
     started = time.perf_counter()
     app = TemplateCompiler().compile(
         resolved_spec,
         checkpointer=checkpointer,
-        enable_hitl_web_approval=enable_hitl_web_approval,
     )
     telemetry_sink: Dict[str, Any] = {"node_events": [], "tool_events": []}
     config = _runtime_config(
@@ -395,7 +385,6 @@ async def _handle_compiled_rag_chat(
         pending_interrupt = _pending_interrupt_from_result(
             result,
             checkpoint_thread_id=checkpoint_thread_id,
-            enable_hitl_web_approval=enable_hitl_web_approval,
         )
         if pending_interrupt:
             partial = _without_runtime_keys(result)
@@ -571,10 +560,18 @@ async def resume_compiled_rag_chat(
     checkpoint_thread_id = str(run.checkpoint_thread_id or run.id)
     telemetry_sink: Dict[str, Any] = {"node_events": [], "tool_events": []}
     enable_hitl_web_approval = _interrupt_compile_web_approval_enabled(interrupt)
+    if enable_hitl_web_approval:
+        spec_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
+        hitl_policy = spec_config.get("hitl_policy") if isinstance(spec_config.get("hitl_policy"), dict) else {}
+        gates = hitl_policy.get("gates") if isinstance(hitl_policy.get("gates"), dict) else {}
+        if "web_approval_gate" not in gates:
+            resolved_spec = dict(resolved_spec)
+            spec_config = dict(spec_config)
+            spec_config["hitl_policy"] = with_web_approval_hitl_policy(hitl_policy)
+            resolved_spec["config"] = spec_config
     app = TemplateCompiler().compile(
         resolved_spec,
         checkpointer=checkpointer,
-        enable_hitl_web_approval=enable_hitl_web_approval,
     )
     config = _runtime_config(
         app_thread_id=run.thread_id,
@@ -620,7 +617,6 @@ async def resume_compiled_rag_chat(
     pending_interrupt = _pending_interrupt_from_result(
         result,
         checkpoint_thread_id=checkpoint_thread_id,
-        enable_hitl_web_approval=enable_hitl_web_approval,
     )
     if pending_interrupt:
         partial = _without_runtime_keys(result)
