@@ -171,7 +171,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             "synthesizer",
             "hitl_gate",
         ],
-        "allowed_child_types": ["END"],
+        "allowed_child_types": ["hitl_gate", "END"],
         "limits": {"default_max_visits": 1},
     },
     "hitl_gate": {

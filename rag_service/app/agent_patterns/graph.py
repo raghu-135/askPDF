@@ -2122,8 +2122,29 @@ class TemplateCompiler:
             hitl_policy=hitl_policy,
         )
         config["graph"] = self._with_catalog_node_metadata(compiled_graph)
+        config["loop_policy"] = self._with_materialized_loop_policy(
+            config.get("loop_policy"),
+            graph_spec=config["graph"],
+        )
         materialized["config"] = config
         return materialized
+
+    def _with_materialized_loop_policy(self, loop_policy: Any, *, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
+        policy = dict(loop_policy) if isinstance(loop_policy, dict) else {}
+        nodes = [node for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
+        node_count = len(nodes)
+        try:
+            max_total_visits = int(policy.get("max_total_visits", 0))
+        except (TypeError, ValueError):
+            max_total_visits = 0
+        if node_count and max_total_visits < node_count:
+            policy["max_total_visits"] = node_count
+        node_visit_limits = policy.get("node_visit_limits")
+        if isinstance(node_visit_limits, dict):
+            policy["node_visit_limits"] = dict(node_visit_limits)
+        elif node_visit_limits is not None:
+            policy["node_visit_limits"] = {}
+        return policy
 
     def _with_explicit_route_functions(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
         nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]

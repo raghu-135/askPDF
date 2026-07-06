@@ -1699,7 +1699,7 @@ class TestAgentPatternRepository:
             await repo.create_internal_template_version(
                 template_id="internal_v1_agent",
                 name="Internal v1 Agent",
-                spec_json=builtin_router_rag_spec(),
+                spec_json=legacy_builtin_router_rag_v1_spec(),
             )
 
         missing_template, missing_version = await repo.get_template_with_current_version(
