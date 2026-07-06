@@ -635,22 +635,78 @@ def _format_prefetch_summary(bundle: Dict[str, Any]) -> str:
     return "\n\n".join(parts).strip() or "No pre-fetched context is available."
 
 
-def _combine_evidence(existing: Any, addition: Any, *, label: str) -> str:
+def _combine_evidence(existing: Any, addition: Any, *, label: str, limit: Optional[int] = None) -> str:
     existing_text = str(existing or "").strip()
     addition_text = str(addition or "").strip()
     if not addition_text:
         return existing_text
     labeled = f"[{label}]\n{addition_text}"
-    return "\n\n".join(part for part in (existing_text, labeled) if part).strip()
+    combined = "\n\n".join(part for part in (existing_text, labeled) if part).strip()
+    if isinstance(limit, int) and limit > 0 and len(combined) > limit:
+        return combined[-limit:].lstrip()
+    return combined
 
 
 EVIDENCE_PACKET_LIMIT = 12
 EVIDENCE_PACKET_CONTENT_LIMIT = 2_000
+EVIDENCE_TEXT_LIMIT = EVIDENCE_PACKET_LIMIT * (EVIDENCE_PACKET_CONTENT_LIMIT + 128)
+
+
+def _context_policy(state: RouterRagState) -> Dict[str, Any]:
+    policy = state.get("context_policy")
+    return policy if isinstance(policy, dict) else {}
+
+
+def _context_policy_int(state: RouterRagState, key: str, default: int) -> int:
+    try:
+        value = int(_context_policy(state).get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(1, value)
+
+
+def _evidence_packet_limit(state: RouterRagState) -> int:
+    return _context_policy_int(state, "evidence_packet_limit", EVIDENCE_PACKET_LIMIT)
+
+
+def _evidence_packet_content_limit(state: RouterRagState) -> int:
+    return _context_policy_int(state, "evidence_packet_content_limit", EVIDENCE_PACKET_CONTENT_LIMIT)
+
+
+def _evidence_text_limit(state: RouterRagState) -> int:
+    packet_limit = _evidence_packet_limit(state)
+    content_limit = _evidence_packet_content_limit(state)
+    if "context_policy" not in state:
+        return EVIDENCE_TEXT_LIMIT
+    return max(1, packet_limit * (content_limit + 128))
 
 
 def _evidence_packets(state: RouterRagState) -> List[Dict[str, Any]]:
     packets = state.get("evidence_packets")
     return [item for item in packets if isinstance(item, dict)] if isinstance(packets, list) else []
+
+
+def _evidence_context_from_packets(state: RouterRagState) -> str:
+    parts = []
+    for packet in _evidence_packets(state)[-_evidence_packet_limit(state):]:
+        content = compact_preview(packet.get("content"), limit=_evidence_packet_content_limit(state))
+        if not content:
+            continue
+        kind = str(packet.get("kind") or packet.get("producer_node_type") or "evidence")
+        producer = str(packet.get("producer_node_id") or packet.get("producer_node_type") or "unknown")
+        parts.append(f"[{kind} evidence from {producer}]\n{content}")
+    return "\n\n".join(parts).strip()
+
+
+def _final_context_from_state(state: RouterRagState) -> tuple[str, str]:
+    policy = _context_policy(state)
+    if policy.get("final_prompt_assembly") == "evidence_packets":
+        packet_context = _evidence_context_from_packets(state)
+        if packet_context:
+            return packet_context, "evidence_packets"
+    if state.get("evidence"):
+        return str(state.get("evidence") or ""), "worker_evidence"
+    return _format_prefetch_summary(state.get("pre_fetch_bundle") or {}), "prefetch"
 
 
 def _append_evidence_packet(
@@ -661,7 +717,7 @@ def _append_evidence_packet(
     content: Any,
     refs: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    text = compact_preview(content, limit=EVIDENCE_PACKET_CONTENT_LIMIT)
+    text = compact_preview(content, limit=_evidence_packet_content_limit(state))
     if not text:
         return _evidence_packets(state)
     node_id = _runtime_node_id(config, kind)
@@ -677,7 +733,7 @@ def _append_evidence_packet(
         "refs": refs or {},
         "created_at": iso_utc_z(utc_now()),
     }
-    return [*_evidence_packets(state), packet][-EVIDENCE_PACKET_LIMIT:]
+    return [*_evidence_packets(state), packet][-_evidence_packet_limit(state):]
 
 
 def _should_skip_worker(state: RouterRagState, worker_node: str) -> bool:
@@ -1273,7 +1329,12 @@ class NodeRegistry:
         artifacts = payload.get("artifacts") or {}
         document_sources = [*state.get("document_sources", []), *artifacts.get("document_sources", [])]
         web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
-        evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Document evidence")
+        evidence = _combine_evidence(
+            state.get("evidence"),
+            payload.get("content", ""),
+            label="Document evidence",
+            limit=_evidence_text_limit(state),
+        )
         evidence_packets = _append_evidence_packet(
             state,
             config,
@@ -1340,7 +1401,12 @@ class NodeRegistry:
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
-        evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Memory evidence")
+        evidence = _combine_evidence(
+            state.get("evidence"),
+            payload.get("content", ""),
+            label="Memory evidence",
+            limit=_evidence_text_limit(state),
+        )
         evidence_packets = _append_evidence_packet(
             state,
             config,
@@ -1400,7 +1466,12 @@ class NodeRegistry:
         )
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
-        evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Timeline evidence")
+        evidence = _combine_evidence(
+            state.get("evidence"),
+            payload.get("content", ""),
+            label="Timeline evidence",
+            limit=_evidence_text_limit(state),
+        )
         evidence_packets = _append_evidence_packet(
             state,
             config,
@@ -1461,7 +1532,12 @@ class NodeRegistry:
         payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
         artifacts = payload.get("artifacts") or {}
         web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
-        evidence = _combine_evidence(state.get("evidence"), payload.get("content", ""), label="Web evidence")
+        evidence = _combine_evidence(
+            state.get("evidence"),
+            payload.get("content", ""),
+            label="Web evidence",
+            limit=_evidence_text_limit(state),
+        )
         evidence_packets = _append_evidence_packet(
             state,
             config,
@@ -1554,6 +1630,7 @@ class NodeRegistry:
                     f"Answer only from available context and explicitly state unresolved gaps: {gaps}"
                 ),
                 label="Evaluator warning",
+                limit=_evidence_text_limit(state),
             )
 
         data = {
@@ -1700,13 +1777,13 @@ class NodeRegistry:
     async def _answer_from_context(self, state: RouterRagState, config: RunnableConfig, *, node_name: str) -> Dict[str, Any]:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
-        context = state.get("evidence") or _format_prefetch_summary(state.get("pre_fetch_bundle") or {})
-        context_source = "worker_evidence" if state.get("evidence") else "prefetch"
+        context, context_source = _final_context_from_state(state)
         if state.get("evaluator_report"):
             context = _combine_evidence(
                 context,
                 json.dumps(state.get("evaluator_report") or {}, ensure_ascii=True, sort_keys=True),
                 label="Evaluator report",
+                limit=_evidence_text_limit(state),
             )
         messages = build_final_answer_messages(state, context)
         retry_attempts, retry_observer = _llm_retry_observer()
@@ -1860,6 +1937,7 @@ class NodeRegistry:
                         "Continue without additional gated actions unless already approved by available context."
                     ),
                     label="HITL decision",
+                    limit=_evidence_text_limit(state),
                 )
             return _skipped_worker_update(state, config, node_id, started, "hitl_interrupt_limit_exhausted") | update
 
@@ -1984,6 +2062,7 @@ class NodeRegistry:
                     "Do not claim skipped tools, branches, or live evidence were checked; answer only from available context."
                 ),
                 label="HITL decision",
+                limit=_evidence_text_limit(state),
             )
 
         data = {

@@ -1491,6 +1491,97 @@ class TestRouterRagGraphToolConsumers:
         assert update["evidence_packets"][0]["producer_node_type"] == "retrieval_worker"
 
     @pytest.mark.asyncio
+    async def test_context_policy_bounds_evidence_packets_and_accumulated_evidence(self, monkeypatch):
+        class FakeTool:
+            async def ainvoke(self, _args, config=None):
+                return {
+                    "content": " ".join(["new-document-evidence"] * 20),
+                    "artifacts": {"document_sources": [{"file_hash": "file-1"}]},
+                }
+
+        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool())
+        bound = NodeRegistry().get_for_spec({"id": "retrieval_1", "type": "retrieval_worker"})
+        update = await bound(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "What does the document say?",
+                "route": "document",
+                "evidence": " ".join(["previous-evidence"] * 80),
+                "evidence_packets": [
+                    {"id": "old-1", "content": "old one"},
+                    {"id": "old-2", "content": "old two"},
+                ],
+                "context_policy": {
+                    "evidence_packet_limit": 2,
+                    "evidence_packet_content_limit": 24,
+                    "final_prompt_assembly": "legacy_evidence",
+                },
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+                "node_events": [],
+                "tool_events": [],
+                "allowed_tool_ids": ["document_evidence"],
+            },
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        assert len(update["evidence_packets"]) == 2
+        assert [packet["id"] for packet in update["evidence_packets"]][0] == "old-2"
+        assert len(update["evidence_packets"][-1]["content"]) <= 27
+        assert len(update["evidence"]) <= 2 * (24 + 128)
+
+    @pytest.mark.asyncio
+    async def test_final_answer_can_assemble_context_from_bounded_evidence_packets(self, monkeypatch):
+        captured_messages = []
+
+        class FakeLlm:
+            async def ainvoke(self, messages):
+                captured_messages.extend(messages)
+                return SimpleNamespace(content="Packet-based answer.")
+
+        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
+
+        update = await NodeRegistry().synthesizer(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "What does the document say?",
+                "llm_model": "test-llm",
+                "context_window": 8192,
+                "evidence": "legacy evidence should not be used",
+                "evidence_packets": [
+                    {
+                        "id": "packet-1",
+                        "producer_node_id": "retrieval_1",
+                        "producer_node_type": "retrieval_worker",
+                        "kind": "document",
+                        "content": " ".join(["packet-evidence"] * 20),
+                    }
+                ],
+                "context_policy": {
+                    "evidence_packet_limit": 2,
+                    "evidence_packet_content_limit": 30,
+                    "final_prompt_assembly": "evidence_packets",
+                },
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+                "node_events": [],
+                "tool_events": [],
+            },
+            {"configurable": {"thread_id": "thread-1"}},
+        )
+
+        human_prompt = captured_messages[-1].content
+        assert "document evidence from retrieval_1" in human_prompt
+        assert "packet-evidence" in human_prompt
+        assert "legacy evidence should not be used" not in human_prompt
+        assert update["node_events"][-1]["input_preview"]["context_source"] == "evidence_packets"
+        assert update["final_answer"] == "Packet-based answer."
+
+    @pytest.mark.asyncio
     async def test_workers_consume_tool_artifacts_without_legacy_fields(self, monkeypatch):
         class FakeTool:
             def __init__(self, payload):
@@ -1782,12 +1873,18 @@ class TestAgentPatternRepository:
         }
         assert router_template.current_version_id == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
+        assert router_version.schema_version == 2
+        assert router_version.spec_json["schema_version"] == 2
         assert router_version.validation_result_json == {"valid": True, "errors": []}
         assert plan_template.current_version_id == plan_version.id
         assert plan_version.version == PLAN_EXECUTE_RAG_AGENT_VERSION
+        assert plan_version.schema_version == 2
+        assert plan_version.spec_json["schema_version"] == 2
         assert plan_version.validation_result_json == {"valid": True, "errors": []}
         assert evaluator_template.current_version_id == evaluator_version.id
         assert evaluator_version.version == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
+        assert evaluator_version.schema_version == 2
+        assert evaluator_version.spec_json["schema_version"] == 2
         assert evaluator_version.validation_result_json == {"valid": True, "errors": []}
 
     @pytest.mark.asyncio

@@ -41,7 +41,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("template_id", sa.String(), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
-        sa.Column("schema_version", sa.Integer(), nullable=False, server_default="1"),
+        sa.Column("schema_version", sa.Integer(), nullable=False, server_default="2"),
         sa.Column(
             "spec_json",
             postgresql.JSONB(astext_type=sa.Text()),
