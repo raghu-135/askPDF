@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
@@ -34,6 +34,7 @@ export default function AgentRunDebugPanel({
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeMessage, setResumeMessage] = useState<string | null>(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
+  const resumeSubmissionKeyRef = useRef<string | null>(null);
   const debug = runDetails?.debug;
   const pendingInterrupt = runDetails?.pending_interrupt;
   const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? 'pending' : undefined);
@@ -86,6 +87,9 @@ export default function AgentRunDebugPanel({
 
   const handleResume = async (action: AgentRunResumeAction) => {
     if (!runDetails || !pendingInterrupt?.interrupt_id) return;
+    const submissionKey = `${runId}:${pendingInterrupt.interrupt_id}:${pendingInterrupt.resume_version ?? 1}:${action}`;
+    if (resumeSubmissionKeyRef.current) return;
+    resumeSubmissionKeyRef.current = submissionKey;
     setResumeSubmitting(action);
     setResumeError(null);
     setResumeMessage(null);
@@ -113,6 +117,9 @@ export default function AgentRunDebugPanel({
     } catch (err: any) {
       setResumeError(err?.message || 'Unable to submit decision.');
     } finally {
+      if (resumeSubmissionKeyRef.current === submissionKey) {
+        resumeSubmissionKeyRef.current = null;
+      }
       setResumeSubmitting(null);
     }
   };

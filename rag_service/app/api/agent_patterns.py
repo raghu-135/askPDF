@@ -280,6 +280,10 @@ async def get_agent_run(
     run_id: str,
     thread_id: str = Query(..., min_length=1),
 ):
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
     repo = AgentPatternRepository()
     run = await repo.get_run(run_id)
     if not run or run.thread_id != thread_id:
@@ -290,6 +294,10 @@ async def get_agent_run(
 
 @router.post("/agent-runs/{run_id}/resume")
 async def resume_agent_run(run_id: str, req: AgentRunResumeRequest):
+    thread = await get_thread(req.thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+
     service = AgentRunService()
     try:
         result = await service.resume_agent_run(

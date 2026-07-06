@@ -194,6 +194,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
     const lastClarificationIdsRef = useRef<{ userId: string | null; assistantId: string | null } | null>(null);
     const chatRootRef = useRef<HTMLDivElement | null>(null);
+    const humanReviewSubmissionKeyRef = useRef<string | null>(null);
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
     activeThreadIdRef.current = activeThread?.id ?? null;
     const clarificationResizeRef = useRef({
@@ -850,7 +851,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!pendingHumanReview || !activeThread) return;
         const interrupt = pendingHumanReview.interrupt;
         if (!interrupt.interrupt_id) return;
+        const submissionKey = `${pendingHumanReview.runId}:${interrupt.interrupt_id}:${interrupt.resume_version ?? 1}:${action}`;
+        if (humanReviewSubmissionKeyRef.current) return;
 
+        humanReviewSubmissionKeyRef.current = submissionKey;
         setHumanReviewSubmitting(action);
         setHumanReviewError(null);
         try {
@@ -881,6 +885,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         } catch (err: any) {
             setHumanReviewError(err?.message || 'Unable to submit review decision.');
         } finally {
+            if (humanReviewSubmissionKeyRef.current === submissionKey) {
+                humanReviewSubmissionKeyRef.current = null;
+            }
             setHumanReviewSubmitting(null);
         }
     };
