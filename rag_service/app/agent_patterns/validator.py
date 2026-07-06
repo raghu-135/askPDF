@@ -5,11 +5,14 @@ from typing import Any, Dict, Optional
 
 from app.agent.tool_registry import known_tool_contract_ids, tool_contracts_by_id
 from app.agent_patterns.node_catalog import (
+    collect_node_catalog_errors,
     get_node_catalog,
     node_type_allowed_tool_contract_ids,
     known_node_types,
 )
 from app.agent_patterns.route_registry import (
+    collect_route_function_registry_errors,
+    get_route_function_registry,
     known_route_function_ids,
     route_function_allowed_for_node_type,
     route_function_labels,
@@ -618,8 +621,17 @@ class GenericGraphValidator:
         errors.extend(TemplateValidator()._collect_hitl_policy_errors(config.get("hitl_policy", {}), pattern_type, graph))
 
         node_catalog = get_node_catalog()
+        catalog_errors = collect_node_catalog_errors(node_catalog)
+        if catalog_errors:
+            return [f"node catalog incompatible: {error}" for error in catalog_errors]
+        route_registry = get_route_function_registry()
+        route_registry_errors = collect_route_function_registry_errors(route_registry)
+        if route_registry_errors:
+            return [f"route function registry incompatible: {error}" for error in route_registry_errors]
+        errors.extend(self._collect_catalog_route_function_errors(node_catalog, route_registry))
         node_ids: set[str] = set()
         node_types_by_id: dict[str, str] = {}
+        node_type_counts: dict[str, int] = {}
         graph_supported_tool_ids: set[str] = set()
         known_types = known_node_types()
 
@@ -645,7 +657,9 @@ class GenericGraphValidator:
                 errors.append(f"graph node {node_id} has unknown type: {node_type}")
                 continue
             node_types_by_id[node_id] = node_type
+            node_type_counts[node_type] = node_type_counts.get(node_type, 0) + 1
             graph_supported_tool_ids.update(node_type_allowed_tool_contract_ids(node_type))
+            errors.extend(self._collect_node_contract_errors(node_id, node_type, node, node_catalog))
 
             node_tool_ids = node.get("tool_contract_ids", [])
             if node_tool_ids in (None, []):
@@ -668,6 +682,11 @@ class GenericGraphValidator:
                 "allowed_tool_ids are not supported by any node in this graph: "
                 + ", ".join(disallowed_enabled_tools)
             )
+
+        for node_type, count in sorted(node_type_counts.items()):
+            max_instances = (node_catalog.get(node_type) or {}).get("max_instances")
+            if isinstance(max_instances, int) and not isinstance(max_instances, bool) and count > max_instances:
+                errors.append(f"graph has {count} nodes of type {node_type}; maximum allowed is {max_instances}")
 
         valid_sources = set(node_ids) | {"START"}
         valid_targets = set(node_ids) | {"END"}
@@ -778,6 +797,112 @@ class GenericGraphValidator:
                         errors.append(f"context_policy.{key} must be a positive integer")
             if "final_prompt_assembly" in context_policy and not isinstance(context_policy["final_prompt_assembly"], str):
                 errors.append("context_policy.final_prompt_assembly must be a string")
+        return errors
+
+    def _collect_catalog_route_function_errors(
+        self,
+        node_catalog: Dict[str, Dict[str, Any]],
+        route_registry: Dict[str, Dict[str, Any]],
+    ) -> list[str]:
+        errors: list[str] = []
+        for node_type, metadata in sorted(node_catalog.items()):
+            allowed_route_functions = metadata.get("allowed_route_functions") or []
+            for route_fn in allowed_route_functions:
+                route_metadata = route_registry.get(route_fn)
+                if not isinstance(route_metadata, dict):
+                    errors.append(f"node catalog type {node_type} references unknown route_fn: {route_fn}")
+                    continue
+                allowed_source_types = set(route_metadata.get("allowed_source_types") or [])
+                if node_type not in allowed_source_types:
+                    errors.append(
+                        f"node catalog type {node_type} allows route_fn {route_fn}, "
+                        "but route registry does not allow that source type"
+                    )
+        return errors
+
+    def _collect_node_contract_errors(
+        self,
+        node_id: str,
+        node_type: str,
+        node: Dict[str, Any],
+        node_catalog: Dict[str, Dict[str, Any]],
+    ) -> list[str]:
+        errors: list[str] = []
+        metadata = node_catalog.get(node_type) or {}
+        for key in ("state_reads", "state_writes", "prompt_slots"):
+            if key not in node:
+                continue
+            value = node.get(key)
+            if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+                errors.append(f"graph node {node_id}.{key} must be a list of non-empty strings")
+                continue
+            allowed_values = set(metadata.get(key) or [])
+            unsupported = sorted(set(value) - allowed_values)
+            if unsupported:
+                errors.append(
+                    f"graph node {node_id}.{key} includes unsupported values for type {node_type}: "
+                    + ", ".join(unsupported)
+                )
+
+        context_policy = node.get("context_policy")
+        if context_policy is not None:
+            if not isinstance(context_policy, dict):
+                errors.append(f"graph node {node_id}.context_policy must be an object")
+            else:
+                unknown_keys = sorted(set(context_policy) - {"mode", "input_budget", "output_budget"})
+                if unknown_keys:
+                    errors.append(f"graph node {node_id}.context_policy has unknown keys: {', '.join(unknown_keys)}")
+                catalog_policy = metadata.get("context_policy") if isinstance(metadata.get("context_policy"), dict) else {}
+                for key in ("mode", "input_budget", "output_budget"):
+                    value = context_policy.get(key)
+                    if value is None:
+                        continue
+                    if not isinstance(value, str) or not value:
+                        errors.append(f"graph node {node_id}.context_policy.{key} must be a non-empty string")
+                    elif catalog_policy.get(key) and value != catalog_policy.get(key):
+                        errors.append(
+                            f"graph node {node_id}.context_policy.{key} must match catalog value "
+                            f"{catalog_policy.get(key)} for type {node_type}"
+                        )
+
+        observability = node.get("observability")
+        if observability is not None:
+            if not isinstance(observability, dict):
+                errors.append(f"graph node {node_id}.observability must be an object")
+            else:
+                unknown_keys = sorted(set(observability) - {"span_kind", "event_prefix", "summary_fields", "raw_payload"})
+                if unknown_keys:
+                    errors.append(f"graph node {node_id}.observability has unknown keys: {', '.join(unknown_keys)}")
+                catalog_observability = (
+                    metadata.get("observability") if isinstance(metadata.get("observability"), dict) else {}
+                )
+                for key in ("span_kind", "event_prefix", "raw_payload"):
+                    value = observability.get(key)
+                    if value is None:
+                        continue
+                    if not isinstance(value, str) or not value:
+                        errors.append(f"graph node {node_id}.observability.{key} must be a non-empty string")
+                    elif catalog_observability.get(key) and value != catalog_observability.get(key):
+                        errors.append(
+                            f"graph node {node_id}.observability.{key} must match catalog value "
+                            f"{catalog_observability.get(key)} for type {node_type}"
+                        )
+                summary_fields = observability.get("summary_fields")
+                if summary_fields is not None:
+                    if not isinstance(summary_fields, list) or not all(
+                        isinstance(item, str) and item for item in summary_fields
+                    ):
+                        errors.append(
+                            f"graph node {node_id}.observability.summary_fields must be a list of non-empty strings"
+                        )
+                    else:
+                        allowed_summary_fields = set(catalog_observability.get("summary_fields") or [])
+                        unsupported = sorted(set(summary_fields) - allowed_summary_fields)
+                        if unsupported:
+                            errors.append(
+                                f"graph node {node_id}.observability.summary_fields includes unsupported values "
+                                f"for type {node_type}: {', '.join(unsupported)}"
+                            )
         return errors
 
     def _collect_edge_compatibility_errors(

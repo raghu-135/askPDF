@@ -24,6 +24,7 @@ from app.agent_patterns.debug_trace import AgentTraceRecorder, build_debug_paylo
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.node_catalog import collect_node_catalog_errors, get_node_catalog
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
+from app.agent_patterns.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_patterns.service import AgentRunService
 from app.agent_patterns.templates import (
     EVALUATOR_REPLANNER_RAG_AGENT_ID,
@@ -646,6 +647,17 @@ class TestRouterRagTemplateValidator:
         assert "retrieval_worker.state_reads must be a list of non-empty strings" in errors
         assert "router.max_instances must be a positive integer" in errors
 
+    def test_route_function_registry_shape_validation_reports_bad_metadata(self):
+        registry = get_route_function_registry()
+        registry["router_route"].pop("allowed_source_types")
+        registry["planner_route"]["route_labels"] = ["execute", ""]
+
+        errors = collect_route_function_registry_errors(registry)
+
+        assert "router_route missing registry keys: allowed_source_types" in errors
+        assert "router_route.allowed_source_types must be a list of non-empty strings" in errors
+        assert "planner_route.route_labels must be null or a list of non-empty strings" in errors
+
     def test_rejects_router_rag_graph_topology_changes(self):
         spec = builtin_router_rag_v2_spec()
         spec["config"]["graph"]["nodes"].append({"id": "surprise", "type": "retrieval_worker"})
@@ -1040,6 +1052,126 @@ class TestRouterRagGraphToolConsumers:
 
         assert TemplateValidator().validate(spec)["valid"] is True
         assert TemplateCompiler().compile(spec) is not None
+
+    def test_v2_custom_graph_rejects_incompatible_node_catalog(self, monkeypatch):
+        catalog = get_node_catalog()
+        catalog["router"].pop("context_policy")
+        monkeypatch.setattr("app.agent_patterns.validator.get_node_catalog", lambda: catalog)
+
+        spec = builtin_router_rag_v2_spec()
+
+        with pytest.raises(TemplateValidationError, match="node catalog incompatible"):
+            TemplateValidator().validate(spec)
+
+    def test_v2_custom_graph_rejects_incompatible_route_function_registry(self, monkeypatch):
+        registry = get_route_function_registry()
+        registry["router_route"]["route_labels"] = ["document", ""]
+        monkeypatch.setattr("app.agent_patterns.validator.get_route_function_registry", lambda: registry)
+
+        spec = builtin_router_rag_v2_spec()
+
+        with pytest.raises(TemplateValidationError, match="route function registry incompatible"):
+            TemplateValidator().validate(spec)
+
+    def test_v2_custom_graph_rejects_catalog_route_registry_mismatch(self, monkeypatch):
+        registry = get_route_function_registry()
+        registry["router_route"]["allowed_source_types"] = ["planner"]
+        monkeypatch.setattr("app.agent_patterns.validator.get_route_function_registry", lambda: registry)
+
+        spec = builtin_router_rag_v2_spec()
+
+        with pytest.raises(TemplateValidationError, match="node catalog type router allows route_fn router_route"):
+            TemplateValidator().validate(spec)
+
+    def test_v2_custom_graph_rejects_node_type_instance_limit_overflow(self):
+        spec = {
+            "schema_version": 2,
+            "pattern_type": "custom_rag_agent",
+            "config": {
+                "allowed_tool_ids": ["thread_shape", "document_evidence", "clarify_intent"],
+                "graph": {
+                    "nodes": [
+                        {"id": "context_1", "type": "context_loader"},
+                        {"id": "context_2", "type": "context_loader"},
+                        {"id": "router_1", "type": "router"},
+                        {"id": "retrieval_1", "type": "retrieval_worker"},
+                        {"id": "final_1", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_1"},
+                        {"from": "context_1", "to": "router_1"},
+                        {
+                            "from": "router_1",
+                            "conditional": True,
+                            "route_fn": "router_route",
+                            "routes": {"document": "retrieval_1", "clarify": "final_1"},
+                        },
+                        {"from": "retrieval_1", "to": "final_1"},
+                        {"from": "final_1", "to": "END"},
+                    ],
+                },
+            },
+        }
+
+        errors = TemplateValidator().collect_errors(spec)
+
+        assert "graph has 2 nodes of type context_loader; maximum allowed is 1" in errors
+
+    def test_v2_custom_graph_rejects_node_contract_metadata_not_allowed_by_catalog(self):
+        spec = {
+            "schema_version": 2,
+            "pattern_type": "custom_rag_agent",
+            "config": {
+                "allowed_tool_ids": ["document_evidence", "clarify_intent"],
+                "graph": {
+                    "nodes": [
+                        {"id": "context_1", "type": "context_loader"},
+                        {"id": "router_1", "type": "router"},
+                        {
+                            "id": "retrieval_1",
+                            "type": "retrieval_worker",
+                            "state_writes": ["final_answer"],
+                            "prompt_slots": ["router"],
+                            "context_policy": {"mode": "assemble_answer"},
+                            "observability": {"span_kind": "answer", "summary_fields": ["answer_chars"]},
+                        },
+                        {"id": "final_1", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_1"},
+                        {"from": "context_1", "to": "router_1"},
+                        {
+                            "from": "router_1",
+                            "conditional": True,
+                            "route_fn": "router_route",
+                            "routes": {"document": "retrieval_1", "clarify": "final_1"},
+                        },
+                        {"from": "retrieval_1", "to": "final_1"},
+                        {"from": "final_1", "to": "END"},
+                    ],
+                },
+            },
+        }
+
+        errors = TemplateValidator().collect_errors(spec)
+
+        assert (
+            "graph node retrieval_1.state_writes includes unsupported values for type retrieval_worker: final_answer"
+            in errors
+        )
+        assert "graph node retrieval_1.prompt_slots includes unsupported values for type retrieval_worker: router" in errors
+        assert (
+            "graph node retrieval_1.context_policy.mode must match catalog value append_evidence for type retrieval_worker"
+            in errors
+        )
+        assert (
+            "graph node retrieval_1.observability.span_kind must match catalog value tool_worker for type retrieval_worker"
+            in errors
+        )
+        assert (
+            "graph node retrieval_1.observability.summary_fields includes unsupported values for type retrieval_worker: answer_chars"
+            in errors
+        )
 
     @pytest.mark.parametrize(
         "edge_update,match",

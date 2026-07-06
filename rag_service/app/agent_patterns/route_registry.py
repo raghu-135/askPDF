@@ -28,6 +28,35 @@ def get_route_function_registry() -> Dict[str, Dict[str, Any]]:
     return deepcopy(ROUTE_FUNCTION_REGISTRY)
 
 
+def collect_route_function_registry_errors(registry: Dict[str, Dict[str, Any]] | None = None) -> list[str]:
+    errors: list[str] = []
+    source = registry if isinstance(registry, dict) else ROUTE_FUNCTION_REGISTRY
+    for route_fn, metadata in sorted(source.items()):
+        if not isinstance(route_fn, str) or not route_fn:
+            errors.append("route function ids must be non-empty strings")
+            continue
+        if not isinstance(metadata, dict):
+            errors.append(f"{route_fn} metadata must be an object")
+            continue
+
+        missing = sorted({"allowed_source_types", "route_labels"} - set(metadata))
+        if missing:
+            errors.append(f"{route_fn} missing registry keys: {', '.join(missing)}")
+
+        allowed_source_types = metadata.get("allowed_source_types")
+        if not isinstance(allowed_source_types, list) or not all(
+            isinstance(item, str) and item for item in allowed_source_types
+        ):
+            errors.append(f"{route_fn}.allowed_source_types must be a list of non-empty strings")
+
+        route_labels = metadata.get("route_labels")
+        if route_labels is not None and (
+            not isinstance(route_labels, list) or not all(isinstance(item, str) and item for item in route_labels)
+        ):
+            errors.append(f"{route_fn}.route_labels must be null or a list of non-empty strings")
+    return errors
+
+
 def get_route_function_metadata(route_fn: str) -> Dict[str, Any]:
     return deepcopy(ROUTE_FUNCTION_REGISTRY.get(route_fn) or {})
 
