@@ -2175,7 +2175,6 @@ class TestAgentRunService:
         assert pending["type"] == "tool_approval"
         assert pending["gate_id"] == "web_approval_gate"
         assert pending["proposed_tool"]["name"] == "search_web"
-        assert "enable_hitl_web_approval" not in pending
         gates = paused_run.resolved_spec_json["config"]["hitl_policy"]["gates"]
         assert gates["web_approval_gate"]["target"] == {"node_id": "web_worker", "node_type": "web_worker"}
         assert fake_llm.calls == 2
@@ -2346,7 +2345,6 @@ class TestAgentRunService:
         )
 
         assert result["pending"]["gate_id"] == "web_approval_gate"
-        assert "enable_hitl_web_approval" not in result["pending"]
         assert "web_approval_gate" in result["paused_run"].resolved_spec_json["config"]["hitl_policy"]["gates"]
         assert result["fake_web"].calls == 1
         assert result["resumed"].run.status == "completed"

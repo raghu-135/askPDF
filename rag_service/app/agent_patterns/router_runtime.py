@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from langgraph.types import Command
 
-from app.agent_patterns.graph import TemplateCompiler, with_web_approval_hitl_policy
+from app.agent_patterns.graph import TemplateCompiler
 from app.db import (
     create_chat_turn,
     increment_qa_stats,
@@ -91,12 +91,6 @@ def _without_runtime_keys(result: Dict[str, Any]) -> Dict[str, Any]:
 def _as_resume_action(interrupt: Dict[str, Any]) -> Any:
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
     return decision.get("action") or decision.get("requested_action") or interrupt.get("default_action")
-
-
-def _interrupt_compile_web_approval_enabled(interrupt: Dict[str, Any]) -> bool:
-    if "enable_hitl_web_approval" in interrupt:
-        return bool(interrupt.get("enable_hitl_web_approval"))
-    return interrupt.get("node_id") == "web_approval_gate" or interrupt.get("type") == "tool_approval"
 
 
 def _interrupted_node_event(partial: Dict[str, Any], pending_interrupt: Dict[str, Any]) -> Dict[str, Any]:
@@ -559,16 +553,6 @@ async def resume_compiled_rag_chat(
     resolved_spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
     checkpoint_thread_id = str(run.checkpoint_thread_id or run.id)
     telemetry_sink: Dict[str, Any] = {"node_events": [], "tool_events": []}
-    enable_hitl_web_approval = _interrupt_compile_web_approval_enabled(interrupt)
-    if enable_hitl_web_approval:
-        spec_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
-        hitl_policy = spec_config.get("hitl_policy") if isinstance(spec_config.get("hitl_policy"), dict) else {}
-        gates = hitl_policy.get("gates") if isinstance(hitl_policy.get("gates"), dict) else {}
-        if "web_approval_gate" not in gates:
-            resolved_spec = dict(resolved_spec)
-            spec_config = dict(spec_config)
-            spec_config["hitl_policy"] = with_web_approval_hitl_policy(hitl_policy)
-            resolved_spec["config"] = spec_config
     app = TemplateCompiler().compile(
         resolved_spec,
         checkpointer=checkpointer,

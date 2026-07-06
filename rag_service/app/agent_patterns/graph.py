@@ -1420,17 +1420,13 @@ class TemplateCompiler:
         spec: Dict[str, Any],
         *,
         checkpointer: Any = None,
-        enable_hitl_web_approval: bool = False,
     ):
         from app.agent_patterns.validator import TemplateValidator
 
         graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
         if not graph_spec.get("hitl_compiled"):
             TemplateValidator().validate(spec)
-            spec = self.materialize_spec(
-                spec,
-                enable_hitl_web_approval=enable_hitl_web_approval,
-            )
+            spec = self.materialize_spec(spec)
             graph_spec = (spec.get("config") or {}).get("graph") or {}
         workflow = StateGraph(RouterRagState)
         node_types: Dict[str, str] = {}
@@ -1463,16 +1459,11 @@ class TemplateCompiler:
     def materialize_spec(
         self,
         spec: Dict[str, Any],
-        *,
-        enable_hitl_web_approval: bool = False,
     ) -> Dict[str, Any]:
         materialized = deepcopy(spec)
         config = materialized.get("config") if isinstance(materialized.get("config"), dict) else {}
         graph_spec = config.get("graph") if isinstance(config.get("graph"), dict) else {}
         hitl_policy = config.get("hitl_policy") if isinstance(config.get("hitl_policy"), dict) else {}
-        if enable_hitl_web_approval:
-            hitl_policy = with_web_approval_hitl_policy(hitl_policy)
-            config["hitl_policy"] = hitl_policy
         config["graph"] = self._with_hitl_policy_gates(
             graph_spec,
             hitl_policy=hitl_policy,
