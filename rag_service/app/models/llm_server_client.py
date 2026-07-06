@@ -93,7 +93,10 @@ def get_replans_limit():
     val = os.getenv("REPLANS_LIMIT")
     if val is None:
         raise ValueError("REPLANS_LIMIT environment variable is not set")
-    return int(val)
+    limit = int(val)
+    if limit < 1:
+        raise ValueError("REPLANS_LIMIT must be at least 1")
+    return limit
 
 DEFAULT_TOKEN_BUDGET = get_default_token_budget()
 REPLANS_LIMIT = get_replans_limit()
@@ -177,7 +180,7 @@ def compute_prefetch_budget(context_window: int) -> dict:
 def default_thread_settings():
     """Default persisted settings for a thread."""
     return {
-        "replans": min(1, REPLANS_LIMIT),
+        "replans": 1,
         "replans_limit": REPLANS_LIMIT,
         "context_window": DEFAULT_TOKEN_BUDGET,
         "system_role": DEFAULT_SYSTEM_ROLE,
@@ -199,6 +202,10 @@ def merge_thread_settings(overrides=None):
             elif "max_iterations" in overrides:
                 overrides = {**overrides, "replans": overrides.get("max_iterations")}
         merged.update({k: overrides.get(k) for k in merged.keys() if k in overrides})
+    try:
+        merged["replans"] = max(1, min(REPLANS_LIMIT, int(merged.get("replans", 1))))
+    except (TypeError, ValueError):
+        merged["replans"] = 1
     return merged
 
 

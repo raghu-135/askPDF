@@ -21,6 +21,7 @@ from app.models.requests import (
     ThreadSettingsResponse,
     ThreadSettingsUpdateRequest,
 )
+from app.models.llm_server_client import REPLANS_LIMIT
 
 
 @pytest.fixture(scope="function")
@@ -249,6 +250,24 @@ class TestThreadEndpoints:
         data = response.json()
         assert isinstance(data, dict)
         assert data["hitl_web_approval"] is False
+
+    def test_get_thread_settings_clamps_legacy_replans(self, client, monkeypatch):
+        """Stored replans above the current limit should not break settings reads."""
+        create_response = client.post(
+            "/api/threads",
+            json={"name": "Legacy Settings Thread", "embed_model": "BAAI/bge-m3"}
+        )
+        thread_id = create_response.json()["id"]
+
+        async def fake_get_thread_settings(_thread_id):
+            return {"replans": REPLANS_LIMIT + 7}
+
+        monkeypatch.setattr(threads_api, "get_thread_settings", fake_get_thread_settings)
+
+        response = client.get(f"/api/threads/{thread_id}/settings")
+
+        assert response.status_code == 200
+        assert response.json()["replans"] == REPLANS_LIMIT
 
     def test_get_settings_nonexistent_thread(self, client):
         """Test getting settings for a thread that doesn't exist."""

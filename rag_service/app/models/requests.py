@@ -94,7 +94,7 @@ class ThreadChatRequest(BaseModel):
     use_web_search: bool = False
     use_reranker: Optional[bool] = None
     context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size
-    replans: Optional[int] = Field(default=None, ge=0, le=REPLANS_LIMIT)
+    replans: Optional[int] = Field(default=None, ge=1, le=REPLANS_LIMIT)
     system_role_override: Optional[str] = Field(
         default=None, max_length=MAX_SYSTEM_ROLE_CHARS
     )
@@ -108,7 +108,7 @@ class ThreadChatRequest(BaseModel):
 
 
 class ThreadSettingsResponse(BaseModel):
-    replans: int = Field(default=min(1, REPLANS_LIMIT), ge=0, le=REPLANS_LIMIT)
+    replans: int = Field(default=1, ge=1, le=REPLANS_LIMIT)
     system_role: str = Field(default="", max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Dict[str, str] = Field(default_factory=dict)
     custom_instructions: str = Field(
@@ -120,7 +120,7 @@ class ThreadSettingsResponse(BaseModel):
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
-    replans: Optional[int] = Field(default=None, ge=0, le=REPLANS_LIMIT)
+    replans: Optional[int] = Field(default=None, ge=1, le=REPLANS_LIMIT)
     system_role: Optional[str] = Field(default=None, max_length=MAX_SYSTEM_ROLE_CHARS)
     tool_instructions: Optional[Dict[str, str]] = None
     custom_instructions: Optional[str] = Field(

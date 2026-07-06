@@ -112,8 +112,8 @@ class TemplateValidator:
             replans = config.get("replans")
             if not isinstance(replans, int):
                 errors.append("replans must be an integer")
-            elif replans < 0 or replans > REPLANS_LIMIT:
-                errors.append(f"replans must be between 0 and {REPLANS_LIMIT}")
+            elif replans < 1 or replans > REPLANS_LIMIT:
+                errors.append(f"replans must be between 1 and {REPLANS_LIMIT}")
 
         system_role = config.get("system_role", "")
         if not isinstance(system_role, str) or len(system_role) > MAX_SYSTEM_ROLE_CHARS:

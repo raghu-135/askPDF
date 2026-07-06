@@ -1239,8 +1239,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 use_reranker: useReranker,
                 agent_pattern: { template_id: normalizeAgentPatternForUi(agentPatternId) },
             };
-            if (isEvaluatorReplannerPattern(agentPatternId)) {
-                nextSettings.replans = Math.max(0, Math.min(replansLimit ?? 3, replans));
+            if (isEvaluatorReplannerPattern(agentPatternId) && replansLimit !== null) {
+                nextSettings.replans = Math.max(1, Math.min(replansLimit, replans));
             }
             const saved = await updateThreadSettings(activeThread.id, nextSettings);
             applyThreadSettingsToState(saved);

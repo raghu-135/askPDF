@@ -580,11 +580,14 @@ class TestRouterRagTemplateValidator:
         )
         assert evaluator_resolved["config"]["replans"] == 3
 
-    def test_accepts_zero_replan_budget(self):
+    def test_rejects_zero_replan_budget(self):
         spec = builtin_evaluator_replanner_rag_spec()
         spec["config"]["replans"] = 0
 
-        assert TemplateValidator().validate(spec)["valid"] is True
+        with pytest.raises(TemplateValidationError) as exc:
+            TemplateValidator().validate(spec)
+
+        assert "replans must be between" in str(exc.value)
 
     def test_accepts_builtin_router_rag_spec(self):
         result = TemplateValidator().validate(builtin_router_rag_spec())

@@ -697,7 +697,7 @@ def _bounded_confidence(value: Any) -> float:
 
 def _replan_budget(state: RouterRagState) -> int:
     try:
-        return max(0, int(state.get("replans", 1)))
+        return max(1, int(state.get("replans", 1)))
     except (TypeError, ValueError):
         return 1
 

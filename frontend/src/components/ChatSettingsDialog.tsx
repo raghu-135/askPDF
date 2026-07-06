@@ -130,10 +130,10 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                             value={replans}
                             onChange={(e) => {
                                 const parsed = parseInt(e.target.value, 10);
-                                onReplansChange(Math.max(0, Math.min(replansLimit, Number.isNaN(parsed) ? 0 : parsed)));
+                                onReplansChange(Math.max(1, Math.min(replansLimit, Number.isNaN(parsed) ? 1 : parsed)));
                             }}
-                            slotProps={{ htmlInput: { min: 0, max: replansLimit } }}
-                            helperText="0 runs once without replanning; higher values allow retry loops."
+                            slotProps={{ htmlInput: { min: 1, max: replansLimit } }}
+                            helperText="Allows at least one evaluator-triggered replan, capped by the server limit."
                         />
                     ) : (
                         <Typography variant="caption" color="error">Replan limit not loaded from server.</Typography>

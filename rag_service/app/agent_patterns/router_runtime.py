@@ -348,7 +348,7 @@ async def _handle_compiled_rag_chat(
     allowed_tool_ids = allowed_tool_ids if isinstance(allowed_tool_ids, list) else []
     hitl_policy = pattern_config.get("hitl_policy") if isinstance(pattern_config.get("hitl_policy"), dict) else {}
     try:
-        replans = max(0, int(pattern_config.get("replans", 1)))
+        replans = max(1, int(pattern_config.get("replans", 1)))
     except (TypeError, ValueError):
         replans = 1
     checkpoint_thread_id = str(agent_run_context.get("checkpoint_thread_id") or agent_run_id or thread_id)
