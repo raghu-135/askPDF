@@ -45,6 +45,7 @@ export default function BuilderGraphEditor({
   state,
   selection,
   validationIssues,
+  disabled,
   onSelectionChange,
   onAddEdge,
 }: {
@@ -52,6 +53,7 @@ export default function BuilderGraphEditor({
   state: AgentPatternBuilderState;
   selection: BuilderSelection;
   validationIssues: BuilderValidationIssue[];
+  disabled?: boolean;
   onSelectionChange: (selection: BuilderSelection) => void;
   onAddEdge: (edge: BuilderEdgeState) => void;
 }) {
@@ -155,7 +157,7 @@ export default function BuilderGraphEditor({
             Add Sequential Edge
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 1, mt: 1, alignItems: 'center' }}>
-            <FormControl size="small">
+            <FormControl size="small" disabled={disabled}>
               <InputLabel id="builder-edge-source-label">Source</InputLabel>
               <Select
                 labelId="builder-edge-source-label"
@@ -169,7 +171,7 @@ export default function BuilderGraphEditor({
                 ))}
               </Select>
             </FormControl>
-            <FormControl size="small">
+            <FormControl size="small" disabled={disabled}>
               <InputLabel id="builder-edge-target-label">Target</InputLabel>
               <Select
                 labelId="builder-edge-target-label"
@@ -187,14 +189,18 @@ export default function BuilderGraphEditor({
               size="small"
               variant="contained"
               startIcon={<AddIcon />}
-              disabled={!compatibility.ok}
+              disabled={disabled || !compatibility.ok}
               onClick={handleAddEdge}
               sx={{ borderRadius: 1, whiteSpace: 'nowrap' }}
             >
               Add
             </Button>
           </Box>
-          {!compatibility.ok ? (
+          {disabled ? (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+              Authoring is disabled; graph edits are read-only.
+            </Typography>
+          ) : !compatibility.ok ? (
             <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.75 }}>
               {compatibility.reason}
             </Typography>

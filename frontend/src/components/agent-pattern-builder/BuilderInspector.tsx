@@ -56,6 +56,7 @@ function NodeInspector({
   catalog,
   state,
   node,
+  disabled,
   onUpdateNode,
   onRemoveNode,
   onAddHitlGate,
@@ -63,6 +64,7 @@ function NodeInspector({
   catalog: AgentPatternCatalogResponse;
   state: AgentPatternBuilderState;
   node: BuilderNodeState;
+  disabled?: boolean;
   onUpdateNode: (nodeId: string, patch: Partial<BuilderNodeState>) => void;
   onRemoveNode: (nodeId: string) => void;
   onAddHitlGate: (targetNodeId: string) => void;
@@ -95,6 +97,7 @@ function NodeInspector({
         size="small"
         label="Label"
         value={node.label || ''}
+        disabled={disabled}
         onChange={(event) => onUpdateNode(node.id, { label: event.target.value })}
       />
       <TextField
@@ -103,6 +106,7 @@ function NodeInspector({
         value={node.description || ''}
         multiline
         minRows={2}
+        disabled={disabled}
         onChange={(event) => onUpdateNode(node.id, { description: event.target.value })}
       />
       <Box>
@@ -128,7 +132,7 @@ function NodeInspector({
           </Typography>
         ) : null}
       </Box>
-      <FormControl size="small" disabled={allowedTools.length === 0}>
+      <FormControl size="small" disabled={disabled || allowedTools.length === 0}>
         <InputLabel id={`node-tools-${node.id}`}>Tool contracts</InputLabel>
         <Select<string[]>
           labelId={`node-tools-${node.id}`}
@@ -157,6 +161,7 @@ function NodeInspector({
             size="small"
             label="Title"
             value={node.hitl?.title || ''}
+            disabled={disabled}
             onChange={(event) => onUpdateNode(node.id, { hitl: { ...(node.hitl || {}), title: event.target.value } })}
           />
           <TextField
@@ -165,10 +170,11 @@ function NodeInspector({
             value={node.hitl?.prompt || node.hitl?.body || ''}
             multiline
             minRows={2}
+            disabled={disabled}
             onChange={(event) => onUpdateNode(node.id, { hitl: { ...(node.hitl || {}), prompt: event.target.value, body: event.target.value } })}
           />
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-            <FormControl size="small">
+            <FormControl size="small" disabled={disabled}>
               <InputLabel id={`hitl-mode-${node.id}`}>Mode</InputLabel>
               <Select
                 labelId={`hitl-mode-${node.id}`}
@@ -181,7 +187,7 @@ function NodeInspector({
                 <MenuItem value="choice">Choice</MenuItem>
               </Select>
             </FormControl>
-            <FormControl size="small">
+            <FormControl size="small" disabled={disabled}>
               <InputLabel id={`hitl-phase-${node.id}`}>Phase</InputLabel>
               <Select
                 labelId={`hitl-phase-${node.id}`}
@@ -194,7 +200,7 @@ function NodeInspector({
               </Select>
             </FormControl>
           </Box>
-          <FormControl size="small">
+          <FormControl size="small" disabled={disabled}>
             <InputLabel id={`hitl-actions-${node.id}`}>Allowed actions</InputLabel>
             <Select<string[]>
               labelId={`hitl-actions-${node.id}`}
@@ -212,7 +218,7 @@ function NodeInspector({
               ))}
             </Select>
           </FormControl>
-          <FormControl size="small">
+          <FormControl size="small" disabled={disabled}>
             <InputLabel id={`hitl-default-${node.id}`}>Default action</InputLabel>
             <Select
               labelId={`hitl-default-${node.id}`}
@@ -232,7 +238,7 @@ function NodeInspector({
           variant="outlined"
           startIcon={<PersonAddAltIcon />}
           onClick={() => onAddHitlGate(node.id)}
-          disabled={!catalog.node_catalog.hitl_gate}
+          disabled={disabled || !catalog.node_catalog.hitl_gate}
           sx={{ borderRadius: 1 }}
         >
           Add HITL Gate
@@ -244,6 +250,7 @@ function NodeInspector({
         variant="outlined"
         startIcon={<DeleteIcon />}
         onClick={() => onRemoveNode(node.id)}
+        disabled={disabled}
         sx={{ borderRadius: 1 }}
       >
         Remove Node
@@ -257,6 +264,7 @@ function EdgeInspector({
   state,
   edge,
   edgeIndex,
+  disabled,
   onUpdateEdge,
   onRemoveEdge,
 }: {
@@ -264,6 +272,7 @@ function EdgeInspector({
   state: AgentPatternBuilderState;
   edge: BuilderEdgeState;
   edgeIndex: number;
+  disabled?: boolean;
   onUpdateEdge: (edgeIndex: number, patch: Partial<BuilderEdgeState>) => void;
   onRemoveEdge: (edgeIndex: number) => void;
 }) {
@@ -327,7 +336,7 @@ function EdgeInspector({
       {edge.conditional ? (
         <>
           <TextField size="small" label="Source" value={edge.from} slotProps={{ input: { readOnly: true } }} />
-          <FormControl size="small" disabled={routeFns.length === 0}>
+          <FormControl size="small" disabled={disabled || routeFns.length === 0}>
             <InputLabel id={`edge-route-fn-${edgeIndex}`}>Route function</InputLabel>
             <Select
               labelId={`edge-route-fn-${edgeIndex}`}
@@ -356,7 +365,7 @@ function EdgeInspector({
                 <Typography variant="caption" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {route}
                 </Typography>
-                <FormControl size="small">
+                <FormControl size="small" disabled={disabled}>
                   <InputLabel id={`route-target-${edgeIndex}-${route}`}>Target</InputLabel>
                   <Select
                     labelId={`route-target-${edgeIndex}-${route}`}
@@ -369,14 +378,14 @@ function EdgeInspector({
                     ))}
                   </Select>
                 </FormControl>
-                <Button size="small" color="error" onClick={() => removeRoute(route)}>
+                <Button size="small" color="error" disabled={disabled} onClick={() => removeRoute(route)}>
                   Remove
                 </Button>
               </Box>
             ))}
             {missingRouteLabels.length > 0 ? (
               <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 1, alignItems: 'center' }}>
-                <FormControl size="small">
+                <FormControl size="small" disabled={disabled}>
                   <InputLabel id={`add-route-label-${edgeIndex}`}>Route</InputLabel>
                   <Select
                     labelId={`add-route-label-${edgeIndex}`}
@@ -389,7 +398,7 @@ function EdgeInspector({
                     ))}
                   </Select>
                 </FormControl>
-                <FormControl size="small">
+                <FormControl size="small" disabled={disabled}>
                   <InputLabel id={`add-route-target-${edgeIndex}`}>Target</InputLabel>
                   <Select
                     labelId={`add-route-target-${edgeIndex}`}
@@ -405,7 +414,7 @@ function EdgeInspector({
                 <Button
                   size="small"
                   variant="outlined"
-                  disabled={!routeToAdd}
+                  disabled={disabled || !routeToAdd}
                   onClick={() => {
                     updateRouteTarget(routeToAdd, routeTarget);
                     setRouteToAdd('');
@@ -420,7 +429,7 @@ function EdgeInspector({
         </>
       ) : (
         <>
-          <FormControl size="small">
+          <FormControl size="small" disabled={disabled}>
             <InputLabel id={`edge-source-${edgeIndex}`}>Source</InputLabel>
             <Select
               labelId={`edge-source-${edgeIndex}`}
@@ -437,7 +446,7 @@ function EdgeInspector({
               ))}
             </Select>
           </FormControl>
-          <FormControl size="small">
+          <FormControl size="small" disabled={disabled}>
             <InputLabel id={`edge-target-${edgeIndex}`}>Target</InputLabel>
             <Select
               labelId={`edge-target-${edgeIndex}`}
@@ -464,6 +473,7 @@ function EdgeInspector({
         variant="outlined"
         startIcon={<DeleteIcon />}
         onClick={() => onRemoveEdge(edgeIndex)}
+        disabled={disabled}
         sx={{ borderRadius: 1 }}
       >
         Remove Edge
@@ -476,6 +486,7 @@ export default function BuilderInspector({
   catalog,
   state,
   selection,
+  disabled,
   onUpdateNode,
   onUpdateEdge,
   onRemoveNode,
@@ -485,6 +496,7 @@ export default function BuilderInspector({
   catalog: AgentPatternCatalogResponse;
   state: AgentPatternBuilderState;
   selection: BuilderSelection;
+  disabled?: boolean;
   onUpdateNode: (nodeId: string, patch: Partial<BuilderNodeState>) => void;
   onUpdateEdge: (edgeIndex: number, patch: Partial<BuilderEdgeState>) => void;
   onRemoveNode: (nodeId: string) => void;
@@ -502,6 +514,7 @@ export default function BuilderInspector({
         catalog={catalog}
         state={state}
         node={selectedNode}
+        disabled={disabled}
         onUpdateNode={onUpdateNode}
         onRemoveNode={onRemoveNode}
         onAddHitlGate={onAddHitlGate}
@@ -516,6 +529,7 @@ export default function BuilderInspector({
         state={state}
         edge={selectedEdge}
         edgeIndex={selection.edgeIndex}
+        disabled={disabled}
         onUpdateEdge={onUpdateEdge}
         onRemoveEdge={onRemoveEdge}
       />

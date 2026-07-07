@@ -30,6 +30,11 @@ export interface BuilderPersistedPattern {
   version: AgentPatternVersion;
 }
 
+export interface BuilderBoundaryMessage {
+  severity: 'info' | 'warning' | 'error';
+  message: string;
+}
+
 export default function BuilderPersistencePanel({
   form,
   onFormChange,
@@ -38,6 +43,10 @@ export default function BuilderPersistencePanel({
   statusMessage,
   errorMessage,
   canSave,
+  authoringDisabled,
+  runtimeDisabled,
+  lifecycleDisabled,
+  boundaryMessages,
   onGenerateTemplateId,
   onSave,
   onPublish,
@@ -51,6 +60,10 @@ export default function BuilderPersistencePanel({
   statusMessage: string | null;
   errorMessage: string | null;
   canSave: boolean;
+  authoringDisabled?: boolean;
+  runtimeDisabled?: boolean;
+  lifecycleDisabled?: boolean;
+  boundaryMessages?: BuilderBoundaryMessage[];
   onGenerateTemplateId: () => void;
   onSave: () => void;
   onPublish: () => void;
@@ -59,6 +72,11 @@ export default function BuilderPersistencePanel({
 }) {
   const savedTemplateId = persisted?.template.id;
   const savedVersion = persisted?.version.version;
+  const saveDisabled = authoringDisabled || !canSave || busyAction === 'save';
+  const publishDisabled = authoringDisabled || lifecycleDisabled || !persisted || busyAction === 'publish';
+  const archiveDisabled = authoringDisabled || lifecycleDisabled || !persisted || busyAction === 'archive';
+  const selectDisabled = runtimeDisabled || !persisted || !form.selectThreadId.trim() || busyAction === 'select';
+  const formDisabled = authoringDisabled || Boolean(busyAction);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
@@ -71,6 +89,11 @@ export default function BuilderPersistencePanel({
         </Typography>
       </Box>
       <Divider />
+      {(boundaryMessages || []).map((message) => (
+        <Alert key={`${message.severity}-${message.message}`} severity={message.severity}>
+          {message.message}
+        </Alert>
+      ))}
       {statusMessage ? <Alert severity="success">{statusMessage}</Alert> : null}
       {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
       {persisted ? (
@@ -84,6 +107,7 @@ export default function BuilderPersistencePanel({
         size="small"
         label="Name"
         value={form.name}
+        disabled={formDisabled}
         onChange={(event) => onFormChange({ name: event.target.value })}
       />
       <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 1, alignItems: 'start' }}>
@@ -91,6 +115,7 @@ export default function BuilderPersistencePanel({
           size="small"
           label="Template ID"
           value={form.templateId}
+          disabled={formDisabled}
           onChange={(event) => onFormChange({ templateId: event.target.value })}
           helperText="Internal ID; must not collide with built-ins."
         />
@@ -101,6 +126,7 @@ export default function BuilderPersistencePanel({
               variant="outlined"
               startIcon={<DriveFileRenameOutlineIcon />}
               onClick={onGenerateTemplateId}
+              disabled={formDisabled}
               sx={{ borderRadius: 1, minHeight: 40 }}
             >
               Slug
@@ -114,12 +140,14 @@ export default function BuilderPersistencePanel({
         value={form.description}
         multiline
         minRows={2}
+        disabled={formDisabled}
         onChange={(event) => onFormChange({ description: event.target.value })}
       />
       <TextField
         size="small"
         label="Owner ID"
         value={form.ownerId}
+        disabled={formDisabled}
         onChange={(event) => onFormChange({ ownerId: event.target.value })}
       />
       <TextField
@@ -128,13 +156,14 @@ export default function BuilderPersistencePanel({
         value={form.changelog}
         multiline
         minRows={2}
+        disabled={formDisabled}
         onChange={(event) => onFormChange({ changelog: event.target.value })}
       />
       <Button
         size="small"
         variant="contained"
         startIcon={<SaveIcon />}
-        disabled={!canSave || busyAction === 'save'}
+        disabled={saveDisabled}
         onClick={onSave}
         sx={{ borderRadius: 1 }}
       >
@@ -145,7 +174,7 @@ export default function BuilderPersistencePanel({
           size="small"
           variant="outlined"
           startIcon={<PublishIcon />}
-          disabled={!persisted || busyAction === 'publish'}
+          disabled={publishDisabled}
           onClick={onPublish}
           sx={{ borderRadius: 1 }}
         >
@@ -156,7 +185,7 @@ export default function BuilderPersistencePanel({
           variant="outlined"
           color="warning"
           startIcon={<ArchiveIcon />}
-          disabled={!persisted || busyAction === 'archive'}
+          disabled={archiveDisabled}
           onClick={onArchive}
           sx={{ borderRadius: 1 }}
         >
@@ -168,6 +197,7 @@ export default function BuilderPersistencePanel({
         size="small"
         label="Thread ID"
         value={form.selectThreadId}
+        disabled={runtimeDisabled || Boolean(busyAction)}
         onChange={(event) => onFormChange({ selectThreadId: event.target.value })}
         helperText="Selects the saved current internal pattern for this thread."
       />
@@ -176,7 +206,7 @@ export default function BuilderPersistencePanel({
         variant="contained"
         color="secondary"
         startIcon={<CloudUploadIcon />}
-        disabled={!persisted || !form.selectThreadId.trim() || busyAction === 'select'}
+        disabled={selectDisabled}
         onClick={onSelectForThread}
         sx={{ borderRadius: 1 }}
       >
@@ -185,4 +215,3 @@ export default function BuilderPersistencePanel({
     </Box>
   );
 }
-

@@ -19,6 +19,7 @@ import type { AgentPatternStarter } from '../../lib/agent-pattern-builder';
 
 export default function BuilderActionsBar({
   starter,
+  disabled,
   onStarterChange,
   onReset,
   onValidate,
@@ -26,6 +27,7 @@ export default function BuilderActionsBar({
   validation,
 }: {
   starter: AgentPatternStarter;
+  disabled?: boolean;
   onStarterChange: (starter: AgentPatternStarter) => void;
   onReset: () => void;
   onValidate: () => void;
@@ -66,7 +68,7 @@ export default function BuilderActionsBar({
       </Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         {validationChip}
-        <FormControl size="small" sx={{ minWidth: 190 }}>
+        <FormControl size="small" disabled={disabled} sx={{ minWidth: 190 }}>
           <InputLabel id="builder-starter-label">Starter</InputLabel>
           <Select
             labelId="builder-starter-label"
@@ -84,6 +86,7 @@ export default function BuilderActionsBar({
           variant="outlined"
           startIcon={<RestartAltIcon />}
           onClick={onReset}
+          disabled={disabled}
           sx={{ borderRadius: 1 }}
         >
           Reset
@@ -102,4 +105,3 @@ export default function BuilderActionsBar({
     </Box>
   );
 }
-

@@ -15,10 +15,12 @@ import { canAddNodeType } from '../../lib/agent-pattern-builder';
 export default function BuilderNodePalette({
   catalog,
   state,
+  disabled,
   onAddNodeType,
 }: {
   catalog: AgentPatternCatalogResponse;
   state: AgentPatternBuilderState;
+  disabled?: boolean;
   onAddNodeType: (nodeType: string) => void;
 }) {
   const groupedNodes = useMemo(() => {
@@ -61,7 +63,7 @@ export default function BuilderNodePalette({
                     size="small"
                     variant="outlined"
                     startIcon={<AddIcon fontSize="small" />}
-                    disabled={!compatibility.ok}
+                    disabled={disabled || !compatibility.ok}
                     onClick={() => onAddNodeType(nodeType)}
                     sx={{
                       justifyContent: 'flex-start',
@@ -83,7 +85,7 @@ export default function BuilderNodePalette({
                 </span>
               );
               return (
-                <Tooltip key={nodeType} title={compatibility.ok ? '' : compatibility.reason || 'Not available'}>
+                <Tooltip key={nodeType} title={disabled ? 'Authoring is disabled.' : compatibility.ok ? '' : compatibility.reason || 'Not available'}>
                   <Box>
                     {button}
                     {entry.max_instances ? (
@@ -104,4 +106,3 @@ export default function BuilderNodePalette({
     </Box>
   );
 }
-

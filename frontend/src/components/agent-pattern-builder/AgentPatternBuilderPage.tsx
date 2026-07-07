@@ -40,11 +40,20 @@ import BuilderGraphEditor from './BuilderGraphEditor';
 import BuilderInspector from './BuilderInspector';
 import BuilderNodePalette from './BuilderNodePalette';
 import BuilderPersistencePanel, {
+  type BuilderBoundaryMessage,
   type BuilderPersistedPattern,
   type BuilderPersistenceState,
 } from './BuilderPersistencePanel';
 import BuilderValidationPanel from './BuilderValidationPanel';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
+
+interface BuilderInternalBoundary {
+  hasMetadata: boolean;
+  authoringEnabled: boolean;
+  runtimeEnabled: boolean;
+  lifecycleEnabled: boolean;
+  messages: BuilderBoundaryMessage[];
+}
 
 const collectNodeToolIds = (nodes: BuilderNodeState[]) => (
   Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
@@ -112,6 +121,70 @@ const buildValidationIssues = (
   ];
 };
 
+const hasExplicitFalse = (boundary: Record<string, any>, keys: string[]) => (
+  keys.some((key) => boundary[key] === false)
+);
+
+const hasExplicitTrue = (boundary: Record<string, any>, keys: string[]) => (
+  keys.some((key) => boundary[key] === true)
+);
+
+const deriveInternalBoundary = (catalog: AgentPatternCatalogResponse | null): BuilderInternalBoundary => {
+  const rawBoundary = catalog?.auth_boundary || {};
+  const boundary = rawBoundary as Record<string, any>;
+  const hasMetadata = Object.keys(boundary).length > 0;
+  const authoringEnabled = !hasExplicitFalse(boundary, [
+    'authoring_enabled',
+    'internal_authoring_enabled',
+    'internal_agent_pattern_authoring_enabled',
+  ]);
+  const runtimeEnabled = !hasExplicitFalse(boundary, [
+    'custom_runtime_enabled',
+    'custom_patterns_enabled',
+    'runtime_custom_execution_enabled',
+  ]);
+  const lifecycleEnabled = hasExplicitTrue(boundary, [
+    'lifecycle_enabled',
+    'publish_archive_enabled',
+    'publish_enabled',
+    'archive_enabled',
+  ]);
+  const messages: BuilderBoundaryMessage[] = [];
+
+  if (!hasMetadata) {
+    messages.push({
+      severity: 'info',
+      message: 'Catalog flag metadata is unavailable; authoring and selection will rely on endpoint responses.',
+    });
+  }
+  if (!authoringEnabled) {
+    messages.push({
+      severity: 'error',
+      message: 'Internal pattern authoring is disabled by backend feature flags. Builder edits and saves are read-only.',
+    });
+  }
+  if (!runtimeEnabled) {
+    messages.push({
+      severity: 'warning',
+      message: 'Custom pattern runtime execution is disabled, so custom patterns cannot be selected for chat yet.',
+    });
+  }
+  if (!lifecycleEnabled) {
+    messages.push({
+      severity: 'info',
+      message: 'Publish and archive are disabled until the catalog advertises lifecycle endpoint support.',
+    });
+  }
+
+  return {
+    hasMetadata,
+    authoringEnabled,
+    runtimeEnabled,
+    lifecycleEnabled,
+    messages,
+  };
+};
+
 const usePrefersDarkMode = () => {
   const [darkMode, setDarkMode] = useState(false);
   useEffect(() => {
@@ -152,6 +225,10 @@ export default function AgentPatternBuilderPage() {
   const [busyAction, setBusyAction] = useState<'save' | 'publish' | 'archive' | 'select' | null>(null);
   const [persistenceStatus, setPersistenceStatus] = useState<string | null>(null);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
+  const boundary = useMemo(() => deriveInternalBoundary(catalog), [catalog]);
+  const authoringDisabled = !boundary.authoringEnabled;
+  const runtimeDisabled = !boundary.runtimeEnabled;
+  const lifecycleDisabled = !boundary.lifecycleEnabled;
 
   useEffect(() => {
     let cancelled = false;
@@ -176,7 +253,7 @@ export default function AgentPatternBuilderPage() {
   }, []);
 
   const updateState = useCallback((updater: (previous: AgentPatternBuilderState) => AgentPatternBuilderState) => {
-    if (!catalog) return;
+    if (!catalog || authoringDisabled) return;
     setBuilderState((previous) => {
       if (!previous) return previous;
       const next = normalizeBuilderState(catalog, updater(previous));
@@ -189,10 +266,10 @@ export default function AgentPatternBuilderPage() {
     setThreadPreview(null);
     setThreadPreviewError(null);
     setPersistenceStatus(null);
-  }, [catalog]);
+  }, [authoringDisabled, catalog]);
 
   const resetToStarter = useCallback((nextStarter = starter) => {
-    if (!catalog) return;
+    if (!catalog || authoringDisabled) return;
     setBuilderState(createInitialBuilderState(catalog, nextStarter));
     setSelection(null);
     setValidation(null);
@@ -201,15 +278,16 @@ export default function AgentPatternBuilderPage() {
     setPersistedPattern(null);
     setPersistenceStatus(null);
     setPersistenceError(null);
-  }, [catalog, starter]);
+  }, [authoringDisabled, catalog, starter]);
 
   const handleStarterChange = (nextStarter: AgentPatternStarter) => {
+    if (authoringDisabled) return;
     setStarter(nextStarter);
     resetToStarter(nextStarter);
   };
 
   const handleAddNodeType = (nodeType: string) => {
-    if (!catalog || !builderState) return;
+    if (!catalog || !builderState || authoringDisabled) return;
     const compatibility = canAddNodeType(catalog, builderState, nodeType);
     if (!compatibility.ok) return;
     const id = getCanonicalNodeId(nodeType, builderState.nodes.map((node) => node.id));
@@ -250,7 +328,7 @@ export default function AgentPatternBuilderPage() {
   };
 
   const handleAddEdge = (edge: BuilderEdgeState) => {
-    if (!catalog || !builderState || !edge.to || !canConnectNodes(catalog, builderState, edge.from, edge.to).ok) return;
+    if (!catalog || !builderState || authoringDisabled || !edge.to || !canConnectNodes(catalog, builderState, edge.from, edge.to).ok) return;
     const duplicate = builderState.edges.some((existing) => existing.from === edge.from && existing.to === edge.to && !existing.conditional);
     if (duplicate) return;
     updateState((previous) => ({
@@ -276,7 +354,7 @@ export default function AgentPatternBuilderPage() {
   };
 
   const handleAddHitlGate = (targetNodeId: string) => {
-    if (!catalog) return;
+    if (!catalog || authoringDisabled) return;
     updateState((previous) => createHitlGateForTarget(catalog, previous, targetNodeId));
   };
 
@@ -325,11 +403,16 @@ export default function AgentPatternBuilderPage() {
   };
 
   const handleGenerateTemplateId = () => {
+    if (authoringDisabled) return;
     updatePersistenceForm({ templateId: slugifyTemplateId(persistenceForm.name) });
   };
 
   const handleSaveInternalVersion = async () => {
     if (!builderState || !spec) return;
+    if (authoringDisabled) {
+      setPersistenceError('Internal pattern authoring is disabled by backend feature flags.');
+      return;
+    }
     try {
       setBusyAction('save');
       setPersistenceError(null);
@@ -366,6 +449,14 @@ export default function AgentPatternBuilderPage() {
   const handlePublish = async () => {
     const templateId = persistedPattern?.template.id;
     if (!templateId) return;
+    if (authoringDisabled) {
+      setPersistenceError('Internal pattern authoring is disabled by backend feature flags.');
+      return;
+    }
+    if (lifecycleDisabled) {
+      setPersistenceError('Publish is disabled until the catalog advertises lifecycle endpoint support.');
+      return;
+    }
     try {
       setBusyAction('publish');
       setPersistenceError(null);
@@ -382,6 +473,14 @@ export default function AgentPatternBuilderPage() {
   const handleArchive = async () => {
     const templateId = persistedPattern?.template.id;
     if (!templateId) return;
+    if (authoringDisabled) {
+      setPersistenceError('Internal pattern authoring is disabled by backend feature flags.');
+      return;
+    }
+    if (lifecycleDisabled) {
+      setPersistenceError('Archive is disabled until the catalog advertises lifecycle endpoint support.');
+      return;
+    }
     try {
       setBusyAction('archive');
       setPersistenceError(null);
@@ -398,6 +497,10 @@ export default function AgentPatternBuilderPage() {
   const handleSelectForThread = async () => {
     const templateId = persistedPattern?.template.id;
     if (!templateId || !persistenceForm.selectThreadId.trim()) return;
+    if (runtimeDisabled) {
+      setPersistenceError('Custom pattern runtime execution is disabled, so this pattern cannot be selected for chat.');
+      return;
+    }
     try {
       setBusyAction('select');
       setPersistenceError(null);
@@ -420,6 +523,7 @@ export default function AgentPatternBuilderPage() {
       <Box sx={{ height: '100vh', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
         <BuilderActionsBar
           starter={starter}
+          disabled={authoringDisabled}
           onStarterChange={handleStarterChange}
           onReset={() => resetToStarter()}
           onValidate={handleValidate}
@@ -444,7 +548,12 @@ export default function AgentPatternBuilderPage() {
             }}
           >
             <Box sx={{ minHeight: 0, overflow: 'auto', borderRight: { lg: 1 }, borderColor: 'divider', p: 1.5 }}>
-              <BuilderNodePalette catalog={catalog} state={builderState} onAddNodeType={handleAddNodeType} />
+              <BuilderNodePalette
+                catalog={catalog}
+                state={builderState}
+                disabled={authoringDisabled}
+                onAddNodeType={handleAddNodeType}
+              />
             </Box>
             <Box sx={{ minHeight: 0, overflow: 'auto', p: 1.5 }}>
               {spec ? (
@@ -467,6 +576,7 @@ export default function AgentPatternBuilderPage() {
                 state={builderState}
                 selection={selection}
                 validationIssues={validationIssues}
+                disabled={authoringDisabled}
                 onSelectionChange={setSelection}
                 onAddEdge={handleAddEdge}
               />
@@ -480,6 +590,10 @@ export default function AgentPatternBuilderPage() {
                 statusMessage={persistenceStatus}
                 errorMessage={persistenceError}
                 canSave={Boolean(spec && persistenceForm.templateId.trim() && persistenceForm.name.trim())}
+                authoringDisabled={authoringDisabled}
+                runtimeDisabled={runtimeDisabled}
+                lifecycleDisabled={lifecycleDisabled}
+                boundaryMessages={boundary.messages}
                 onGenerateTemplateId={handleGenerateTemplateId}
                 onSave={handleSaveInternalVersion}
                 onPublish={handlePublish}
@@ -491,6 +605,7 @@ export default function AgentPatternBuilderPage() {
                 catalog={catalog}
                 state={builderState}
                 selection={selection}
+                disabled={authoringDisabled}
                 onUpdateNode={handleUpdateNode}
                 onUpdateEdge={handleUpdateEdge}
                 onRemoveNode={handleRemoveNode}
