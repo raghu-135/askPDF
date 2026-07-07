@@ -599,6 +599,22 @@ class TestRouterRagTemplateValidator:
 
         assert "replans must be between" in str(exc.value)
 
+    @pytest.mark.parametrize(
+        "policy_update, expected",
+        [
+            ({"final_prompt_assembly": "unsupported"}, "context_policy.final_prompt_assembly must be one of"),
+            ({"evidence_compression": "lossy"}, "context_policy.evidence_compression must be one of"),
+        ],
+    )
+    def test_rejects_unsupported_context_policy_modes(self, policy_update, expected):
+        spec = builtin_router_rag_v2_spec()
+        spec["config"]["context_policy"].update(policy_update)
+
+        with pytest.raises(TemplateValidationError) as exc:
+            TemplateValidator().validate(spec)
+
+        assert expected in str(exc.value)
+
     def test_rejects_legacy_v1_builtin_specs(self):
         with pytest.raises(TemplateValidationError, match="schema_version must be 2"):
             TemplateValidator().validate(legacy_builtin_router_rag_v1_spec())

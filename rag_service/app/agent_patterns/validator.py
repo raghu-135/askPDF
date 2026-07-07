@@ -62,6 +62,8 @@ HITL_ACTIONS = {"approve", "approve_selected", "continue_without", "reject", "ed
 HITL_PHASES = {"before", "after", "inside_tool"}
 HITL_MODES = {"approval", "choice", "review"}
 HITL_SELECTION_MODES = {"single", "multi", "single_or_multi"}
+CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"legacy_evidence", "evidence_packets"}
+CONTEXT_EVIDENCE_COMPRESSION_MODES = {"none", "compact"}
 HITL_GATE_KEYS = {
     "enabled",
     "title",
@@ -812,10 +814,26 @@ class GenericGraphValidator:
                         errors.append(f"context_policy.{key} must be a positive integer")
             if "final_prompt_assembly" in context_policy and not isinstance(context_policy["final_prompt_assembly"], str):
                 errors.append("context_policy.final_prompt_assembly must be a string")
+            elif (
+                "final_prompt_assembly" in context_policy
+                and context_policy["final_prompt_assembly"] not in CONTEXT_FINAL_PROMPT_ASSEMBLIES
+            ):
+                errors.append(
+                    "context_policy.final_prompt_assembly must be one of: "
+                    f"{', '.join(sorted(CONTEXT_FINAL_PROMPT_ASSEMBLIES))}"
+                )
             if "evidence_dedupe" in context_policy and not isinstance(context_policy["evidence_dedupe"], bool):
                 errors.append("context_policy.evidence_dedupe must be a boolean")
             if "evidence_compression" in context_policy and not isinstance(context_policy["evidence_compression"], str):
                 errors.append("context_policy.evidence_compression must be a string")
+            elif (
+                "evidence_compression" in context_policy
+                and context_policy["evidence_compression"] not in CONTEXT_EVIDENCE_COMPRESSION_MODES
+            ):
+                errors.append(
+                    "context_policy.evidence_compression must be one of: "
+                    f"{', '.join(sorted(CONTEXT_EVIDENCE_COMPRESSION_MODES))}"
+                )
         return errors
 
     def _collect_catalog_route_function_errors(
