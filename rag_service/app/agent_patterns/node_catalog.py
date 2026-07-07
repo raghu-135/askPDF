@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict
 
+from app.models.llm_server_client import REPLANS_LIMIT
+
 
 NODE_CATALOG: Dict[str, Dict[str, Any]] = {
     "context_loader": {
@@ -59,7 +61,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             "finalizer",
             "hitl_gate",
         ],
-        "limits": {"default_max_visits": 2},
+        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
     "memory_worker": {
         "display_name": "Memory Retrieval",
@@ -76,7 +78,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             "finalizer",
             "hitl_gate",
         ],
-        "limits": {"default_max_visits": 2},
+        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
     "timeline_worker": {
         "display_name": "Timeline Retrieval",
@@ -86,7 +88,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": ["thread_timeline"],
         "allowed_parent_types": ["router", "memory_worker", "planner", "replanner", "hitl_gate"],
         "allowed_child_types": ["web_worker", "evidence_evaluator", "synthesizer", "finalizer", "hitl_gate"],
-        "limits": {"default_max_visits": 2},
+        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
     "web_worker": {
         "display_name": "Web Retrieval",
@@ -105,7 +107,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         ],
         "allowed_parent_types": ["router", "timeline_worker", "memory_worker", "planner", "replanner", "hitl_gate"],
         "allowed_child_types": ["evidence_evaluator", "synthesizer", "finalizer", "hitl_gate"],
-        "limits": {"default_max_visits": 2},
+        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
     "evidence_evaluator": {
         "display_name": "Evidence Evaluator",
@@ -115,7 +117,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": ["clarify_intent"],
         "allowed_parent_types": ["retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "hitl_gate"],
         "allowed_child_types": ["synthesizer", "replanner", "hitl_gate"],
-        "limits": {"default_max_visits": 2},
+        "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
     "replanner": {
         "display_name": "Replanner",
@@ -125,7 +127,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": ["clarify_intent"],
         "allowed_parent_types": ["evidence_evaluator", "hitl_gate"],
         "allowed_child_types": ["retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "hitl_gate"],
-        "limits": {"default_max_visits": 1},
+        "limits": {"default_max_visits": 1, "max_visits": REPLANS_LIMIT},
     },
     "direct_answer": {
         "display_name": "Direct Answer",
@@ -463,3 +465,13 @@ def node_type_default_max_visits(node_type: str) -> int:
         return max(1, int(limits.get("default_max_visits", 1)))
     except (TypeError, ValueError):
         return 1
+
+
+def node_type_max_visits(node_type: str) -> int:
+    metadata = NODE_CATALOG.get(node_type) or {}
+    limits = metadata.get("limits") if isinstance(metadata.get("limits"), dict) else {}
+    default = node_type_default_max_visits(node_type)
+    try:
+        return max(default, int(limits.get("max_visits", default)))
+    except (TypeError, ValueError):
+        return default

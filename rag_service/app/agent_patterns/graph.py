@@ -29,7 +29,12 @@ from app.agent_patterns.prompting import (
     build_replanner_prompt,
     build_router_prompt,
 )
-from app.agent_patterns.node_catalog import get_node_type_metadata, node_type_capabilities, node_type_default_max_visits
+from app.agent_patterns.node_catalog import (
+    get_node_type_metadata,
+    node_type_capabilities,
+    node_type_default_max_visits,
+    node_type_max_visits,
+)
 from app.agent_patterns.route_registry import route_function_allowed_for_node_type
 from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES, WEB_APPROVAL_GATE_ID
 from app.agent_patterns.trace import (
@@ -183,7 +188,7 @@ def _node_visit_limit(state: RouterRagState, *, node_id: str, node_type: str) ->
         default_limit = int(policy.get("default_max_node_visits", node_type_default_max_visits(node_type)))
     except (TypeError, ValueError):
         default_limit = node_type_default_max_visits(node_type)
-    return max(1, min(default_limit, node_type_default_max_visits(node_type)))
+    return max(1, min(default_limit, node_type_max_visits(node_type)))
 
 
 def _total_visit_limit(state: RouterRagState) -> Optional[int]:

@@ -8,6 +8,7 @@ from app.agent_patterns.node_catalog import (
     collect_node_catalog_errors,
     get_node_catalog,
     node_type_allowed_tool_contract_ids,
+    node_type_max_visits,
     known_node_types,
 )
 from app.agent_patterns.route_registry import (
@@ -30,6 +31,7 @@ from app.agent_patterns.templates import (
     ROUTER_RAG_REQUIRED_TOOL_IDS,
     SUPPORTED_BUILTIN_TEMPLATE_IDS,
     WEB_APPROVAL_GATE_ID,
+    evaluator_replanner_loop_policy,
 )
 from app.models.llm_server_client import (
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -1041,11 +1043,8 @@ class GenericGraphValidator:
             node_type = node_types_by_id.get(node_id)
             metadata = node_catalog.get(node_type or "") or {}
             limits = metadata.get("limits") if isinstance(metadata.get("limits"), dict) else {}
-            try:
-                catalog_default = int(limits.get("default_max_visits", default_max_value))
-            except (TypeError, ValueError):
-                catalog_default = default_max_value
-            if limit > max(default_max_value, catalog_default):
+            max_visits = node_type_max_visits(node_type or "")
+            if limit > max(default_max_value, max_visits):
                 errors.append(
                     f"loop_policy.node_visit_limits.{node_id} exceeds allowed max for node type {node_type}"
                 )
@@ -1130,5 +1129,7 @@ class TemplateResolver:
                     config[key] = source[key]
 
         resolved["config"] = config
+        if resolved.get("pattern_type") == EVALUATOR_REPLANNER_RAG_AGENT_ID:
+            config["loop_policy"] = evaluator_replanner_loop_policy(config)
         self.validator.validate(resolved)
         return resolved

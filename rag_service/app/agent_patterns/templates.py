@@ -65,6 +65,13 @@ EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS = {
     "evidence_evaluator": "clarify_intent",
     "replanner": "clarify_intent",
 }
+EVALUATOR_REPLANNER_REPEATABLE_NODE_TYPES = {
+    "retrieval_worker",
+    "memory_worker",
+    "timeline_worker",
+    "web_worker",
+    "evidence_evaluator",
+}
 
 PLAN_EXECUTE_WORKER_NODES = [
     "retrieval_worker",
@@ -345,16 +352,19 @@ def _with_v2_contract(spec: Dict[str, Any], *, max_total_visits: int) -> Dict[st
         for node in graph.get("nodes", [])
         if isinstance(node, dict) and node.get("id") and node.get("type")
     }
-    repeatable_node_ids = {
-        node_id
-        for node_id, node_type in node_types.items()
-        if node_type in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "evidence_evaluator"}
-    }
-    config["loop_policy"] = {
-        "max_total_visits": max_total_visits,
-        "default_max_node_visits": 1,
-        "node_visit_limits": {node_id: 2 for node_id in sorted(repeatable_node_ids)},
-    }
+    if v2.get("pattern_type") == EVALUATOR_REPLANNER_RAG_AGENT_ID:
+        config["loop_policy"] = evaluator_replanner_loop_policy(config)
+    else:
+        repeatable_node_ids = {
+            node_id
+            for node_id, node_type in node_types.items()
+            if node_type in EVALUATOR_REPLANNER_REPEATABLE_NODE_TYPES
+        }
+        config["loop_policy"] = {
+            "max_total_visits": max_total_visits,
+            "default_max_node_visits": 1,
+            "node_visit_limits": {node_id: 2 for node_id in sorted(repeatable_node_ids)},
+        }
     route_by_type = {
         "router": "router_route",
         "planner": "planner_route",
@@ -369,6 +379,33 @@ def _with_v2_contract(spec: Dict[str, Any], *, max_total_visits: int) -> Dict[st
         if route_fn:
             edge["route_fn"] = route_fn
     return v2
+
+
+def evaluator_replanner_loop_policy(config: Dict[str, Any]) -> Dict[str, Any]:
+    graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
+    node_types = {
+        str(node.get("id")): str(node.get("type"))
+        for node in graph.get("nodes", [])
+        if isinstance(node, dict) and node.get("id") and node.get("type")
+    }
+    try:
+        replans = max(1, int(config.get("replans", 1)))
+    except (TypeError, ValueError):
+        replans = 1
+    node_visit_limits = {
+        node_id: replans + 1
+        for node_id, node_type in node_types.items()
+        if node_type in EVALUATOR_REPLANNER_REPEATABLE_NODE_TYPES
+    }
+    for node_id, node_type in node_types.items():
+        if node_type == "replanner":
+            node_visit_limits[node_id] = replans
+    max_total_visits = sum(node_visit_limits.get(node_id, 1) for node_id in node_types)
+    return {
+        "max_total_visits": max_total_visits,
+        "default_max_node_visits": 1,
+        "node_visit_limits": {node_id: node_visit_limits[node_id] for node_id in sorted(node_visit_limits)},
+    }
 
 
 def builtin_router_rag_v2_spec() -> Dict[str, Any]:

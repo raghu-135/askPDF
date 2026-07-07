@@ -589,6 +589,9 @@ class TestRouterRagTemplateValidator:
             request_overrides={"use_web_search": True},
         )
         assert evaluator_resolved["config"]["replans"] == 3
+        assert evaluator_resolved["config"]["loop_policy"]["node_visit_limits"]["replanner"] == 3
+        assert evaluator_resolved["config"]["loop_policy"]["node_visit_limits"]["evidence_evaluator"] == 4
+        assert evaluator_resolved["config"]["loop_policy"]["max_total_visits"] == 28
 
     def test_rejects_zero_replan_budget(self):
         spec = builtin_evaluator_replanner_rag_v2_spec()
@@ -638,6 +641,26 @@ class TestRouterRagTemplateValidator:
 
     def test_accepts_builtin_evaluator_replanner_rag_spec(self):
         result = TemplateValidator().validate(builtin_evaluator_replanner_rag_v2_spec())
+
+        assert result == {"valid": True, "errors": []}
+
+    def test_evaluator_replanner_loop_policy_matches_replan_budget(self):
+        spec = builtin_evaluator_replanner_rag_v2_spec()
+        spec["config"]["replans"] = 2
+        spec["config"]["loop_policy"] = {
+            "max_total_visits": 22,
+            "default_max_node_visits": 1,
+            "node_visit_limits": {
+                "retrieval_worker": 3,
+                "memory_worker": 3,
+                "timeline_worker": 3,
+                "web_worker": 3,
+                "evidence_evaluator": 3,
+                "replanner": 2,
+            },
+        }
+
+        result = TemplateValidator().validate(spec)
 
         assert result == {"valid": True, "errors": []}
 
