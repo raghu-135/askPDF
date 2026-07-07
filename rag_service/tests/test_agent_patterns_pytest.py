@@ -48,7 +48,7 @@ from app.agent_patterns.templates import (
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
 from app.db import get_thread_settings
-from app.db.models_sqlmodel import AgentPatternTemplate, AgentPatternTemplateVersion, AgentRun, ChatTurn, Thread
+from app.db.models_sqlmodel import AgentPatternTemplate, AgentRun, ChatTurn, Thread
 from app.models.llm_server_client import REPLANS_LIMIT
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z, utc_now
@@ -2038,17 +2038,17 @@ class TestAgentPatternRepository:
             PLAN_EXECUTE_RAG_AGENT_ID,
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
         }
-        assert router_template.current_version_id == router_version.id
+        assert router_template.metadata_json["version_id"] == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
         assert router_version.schema_version == 2
         assert router_version.spec_json["schema_version"] == 2
         assert router_version.validation_result_json == {"valid": True, "errors": []}
-        assert plan_template.current_version_id == plan_version.id
+        assert plan_template.metadata_json["version_id"] == plan_version.id
         assert plan_version.version == PLAN_EXECUTE_RAG_AGENT_VERSION
         assert plan_version.schema_version == 2
         assert plan_version.spec_json["schema_version"] == 2
         assert plan_version.validation_result_json == {"valid": True, "errors": []}
-        assert evaluator_template.current_version_id == evaluator_version.id
+        assert evaluator_template.metadata_json["version_id"] == evaluator_version.id
         assert evaluator_version.version == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
         assert evaluator_version.schema_version == 2
         assert evaluator_version.spec_json["schema_version"] == 2
@@ -2094,18 +2094,14 @@ class TestAgentPatternRepository:
                     description="Invalid internal test agent.",
                     visibility="internal",
                     is_builtin=False,
-                    current_version_id="internal_bad_agent:v1",
-                )
-            )
-            repo._session.add(
-                AgentPatternTemplateVersion(
-                    id="internal_bad_agent:v1",
-                    template_id="internal_bad_agent",
-                    version=1,
                     schema_version=2,
                     spec_json=bad_spec,
                     validation_result_json={},
-                    changelog="Invalid test spec.",
+                    metadata_json={
+                        "version": 1,
+                        "version_id": "internal_bad_agent:v1",
+                        "changelog": "Invalid test spec.",
+                    },
                 )
             )
 
@@ -2136,7 +2132,7 @@ class TestAgentPatternRepository:
         assert template.id == "internal_custom_rag_agent"
         assert template.visibility == "internal"
         assert template.is_builtin is False
-        assert template.current_version_id == "internal_custom_rag_agent:v1"
+        assert template.metadata_json["version_id"] == "internal_custom_rag_agent:v1"
         assert version.schema_version == 2
         assert version.validation_result_json == {"valid": True, "errors": []}
         assert public_template is None

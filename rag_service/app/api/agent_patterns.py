@@ -49,11 +49,7 @@ class InternalAgentPatternCreateRequest(BaseModel):
     template_id: Optional[str] = Field(default=None, min_length=1)
     name: str = Field(..., min_length=1)
     description: str = ""
-    owner_id: Optional[str] = None
-    version: Optional[int] = Field(default=None, ge=1)
-    changelog: Optional[str] = None
     spec_json: Dict[str, Any] = Field(default_factory=dict)
-    set_current: bool = True
 
 
 class AgentRunResumeRequest(BaseModel):
@@ -73,8 +69,6 @@ def _template_payload(template) -> Dict[str, Any]:
         "name": template.name,
         "description": template.description,
         "visibility": template.visibility,
-        "owner_id": template.owner_id,
-        "current_version_id": template.current_version_id,
         "is_builtin": template.is_builtin,
         "created_at": iso_utc_z(template.created_at) if template.created_at else None,
         "updated_at": iso_utc_z(template.updated_at) if template.updated_at else None,
@@ -320,8 +314,6 @@ async def create_internal_agent_pattern(req: InternalAgentPatternCreateRequest):
             template_id=template_id,
             name=req.name,
             description=req.description,
-            owner_id=req.owner_id,
-            changelog=req.changelog,
             spec_json=spec_json,
         )
     except (TemplateValidationError, ValueError) as exc:

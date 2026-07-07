@@ -14,7 +14,6 @@ from app.db.models_sqlmodel import (
     ThreadFile,
     ChatTurn,
     AgentPatternTemplate,
-    AgentPatternTemplateVersion,
     AgentRun,
 )
 
@@ -404,7 +403,6 @@ __all__ = [
     "ThreadFile",
     "ChatTurn",
     "AgentPatternTemplate",
-    "AgentPatternTemplateVersion",
     "AgentRun",
     # Config
     "init_db",

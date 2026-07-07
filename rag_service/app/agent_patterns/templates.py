@@ -446,7 +446,6 @@ def builtin_templates() -> list[Dict[str, Any]]:
             "description": "A compiled LangGraph pattern that loads context, routes to document retrieval, memory retrieval, direct answer, or clarification, then synthesizes a final response.",
             "visibility": "builtin",
             "is_builtin": True,
-            "current_version_id": ROUTER_RAG_AGENT_VERSION_ID,
             "version": {
                 "id": ROUTER_RAG_AGENT_VERSION_ID,
                 "version": ROUTER_RAG_AGENT_VERSION,
@@ -470,7 +469,6 @@ def builtin_templates() -> list[Dict[str, Any]]:
             "description": "A scoped compiled RAG pattern that loads context, plans a bounded set of retrieval workers, executes them in a fixed safe order, then synthesizes a final response.",
             "visibility": "builtin",
             "is_builtin": True,
-            "current_version_id": PLAN_EXECUTE_RAG_AGENT_VERSION_ID,
             "version": {
                 "id": PLAN_EXECUTE_RAG_AGENT_VERSION_ID,
                 "version": PLAN_EXECUTE_RAG_AGENT_VERSION,
@@ -494,7 +492,6 @@ def builtin_templates() -> list[Dict[str, Any]]:
             "description": "A bounded compiled RAG pattern that plans retrieval, evaluates evidence sufficiency, optionally replans once, then synthesizes a final response.",
             "visibility": "builtin",
             "is_builtin": True,
-            "current_version_id": EVALUATOR_REPLANNER_RAG_AGENT_VERSION_ID,
             "version": {
                 "id": EVALUATOR_REPLANNER_RAG_AGENT_VERSION_ID,
                 "version": EVALUATOR_REPLANNER_RAG_AGENT_VERSION,

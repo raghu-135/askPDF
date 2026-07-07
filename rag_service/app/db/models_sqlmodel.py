@@ -219,18 +219,29 @@ class ChatTurn(SQLModel, table=True):
 
 
 class AgentPatternTemplate(SQLModel, table=True):
-    """Versioned agent pattern template family."""
+    """Agent pattern template and its current executable spec."""
     __tablename__ = "agent_pattern_templates"
 
     id: str = Field(primary_key=True)
     name: str = Field(index=True)
     description: str = ""
     visibility: str = Field(default="builtin", index=True)
-    owner_id: Optional[str] = Field(default=None, index=True)
-    current_version_id: Optional[str] = Field(default=None, index=True)
     is_builtin: bool = Field(
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default="false"),
+    )
+    schema_version: int = Field(default=2)
+    spec_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+    validation_result_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+    metadata_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
     )
     created_at: datetime = Field(
         default_factory=utc_now,
@@ -243,35 +254,6 @@ class AgentPatternTemplate(SQLModel, table=True):
 
     __table_args__ = (
         Index("idx_agent_pattern_template_builtin", "is_builtin"),
-    )
-
-
-class AgentPatternTemplateVersion(SQLModel, table=True):
-    """Immutable spec for a single agent pattern version."""
-    __tablename__ = "agent_pattern_template_versions"
-
-    id: str = Field(primary_key=True)
-    template_id: str = Field(
-        sa_column=Column(String, ForeignKey("agent_pattern_templates.id", ondelete="CASCADE"), index=True)
-    )
-    version: int = Field(index=True)
-    schema_version: int = Field(default=2)
-    spec_json: Dict[str, Any] = Field(
-        default_factory=dict,
-        sa_column=Column(JSONB, default=dict)
-    )
-    validation_result_json: Dict[str, Any] = Field(
-        default_factory=dict,
-        sa_column=Column(JSONB, default=dict)
-    )
-    changelog: Optional[str] = None
-    created_at: datetime = Field(
-        default_factory=utc_now,
-        sa_column=Column(DateTime(timezone=True), server_default=func.now())
-    )
-
-    __table_args__ = (
-        Index("idx_agent_pattern_template_version_unique", "template_id", "version", unique=True),
     )
 
 

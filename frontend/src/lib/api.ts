@@ -274,8 +274,6 @@ export interface AgentPatternTemplate {
   name: string;
   description?: string;
   visibility?: string;
-  owner_id?: string | null;
-  current_version_id?: string | null;
   is_builtin?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
@@ -320,11 +318,7 @@ export interface CreateInternalAgentPatternPayload {
   template_id?: string;
   name: string;
   description?: string;
-  owner_id?: string | null;
-  version?: number;
-  changelog?: string | null;
   spec_json: AgentPatternBuilderSpec | Record<string, any>;
-  set_current?: boolean;
 }
 
 export interface ThreadAgentConfigValidationResponse {
