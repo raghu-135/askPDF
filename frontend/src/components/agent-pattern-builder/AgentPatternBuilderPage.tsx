@@ -11,9 +11,13 @@ import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../../theme';
 import {
   createInternalAgentPattern,
+  deleteInternalAgentPattern,
+  getInternalAgentPattern,
   getInternalAgentPatternCatalog,
+  listAgentPatterns,
   previewThreadAgentConfig,
   validateAgentPatternSpec,
+  type AgentPatternTemplate,
   type AgentPatternCatalogResponse,
   type AgentPatternValidationReport,
   type ThreadAgentConfigPreviewResponse,
@@ -26,6 +30,7 @@ import {
   createInitialBuilderState,
   getAllowedToolContractsForNode,
   getCanonicalNodeId,
+  loadBuilderStateFromSpec,
   normalizeBuilderState,
   type AgentPatternBuilderState,
   type AgentPatternStarter,
@@ -53,6 +58,18 @@ interface BuilderInternalBoundary {
 
 const collectNodeToolIds = (nodes: BuilderNodeState[]) => (
   Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
+);
+
+const BUILTIN_STARTERS: AgentPatternStarter[] = ['router', 'plan_execute', 'evaluator_replanner'];
+
+const isBuiltinStarter = (value: string): value is AgentPatternStarter => (
+  BUILTIN_STARTERS.includes(value as AgentPatternStarter)
+);
+
+const customStarterValue = (templateId: string) => `custom:${templateId}`;
+
+const templateIdFromCustomStarter = (value: string) => (
+  value.startsWith('custom:') ? value.slice('custom:'.length) : null
 );
 
 const slugifyTemplateId = (name: string) => {
@@ -181,9 +198,10 @@ export default function AgentPatternBuilderPage() {
   const darkMode = usePrefersDarkMode();
   const theme = useMemo(() => getTheme(darkMode), [darkMode]);
   const [catalog, setCatalog] = useState<AgentPatternCatalogResponse | null>(null);
+  const [customPatterns, setCustomPatterns] = useState<AgentPatternTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [starter, setStarter] = useState<AgentPatternStarter>('router');
+  const [starter, setStarter] = useState<string>('router');
   const [builderState, setBuilderState] = useState<AgentPatternBuilderState | null>(null);
   const [selection, setSelection] = useState<BuilderSelection>(null);
   const [validation, setValidation] = useState<AgentPatternValidationReport | null>(null);
@@ -200,7 +218,7 @@ export default function AgentPatternBuilderPage() {
     changelog: '',
   });
   const [persistedPattern, setPersistedPattern] = useState<BuilderPersistedPattern | null>(null);
-  const [busyAction, setBusyAction] = useState<'save' | null>(null);
+  const [busyAction, setBusyAction] = useState<'save' | 'delete' | null>(null);
   const [persistenceStatus, setPersistenceStatus] = useState<string | null>(null);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const boundary = useMemo(() => deriveInternalBoundary(catalog), [catalog]);
@@ -209,11 +227,15 @@ export default function AgentPatternBuilderPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    getInternalAgentPatternCatalog()
-      .then((nextCatalog) => {
+    Promise.all([
+      getInternalAgentPatternCatalog(),
+      listAgentPatterns().catch(() => ({ agent_patterns: [] })),
+    ])
+      .then(([nextCatalog, patternList]) => {
         if (cancelled) return;
         setCatalog(nextCatalog);
-        setBuilderState(createInitialBuilderState(nextCatalog, starter));
+        setCustomPatterns((patternList.agent_patterns || []).filter((pattern) => !pattern.is_builtin));
+        setBuilderState(createInitialBuilderState(nextCatalog, 'router'));
         setError(null);
       })
       .catch((err) => {
@@ -226,6 +248,11 @@ export default function AgentPatternBuilderPage() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  const refreshCustomPatterns = useCallback(async () => {
+    const response = await listAgentPatterns();
+    setCustomPatterns((response.agent_patterns || []).filter((pattern) => !pattern.is_builtin));
   }, []);
 
   const updateState = useCallback((updater: (previous: AgentPatternBuilderState) => AgentPatternBuilderState) => {
@@ -244,9 +271,10 @@ export default function AgentPatternBuilderPage() {
     setPersistenceStatus(null);
   }, [authoringDisabled, catalog]);
 
-  const resetToStarter = useCallback((nextStarter = starter) => {
+  const resetToStarter = useCallback((nextStarter: AgentPatternStarter = 'router') => {
     if (!catalog || authoringDisabled) return;
     setBuilderState(createInitialBuilderState(catalog, nextStarter));
+    setStarter(nextStarter);
     setSelection(null);
     setValidation(null);
     setThreadPreview(null);
@@ -254,11 +282,46 @@ export default function AgentPatternBuilderPage() {
     setPersistedPattern(null);
     setPersistenceStatus(null);
     setPersistenceError(null);
-  }, [authoringDisabled, catalog, starter]);
+  }, [authoringDisabled, catalog]);
 
-  const handleStarterChange = (nextStarter: AgentPatternStarter) => {
+  const loadCustomPattern = useCallback(async (templateId: string) => {
+    if (!catalog || authoringDisabled) return;
+    try {
+      setError(null);
+      const response = await getInternalAgentPattern(templateId);
+      const loadedState = normalizeBuilderState(catalog, loadBuilderStateFromSpec(response.current_version.spec_json));
+      setBuilderState({
+        ...loadedState,
+        allowed_tool_ids: collectNodeToolIds(loadedState.nodes),
+      });
+      setStarter(customStarterValue(response.agent_pattern.id));
+      setPersistenceForm({
+        templateId: response.agent_pattern.id,
+        name: response.agent_pattern.name || response.agent_pattern.id,
+        description: response.agent_pattern.description || '',
+        ownerId: response.agent_pattern.owner_id || '',
+        changelog: '',
+      });
+      setPersistedPattern({ template: response.agent_pattern, version: response.current_version });
+      setSelection(null);
+      setValidation(null);
+      setThreadPreview(null);
+      setThreadPreviewError(null);
+      setPersistenceStatus(`Loaded ${response.agent_pattern.id} v${response.current_version.version}.`);
+      setPersistenceError(null);
+    } catch (err) {
+      setPersistenceError(err instanceof Error ? err.message : String(err));
+    }
+  }, [authoringDisabled, catalog]);
+
+  const handleStarterChange = (nextStarter: AgentPatternStarter | string) => {
     if (authoringDisabled) return;
-    setStarter(nextStarter);
+    const customTemplateId = templateIdFromCustomStarter(nextStarter);
+    if (customTemplateId) {
+      void loadCustomPattern(customTemplateId);
+      return;
+    }
+    if (!isBuiltinStarter(nextStarter)) return;
     resetToStarter(nextStarter);
   };
 
@@ -414,7 +477,36 @@ export default function AgentPatternBuilderPage() {
         set_current: true,
       });
       setPersistedPattern({ template: response.agent_pattern, version: response.version });
+      setStarter(customStarterValue(response.agent_pattern.id));
+      await refreshCustomPatterns();
       setPersistenceStatus(`Saved ${response.agent_pattern.id} v${response.version.version}.`);
+    } catch (err) {
+      setPersistenceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleDeleteInternalPattern = async () => {
+    if (!persistedPattern || persistedPattern.template.is_builtin || authoringDisabled) return;
+    const templateId = persistedPattern.template.id;
+    if (typeof window !== 'undefined' && !window.confirm(`Delete custom agent pattern "${templateId}"?`)) {
+      return;
+    }
+    try {
+      setBusyAction('delete');
+      setPersistenceError(null);
+      setPersistenceStatus(null);
+      await deleteInternalAgentPattern(templateId);
+      await refreshCustomPatterns();
+      setPersistenceForm((previous) => ({
+        ...previous,
+        templateId,
+        changelog: '',
+      }));
+      resetToStarter('router');
+      setPersistedPattern(null);
+      setPersistenceStatus(`Deleted ${templateId}.`);
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -428,6 +520,7 @@ export default function AgentPatternBuilderPage() {
       <Box sx={{ height: '100vh', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
         <BuilderActionsBar
           starter={starter}
+          customPatterns={customPatterns}
           disabled={authoringDisabled}
           onStarterChange={handleStarterChange}
           onReset={() => resetToStarter()}
@@ -499,6 +592,7 @@ export default function AgentPatternBuilderPage() {
                 boundaryMessages={boundary.messages}
                 onGenerateTemplateId={handleGenerateTemplateId}
                 onSave={handleSaveInternalVersion}
+                onDelete={handleDeleteInternalPattern}
               />
               <Divider sx={{ my: 1.5 }} />
               <BuilderInspector

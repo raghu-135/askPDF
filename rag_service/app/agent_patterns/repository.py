@@ -287,6 +287,19 @@ class AgentPatternRepository:
             )
             return list(result.scalars().all())
 
+    async def mark_custom_template_deleted(self, template_id: str) -> Optional[AgentPatternTemplate]:
+        if template_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            raise ValueError("built-in agent pattern templates cannot be deleted")
+        session = await self._get_session()
+        async with session.begin():
+            template = await session.get(AgentPatternTemplate, template_id)
+            if template is None or template.is_builtin:
+                return None
+            template.visibility = "deleted"
+            template.updated_at = utc_now()
+            await session.flush()
+            return template
+
     async def get_template(self, template_id: str) -> Optional[AgentPatternTemplate]:
         session = await self._get_session()
         async with session.begin():
@@ -306,6 +319,8 @@ class AgentPatternRepository:
                 return None, None
             template = await session.get(AgentPatternTemplate, template_id)
             if not template:
+                return None, None
+            if include_custom and not template.is_builtin and template.visibility not in {"public", "internal"}:
                 return None, None
             version = None
             if template.current_version_id:
@@ -333,6 +348,8 @@ class AgentPatternRepository:
                 return None, None
             template = await session.get(AgentPatternTemplate, template_id)
             if not template:
+                return None, None
+            if include_custom and not template.is_builtin and template.visibility not in {"public", "internal"}:
                 return None, None
             current_version_number: Optional[int] = None
             if template.current_version_id:

@@ -1,4 +1,5 @@
 import React from 'react';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import SaveIcon from '@mui/icons-material/Save';
 import {
@@ -43,11 +44,12 @@ export default function BuilderPersistencePanel({
   boundaryMessages,
   onGenerateTemplateId,
   onSave,
+  onDelete,
 }: {
   form: BuilderPersistenceState;
   onFormChange: (patch: Partial<BuilderPersistenceState>) => void;
   persisted: BuilderPersistedPattern | null;
-  busyAction: 'save' | null;
+  busyAction: 'save' | 'delete' | null;
   statusMessage: string | null;
   errorMessage: string | null;
   canSave: boolean;
@@ -55,10 +57,12 @@ export default function BuilderPersistencePanel({
   boundaryMessages?: BuilderBoundaryMessage[];
   onGenerateTemplateId: () => void;
   onSave: () => void;
+  onDelete: () => void;
 }) {
   const savedTemplateId = persisted?.template.id;
   const savedVersion = persisted?.version.version;
   const saveDisabled = authoringDisabled || !canSave || busyAction === 'save';
+  const deleteDisabled = authoringDisabled || !persisted || Boolean(persisted.template.is_builtin) || Boolean(busyAction);
   const formDisabled = authoringDisabled || Boolean(busyAction);
 
   return (
@@ -142,16 +146,33 @@ export default function BuilderPersistencePanel({
         disabled={formDisabled}
         onChange={(event) => onFormChange({ changelog: event.target.value })}
       />
-      <Button
-        size="small"
-        variant="contained"
-        startIcon={<SaveIcon />}
-        disabled={saveDisabled}
-        onClick={onSave}
-        sx={{ borderRadius: 1 }}
-      >
-        {busyAction === 'save' ? 'Saving' : 'Save Internal Version'}
-      </Button>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 1 }}>
+        <Button
+          size="small"
+          variant="contained"
+          startIcon={<SaveIcon />}
+          disabled={saveDisabled}
+          onClick={onSave}
+          sx={{ borderRadius: 1 }}
+        >
+          {busyAction === 'save' ? 'Saving' : 'Save Pattern'}
+        </Button>
+        <Tooltip title={persisted?.template.is_builtin ? 'Built-in patterns cannot be deleted' : 'Delete custom pattern'}>
+          <span>
+            <Button
+              size="small"
+              variant="outlined"
+              color="error"
+              startIcon={<DeleteOutlineIcon />}
+              disabled={deleteDisabled}
+              onClick={onDelete}
+              sx={{ borderRadius: 1, minHeight: 30 }}
+            >
+              {busyAction === 'delete' ? 'Deleting' : 'Delete'}
+            </Button>
+          </span>
+        </Tooltip>
+      </Box>
       <Divider />
       <Typography variant="caption" color="text.secondary">
         Saved compatible patterns appear in the Agent pattern menu for all threads.

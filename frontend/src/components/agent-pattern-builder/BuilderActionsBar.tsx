@@ -7,6 +7,7 @@ import {
   Box,
   Button,
   Chip,
+  Divider,
   FormControl,
   InputLabel,
   MenuItem,
@@ -14,11 +15,12 @@ import {
   Typography,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
-import type { AgentPatternValidationReport } from '../../lib/api';
+import type { AgentPatternTemplate, AgentPatternValidationReport } from '../../lib/api';
 import type { AgentPatternStarter } from '../../lib/agent-pattern-builder';
 
 export default function BuilderActionsBar({
   starter,
+  customPatterns,
   disabled,
   onStarterChange,
   onReset,
@@ -26,9 +28,10 @@ export default function BuilderActionsBar({
   validating,
   validation,
 }: {
-  starter: AgentPatternStarter;
+  starter: string;
+  customPatterns?: AgentPatternTemplate[];
   disabled?: boolean;
-  onStarterChange: (starter: AgentPatternStarter) => void;
+  onStarterChange: (starter: AgentPatternStarter | string) => void;
   onReset: () => void;
   onValidate: () => void;
   validating: boolean;
@@ -42,6 +45,7 @@ export default function BuilderActionsBar({
       label={validation.valid ? 'Valid' : `${validation.errors?.length || 0} errors`}
     />
   ) : null;
+  const customOptions = customPatterns || [];
 
   return (
     <Box
@@ -74,11 +78,17 @@ export default function BuilderActionsBar({
             labelId="builder-starter-label"
             label="Starter"
             value={starter}
-            onChange={(event: SelectChangeEvent) => onStarterChange(event.target.value as AgentPatternStarter)}
+            onChange={(event: SelectChangeEvent) => onStarterChange(event.target.value)}
           >
             <MenuItem value="router">Router</MenuItem>
             <MenuItem value="plan_execute">Plan Execute</MenuItem>
             <MenuItem value="evaluator_replanner">Evaluator/Replanner</MenuItem>
+            {customOptions.length ? <Divider /> : null}
+            {customOptions.map((pattern) => (
+              <MenuItem key={pattern.id} value={`custom:${pattern.id}`}>
+                {pattern.name || pattern.id}
+              </MenuItem>
+            ))}
           </Select>
         </FormControl>
         <Button

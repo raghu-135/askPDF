@@ -326,6 +326,18 @@ async def create_internal_agent_pattern(req: InternalAgentPatternCreateRequest):
     }
 
 
+@router.delete("/internal/agent-patterns/{template_id}")
+async def delete_internal_agent_pattern(template_id: str):
+    repo = AgentPatternRepository()
+    try:
+        template = await repo.mark_custom_template_deleted(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if template is None:
+        raise HTTPException(status_code=404, detail="Internal agent pattern not found")
+    return {"status": "deleted", "agent_pattern": _template_payload(template)}
+
+
 @router.get("/internal/agent-patterns/catalog")
 async def get_internal_agent_pattern_catalog():
     return {

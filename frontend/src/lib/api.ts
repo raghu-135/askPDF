@@ -720,6 +720,16 @@ export async function getInternalAgentPattern(
   return res.json();
 }
 
+export async function deleteInternalAgentPattern(
+  templateId: string
+): Promise<{ status: string; agent_pattern: AgentPatternTemplate }> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/${encodeURIComponent(templateId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
 export async function validateAgentPatternSpec(
   spec: AgentPatternBuilderSpec | Record<string, any>
 ): Promise<AgentPatternValidationReport> {

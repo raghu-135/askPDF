@@ -5444,6 +5444,39 @@ class TestAgentPatternApi:
         assert public_detail.status_code == 200
         assert public_detail.json()["current_version"]["id"] == "internal_api_agent:v1"
 
+    def test_internal_agent_pattern_delete_hides_custom_pattern(self, api_client):
+        spec = builtin_router_rag_v2_spec()
+        spec["pattern_type"] = "internal_api_delete_agent"
+
+        created = api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": "internal_api_delete_agent",
+                "name": "Internal API Delete Agent",
+                "spec_json": spec,
+            },
+        )
+        deleted = api_client.delete("/api/internal/agent-patterns/internal_api_delete_agent")
+        listed = api_client.get("/api/agent-patterns")
+        public_detail = api_client.get("/api/agent-patterns/internal_api_delete_agent")
+        internal_detail = api_client.get("/api/internal/agent-patterns/internal_api_delete_agent")
+
+        assert created.status_code == 200
+        assert deleted.status_code == 200
+        assert deleted.json()["status"] == "deleted"
+        assert deleted.json()["agent_pattern"]["visibility"] == "deleted"
+        assert "internal_api_delete_agent" not in {
+            item["id"] for item in listed.json()["agent_patterns"]
+        }
+        assert public_detail.status_code == 404
+        assert internal_detail.status_code == 404
+
+    def test_internal_agent_pattern_delete_rejects_builtin_ids(self, api_client):
+        deleted = api_client.delete(f"/api/internal/agent-patterns/{ROUTER_RAG_AGENT_ID}")
+
+        assert deleted.status_code == 400
+        assert "built-in agent pattern templates cannot be deleted" in deleted.json()["detail"]
+
     def test_internal_agent_pattern_endpoint_rejects_invalid_specs_without_storing(self, api_client):
         invalid_spec = builtin_router_rag_v2_spec()
         invalid_spec["pattern_type"] = "internal_api_invalid_agent"
