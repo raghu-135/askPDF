@@ -1,7 +1,5 @@
 import React from 'react';
-import ArchiveIcon from '@mui/icons-material/Archive';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
-import PublishIcon from '@mui/icons-material/Publish';
 import SaveIcon from '@mui/icons-material/Save';
 import {
   Alert,
@@ -42,33 +40,25 @@ export default function BuilderPersistencePanel({
   errorMessage,
   canSave,
   authoringDisabled,
-  lifecycleDisabled,
   boundaryMessages,
   onGenerateTemplateId,
   onSave,
-  onPublish,
-  onArchive,
 }: {
   form: BuilderPersistenceState;
   onFormChange: (patch: Partial<BuilderPersistenceState>) => void;
   persisted: BuilderPersistedPattern | null;
-  busyAction: 'save' | 'publish' | 'archive' | null;
+  busyAction: 'save' | null;
   statusMessage: string | null;
   errorMessage: string | null;
   canSave: boolean;
   authoringDisabled?: boolean;
-  lifecycleDisabled?: boolean;
   boundaryMessages?: BuilderBoundaryMessage[];
   onGenerateTemplateId: () => void;
   onSave: () => void;
-  onPublish: () => void;
-  onArchive: () => void;
 }) {
   const savedTemplateId = persisted?.template.id;
   const savedVersion = persisted?.version.version;
   const saveDisabled = authoringDisabled || !canSave || busyAction === 'save';
-  const publishDisabled = authoringDisabled || lifecycleDisabled || !persisted || busyAction === 'publish';
-  const archiveDisabled = authoringDisabled || lifecycleDisabled || !persisted || busyAction === 'archive';
   const formDisabled = authoringDisabled || Boolean(busyAction);
 
   return (
@@ -162,29 +152,6 @@ export default function BuilderPersistencePanel({
       >
         {busyAction === 'save' ? 'Saving' : 'Save Internal Version'}
       </Button>
-      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1 }}>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<PublishIcon />}
-          disabled={publishDisabled}
-          onClick={onPublish}
-          sx={{ borderRadius: 1 }}
-        >
-          Publish
-        </Button>
-        <Button
-          size="small"
-          variant="outlined"
-          color="warning"
-          startIcon={<ArchiveIcon />}
-          disabled={archiveDisabled}
-          onClick={onArchive}
-          sx={{ borderRadius: 1 }}
-        >
-          Archive
-        </Button>
-      </Box>
       <Divider />
       <Typography variant="caption" color="text.secondary">
         Saved compatible patterns appear in the Agent pattern menu for all threads.

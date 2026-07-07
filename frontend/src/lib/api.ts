@@ -147,8 +147,6 @@ export interface ThreadSettings {
   use_reranker: boolean;
   agent_pattern?: {
     template_id: 'router_rag_agent' | string;
-    template_version?: number | string;
-    source?: 'builtin' | 'internal' | string;
   };
 }
 
@@ -312,12 +310,6 @@ export interface InternalAgentPatternResponse {
 export interface InternalAgentPatternCurrentResponse {
   agent_pattern: AgentPatternTemplate;
   current_version: AgentPatternVersion;
-}
-
-export interface InternalAgentPatternLifecycleResponse {
-  agent_pattern: AgentPatternTemplate;
-  version?: AgentPatternVersion;
-  current_version?: AgentPatternVersion;
 }
 
 export interface AgentPatternListResponse {
@@ -724,26 +716,6 @@ export async function getInternalAgentPattern(
   templateId: string
 ): Promise<InternalAgentPatternCurrentResponse> {
   const res = await fetch(`${API_BASE}/api/internal/agent-patterns/${encodeURIComponent(templateId)}`);
-  if (!res.ok) throw new Error(await readApiError(res));
-  return res.json();
-}
-
-export async function publishInternalAgentPattern(
-  templateId: string
-): Promise<InternalAgentPatternLifecycleResponse> {
-  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/${encodeURIComponent(templateId)}/publish`, {
-    method: "POST",
-  });
-  if (!res.ok) throw new Error(await readApiError(res));
-  return res.json();
-}
-
-export async function archiveInternalAgentPattern(
-  templateId: string
-): Promise<InternalAgentPatternLifecycleResponse> {
-  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/${encodeURIComponent(templateId)}/archive`, {
-    method: "POST",
-  });
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }

@@ -197,7 +197,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
     const [agentPatternId, setAgentPatternId] = useState('router_rag_agent');
-    const [agentPatternConfig, setAgentPatternConfig] = useState<Thread['settings']['agent_pattern'] | undefined>(undefined);
     const [agentPatterns, setAgentPatterns] = useState<AgentPatternTemplate[]>(DEFAULT_AGENT_PATTERNS);
 
     // Model selection
@@ -240,7 +239,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setHitlWebApproval(settings?.hitl_web_approval ?? defaultHitlWebApproval);
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
         setAgentPatternId(normalizeAgentPatternForUi(settings?.agent_pattern?.template_id));
-        setAgentPatternConfig(settings?.agent_pattern);
     }, [
         defaultCustomInstructions,
         defaultSystemRole,
@@ -648,7 +646,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setHitlWebApproval(defaultHitlWebApproval);
         setUseReranker(defaultUseReranker);
         setAgentPatternId('router_rag_agent');
-        setAgentPatternConfig({ template_id: 'router_rag_agent' });
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -1273,13 +1270,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 custom_instructions: customInstructions,
                 hitl_web_approval: hitlWebApproval,
                 use_reranker: useReranker,
-                agent_pattern: isBuiltinAgentPattern(agentPatternId)
-                    ? { template_id: normalizeAgentPatternForUi(agentPatternId) }
-                    : {
-                        ...(agentPatternConfig || {}),
-                        template_id: normalizeAgentPatternForUi(agentPatternId),
-                        source: agentPatternConfig?.source ?? 'internal',
-                    },
+                agent_pattern: { template_id: normalizeAgentPatternForUi(agentPatternId) },
             };
             if (isEvaluatorReplannerPattern(agentPatternId) && replansLimit !== null) {
                 nextSettings.replans = Math.max(1, Math.min(replansLimit, replans));
@@ -2237,11 +2228,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onRerankerChange={(checked) => setUseReranker(checked)}
                 onAgentPatternChange={(value) => {
                     setAgentPatternId(value);
-                    if (isBuiltinAgentPattern(value)) {
-                        setAgentPatternConfig({ template_id: value });
-                    } else {
-                        setAgentPatternConfig({ template_id: value, source: 'internal' });
-                    }
                 }}
                 onSystemRoleChange={(value) => setSystemRole(value)}
                 onToolInstructionChange={(toolId, value) =>

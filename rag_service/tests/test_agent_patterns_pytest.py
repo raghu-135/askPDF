@@ -3439,7 +3439,7 @@ class TestAgentRunService:
         assert captured_spec["pattern_type"] == ROUTER_RAG_AGENT_ID
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_can_pin_custom_db_pattern_version(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_uses_current_custom_db_pattern_version(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -3470,6 +3470,7 @@ class TestAgentRunService:
                 return {
                     "agent_pattern": {
                         "template_id": "internal_custom_rag_agent",
+                        # Legacy pins are ignored; chat always runs the current pattern version.
                         "template_version": 1,
                     }
                 }
@@ -3477,7 +3478,7 @@ class TestAgentRunService:
             async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
-                    "answer": "custom pinned ok",
+                    "answer": "custom current ok",
                     "document_sources": [],
                     "web_sources": [],
                     "used_chat_ids": [],
@@ -3511,9 +3512,9 @@ class TestAgentRunService:
             run = await repo.get_run(result["agent_run_id"])
 
         assert result["agent_pattern_id"] == "internal_custom_rag_agent"
-        assert result["agent_pattern_version"] == 1
-        assert run.template_version_id == "internal_custom_rag_agent:v1"
-        assert captured_spec["pattern_type"] == "internal_custom_rag_agent_v1"
+        assert result["agent_pattern_version"] == 2
+        assert run.template_version_id == "internal_custom_rag_agent:v2"
+        assert captured_spec["pattern_type"] == "internal_custom_rag_agent_v2"
 
     @pytest.mark.asyncio
     async def test_internal_custom_pattern_create_select_and_run_keeps_instance_node_identity(
@@ -3642,7 +3643,7 @@ class TestAgentRunService:
         listed = await async_api_client.get("/api/agent-patterns")
         selected = await async_api_client.put(
             f"/api/threads/{thread_id}/settings",
-            json={"agent_pattern": {"template_id": "internal_e2e_custom_rag_agent", "source": "internal"}},
+            json={"agent_pattern": {"template_id": "internal_e2e_custom_rag_agent"}},
         )
 
         assert selected.status_code == 200

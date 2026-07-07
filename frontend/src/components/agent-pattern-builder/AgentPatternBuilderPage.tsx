@@ -10,10 +10,8 @@ import {
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../../theme';
 import {
-  archiveInternalAgentPattern,
   createInternalAgentPattern,
   getInternalAgentPatternCatalog,
-  publishInternalAgentPattern,
   previewThreadAgentConfig,
   validateAgentPatternSpec,
   type AgentPatternCatalogResponse,
@@ -50,7 +48,6 @@ interface BuilderInternalBoundary {
   hasMetadata: boolean;
   authoringEnabled: boolean;
   runtimeEnabled: boolean;
-  lifecycleEnabled: boolean;
   messages: BuilderBoundaryMessage[];
 }
 
@@ -124,10 +121,6 @@ const hasExplicitFalse = (boundary: Record<string, any>, keys: string[]) => (
   keys.some((key) => boundary[key] === false)
 );
 
-const hasExplicitTrue = (boundary: Record<string, any>, keys: string[]) => (
-  keys.some((key) => boundary[key] === true)
-);
-
 const deriveInternalBoundary = (catalog: AgentPatternCatalogResponse | null): BuilderInternalBoundary => {
   const rawBoundary = catalog?.auth_boundary || {};
   const boundary = rawBoundary as Record<string, any>;
@@ -142,18 +135,12 @@ const deriveInternalBoundary = (catalog: AgentPatternCatalogResponse | null): Bu
     'custom_patterns_enabled',
     'runtime_custom_execution_enabled',
   ]);
-  const lifecycleEnabled = hasExplicitTrue(boundary, [
-    'lifecycle_enabled',
-    'publish_archive_enabled',
-    'publish_enabled',
-    'archive_enabled',
-  ]);
   const messages: BuilderBoundaryMessage[] = [];
 
   if (!hasMetadata) {
     messages.push({
       severity: 'info',
-      message: 'Catalog flag metadata is unavailable; authoring and selection will rely on endpoint responses.',
+      message: 'Catalog flag metadata is unavailable; authoring will rely on endpoint responses.',
     });
   }
   if (!authoringEnabled) {
@@ -165,13 +152,7 @@ const deriveInternalBoundary = (catalog: AgentPatternCatalogResponse | null): Bu
   if (!runtimeEnabled) {
     messages.push({
       severity: 'warning',
-      message: 'Custom pattern runtime execution is disabled, so custom patterns cannot be selected for chat yet.',
-    });
-  }
-  if (!lifecycleEnabled) {
-    messages.push({
-      severity: 'info',
-      message: 'Publish and archive are disabled until the catalog advertises lifecycle endpoint support.',
+      message: 'Custom pattern runtime execution is disabled, so saved custom patterns are visible but will not run in chat yet.',
     });
   }
 
@@ -179,7 +160,6 @@ const deriveInternalBoundary = (catalog: AgentPatternCatalogResponse | null): Bu
     hasMetadata,
     authoringEnabled,
     runtimeEnabled,
-    lifecycleEnabled,
     messages,
   };
 };
@@ -220,12 +200,11 @@ export default function AgentPatternBuilderPage() {
     changelog: '',
   });
   const [persistedPattern, setPersistedPattern] = useState<BuilderPersistedPattern | null>(null);
-  const [busyAction, setBusyAction] = useState<'save' | 'publish' | 'archive' | null>(null);
+  const [busyAction, setBusyAction] = useState<'save' | null>(null);
   const [persistenceStatus, setPersistenceStatus] = useState<string | null>(null);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const boundary = useMemo(() => deriveInternalBoundary(catalog), [catalog]);
   const authoringDisabled = !boundary.authoringEnabled;
-  const lifecycleDisabled = !boundary.lifecycleEnabled;
 
   useEffect(() => {
     let cancelled = false;
@@ -443,54 +422,6 @@ export default function AgentPatternBuilderPage() {
     }
   };
 
-  const handlePublish = async () => {
-    const templateId = persistedPattern?.template.id;
-    if (!templateId) return;
-    if (authoringDisabled) {
-      setPersistenceError('Internal pattern authoring is disabled by backend feature flags.');
-      return;
-    }
-    if (lifecycleDisabled) {
-      setPersistenceError('Publish is disabled until the catalog advertises lifecycle endpoint support.');
-      return;
-    }
-    try {
-      setBusyAction('publish');
-      setPersistenceError(null);
-      setPersistenceStatus(null);
-      const response = await publishInternalAgentPattern(templateId);
-      setPersistenceStatus(`Publish completed for ${response.agent_pattern.id}.`);
-    } catch (err) {
-      setPersistenceError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
-  const handleArchive = async () => {
-    const templateId = persistedPattern?.template.id;
-    if (!templateId) return;
-    if (authoringDisabled) {
-      setPersistenceError('Internal pattern authoring is disabled by backend feature flags.');
-      return;
-    }
-    if (lifecycleDisabled) {
-      setPersistenceError('Archive is disabled until the catalog advertises lifecycle endpoint support.');
-      return;
-    }
-    try {
-      setBusyAction('archive');
-      setPersistenceError(null);
-      setPersistenceStatus(null);
-      const response = await archiveInternalAgentPattern(templateId);
-      setPersistenceStatus(`Archive completed for ${response.agent_pattern.id}.`);
-    } catch (err) {
-      setPersistenceError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -565,12 +496,9 @@ export default function AgentPatternBuilderPage() {
                 errorMessage={persistenceError}
                 canSave={Boolean(spec && persistenceForm.templateId.trim() && persistenceForm.name.trim())}
                 authoringDisabled={authoringDisabled}
-                lifecycleDisabled={lifecycleDisabled}
                 boundaryMessages={boundary.messages}
                 onGenerateTemplateId={handleGenerateTemplateId}
                 onSave={handleSaveInternalVersion}
-                onPublish={handlePublish}
-                onArchive={handleArchive}
               />
               <Divider sx={{ my: 1.5 }} />
               <BuilderInspector

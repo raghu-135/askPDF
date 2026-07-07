@@ -56,19 +56,7 @@ class AgentRunService:
             template_id = ROUTER_RAG_AGENT_ID
         logger.info("Resolving agent pattern for thread %s | requested_template=%s", thread_id, template_id)
 
-        requested_template_version = agent_settings.get("template_version")
-        try:
-            requested_template_version = int(requested_template_version)
-        except (TypeError, ValueError):
-            requested_template_version = None
-
-        if requested_template_version is not None and allow_custom_for_run:
-            template, version = await self.repository.get_template_version(
-                template_id,
-                requested_template_version,
-                include_custom=allow_custom_for_run,
-            )
-        elif allow_custom_for_run:
+        if allow_custom_for_run:
             template, version = await self.repository.get_template_with_current_version(
                 template_id,
                 include_custom=True,
@@ -77,13 +65,7 @@ class AgentRunService:
             template, version = await self.repository.get_template_with_current_version(template_id)
         if template is None or version is None:
             await self.repository.seed_builtin_templates()
-            if requested_template_version is not None and allow_custom_for_run:
-                template, version = await self.repository.get_template_version(
-                    template_id,
-                    requested_template_version,
-                    include_custom=allow_custom_for_run,
-                )
-            elif allow_custom_for_run:
+            if allow_custom_for_run:
                 template, version = await self.repository.get_template_with_current_version(
                     template_id,
                     include_custom=True,

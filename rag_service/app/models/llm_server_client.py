@@ -206,6 +206,12 @@ def merge_thread_settings(overrides=None):
         merged["replans"] = max(1, min(REPLANS_LIMIT, int(merged.get("replans", 1))))
     except (TypeError, ValueError):
         merged["replans"] = 1
+    agent_pattern = merged.get("agent_pattern")
+    if isinstance(agent_pattern, dict):
+        template_id = agent_pattern.get("template_id") or "router_rag_agent"
+        merged["agent_pattern"] = {"template_id": str(template_id)}
+    else:
+        merged["agent_pattern"] = {"template_id": "router_rag_agent"}
     return merged
 
 
