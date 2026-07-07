@@ -155,13 +155,13 @@ const deriveInternalBoundary = (catalog: AgentPatternCatalogResponse | null): Bu
   if (!authoringEnabled) {
     messages.push({
       severity: 'error',
-      message: 'Internal pattern authoring is disabled by backend feature flags. Builder edits and saves are read-only.',
+      message: 'Internal workflow authoring is disabled by backend feature flags. Builder edits and saves are read-only.',
     });
   }
   if (!runtimeEnabled) {
     messages.push({
       severity: 'warning',
-      message: 'Custom pattern runtime execution is disabled, so saved custom patterns are visible but will not run in chat yet.',
+      message: 'Custom workflow runtime execution is disabled, so saved custom workflows are visible but will not run in chat yet.',
     });
   }
 
@@ -432,7 +432,7 @@ export default function AgentPatternBuilderPage() {
   const handleSaveInternalVersion = async () => {
     if (!builderState || !spec) return;
     if (authoringDisabled) {
-      setPersistenceError('Internal pattern authoring is disabled by backend feature flags.');
+      setPersistenceError('Internal workflow authoring is disabled by backend feature flags.');
       return;
     }
     try {
@@ -471,7 +471,7 @@ export default function AgentPatternBuilderPage() {
   const handleDeleteInternalPattern = async () => {
     if (!persistedPattern || persistedPattern.template.is_builtin || authoringDisabled) return;
     const templateId = persistedPattern.template.id;
-    if (typeof window !== 'undefined' && !window.confirm(`Delete custom agent pattern "${templateId}"?`)) {
+    if (typeof window !== 'undefined' && !window.confirm(`Delete custom agent workflow "${templateId}"?`)) {
       return;
     }
     try {
@@ -514,7 +514,7 @@ export default function AgentPatternBuilderPage() {
           </Box>
         ) : error || !catalog || !builderState ? (
           <Box sx={{ p: 2 }}>
-            <Alert severity="error">{error || 'Agent pattern catalog is unavailable.'}</Alert>
+            <Alert severity="error">{error || 'Agent workflow catalog is unavailable.'}</Alert>
           </Box>
         ) : (
           <Box

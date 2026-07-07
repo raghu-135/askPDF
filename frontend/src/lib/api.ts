@@ -150,7 +150,7 @@ export interface ThreadSettings {
   };
 }
 
-// ============ Agent Pattern Builder API ============
+// ============ Agent Workflow Builder API ============
 
 export interface AgentPatternGraphSpec {
   nodes?: {

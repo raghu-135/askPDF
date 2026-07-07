@@ -63,10 +63,10 @@ export default function BuilderPersistencePanel({
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
       <Box>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Save Pattern
+          Save Workflow
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          Custom pattern available to every thread after saving
+          Custom workflow available to every thread after saving
         </Typography>
       </Box>
       <Divider />
@@ -108,9 +108,9 @@ export default function BuilderPersistencePanel({
           onClick={onSave}
           sx={{ borderRadius: 1 }}
         >
-          {busyAction === 'save' ? 'Saving' : 'Save Pattern'}
+          {busyAction === 'save' ? 'Saving' : 'Save Workflow'}
         </Button>
-        <Tooltip title={persisted?.template.is_builtin ? 'Built-in patterns cannot be deleted' : 'Delete custom pattern'}>
+        <Tooltip title={persisted?.template.is_builtin ? 'Built-in workflows cannot be deleted' : 'Delete custom workflow'}>
           <span>
             <Button
               size="small"
@@ -128,7 +128,7 @@ export default function BuilderPersistencePanel({
       </Box>
       <Divider />
       <Typography variant="caption" color="text.secondary">
-        Saved compatible patterns appear in the Agent pattern menu for all threads.
+        Saved compatible workflows appear in the Agent workflow menu for all threads.
       </Typography>
     </Box>
   );

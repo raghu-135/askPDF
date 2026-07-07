@@ -100,7 +100,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
             <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
                     <Typography variant="body2" color="text.secondary">
-                        These settings are saved per thread and used by default for every message. Agent patterns are globally available.
+                        These settings are saved per thread and used by default for every message. Agent workflows are globally available.
                     </Typography>
                     <Tooltip title="Reset all settings to default">
                         <IconButton
@@ -120,10 +120,10 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                 <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) auto' }, gap: 1, alignItems: 'start' }}>
                     <TextField
                         select
-                        label="Agent pattern"
+                        label="Agent workflow"
                         value={agentPatternId}
                         onChange={(e) => onAgentPatternChange(e.target.value)}
-                        helperText="Router RAG remains the default; advanced patterns are opt-in."
+                        helperText="Router RAG remains the default; advanced workflows are opt-in."
                     >
                         {agentPatterns.map((pattern) => (
                             <MenuItem key={pattern.id} value={pattern.id}>
@@ -139,7 +139,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     <Button
                         variant="outlined"
                         startIcon={<AccountTreeIcon />}
-                        onClick={() => window.open('/agent-pattern-builder', '_blank', 'noopener,noreferrer')}
+                        onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}
                         sx={{ borderRadius: 1, minHeight: 40, whiteSpace: 'nowrap' }}
                     >
                         Open Builder

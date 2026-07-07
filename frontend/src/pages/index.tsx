@@ -831,7 +831,7 @@ export default function Home() {
                   </Typography>
                   <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
                     <li>Open the <b>Chat</b> tab and click the <b>gear icon</b> to configure AI prompt settings for the current thread.</li>
-                    <li>Choose an <b>Agent pattern</b> for Router RAG or Plan-and-Execute behavior.</li>
+                    <li>Choose an <b>Agent workflow</b> for Router RAG or Plan-and-Execute behavior.</li>
                     <li>Enable <b>Reranker</b> to improve ordering of retrieved chunks.</li>
                     <li>Customize <b>Tools</b> to control which capabilities the assistant can use.</li>
                     <li>Edit the <b>System role</b> to change the assistant's behavior and tone.</li>

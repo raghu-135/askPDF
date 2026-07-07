@@ -64,7 +64,7 @@ export default function BuilderActionsBar({
     >
       <Box sx={{ minWidth: 0 }}>
         <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-          Agent Pattern Builder
+          Agent Workflow Builder
         </Typography>
         <Typography variant="caption" color="text.secondary">
           Internal graph authoring surface
@@ -73,10 +73,10 @@ export default function BuilderActionsBar({
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         {validationChip}
         <FormControl size="small" disabled={disabled} sx={{ minWidth: 190 }}>
-          <InputLabel id="builder-starter-label">Starter</InputLabel>
+          <InputLabel id="builder-starter-label">Workflow</InputLabel>
           <Select
             labelId="builder-starter-label"
-            label="Starter"
+            label="Workflow"
             value={starter}
             onChange={(event: SelectChangeEvent) => onStarterChange(event.target.value)}
           >

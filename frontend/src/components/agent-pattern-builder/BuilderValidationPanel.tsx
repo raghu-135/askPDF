@@ -126,7 +126,7 @@ export default function BuilderValidationPanel({
         {tab === 'spec' ? (
           <Box>
             <Typography variant="caption" color="text.secondary">
-              Assembled schema v2 custom pattern spec sent to validation/save endpoints.
+              Assembled schema v2 custom workflow spec sent to validation/save endpoints.
             </Typography>
             <JsonPreview value={spec} maxHeight={360} />
           </Box>
@@ -154,7 +154,7 @@ export default function BuilderValidationPanel({
             {previewError ? <Alert severity="error">{previewError}</Alert> : null}
             {previewResult ? (
               <Alert severity={previewResult.validation?.valid === false ? 'warning' : 'success'}>
-                Thread preview returned {previewResult.template_id || 'a pattern'}{previewResult.template_version ? ` v${previewResult.template_version}` : ''}.
+                Thread preview returned {previewResult.template_id || 'a workflow'}{previewResult.template_version ? ` v${previewResult.template_version}` : ''}.
               </Alert>
             ) : (
               <Alert severity="info">
@@ -196,4 +196,3 @@ export default function BuilderValidationPanel({
     </Box>
   );
 }
-
