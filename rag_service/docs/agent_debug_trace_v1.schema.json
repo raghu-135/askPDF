@@ -9,7 +9,7 @@
     "schema_version",
     "trace_id",
     "run_id",
-    "template_id",
+    "workflow_id",
     "status",
     "attributes",
     "metrics",
@@ -36,10 +36,7 @@
     "user_id": {
       "type": ["string", "number", "null"]
     },
-    "template_id": {
-      "type": ["string", "null"]
-    },
-    "template_version_id": {
+    "workflow_id": {
       "type": ["string", "null"]
     },
     "pattern_type": {

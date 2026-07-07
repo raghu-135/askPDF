@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 
-from app.agent_patterns.repository import AgentPatternRepository
-from app.agent_patterns.templates import ROUTER_RAG_AGENT_ID
+from app.agent_workflows.repository import AgentPatternRepository
+from app.agent_workflows.templates import ROUTER_RAG_AGENT_ID
 from app.db.models_sqlmodel import ChatTurn, MessageRole
 from app.db.repositories.message_repo_sqlmodel import (
     MessageRepository,
@@ -31,12 +31,11 @@ async def _create_agent_run(engine, thread_id: str):
     )
     async with session_factory() as repo_session:
         agent_repo = AgentPatternRepository(repo_session)
-        await agent_repo.seed_builtin_templates()
-        template, version = await agent_repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await agent_repo.seed_builtin_workflows()
+        workflow = await agent_repo.get_workflow(ROUTER_RAG_AGENT_ID)
         return await agent_repo.create_run(
             thread_id=thread_id,
-            template_id=template.id,
-            template_version_id=version.id,
+            workflow_id=workflow.id,
             resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
         )
 
@@ -69,8 +68,8 @@ class TestMessageRepository:
             web_sources=[{"url": "https://example.com"}],
             metadata={
                 "context_compact": "Q/A compact",
-                "agent_pattern_id": "router_rag_agent",
-                "agent_pattern_version": 1,
+                "agent_workflow_id": "router_rag_agent",
+                "agent_workflow_version": 1,
                 "agent_route": "document",
             },
             agent_run_id=run.id,
@@ -99,7 +98,7 @@ class TestMessageRepository:
         assert messages[1].reasoning_available is True
         assert messages[1].web_sources == [{"url": "https://example.com"}]
         assert messages[1].agent_run_id == run.id
-        assert messages[1].metadata["agent_pattern_id"] == "router_rag_agent"
+        assert messages[1].metadata["agent_workflow_id"] == "router_rag_agent"
         assert messages[1].metadata["agent_route"] == "document"
 
     @pytest.mark.asyncio

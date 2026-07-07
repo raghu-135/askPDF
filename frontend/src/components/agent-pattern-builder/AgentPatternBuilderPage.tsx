@@ -10,14 +10,14 @@ import {
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../../theme';
 import {
-  createInternalAgentPattern,
-  deleteInternalAgentPattern,
-  getInternalAgentPattern,
-  getInternalAgentPatternCatalog,
-  listAgentPatterns,
+  saveInternalAgentWorkflow,
+  deleteInternalAgentWorkflow,
+  getInternalAgentWorkflow,
+  getInternalAgentWorkflowCatalog,
+  listAgentWorkflows,
   previewThreadAgentConfig,
   validateAgentPatternSpec,
-  type AgentPatternTemplate,
+  type AgentWorkflow,
   type AgentPatternCatalogResponse,
   type AgentPatternValidationReport,
   type ThreadAgentConfigPreviewResponse,
@@ -43,7 +43,7 @@ import BuilderInspector from './BuilderInspector';
 import BuilderNodePalette from './BuilderNodePalette';
 import BuilderPersistencePanel, {
   type BuilderBoundaryMessage,
-  type BuilderPersistedPattern,
+  type BuilderPersistedWorkflow,
   type BuilderPersistenceState,
 } from './BuilderPersistencePanel';
 import BuilderValidationPanel from './BuilderValidationPanel';
@@ -66,9 +66,9 @@ const isBuiltinStarter = (value: string): value is AgentPatternStarter => (
   BUILTIN_STARTERS.includes(value as AgentPatternStarter)
 );
 
-const customStarterValue = (templateId: string) => `custom:${templateId}`;
+const customStarterValue = (workflowId: string) => `custom:${workflowId}`;
 
-const templateIdFromCustomStarter = (value: string) => (
+const workflowIdFromCustomStarter = (value: string) => (
   value.startsWith('custom:') ? value.slice('custom:'.length) : null
 );
 
@@ -190,7 +190,7 @@ export default function AgentPatternBuilderPage() {
   const darkMode = usePrefersDarkMode();
   const theme = useMemo(() => getTheme(darkMode), [darkMode]);
   const [catalog, setCatalog] = useState<AgentPatternCatalogResponse | null>(null);
-  const [customPatterns, setCustomPatterns] = useState<AgentPatternTemplate[]>([]);
+  const [customWorkflows, setCustomWorkflows] = useState<AgentWorkflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [starter, setStarter] = useState<string>('router');
@@ -203,11 +203,11 @@ export default function AgentPatternBuilderPage() {
   const [threadPreviewError, setThreadPreviewError] = useState<string | null>(null);
   const [previewingThread, setPreviewingThread] = useState(false);
   const [persistenceForm, setPersistenceForm] = useState<BuilderPersistenceState>({
-    templateId: '',
+    workflowId: '',
     name: 'Internal Custom Agent',
     description: '',
   });
-  const [persistedPattern, setPersistedPattern] = useState<BuilderPersistedPattern | null>(null);
+  const [persistedWorkflow, setPersistedWorkflow] = useState<BuilderPersistedWorkflow | null>(null);
   const [busyAction, setBusyAction] = useState<'save' | 'delete' | null>(null);
   const [persistenceStatus, setPersistenceStatus] = useState<string | null>(null);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
@@ -218,13 +218,13 @@ export default function AgentPatternBuilderPage() {
     let cancelled = false;
     setLoading(true);
     Promise.all([
-      getInternalAgentPatternCatalog(),
-      listAgentPatterns().catch(() => ({ agent_patterns: [] })),
+      getInternalAgentWorkflowCatalog(),
+      listAgentWorkflows().catch(() => ({ agent_workflows: [] })),
     ])
       .then(([nextCatalog, patternList]) => {
         if (cancelled) return;
         setCatalog(nextCatalog);
-        setCustomPatterns((patternList.agent_patterns || []).filter((pattern) => !pattern.is_builtin));
+        setCustomWorkflows((patternList.agent_workflows || []).filter((pattern) => !pattern.is_builtin));
         setBuilderState(createInitialBuilderState(nextCatalog, 'router'));
         setError(null);
       })
@@ -240,9 +240,9 @@ export default function AgentPatternBuilderPage() {
     };
   }, []);
 
-  const refreshCustomPatterns = useCallback(async () => {
-    const response = await listAgentPatterns();
-    setCustomPatterns((response.agent_patterns || []).filter((pattern) => !pattern.is_builtin));
+  const refreshCustomWorkflows = useCallback(async () => {
+    const response = await listAgentWorkflows();
+    setCustomWorkflows((response.agent_workflows || []).filter((pattern) => !pattern.is_builtin));
   }, []);
 
   const updateState = useCallback((updater: (previous: AgentPatternBuilderState) => AgentPatternBuilderState) => {
@@ -269,33 +269,33 @@ export default function AgentPatternBuilderPage() {
     setValidation(null);
     setThreadPreview(null);
     setThreadPreviewError(null);
-    setPersistedPattern(null);
+    setPersistedWorkflow(null);
     setPersistenceStatus(null);
     setPersistenceError(null);
   }, [authoringDisabled, catalog]);
 
-  const loadCustomPattern = useCallback(async (templateId: string) => {
+  const loadCustomPattern = useCallback(async (workflowId: string) => {
     if (!catalog || authoringDisabled) return;
     try {
       setError(null);
-      const response = await getInternalAgentPattern(templateId);
-      const loadedState = normalizeBuilderState(catalog, loadBuilderStateFromSpec(response.current_version.spec_json));
+      const response = await getInternalAgentWorkflow(workflowId);
+      const loadedState = normalizeBuilderState(catalog, loadBuilderStateFromSpec(response.spec.spec_json));
       setBuilderState({
         ...loadedState,
         allowed_tool_ids: collectNodeToolIds(loadedState.nodes),
       });
-      setStarter(customStarterValue(response.agent_pattern.id));
+      setStarter(customStarterValue(response.agent_workflow.id));
       setPersistenceForm({
-        templateId: response.agent_pattern.id,
-        name: response.agent_pattern.name || response.agent_pattern.id,
-        description: response.agent_pattern.description || '',
+        workflowId: response.agent_workflow.id,
+        name: response.agent_workflow.name || response.agent_workflow.id,
+        description: response.agent_workflow.description || '',
       });
-      setPersistedPattern({ template: response.agent_pattern, version: response.current_version });
+      setPersistedWorkflow({ workflow: response.agent_workflow, spec: response.spec });
       setSelection(null);
       setValidation(null);
       setThreadPreview(null);
       setThreadPreviewError(null);
-      setPersistenceStatus(`Loaded ${response.agent_pattern.name || response.agent_pattern.id}.`);
+      setPersistenceStatus(`Loaded ${response.agent_workflow.name || response.agent_workflow.id}.`);
       setPersistenceError(null);
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
@@ -304,9 +304,9 @@ export default function AgentPatternBuilderPage() {
 
   const handleStarterChange = (nextStarter: AgentPatternStarter | string) => {
     if (authoringDisabled) return;
-    const customTemplateId = templateIdFromCustomStarter(nextStarter);
-    if (customTemplateId) {
-      void loadCustomPattern(customTemplateId);
+    const customWorkflowId = workflowIdFromCustomStarter(nextStarter);
+    if (customWorkflowId) {
+      void loadCustomPattern(customWorkflowId);
       return;
     }
     if (!isBuiltinStarter(nextStarter)) return;
@@ -429,7 +429,7 @@ export default function AgentPatternBuilderPage() {
     setPersistenceError(null);
   };
 
-  const handleSaveInternalVersion = async () => {
+  const handleSaveInternalWorkflow = async () => {
     if (!builderState || !spec) return;
     if (authoringDisabled) {
       setPersistenceError('Internal workflow authoring is disabled by backend feature flags.');
@@ -439,7 +439,7 @@ export default function AgentPatternBuilderPage() {
       setBusyAction('save');
       setPersistenceError(null);
       setPersistenceStatus(null);
-      const templateId = persistedPattern?.template.id;
+      const workflowId = persistedWorkflow?.workflow.id;
       const saveSpec = { ...spec };
       const report = await validateAgentPatternSpec(saveSpec);
       setValidation(report);
@@ -447,20 +447,20 @@ export default function AgentPatternBuilderPage() {
         setPersistenceError('Validation failed. Fix the reported issues before saving.');
         return;
       }
-      const response = await createInternalAgentPattern({
-        ...(templateId ? { template_id: templateId } : {}),
+      const response = await saveInternalAgentWorkflow({
+        ...(workflowId ? { workflow_id: workflowId } : {}),
         name: persistenceForm.name.trim(),
         description: persistenceForm.description,
         spec_json: saveSpec,
       });
-      setPersistedPattern({ template: response.agent_pattern, version: response.version });
+      setPersistedWorkflow({ workflow: response.agent_workflow, spec: response.spec });
       setPersistenceForm((previous) => ({
         ...previous,
-        templateId: response.agent_pattern.id,
+        workflowId: response.agent_workflow.id,
       }));
-      setStarter(customStarterValue(response.agent_pattern.id));
-      await refreshCustomPatterns();
-      setPersistenceStatus(`Saved ${response.agent_pattern.name || response.agent_pattern.id}.`);
+      setStarter(customStarterValue(response.agent_workflow.id));
+      await refreshCustomWorkflows();
+      setPersistenceStatus(`Saved ${response.agent_workflow.name || response.agent_workflow.id}.`);
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -468,25 +468,25 @@ export default function AgentPatternBuilderPage() {
     }
   };
 
-  const handleDeleteInternalPattern = async () => {
-    if (!persistedPattern || persistedPattern.template.is_builtin || authoringDisabled) return;
-    const templateId = persistedPattern.template.id;
-    if (typeof window !== 'undefined' && !window.confirm(`Delete custom agent workflow "${templateId}"?`)) {
+  const handleDeleteInternalWorkflow = async () => {
+    if (!persistedWorkflow || persistedWorkflow.workflow.is_builtin || authoringDisabled) return;
+    const workflowId = persistedWorkflow.workflow.id;
+    if (typeof window !== 'undefined' && !window.confirm(`Delete custom agent workflow "${workflowId}"?`)) {
       return;
     }
     try {
       setBusyAction('delete');
       setPersistenceError(null);
       setPersistenceStatus(null);
-      await deleteInternalAgentPattern(templateId);
-      await refreshCustomPatterns();
+      await deleteInternalAgentWorkflow(workflowId);
+      await refreshCustomWorkflows();
       setPersistenceForm((previous) => ({
         ...previous,
-        templateId: '',
+        workflowId: '',
       }));
       resetToStarter('router');
-      setPersistedPattern(null);
-      setPersistenceStatus(`Deleted ${templateId}.`);
+      setPersistedWorkflow(null);
+      setPersistenceStatus(`Deleted ${workflowId}.`);
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -500,7 +500,7 @@ export default function AgentPatternBuilderPage() {
       <Box sx={{ height: '100vh', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
         <BuilderActionsBar
           starter={starter}
-          customPatterns={customPatterns}
+          customWorkflows={customWorkflows}
           disabled={authoringDisabled}
           onStarterChange={handleStarterChange}
           onReset={() => resetToStarter()}
@@ -563,15 +563,15 @@ export default function AgentPatternBuilderPage() {
               <BuilderPersistencePanel
                 form={persistenceForm}
                 onFormChange={updatePersistenceForm}
-                persisted={persistedPattern}
+                persisted={persistedWorkflow}
                 busyAction={busyAction}
                 statusMessage={persistenceStatus}
                 errorMessage={persistenceError}
                 canSave={Boolean(spec && persistenceForm.name.trim())}
                 authoringDisabled={authoringDisabled}
                 boundaryMessages={boundary.messages}
-                onSave={handleSaveInternalVersion}
-                onDelete={handleDeleteInternalPattern}
+                onSave={handleSaveInternalWorkflow}
+                onDelete={handleDeleteInternalWorkflow}
               />
               <Divider sx={{ my: 1.5 }} />
               <BuilderInspector

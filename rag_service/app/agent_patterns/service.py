@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class AgentRunService:
-    """Runs the selected agent pattern, defaulting to the compiled Router RAG graph."""
+    """Runs the selected agent workflow, defaulting to the compiled Router RAG graph."""
 
     def __init__(
         self,
@@ -42,52 +42,39 @@ class AgentRunService:
 
     async def run_thread_chat(self, thread_id: str, req: Any, embed_model: str) -> Dict[str, Any]:
         thread_settings = await get_thread_settings(thread_id)
-        agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
+        agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
-        template_id = agent_settings.get("template_id") or ROUTER_RAG_AGENT_ID
+        workflow_id = agent_settings.get("workflow_id") or ROUTER_RAG_AGENT_ID
         allow_custom_for_run = self.allow_custom_agent_patterns
-        if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS and not allow_custom_for_run:
+        if workflow_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS and not allow_custom_for_run:
             logger.warning(
-                "Unsupported agent pattern requested for thread %s | requested_template=%s fallback_template=%s",
+                "Unsupported agent workflow requested for thread %s | requested_workflow=%s fallback_workflow=%s",
                 thread_id,
-                template_id,
+                workflow_id,
                 ROUTER_RAG_AGENT_ID,
             )
-            template_id = ROUTER_RAG_AGENT_ID
-        logger.info("Resolving agent pattern for thread %s | requested_template=%s", thread_id, template_id)
+            workflow_id = ROUTER_RAG_AGENT_ID
+        logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
 
-        if allow_custom_for_run:
-            template, version = await self.repository.get_template_with_current_version(
-                template_id,
-                include_custom=True,
-            )
-        else:
-            template, version = await self.repository.get_template_with_current_version(template_id)
-        if template is None or version is None:
-            await self.repository.seed_builtin_templates()
-            if allow_custom_for_run:
-                template, version = await self.repository.get_template_with_current_version(
-                    template_id,
-                    include_custom=True,
-                )
-            else:
-                template, version = await self.repository.get_template_with_current_version(template_id)
-        if template is None or version is None:
-            if template_id != ROUTER_RAG_AGENT_ID:
+        workflow = await self.repository.get_workflow(workflow_id, include_custom=allow_custom_for_run)
+        if workflow is None:
+            await self.repository.seed_builtin_workflows()
+            workflow = await self.repository.get_workflow(workflow_id, include_custom=allow_custom_for_run)
+        if workflow is None:
+            if workflow_id != ROUTER_RAG_AGENT_ID:
                 logger.warning(
-                    "Selected agent pattern unavailable; falling back to default | thread_id=%s requested_template=%s",
+                    "Selected agent workflow unavailable; falling back to default | thread_id=%s requested_workflow=%s",
                     thread_id,
-                    template_id,
+                    workflow_id,
                 )
-                template_id = ROUTER_RAG_AGENT_ID
-                template, version = await self.repository.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
-        if template is None or version is None:
-            raise RuntimeError("Default agent pattern is unavailable")
+                workflow_id = ROUTER_RAG_AGENT_ID
+                workflow = await self.repository.get_workflow(ROUTER_RAG_AGENT_ID)
+        if workflow is None:
+            raise RuntimeError("Default agent workflow is unavailable")
         logger.info(
-            "Selected agent pattern for thread %s | template=%s version=%s",
+            "Selected agent workflow for thread %s | workflow=%s",
             thread_id,
-            template.id,
-            version.version,
+            workflow.id,
         )
 
         request_overrides = {
@@ -100,45 +87,44 @@ class AgentRunService:
         }
         try:
             resolved_spec = self.resolver.resolve(
-                version.spec_json,
+                workflow.spec_json,
                 thread_settings=thread_settings,
                 request_overrides=request_overrides,
             )
         except TemplateValidationError as exc:
-            if template.id == ROUTER_RAG_AGENT_ID:
+            if workflow.id == ROUTER_RAG_AGENT_ID:
                 logger.exception(
-                    "Default agent pattern failed compatibility validation | thread_id=%s version_id=%s",
+                    "Default agent workflow failed compatibility validation | thread_id=%s workflow_id=%s",
                     thread_id,
-                    version.id,
+                    workflow.id,
                 )
-                raise RuntimeError("Default agent pattern is incompatible with this service version") from exc
+                raise RuntimeError("Default agent workflow is incompatible with this service version") from exc
             logger.warning(
-                "Selected agent pattern failed compatibility validation; falling back to default | thread_id=%s requested_template=%s version_id=%s error=%s",
+                "Selected agent workflow failed compatibility validation; falling back to default | thread_id=%s requested_workflow=%s error=%s",
                 thread_id,
-                template.id,
-                version.id,
+                workflow.id,
                 exc,
             )
-            fallback_template, fallback_version = await self.repository.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
-            if fallback_template is None or fallback_version is None:
-                await self.repository.seed_builtin_templates()
-                fallback_template, fallback_version = await self.repository.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
-            if fallback_template is None or fallback_version is None:
-                raise RuntimeError("Default agent pattern is unavailable") from exc
-            template, version = fallback_template, fallback_version
+            fallback_workflow = await self.repository.get_workflow(ROUTER_RAG_AGENT_ID)
+            if fallback_workflow is None:
+                await self.repository.seed_builtin_workflows()
+                fallback_workflow = await self.repository.get_workflow(ROUTER_RAG_AGENT_ID)
+            if fallback_workflow is None:
+                raise RuntimeError("Default agent workflow is unavailable") from exc
+            workflow = fallback_workflow
             try:
                 resolved_spec = self.resolver.resolve(
-                    version.spec_json,
+                    workflow.spec_json,
                     thread_settings=thread_settings,
                     request_overrides=request_overrides,
                 )
             except TemplateValidationError as fallback_exc:
                 logger.exception(
-                    "Default agent pattern failed compatibility validation | thread_id=%s version_id=%s",
+                    "Default agent workflow failed compatibility validation | thread_id=%s workflow_id=%s",
                     thread_id,
-                    version.id,
+                    workflow.id,
                 )
-                raise RuntimeError("Default agent pattern is incompatible with this service version") from fallback_exc
+                raise RuntimeError("Default agent workflow is incompatible with this service version") from fallback_exc
         from app.agent_patterns.graph import TemplateCompiler, normalize_hitl_policy_for_thread_settings
 
         resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
@@ -153,9 +139,7 @@ class AgentRunService:
 
         run = await self.repository.create_run(
             thread_id=thread_id,
-            template_id=template.id,
-            template_version_id=version.id,
-            template_version=version.version,
+            workflow_id=workflow.id,
             resolved_spec_json=stored_resolved_spec,
         )
 
@@ -163,23 +147,21 @@ class AgentRunService:
         trace_recorder = AgentTraceRecorder(run)
         context = {
             "agent_run_id": run.id,
-            "agent_pattern_id": template.id,
-            "agent_pattern_version": version.version,
-            "agent_pattern_template_version_id": version.id,
+            "agent_workflow_id": workflow.id,
             "checkpoint_thread_id": run.checkpoint_thread_id,
         }
 
         try:
-            logger.info("Invoking compiled agent pattern for thread %s | template=%s", thread_id, template.id)
+            logger.info("Invoking compiled agent workflow for thread %s | workflow=%s", thread_id, workflow.id)
             from app.agent_patterns.router_runtime import (
                 handle_evaluator_replanner_rag_chat,
                 handle_plan_execute_rag_chat,
                 handle_router_rag_chat,
             )
 
-            if template.id == EVALUATOR_REPLANNER_RAG_AGENT_ID:
+            if workflow.id == EVALUATOR_REPLANNER_RAG_AGENT_ID:
                 handler = handle_evaluator_replanner_rag_chat
-            elif template.id == PLAN_EXECUTE_RAG_AGENT_ID:
+            elif workflow.id == PLAN_EXECUTE_RAG_AGENT_ID:
                 handler = handle_plan_execute_rag_chat
             else:
                 handler = handle_router_rag_chat

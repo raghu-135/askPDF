@@ -15,12 +15,12 @@ import {
   Typography,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
-import type { AgentPatternTemplate, AgentPatternValidationReport } from '../../lib/api';
+import type { AgentWorkflow, AgentPatternValidationReport } from '../../lib/api';
 import type { AgentPatternStarter } from '../../lib/agent-pattern-builder';
 
 export default function BuilderActionsBar({
   starter,
-  customPatterns,
+  customWorkflows,
   disabled,
   onStarterChange,
   onReset,
@@ -29,7 +29,7 @@ export default function BuilderActionsBar({
   validation,
 }: {
   starter: string;
-  customPatterns?: AgentPatternTemplate[];
+  customWorkflows?: AgentWorkflow[];
   disabled?: boolean;
   onStarterChange: (starter: AgentPatternStarter | string) => void;
   onReset: () => void;
@@ -45,7 +45,7 @@ export default function BuilderActionsBar({
       label={validation.valid ? 'Valid' : `${validation.errors?.length || 0} errors`}
     />
   ) : null;
-  const customOptions = customPatterns || [];
+  const customOptions = customWorkflows || [];
 
   return (
     <Box

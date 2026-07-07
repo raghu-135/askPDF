@@ -116,7 +116,7 @@ class ThreadSettingsResponse(BaseModel):
     )
     hitl_web_approval: bool = False
     use_reranker: bool = True
-    agent_pattern: Dict[str, str] = Field(default_factory=lambda: {"template_id": "router_rag_agent"})
+    agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": "router_rag_agent"})
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -128,7 +128,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     )
     hitl_web_approval: Optional[bool] = None
     use_reranker: Optional[bool] = None
-    agent_pattern: Optional[Dict[str, str]] = None
+    agent_workflow: Optional[Dict[str, str]] = None
 
 
 class ToolCatalogEntry(BaseModel):
@@ -156,8 +156,8 @@ class PromptPreviewRequest(BaseModel):
         default=None, max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
     use_web_search: bool = False
-    agent_pattern: Optional[Dict[str, str]] = None
-    agent_pattern_id: Optional[str] = None
+    agent_workflow: Optional[Dict[str, str]] = None
+    agent_workflow_id: Optional[str] = None
     client_timezone: Optional[str] = Field(default=None, max_length=100)
     client_locale: Optional[str] = Field(default=None, max_length=50)
     client_now_iso: Optional[str] = Field(default=None, max_length=80)

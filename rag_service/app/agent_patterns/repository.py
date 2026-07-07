@@ -18,7 +18,7 @@ from app.agent_patterns.validator import TemplateValidationError, TemplateValida
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
-    AgentPatternTemplate,
+    AgentWorkflow,
     AgentRun,
     ChatTurn,
 )
@@ -75,18 +75,6 @@ class InterruptResolutionResult:
     outcome: str
     interrupt: Dict[str, Any]
     duplicate: bool = False
-
-
-@dataclass
-class AgentPatternSpecRecord:
-    id: str
-    template_id: str
-    version: int
-    schema_version: int
-    spec_json: Dict[str, Any]
-    validation_result_json: Dict[str, Any]
-    changelog: Optional[str]
-    created_at: Optional[datetime]
 
 
 def _compact_interrupt_value(value: Any, *, depth: int = 0) -> Any:
@@ -177,13 +165,10 @@ def _canonical_json_hash(value: Any) -> str:
 
 def _run_interrupt_compatibility(run: AgentRun) -> Dict[str, Any]:
     spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
-    metadata = run.run_metadata_json if isinstance(run.run_metadata_json, dict) else {}
     return {
         "schema_version": INTERRUPT_COMPATIBILITY_SCHEMA_VERSION,
         "spec_schema_version": spec.get("schema_version"),
-        "template_id": run.template_id,
-        "template_version_id": metadata.get("template_version_id"),
-        "template_version": metadata.get("template_version"),
+        "workflow_id": run.workflow_id,
         "checkpoint_thread_id": run.checkpoint_thread_id,
         "resolved_spec_hash": _canonical_json_hash(spec),
     }
@@ -207,9 +192,7 @@ def _validate_interrupt_compatibility(interrupt: Dict[str, Any], run: AgentRun) 
     fields = (
         "schema_version",
         "spec_schema_version",
-        "template_id",
-        "template_version_id",
-        "template_version",
+        "workflow_id",
         "checkpoint_thread_id",
         "resolved_spec_hash",
     )
@@ -222,7 +205,7 @@ def _validate_interrupt_compatibility(interrupt: Dict[str, Any], run: AgentRun) 
 
 
 class AgentPatternRepository:
-    """Persistence for agent templates and runs."""
+    """Persistence for agent workflows and runs."""
 
     def __init__(self, session: Optional[AsyncSession] = None):
         self._session = session
@@ -232,206 +215,118 @@ class AgentPatternRepository:
             return self._session
         return async_session_maker()
 
-    def _spec_record_for_template(self, template: AgentPatternTemplate) -> AgentPatternSpecRecord:
-        metadata = template.metadata_json if isinstance(template.metadata_json, dict) else {}
-        version = metadata.get("version")
-        try:
-            version_number = int(version)
-        except (TypeError, ValueError):
-            version_number = 1
-        version_id = str(metadata.get("version_id") or f"{template.id}:v{version_number}")
-        return AgentPatternSpecRecord(
-            id=version_id,
-            template_id=template.id,
-            version=version_number,
-            schema_version=template.schema_version,
-            spec_json=template.spec_json if isinstance(template.spec_json, dict) else {},
-            validation_result_json=template.validation_result_json if isinstance(template.validation_result_json, dict) else {},
-            changelog=metadata.get("changelog") if isinstance(metadata.get("changelog"), str) else None,
-            created_at=template.created_at,
-        )
-
-    async def seed_builtin_templates(self) -> None:
+    async def seed_builtin_workflows(self) -> None:
         validator = TemplateValidator()
         session = await self._get_session()
         async with session.begin():
-            for template_def in builtin_templates():
-                current_version_def = template_def["version"]
-                validation_result = validator.validate(current_version_def["spec_json"])
+            for workflow_def in builtin_templates():
+                current_spec_def = workflow_def["version"]
+                validation_result = validator.validate(current_spec_def["spec_json"])
                 metadata = {
-                    "version": current_version_def["version"],
-                    "version_id": current_version_def["id"],
-                    "changelog": current_version_def.get("changelog"),
                     "source": "builtin",
                 }
 
-                template = await session.get(AgentPatternTemplate, template_def["id"])
-                if template is None:
-                    template = AgentPatternTemplate(
-                        id=template_def["id"],
-                        name=template_def["name"],
-                        description=template_def["description"],
-                        visibility=template_def["visibility"],
-                        is_builtin=template_def["is_builtin"],
-                        schema_version=current_version_def["schema_version"],
-                        spec_json=current_version_def["spec_json"],
+                workflow = await session.get(AgentWorkflow, workflow_def["id"])
+                if workflow is None:
+                    workflow = AgentWorkflow(
+                        id=workflow_def["id"],
+                        name=workflow_def["name"],
+                        description=workflow_def["description"],
+                        visibility=workflow_def["visibility"],
+                        is_builtin=workflow_def["is_builtin"],
+                        schema_version=current_spec_def["schema_version"],
+                        spec_json=current_spec_def["spec_json"],
                         validation_result_json=validation_result,
                         metadata_json=metadata,
                     )
-                    session.add(template)
+                    session.add(workflow)
                 else:
-                    template.name = template_def["name"]
-                    template.description = template_def["description"]
-                    template.visibility = template_def["visibility"]
-                    template.is_builtin = template_def["is_builtin"]
-                    template.schema_version = current_version_def["schema_version"]
-                    replace_jsonb_field(template, "spec_json", current_version_def["spec_json"])
-                    replace_jsonb_field(template, "validation_result_json", validation_result)
-                    replace_jsonb_field(template, "metadata_json", metadata)
-                    template.updated_at = utc_now()
+                    workflow.name = workflow_def["name"]
+                    workflow.description = workflow_def["description"]
+                    workflow.visibility = workflow_def["visibility"]
+                    workflow.is_builtin = workflow_def["is_builtin"]
+                    workflow.schema_version = current_spec_def["schema_version"]
+                    replace_jsonb_field(workflow, "spec_json", current_spec_def["spec_json"])
+                    replace_jsonb_field(workflow, "validation_result_json", validation_result)
+                    replace_jsonb_field(workflow, "metadata_json", metadata)
+                    workflow.updated_at = utc_now()
 
-    async def list_templates(self, *, include_custom: bool = False) -> list[AgentPatternTemplate]:
+    async def list_workflows(self, *, include_custom: bool = False) -> list[AgentWorkflow]:
         session = await self._get_session()
         async with session.begin():
             visibility_filter = (
-                AgentPatternTemplate.id.in_(SUPPORTED_BUILTIN_TEMPLATE_IDS)
+                AgentWorkflow.id.in_(SUPPORTED_BUILTIN_TEMPLATE_IDS)
                 if not include_custom
                 else or_(
-                    AgentPatternTemplate.id.in_(SUPPORTED_BUILTIN_TEMPLATE_IDS),
-                    AgentPatternTemplate.visibility.in_(["public", "internal"]),
+                    AgentWorkflow.id.in_(SUPPORTED_BUILTIN_TEMPLATE_IDS),
+                    AgentWorkflow.visibility.in_(["public", "internal"]),
                 )
             )
             result = await session.execute(
-                select(AgentPatternTemplate)
+                select(AgentWorkflow)
                 .where(visibility_filter)
-                .order_by(AgentPatternTemplate.name.asc())
+                .order_by(AgentWorkflow.name.asc())
             )
             return list(result.scalars().all())
 
-    async def mark_custom_template_deleted(self, template_id: str) -> Optional[AgentPatternTemplate]:
-        if template_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
-            raise ValueError("built-in agent pattern templates cannot be deleted")
+    async def mark_custom_workflow_deleted(self, workflow_id: str) -> Optional[AgentWorkflow]:
+        if workflow_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            raise ValueError("built-in agent workflows cannot be deleted")
         session = await self._get_session()
         async with session.begin():
-            template = await session.get(AgentPatternTemplate, template_id)
-            if template is None or template.is_builtin:
+            workflow = await session.get(AgentWorkflow, workflow_id)
+            if workflow is None or workflow.is_builtin:
                 return None
-            template.visibility = "deleted"
-            template.updated_at = utc_now()
+            workflow.visibility = "deleted"
+            workflow.updated_at = utc_now()
             await session.flush()
-            return template
+            return workflow
 
-    async def get_template(self, template_id: str) -> Optional[AgentPatternTemplate]:
+    async def get_workflow(self, workflow_id: str, *, include_custom: bool = False) -> Optional[AgentWorkflow]:
         session = await self._get_session()
         async with session.begin():
-            if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            if not include_custom and workflow_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
                 return None
-            return await session.get(AgentPatternTemplate, template_id)
+            workflow = await session.get(AgentWorkflow, workflow_id)
+            if not workflow:
+                return None
+            if include_custom and not workflow.is_builtin and workflow.visibility not in {"public", "internal"}:
+                return None
+            return workflow
 
-    async def get_template_with_current_version(
-        self,
-        template_id: str,
-        *,
-        include_custom: bool = False,
-    ) -> tuple[Optional[AgentPatternTemplate], Optional[AgentPatternSpecRecord]]:
-        session = await self._get_session()
-        async with session.begin():
-            if not include_custom and template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
-                return None, None
-            template = await session.get(AgentPatternTemplate, template_id)
-            if not template:
-                return None, None
-            if include_custom and not template.is_builtin and template.visibility not in {"public", "internal"}:
-                return None, None
-            return template, self._spec_record_for_template(template)
-
-    async def get_template_version(
-        self,
-        template_id: str,
-        version: int,
-        *,
-        include_custom: bool = False,
-    ) -> tuple[Optional[AgentPatternTemplate], Optional[AgentPatternSpecRecord]]:
-        template, current = await self.get_template_with_current_version(template_id, include_custom=include_custom)
-        if not template or not current:
-            return template, None
-        return template, current if current.version == version else None
-
-    async def create_internal_template_version(
+    async def save_custom_workflow(
         self,
         *,
-        template_id: str,
+        workflow_id: str,
         name: str,
         spec_json: Dict[str, Any],
         description: str = "",
-        version: Optional[int] = None,
-        changelog: Optional[str] = None,
         visibility: str = "internal",
-        set_current: bool = True,
-    ) -> tuple[AgentPatternTemplate, AgentPatternSpecRecord]:
-        if version is None:
-            existing_template, existing_record = await self.get_template_with_current_version(
-                template_id,
-                include_custom=True,
-            )
-            if existing_template and existing_record:
-                version = existing_record.version + 1
-            else:
-                version = 1
-        return await self.save_internal_template(
-            template_id=template_id,
-            name=name,
-            spec_json=spec_json,
-            description=description,
-            version=version,
-            changelog=changelog,
-            visibility=visibility,
-        )
-
-    async def save_internal_template(
-        self,
-        *,
-        template_id: str,
-        name: str,
-        spec_json: Dict[str, Any],
-        description: str = "",
-        changelog: Optional[str] = None,
-        visibility: str = "internal",
-        version: Optional[int] = None,
-    ) -> tuple[AgentPatternTemplate, AgentPatternSpecRecord]:
-        """Create or update the latest mutable internal/custom pattern spec."""
-        if not isinstance(template_id, str) or not template_id:
-            raise ValueError("template_id must be a non-empty string")
-        if template_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
-            raise ValueError("built-in agent pattern templates cannot be authored through the internal path")
+    ) -> AgentWorkflow:
+        """Create or update a mutable internal/custom workflow spec."""
+        if not isinstance(workflow_id, str) or not workflow_id:
+            raise ValueError("workflow_id must be a non-empty string")
+        if workflow_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            raise ValueError("built-in agent workflows cannot be authored through the internal path")
         if not isinstance(name, str) or not name:
             raise ValueError("name must be a non-empty string")
         if not isinstance(spec_json, dict):
             raise TemplateValidationError("spec must be an object")
         if spec_json.get("schema_version") != 2:
-            raise TemplateValidationError("internal custom agent pattern specs must use schema_version 2")
+            raise TemplateValidationError("internal custom agent workflow specs must use schema_version 2")
 
         validation_result = TemplateValidator().validate(spec_json)
         session = await self._get_session()
         async with session.begin():
-            template = await session.get(AgentPatternTemplate, template_id)
-            previous_metadata = template.metadata_json if template and isinstance(template.metadata_json, dict) else {}
-            previous_version = previous_metadata.get("version")
-            try:
-                previous_version_number = int(previous_version)
-            except (TypeError, ValueError):
-                previous_version_number = 0
-            version_number = int(version or previous_version_number or 1)
+            workflow = await session.get(AgentWorkflow, workflow_id)
+            previous_metadata = workflow.metadata_json if workflow and isinstance(workflow.metadata_json, dict) else {}
             metadata = {
                 **previous_metadata,
-                "version": version_number,
-                "version_id": f"{template_id}:v{version_number}",
+                "source": "custom",
             }
-            if changelog is not None:
-                metadata["changelog"] = changelog
-            if template is None:
-                template = AgentPatternTemplate(
-                    id=template_id,
+            if workflow is None:
+                workflow = AgentWorkflow(
+                    id=workflow_id,
                     name=name,
                     description=description,
                     visibility=visibility,
@@ -441,22 +336,22 @@ class AgentPatternRepository:
                     validation_result_json=validation_result,
                     metadata_json=metadata,
                 )
-                session.add(template)
+                session.add(workflow)
             else:
-                if template.is_builtin:
-                    raise ValueError("built-in agent pattern templates cannot be authored through the internal path")
-                template.name = name
-                template.description = description
-                template.visibility = visibility
-                template.is_builtin = False
-                template.schema_version = 2
-                replace_jsonb_field(template, "spec_json", spec_json)
-                replace_jsonb_field(template, "validation_result_json", validation_result)
-                replace_jsonb_field(template, "metadata_json", metadata)
-                template.updated_at = utc_now()
+                if workflow.is_builtin:
+                    raise ValueError("built-in agent workflows cannot be authored through the internal path")
+                workflow.name = name
+                workflow.description = description
+                workflow.visibility = visibility
+                workflow.is_builtin = False
+                workflow.schema_version = 2
+                replace_jsonb_field(workflow, "spec_json", spec_json)
+                replace_jsonb_field(workflow, "validation_result_json", validation_result)
+                replace_jsonb_field(workflow, "metadata_json", metadata)
+                workflow.updated_at = utc_now()
 
             await session.flush()
-            return template, self._spec_record_for_template(template)
+            return workflow
 
     async def get_run(self, run_id: str) -> Optional[AgentRun]:
         session = await self._get_session()
@@ -602,23 +497,18 @@ class AgentPatternRepository:
         self,
         *,
         thread_id: str,
-        template_id: str,
-        template_version_id: str,
-        template_version: Optional[int] = None,
+        workflow_id: str,
         resolved_spec_json: Dict[str, Any],
         user_id: Optional[str] = None,
         checkpoint_thread_id: Optional[str] = None,
     ) -> AgentRun:
         run_id = str(uuid.uuid4())
-        run_metadata_json: Dict[str, Any] = {"template_version_id": template_version_id}
-        if template_version is not None:
-            run_metadata_json["template_version"] = template_version
         run = AgentRun(
             id=run_id,
             thread_id=thread_id,
             user_id=user_id,
-            template_id=template_id,
-            run_metadata_json=run_metadata_json,
+            workflow_id=workflow_id,
+            run_metadata_json={},
             resolved_spec_json=resolved_spec_json,
             status=RUN_STATUS_RUNNING,
             checkpoint_thread_id=checkpoint_thread_id or run_id,

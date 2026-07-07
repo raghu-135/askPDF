@@ -161,9 +161,7 @@ async def _persist_success_turn(
     llm_model = result.get("llm_model")
     context_window = result.get("context_window") or DEFAULT_TOKEN_BUDGET
     metadata = {
-        "agent_pattern_id": agent_run_context.get("agent_pattern_id"),
-        "agent_pattern_version": agent_run_context.get("agent_pattern_version"),
-        "agent_pattern_template_version_id": agent_run_context.get("agent_pattern_template_version_id"),
+        "agent_workflow_id": agent_run_context.get("agent_workflow_id"),
         "agent_route": result.get("route"),
         "agent_route_reason": result.get("route_reason"),
     }
@@ -408,12 +406,11 @@ async def _handle_compiled_rag_chat(
 
     try:
         logger.info(
-            "%s run started | run_id=%s thread_id=%s pattern=%s version=%s question_chars=%s",
+            "%s run started | run_id=%s thread_id=%s workflow=%s question_chars=%s",
             runtime_label,
             agent_run_id,
             thread_id,
-            agent_run_context.get("agent_pattern_id"),
-            agent_run_context.get("agent_pattern_version"),
+            agent_run_context.get("agent_workflow_id"),
             len(question or ""),
         )
         result = await _invoke_graph_with_partial_state(app, state, config)
@@ -529,9 +526,7 @@ async def _handle_compiled_rag_chat(
             "agent_error": error_payload,
         }
         metadata = {
-            "agent_pattern_id": agent_run_context.get("agent_pattern_id"),
-            "agent_pattern_version": agent_run_context.get("agent_pattern_version"),
-            "agent_pattern_template_version_id": agent_run_context.get("agent_pattern_template_version_id"),
+            "agent_workflow_id": agent_run_context.get("agent_workflow_id"),
             "agent_route": route,
             "agent_route_reason": route_reason,
             "agent_error": error_payload,
@@ -620,9 +615,7 @@ async def resume_compiled_rag_chat(
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
     agent_run_context = {
         "agent_run_id": run.id,
-        "agent_pattern_id": run.template_id,
-        "agent_pattern_version": run.template_version,
-        "agent_pattern_template_version_id": run.template_version_id,
+        "agent_workflow_id": run.workflow_id,
         "checkpoint_thread_id": checkpoint_thread_id,
     }
 

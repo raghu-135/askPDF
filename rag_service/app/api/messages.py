@@ -33,10 +33,10 @@ router = APIRouter(tags=["messages"])
 
 
 def _is_evaluator_replanner_settings(settings: dict) -> bool:
-    agent_pattern = settings.get("agent_pattern")
-    if not isinstance(agent_pattern, dict):
+    agent_workflow = settings.get("agent_workflow")
+    if not isinstance(agent_workflow, dict):
         return False
-    return agent_pattern.get("template_id") == EVALUATOR_REPLANNER_RAG_AGENT_ID
+    return agent_workflow.get("workflow_id") == EVALUATOR_REPLANNER_RAG_AGENT_ID
 
 
 def _agent_message_metadata(message) -> dict:
@@ -44,8 +44,7 @@ def _agent_message_metadata(message) -> dict:
     if not isinstance(metadata, dict):
         return {}
     allowed_keys = {
-        "agent_pattern_id",
-        "agent_pattern_version",
+        "agent_workflow_id",
         "agent_route",
         "agent_route_reason",
     }

@@ -154,7 +154,7 @@ export default function BuilderValidationPanel({
             {previewError ? <Alert severity="error">{previewError}</Alert> : null}
             {previewResult ? (
               <Alert severity={previewResult.validation?.valid === false ? 'warning' : 'success'}>
-                Thread preview returned {previewResult.template_id || 'a workflow'}{previewResult.template_version ? ` v${previewResult.template_version}` : ''}.
+                Thread preview returned {previewResult.workflow_id || 'a workflow'}.
               </Alert>
             ) : (
               <Alert severity="info">

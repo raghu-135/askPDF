@@ -289,14 +289,14 @@ class TestThreadEndpoints:
                 "replans": 2,
                 "token_budget": 16384,
                 "hitl_web_approval": True,
-                "agent_pattern": {"template_id": "router_rag_agent"},
+                "agent_workflow": {"workflow_id": "router_rag_agent"},
             }
         )
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, dict)
         assert data["hitl_web_approval"] is True
-        assert data["agent_pattern"]["template_id"] == "router_rag_agent"
+        assert data["agent_workflow"]["workflow_id"] == "router_rag_agent"
 
     def test_update_settings_nonexistent_thread(self, client):
         """Test updating settings for a thread that doesn't exist."""
@@ -494,7 +494,7 @@ class TestThreadEndpoints:
                 "system_role": "You are a helpful assistant",
                 "tool_instructions": {},
                 "custom_instructions": "Be concise",
-                "agent_pattern_id": "plan_execute_rag_agent",
+                "agent_workflow_id": "plan_execute_rag_agent",
             },
         )
 
@@ -509,7 +509,7 @@ class TestThreadEndpoints:
             "/api/threads/prompt-preview",
             json={
                 "context_window": 8192,
-                "agent_pattern_id": "unknown_agent",
+                "agent_workflow_id": "unknown_agent",
             },
         )
 

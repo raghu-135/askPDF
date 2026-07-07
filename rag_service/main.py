@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("Initializing PostgreSQL database with SQLModel...")
         await init_db()
-        await AgentPatternRepository().seed_builtin_templates()
+        await AgentPatternRepository().seed_builtin_workflows()
         logger.info("Database initialization complete.")
     except Exception as e:
         logger.critical(f"Failed to initialize database: {e}", exc_info=True)

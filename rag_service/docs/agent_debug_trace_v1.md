@@ -49,7 +49,7 @@ Top-level fields:
 - `schema_version`: currently `1`.
 - `trace_id`: stable trace identifier. V1 uses the agent run ID.
 - `run_id`, `thread_id`, `chat_turn_id`, `user_id`: owning entities.
-- `template_id`, `template_version_id`, `pattern_type`: selected agent pattern.
+- `workflow_id`, `pattern_type`: selected agent workflow.
 - `status`: run status.
 - `started_at`, `completed_at`, `duration_ms`: run timing when available.
 - `attributes`: root run attributes duplicated from the root span for quick access.
@@ -100,8 +100,7 @@ Root span attributes:
 - `askpdf.run.id`
 - `askpdf.thread.id`
 - `askpdf.chat_turn.id`
-- `askpdf.template.id`
-- `askpdf.template_version.id`
+- `askpdf.workflow.id`
 - `askpdf.pattern_type`
 - `askpdf.route`
 - `askpdf.route_reason`

@@ -31,8 +31,8 @@ class TestMessageEndpoints:
             web_sources=[],
             metadata={
                 "agent_run_id": "legacy-metadata-run",
-                "agent_pattern_id": "router_rag_agent",
-                "agent_pattern_version": 1,
+                "agent_workflow_id": "router_rag_agent",
+                "agent_workflow_version": 1,
                 "agent_route": "document",
                 "agent_route_reason": "Question needs document evidence.",
                 "context_compact": "internal compact text",
@@ -62,8 +62,8 @@ class TestMessageEndpoints:
         assert message["agent_trace_refs"]["node_ids"] == ["router"]
         metadata = message["metadata"]
         assert metadata == {
-            "agent_pattern_id": "router_rag_agent",
-            "agent_pattern_version": 1,
+            "agent_workflow_id": "router_rag_agent",
+            "agent_workflow_version": 1,
             "agent_route": "document",
             "agent_route_reason": "Question needs document evidence.",
         }

@@ -11,17 +11,17 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import type { AgentPatternTemplate, AgentPatternVersion } from '../../lib/api';
+import type { AgentWorkflow, AgentWorkflowSpecResponse } from '../../lib/api';
 
 export interface BuilderPersistenceState {
-  templateId: string;
+  workflowId: string;
   name: string;
   description: string;
 }
 
-export interface BuilderPersistedPattern {
-  template: AgentPatternTemplate;
-  version: AgentPatternVersion;
+export interface BuilderPersistedWorkflow {
+  workflow: AgentWorkflow;
+  spec: AgentWorkflowSpecResponse;
 }
 
 export interface BuilderBoundaryMessage {
@@ -44,7 +44,7 @@ export default function BuilderPersistencePanel({
 }: {
   form: BuilderPersistenceState;
   onFormChange: (patch: Partial<BuilderPersistenceState>) => void;
-  persisted: BuilderPersistedPattern | null;
+  persisted: BuilderPersistedWorkflow | null;
   busyAction: 'save' | 'delete' | null;
   statusMessage: string | null;
   errorMessage: string | null;
@@ -54,9 +54,9 @@ export default function BuilderPersistencePanel({
   onSave: () => void;
   onDelete: () => void;
 }) {
-  const savedTemplateId = persisted?.template.id;
+  const savedWorkflowId = persisted?.workflow.id;
   const saveDisabled = authoringDisabled || !canSave || busyAction === 'save';
-  const deleteDisabled = authoringDisabled || !persisted || Boolean(persisted.template.is_builtin) || Boolean(busyAction);
+  const deleteDisabled = authoringDisabled || !persisted || Boolean(persisted.workflow.is_builtin) || Boolean(busyAction);
   const formDisabled = authoringDisabled || Boolean(busyAction);
 
   return (
@@ -80,7 +80,7 @@ export default function BuilderPersistencePanel({
       {persisted ? (
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
           <Chip size="small" color="success" label="Saved" />
-          <Chip size="small" variant="outlined" label={savedTemplateId} />
+          <Chip size="small" variant="outlined" label={savedWorkflowId} />
         </Box>
       ) : null}
       <TextField
@@ -110,7 +110,7 @@ export default function BuilderPersistencePanel({
         >
           {busyAction === 'save' ? 'Saving' : 'Save Workflow'}
         </Button>
-        <Tooltip title={persisted?.template.is_builtin ? 'Built-in workflows cannot be deleted' : 'Delete custom workflow'}>
+        <Tooltip title={persisted?.workflow.is_builtin ? 'Built-in workflows cannot be deleted' : 'Delete custom workflow'}>
           <span>
             <Button
               size="small"

@@ -120,7 +120,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
     # Rebuild repository singletons so endpoint tests cannot reuse app-DB sessions.
     import app.db as db_api
 
-    for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo", "_agent_pattern_repo"):
+    for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo", "_agent_workflow_repo"):
         monkeypatch.setattr(db_api, attr, None)
 
 

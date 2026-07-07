@@ -76,10 +76,10 @@ router = APIRouter(tags=["threads"])
 
 
 def _is_evaluator_replanner_settings(settings: dict) -> bool:
-    agent_pattern = settings.get("agent_pattern")
-    if not isinstance(agent_pattern, dict):
+    agent_workflow = settings.get("agent_workflow")
+    if not isinstance(agent_workflow, dict):
         return False
-    return agent_pattern.get("template_id") == EVALUATOR_REPLANNER_RAG_AGENT_ID
+    return agent_workflow.get("workflow_id") == EVALUATOR_REPLANNER_RAG_AGENT_ID
 
 
 def _empty_thread_stats() -> dict:
@@ -158,10 +158,10 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
     """Return the fully composed system prompt preview from the backend source of truth."""
     try:
         tool_instructions = normalize_tool_instructions(req.tool_instructions or {})
-        requested_pattern = req.agent_pattern_id
-        if not requested_pattern and isinstance(req.agent_pattern, dict):
-            requested_pattern = req.agent_pattern.get("template_id")
-        pattern_id = requested_pattern if requested_pattern in SUPPORTED_BUILTIN_TEMPLATE_IDS else ROUTER_RAG_AGENT_ID
+        requested_workflow = req.agent_workflow_id
+        if not requested_workflow and isinstance(req.agent_workflow, dict):
+            requested_workflow = req.agent_workflow.get("workflow_id")
+        pattern_id = requested_workflow if requested_workflow in SUPPORTED_BUILTIN_TEMPLATE_IDS else ROUTER_RAG_AGENT_ID
         prompt = build_agent_pattern_prompt_preview(
             pattern_id=pattern_id,
             context_window=req.context_window,

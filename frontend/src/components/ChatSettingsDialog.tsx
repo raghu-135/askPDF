@@ -17,7 +17,7 @@ import {
 } from '@mui/material';
 import ReplayIcon from '@mui/icons-material/Replay';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import { AgentPatternTemplate, PromptToolDefinition } from '../lib/api';
+import { AgentWorkflow, PromptToolDefinition } from '../lib/api';
 
 interface ChatSettingsDialogProps {
     open: boolean;
@@ -30,9 +30,9 @@ interface ChatSettingsDialogProps {
     replansLimit: number | null;
     hitlWebApproval: boolean;
     useReranker: boolean;
-    agentPatternId: string;
-    agentPatternIsCustom?: boolean;
-    agentPatterns: AgentPatternTemplate[];
+    agentWorkflowId: string;
+    agentWorkflowIsCustom?: boolean;
+    agentWorkflows: AgentWorkflow[];
     systemRole: string;
     toolInstructions: Record<string, string>;
     customInstructions: string;
@@ -44,7 +44,7 @@ interface ChatSettingsDialogProps {
     onReplansChange: (value: number) => void;
     onHitlWebApprovalChange: (checked: boolean) => void;
     onRerankerChange: (checked: boolean) => void;
-    onAgentPatternChange: (value: string) => void;
+    onAgentWorkflowChange: (value: string) => void;
     onSystemRoleChange: (value: string) => void;
     onToolInstructionChange: (toolId: string, value: string) => void;
     onCustomInstructionsChange: (value: string) => void;
@@ -65,9 +65,9 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     replansLimit,
     hitlWebApproval,
     useReranker,
-    agentPatternId,
-    agentPatternIsCustom = false,
-    agentPatterns,
+    agentWorkflowId,
+    agentWorkflowIsCustom = false,
+    agentWorkflows,
     systemRole,
     toolInstructions,
     customInstructions,
@@ -77,7 +77,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onReplansChange,
     onHitlWebApprovalChange,
     onRerankerChange,
-    onAgentPatternChange,
+    onAgentWorkflowChange,
     onSystemRoleChange,
     onToolInstructionChange,
     onCustomInstructionsChange,
@@ -86,8 +86,8 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onResetToolInstruction,
     onResetCustomInstructions,
 }) => {
-    const replansEnabled = agentPatternId === 'evaluator_replanner_rag_agent';
-    const selectedPatternListed = agentPatterns.some((pattern) => pattern.id === agentPatternId);
+    const replansEnabled = agentWorkflowId === 'evaluator_replanner_rag_agent';
+    const selectedWorkflowListed = agentWorkflows.some((pattern) => pattern.id === agentWorkflowId);
 
     return (
         <Dialog
@@ -121,18 +121,18 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     <TextField
                         select
                         label="Agent workflow"
-                        value={agentPatternId}
-                        onChange={(e) => onAgentPatternChange(e.target.value)}
+                        value={agentWorkflowId}
+                        onChange={(e) => onAgentWorkflowChange(e.target.value)}
                         helperText="Router RAG remains the default; advanced workflows are opt-in."
                     >
-                        {agentPatterns.map((pattern) => (
+                        {agentWorkflows.map((pattern) => (
                             <MenuItem key={pattern.id} value={pattern.id}>
                                 {pattern.is_builtin ? pattern.name : `Custom: ${pattern.name || pattern.id}`}
                             </MenuItem>
                         ))}
-                        {agentPatternIsCustom && !selectedPatternListed ? (
-                            <MenuItem value={agentPatternId}>
-                                Custom: {agentPatternId}
+                        {agentWorkflowIsCustom && !selectedWorkflowListed ? (
+                            <MenuItem value={agentWorkflowId}>
+                                Custom: {agentWorkflowId}
                             </MenuItem>
                         ) : null}
                     </TextField>

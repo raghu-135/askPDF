@@ -1,4 +1,4 @@
-"""Add agent pattern runtime tables
+"""Add agent workflow runtime tables
 
 Revision ID: b7e2a4c9d1f0
 Revises: a1f4c8d9e2b3
@@ -18,29 +18,12 @@ depends_on = None
 
 def upgrade() -> None:
     op.create_table(
-        "agent_pattern_templates",
+        "agent_workflows",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("description", sa.String(), nullable=False, server_default=""),
         sa.Column("visibility", sa.String(), nullable=False, server_default="builtin"),
-        sa.Column("owner_id", sa.String(), nullable=True),
-        sa.Column("current_version_id", sa.String(), nullable=True),
         sa.Column("is_builtin", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("idx_agent_pattern_template_builtin", "agent_pattern_templates", ["is_builtin"], unique=False)
-    op.create_index(op.f("ix_agent_pattern_templates_current_version_id"), "agent_pattern_templates", ["current_version_id"], unique=False)
-    op.create_index(op.f("ix_agent_pattern_templates_name"), "agent_pattern_templates", ["name"], unique=False)
-    op.create_index(op.f("ix_agent_pattern_templates_owner_id"), "agent_pattern_templates", ["owner_id"], unique=False)
-    op.create_index(op.f("ix_agent_pattern_templates_visibility"), "agent_pattern_templates", ["visibility"], unique=False)
-
-    op.create_table(
-        "agent_pattern_template_versions",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("template_id", sa.String(), nullable=False),
-        sa.Column("version", sa.Integer(), nullable=False),
         sa.Column("schema_version", sa.Integer(), nullable=False, server_default="2"),
         sa.Column(
             "spec_json",
@@ -54,21 +37,26 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("'{}'::jsonb"),
         ),
-        sa.Column("changelog", sa.String(), nullable=True),
+        sa.Column(
+            "metadata_json",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
-        sa.ForeignKeyConstraint(["template_id"], ["agent_pattern_templates.id"], ondelete="CASCADE"),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("idx_agent_pattern_template_version_unique", "agent_pattern_template_versions", ["template_id", "version"], unique=True)
-    op.create_index(op.f("ix_agent_pattern_template_versions_template_id"), "agent_pattern_template_versions", ["template_id"], unique=False)
-    op.create_index(op.f("ix_agent_pattern_template_versions_version"), "agent_pattern_template_versions", ["version"], unique=False)
+    op.create_index("idx_agent_workflow_builtin", "agent_workflows", ["is_builtin"], unique=False)
+    op.create_index(op.f("ix_agent_workflows_name"), "agent_workflows", ["name"], unique=False)
+    op.create_index(op.f("ix_agent_workflows_visibility"), "agent_workflows", ["visibility"], unique=False)
 
     op.create_table(
         "agent_runs",
         sa.Column("id", sa.String(), nullable=False),
         sa.Column("thread_id", sa.String(), nullable=False),
         sa.Column("user_id", sa.String(), nullable=True),
-        sa.Column("template_id", sa.String(), nullable=False),
+        sa.Column("workflow_id", sa.String(), nullable=False),
         sa.Column(
             "run_metadata_json",
             postgresql.JSONB(astext_type=sa.Text()),
@@ -93,13 +81,13 @@ def upgrade() -> None:
             server_default=sa.text("'{}'::jsonb"),
         ),
         sa.Column("debug_trace_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.ForeignKeyConstraint(["template_id"], ["agent_pattern_templates.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["workflow_id"], ["agent_workflows.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["thread_id"], ["threads.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("idx_agent_run_thread_started", "agent_runs", ["thread_id", "started_at"], unique=False)
     op.create_index(op.f("ix_agent_runs_status"), "agent_runs", ["status"], unique=False)
-    op.create_index(op.f("ix_agent_runs_template_id"), "agent_runs", ["template_id"], unique=False)
+    op.create_index(op.f("ix_agent_runs_workflow_id"), "agent_runs", ["workflow_id"], unique=False)
     op.create_index(op.f("ix_agent_runs_thread_id"), "agent_runs", ["thread_id"], unique=False)
     op.create_index(op.f("ix_agent_runs_user_id"), "agent_runs", ["user_id"], unique=False)
 
@@ -133,19 +121,12 @@ def downgrade() -> None:
 
     op.drop_index(op.f("ix_agent_runs_user_id"), table_name="agent_runs")
     op.drop_index(op.f("ix_agent_runs_thread_id"), table_name="agent_runs")
-    op.drop_index(op.f("ix_agent_runs_template_id"), table_name="agent_runs")
+    op.drop_index(op.f("ix_agent_runs_workflow_id"), table_name="agent_runs")
     op.drop_index(op.f("ix_agent_runs_status"), table_name="agent_runs")
     op.drop_index("idx_agent_run_thread_started", table_name="agent_runs")
     op.drop_table("agent_runs")
 
-    op.drop_index(op.f("ix_agent_pattern_template_versions_version"), table_name="agent_pattern_template_versions")
-    op.drop_index(op.f("ix_agent_pattern_template_versions_template_id"), table_name="agent_pattern_template_versions")
-    op.drop_index("idx_agent_pattern_template_version_unique", table_name="agent_pattern_template_versions")
-    op.drop_table("agent_pattern_template_versions")
-
-    op.drop_index(op.f("ix_agent_pattern_templates_visibility"), table_name="agent_pattern_templates")
-    op.drop_index(op.f("ix_agent_pattern_templates_owner_id"), table_name="agent_pattern_templates")
-    op.drop_index(op.f("ix_agent_pattern_templates_name"), table_name="agent_pattern_templates")
-    op.drop_index(op.f("ix_agent_pattern_templates_current_version_id"), table_name="agent_pattern_templates")
-    op.drop_index("idx_agent_pattern_template_builtin", table_name="agent_pattern_templates")
-    op.drop_table("agent_pattern_templates")
+    op.drop_index(op.f("ix_agent_workflows_visibility"), table_name="agent_workflows")
+    op.drop_index(op.f("ix_agent_workflows_name"), table_name="agent_workflows")
+    op.drop_index("idx_agent_workflow_builtin", table_name="agent_workflows")
+    op.drop_table("agent_workflows")

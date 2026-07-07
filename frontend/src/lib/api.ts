@@ -145,8 +145,8 @@ export interface ThreadSettings {
   custom_instructions: string;
   hitl_web_approval: boolean;
   use_reranker: boolean;
-  agent_pattern?: {
-    template_id: 'router_rag_agent' | string;
+  agent_workflow?: {
+    workflow_id: 'router_rag_agent' | string;
   };
 }
 
@@ -269,8 +269,9 @@ export interface AgentPatternCatalogResponse {
   [key: string]: any;
 }
 
-export interface AgentPatternTemplate {
+export interface AgentWorkflow {
   id: string;
+  workflow_id?: string;
   name: string;
   description?: string;
   visibility?: string;
@@ -288,34 +289,33 @@ export interface AgentPatternValidationReport {
   [key: string]: any;
 }
 
-export interface AgentPatternVersion {
-  id: string;
-  template_id: string;
-  version: number;
+export interface AgentWorkflowSpecResponse {
+  workflow_id: string;
   schema_version: number;
   spec_json: AgentPatternBuilderSpec | Record<string, any>;
   validation: AgentPatternValidationReport;
   validation_result_json?: Record<string, any>;
-  changelog?: string | null;
   created_at?: string | null;
+  updated_at?: string | null;
 }
 
-export interface InternalAgentPatternResponse {
-  agent_pattern: AgentPatternTemplate;
-  version: AgentPatternVersion;
+export interface InternalAgentWorkflowResponse {
+  agent_workflow: AgentWorkflow;
+  spec: AgentWorkflowSpecResponse;
 }
 
-export interface InternalAgentPatternCurrentResponse {
-  agent_pattern: AgentPatternTemplate;
-  current_version: AgentPatternVersion;
+export interface AgentWorkflowResponse {
+  agent_workflow: AgentWorkflow;
+  spec: AgentWorkflowSpecResponse;
+  capabilities?: Record<string, any>;
 }
 
-export interface AgentPatternListResponse {
-  agent_patterns: AgentPatternTemplate[];
+export interface AgentWorkflowListResponse {
+  agent_workflows: AgentWorkflow[];
 }
 
-export interface CreateInternalAgentPatternPayload {
-  template_id?: string;
+export interface SaveInternalAgentWorkflowPayload {
+  workflow_id?: string;
   name: string;
   description?: string;
   spec_json: AgentPatternBuilderSpec | Record<string, any>;
@@ -323,9 +323,7 @@ export interface CreateInternalAgentPatternPayload {
 
 export interface ThreadAgentConfigValidationResponse {
   valid: boolean;
-  template_id: string;
-  template_version: number;
-  template_version_id: string;
+  workflow_id: string;
   validation: AgentPatternValidationReport;
   resolved_spec_json: AgentPatternBuilderSpec | Record<string, any>;
 }
@@ -340,9 +338,7 @@ export interface AgentPatternGraphPreview {
 
 export interface ThreadAgentConfigPreviewResponse {
   thread_id?: string;
-  template_id?: string;
-  template_version?: number;
-  template_version_id?: string;
+  workflow_id?: string;
   validation?: AgentPatternValidationReport;
   resolved_spec_json?: AgentPatternBuilderSpec | Record<string, any>;
   graph?: AgentPatternGraphPreview;
@@ -398,8 +394,7 @@ export interface WebSource {
 
 export interface AgentMessageMetadata {
   agent_run_id?: string;
-  agent_pattern_id?: string;
-  agent_pattern_version?: number | string;
+  agent_workflow_id?: string;
   agent_route?: string;
   agent_route_reason?: string;
 }
@@ -427,8 +422,7 @@ export interface Message {
   agent_run_turn_kind?: string;
   agent_run_sequence?: number | null;
   agent_trace_refs?: AgentTraceRefs | null;
-  agent_pattern_id?: string;
-  agent_pattern_version?: number | string;
+  agent_workflow_id?: string;
   agent_route?: string;
   agent_route_reason?: string;
 }
@@ -466,8 +460,7 @@ export interface AgentDebugTrace {
   thread_id?: string;
   chat_turn_id?: string | null;
   user_id?: string | null;
-  template_id?: string;
-  template_version_id?: string;
+  workflow_id?: string;
   pattern_type?: string;
   status?: string;
   started_at?: string | null;
@@ -552,8 +545,7 @@ export interface AgentRunDetails {
   id: string;
   thread_id: string;
   status: string;
-  template_id: string;
-  template_version_id?: string;
+  workflow_id: string;
   resolved_spec_json?: Record<string, any>;
   metrics_json?: Record<string, any>;
   error_json?: Record<string, any> | null;
@@ -573,8 +565,7 @@ export interface AgentRunDetails {
 export interface AgentRunSummary {
   id: string;
   thread_id: string;
-  template_id: string;
-  template_version_id?: string;
+  workflow_id: string;
   status: string;
   started_at?: string | null;
   completed_at?: string | null;
@@ -668,7 +659,7 @@ export async function getPromptPreview(payload: {
   tool_instructions: Record<string, string>;
   custom_instructions: string;
   use_web_search?: boolean;
-  agent_pattern_id?: string;
+  agent_workflow_id?: string;
 }): Promise<{ prompt: string }> {
   const res = await fetch(`${API_BASE}/api/threads/prompt-preview`, {
     method: "POST",
@@ -682,22 +673,22 @@ export async function getPromptPreview(payload: {
   return res.json();
 }
 
-export async function getInternalAgentPatternCatalog(): Promise<AgentPatternCatalogResponse> {
-  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/catalog`);
+export async function getInternalAgentWorkflowCatalog(): Promise<AgentPatternCatalogResponse> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-workflows/catalog`);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }
 
-export async function listAgentPatterns(): Promise<AgentPatternListResponse> {
-  const res = await fetch(`${API_BASE}/api/agent-patterns`);
+export async function listAgentWorkflows(): Promise<AgentWorkflowListResponse> {
+  const res = await fetch(`${API_BASE}/api/agent-workflows`);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }
 
-export async function createInternalAgentPattern(
-  payload: CreateInternalAgentPatternPayload
-): Promise<InternalAgentPatternResponse> {
-  const res = await fetch(`${API_BASE}/api/internal/agent-patterns`, {
+export async function saveInternalAgentWorkflow(
+  payload: SaveInternalAgentWorkflowPayload
+): Promise<InternalAgentWorkflowResponse> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-workflows`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -706,18 +697,18 @@ export async function createInternalAgentPattern(
   return res.json();
 }
 
-export async function getInternalAgentPattern(
-  templateId: string
-): Promise<InternalAgentPatternCurrentResponse> {
-  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/${encodeURIComponent(templateId)}`);
+export async function getInternalAgentWorkflow(
+  workflowId: string
+): Promise<InternalAgentWorkflowResponse> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-workflows/${encodeURIComponent(workflowId)}`);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }
 
-export async function deleteInternalAgentPattern(
-  templateId: string
-): Promise<{ status: string; agent_pattern: AgentPatternTemplate }> {
-  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/${encodeURIComponent(templateId)}`, {
+export async function deleteInternalAgentWorkflow(
+  workflowId: string
+): Promise<{ status: string; agent_workflow: AgentWorkflow }> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-workflows/${encodeURIComponent(workflowId)}`, {
     method: "DELETE",
   });
   if (!res.ok) throw new Error(await readApiError(res));
@@ -727,7 +718,7 @@ export async function deleteInternalAgentPattern(
 export async function validateAgentPatternSpec(
   spec: AgentPatternBuilderSpec | Record<string, any>
 ): Promise<AgentPatternValidationReport> {
-  const res = await fetch(`${API_BASE}/api/agent-patterns/validate`, {
+  const res = await fetch(`${API_BASE}/api/agent-workflows/validate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ spec }),
@@ -1016,8 +1007,7 @@ export async function threadChat(
   agent_run_sequence?: number | null;
   agent_trace_refs?: AgentTraceRefs | null;
   pending_interrupt?: AgentRunPendingInterrupt | null;
-  agent_pattern_id?: string;
-  agent_pattern_version?: number | string;
+  agent_workflow_id?: string;
   route?: string;
   agent_route?: string;
   agent_route_reason?: string;

@@ -51,14 +51,14 @@ import {
     updateThreadSettings,
     getPromptTools,
     getPromptPreview,
-    listAgentPatterns,
+    listAgentWorkflows,
     getAgentRun,
     listThreadAgentRuns,
     AgentRunDetails,
     AgentTraceRefs,
     AgentRunPendingInterrupt,
     AgentRunResumeAction,
-    AgentPatternTemplate,
+    AgentWorkflow,
     resumeAgentRun,
 } from '../lib/api';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
@@ -79,8 +79,7 @@ interface ChatMessage extends Message {
     agent_run_turn_kind?: string;
     agent_run_sequence?: number | null;
     agent_trace_refs?: AgentTraceRefs | null;
-    agent_pattern_id?: string;
-    agent_pattern_version?: number | string;
+    agent_workflow_id?: string;
     agent_route?: string;
     agent_route_reason?: string;
     pending_human_review?: boolean;
@@ -98,9 +97,9 @@ type PendingHumanReview = {
     localAssistantMessageId: string;
 };
 
-const BUILTIN_AGENT_PATTERN_IDS = ['router_rag_agent', 'plan_execute_rag_agent', 'evaluator_replanner_rag_agent'];
+const BUILTIN_AGENT_WORKFLOW_IDS = ['router_rag_agent', 'plan_execute_rag_agent', 'evaluator_replanner_rag_agent'];
 
-const DEFAULT_AGENT_PATTERNS: AgentPatternTemplate[] = [
+const DEFAULT_AGENT_WORKFLOWS: AgentWorkflow[] = [
     {
         id: 'router_rag_agent',
         name: 'Router RAG Agent',
@@ -118,16 +117,16 @@ const DEFAULT_AGENT_PATTERNS: AgentPatternTemplate[] = [
     },
 ];
 
-const normalizeAgentPatternForUi = (templateId?: string | null) => (
-    templateId ? String(templateId) : 'router_rag_agent'
+const normalizeAgentWorkflowForUi = (workflowId?: string | null) => (
+    workflowId ? String(workflowId) : 'router_rag_agent'
 );
 
-const isBuiltinAgentPattern = (templateId?: string | null) => (
-    BUILTIN_AGENT_PATTERN_IDS.includes(templateId || '')
+const isBuiltinAgentWorkflow = (workflowId?: string | null) => (
+    BUILTIN_AGENT_WORKFLOW_IDS.includes(workflowId || '')
 );
 
-const isEvaluatorReplannerPattern = (templateId?: string | null) => (
-    normalizeAgentPatternForUi(templateId) === 'evaluator_replanner_rag_agent'
+const isEvaluatorReplannerWorkflow = (workflowId?: string | null) => (
+    normalizeAgentWorkflowForUi(workflowId) === 'evaluator_replanner_rag_agent'
 );
 
 interface ChatInterfaceProps {
@@ -196,8 +195,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
-    const [agentPatternId, setAgentPatternId] = useState('router_rag_agent');
-    const [agentPatterns, setAgentPatterns] = useState<AgentPatternTemplate[]>(DEFAULT_AGENT_PATTERNS);
+    const [agentWorkflowId, setAgentWorkflowId] = useState('router_rag_agent');
+    const [agentWorkflows, setAgentWorkflows] = useState<AgentWorkflow[]>(DEFAULT_AGENT_WORKFLOWS);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -238,7 +237,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
         setHitlWebApproval(settings?.hitl_web_approval ?? defaultHitlWebApproval);
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
-        setAgentPatternId(normalizeAgentPatternForUi(settings?.agent_pattern?.template_id));
+        setAgentWorkflowId(normalizeAgentWorkflowForUi(settings?.agent_workflow?.workflow_id));
     }, [
         defaultCustomInstructions,
         defaultSystemRole,
@@ -384,13 +383,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             try {
                 const [res, patterns] = await Promise.all([
                     getPromptTools(),
-                    listAgentPatterns().catch((error) => {
+                    listAgentWorkflows().catch((error) => {
                         console.error('Failed to load agent patterns:', error);
-                        return { agent_patterns: DEFAULT_AGENT_PATTERNS };
+                        return { agent_workflows: DEFAULT_AGENT_WORKFLOWS };
                     }),
                 ]);
                 setToolCatalog(res.tools || []);
-                setAgentPatterns(patterns.agent_patterns?.length ? patterns.agent_patterns : DEFAULT_AGENT_PATTERNS);
+                setAgentWorkflows(patterns.agent_workflows?.length ? patterns.agent_workflows : DEFAULT_AGENT_WORKFLOWS);
                 if (res.defaults) {
                     setReplansLimit(res.defaults.replans_limit);
                     setDefaultSystemRole(res.defaults.system_role ?? '');
@@ -411,7 +410,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             } catch (error) {
                 console.error('Failed to load prompt tools:', error);
                 setToolCatalog([]);
-                setAgentPatterns(DEFAULT_AGENT_PATTERNS);
+                setAgentWorkflows(DEFAULT_AGENT_WORKFLOWS);
             }
         };
         loadTools();
@@ -445,9 +444,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 agent_run_turn_kind: m.agent_run_turn_kind,
                 agent_run_sequence: m.agent_run_sequence,
                 agent_trace_refs: m.agent_trace_refs,
-                agent_pattern_id: m.agent_pattern_id ?? m.metadata?.agent_pattern_id,
-                agent_pattern_version: m.agent_pattern_version ?? m.metadata?.agent_pattern_version,
-                agent_route: m.agent_route ?? m.metadata?.agent_route,
+                agent_workflow_id: m.agent_workflow_id ?? m.metadata?.agent_workflow_id,
+                                agent_route: m.agent_route ?? m.metadata?.agent_route,
                 agent_route_reason: m.agent_route_reason ?? m.metadata?.agent_route_reason,
             })));
         } catch (error) {
@@ -617,7 +615,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     tool_instructions: effectiveToolInstructions,
                     custom_instructions: customInstructions,
                     use_web_search: useWebSearch,
-                    agent_pattern_id: normalizeAgentPatternForUi(agentPatternId),
+                    agent_workflow_id: normalizeAgentWorkflowForUi(agentWorkflowId),
                 });
                 if (!cancelled) {
                     setPromptPreview(res.prompt || '');
@@ -632,7 +630,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             cancelled = true;
             clearTimeout(timeoutId);
         };
-    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, agentPatternId]);
+    }, [settingsDialogOpen, contextWindow, systemRole, effectiveToolInstructions, customInstructions, useWebSearch, agentWorkflowId]);
 
     const resetAllSettingsToDefault = () => {
         const defaults: Record<string, string> = {};
@@ -645,7 +643,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setCustomInstructions(defaultCustomInstructions);
         setHitlWebApproval(defaultHitlWebApproval);
         setUseReranker(defaultUseReranker);
-        setAgentPatternId('router_rag_agent');
+        setAgentWorkflowId('router_rag_agent');
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -995,7 +993,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 useWebSearch,
                 useReranker,
                 contextWindow,
-                isEvaluatorReplannerPattern(agentPatternId) ? replans : undefined,
+                isEvaluatorReplannerWorkflow(agentWorkflowId) ? replans : undefined,
                 systemRole,
                 effectiveToolInstructions,
                 customInstructions
@@ -1027,9 +1025,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             agent_run_id: response.agent_run_id,
                             agent_run_turn_kind: 'user_prompt',
                             agent_trace_refs: response.agent_trace_refs,
-                            agent_pattern_id: response.agent_pattern_id,
-                            agent_pattern_version: response.agent_pattern_version,
-                            agent_route: response.agent_route || response.route,
+                            agent_workflow_id: response.agent_workflow_id,
+                                                        agent_route: response.agent_route || response.route,
                             agent_route_reason: response.agent_route_reason,
                             created_at: new Date().toISOString()
                         },
@@ -1040,9 +1037,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             agent_run_id: response.agent_run_id,
                             agent_run_turn_kind: 'assistant_pending_review',
                             agent_trace_refs: response.agent_trace_refs,
-                            agent_pattern_id: response.agent_pattern_id,
-                            agent_pattern_version: response.agent_pattern_version,
-                            agent_route: response.agent_route || response.route,
+                            agent_workflow_id: response.agent_workflow_id,
+                                                        agent_route: response.agent_route || response.route,
                             agent_route_reason: response.agent_route_reason,
                             pending_human_review: true,
                             created_at: new Date().toISOString()
@@ -1102,9 +1098,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         agent_run_turn_kind: response.agent_run_turn_kind,
                         agent_run_sequence: response.agent_run_sequence,
                         agent_trace_refs: response.agent_trace_refs,
-                        agent_pattern_id: response.agent_pattern_id,
-                        agent_pattern_version: response.agent_pattern_version,
-                        agent_route: response.agent_route || response.route,
+                        agent_workflow_id: response.agent_workflow_id,
+                                                agent_route: response.agent_route || response.route,
                         agent_route_reason: response.agent_route_reason,
                         created_at: new Date().toISOString()
                     });
@@ -1122,9 +1117,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             agent_run_turn_kind: response.agent_run_turn_kind,
                             agent_run_sequence: response.agent_run_sequence,
                             agent_trace_refs: response.agent_trace_refs,
-                            agent_pattern_id: response.agent_pattern_id,
-                            agent_pattern_version: response.agent_pattern_version,
-                            agent_route: response.agent_route || response.route,
+                            agent_workflow_id: response.agent_workflow_id,
+                                                        agent_route: response.agent_route || response.route,
                             agent_route_reason: response.agent_route_reason,
                             created_at: new Date().toISOString()
                         });
@@ -1270,9 +1264,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 custom_instructions: customInstructions,
                 hitl_web_approval: hitlWebApproval,
                 use_reranker: useReranker,
-                agent_pattern: { template_id: normalizeAgentPatternForUi(agentPatternId) },
+                agent_workflow: { workflow_id: normalizeAgentWorkflowForUi(agentWorkflowId) },
             };
-            if (isEvaluatorReplannerPattern(agentPatternId) && replansLimit !== null) {
+            if (isEvaluatorReplannerWorkflow(agentWorkflowId) && replansLimit !== null) {
                 nextSettings.replans = Math.max(1, Math.min(replansLimit, replans));
             }
             const saved = await updateThreadSettings(activeThread.id, nextSettings);
@@ -1349,10 +1343,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const formatAgentPatternLabel = (msg: ChatMessage) => {
-        const pattern = msg.agent_pattern_id || 'agent';
-        const version = msg.agent_pattern_version;
-        return version ? `${pattern} v${version}` : pattern;
+    const formatAgentWorkflowLabel = (msg: ChatMessage) => {
+        return msg.agent_workflow_id || 'agent';
     };
 
     if (!activeThread) {
@@ -1813,7 +1805,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     <Box sx={{ mt: 1 }}>
                                         <details onToggle={(event) => handleAgentRunToggle(msg, event)}>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                Agent run: {formatAgentPatternLabel(msg)}
+                                                Agent run: {formatAgentWorkflowLabel(msg)}
                                                 {msg.agent_route ? ` - ${msg.agent_route}` : ''}
                                             </summary>
                                             <Box
@@ -2214,9 +2206,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 replansLimit={replansLimit}
                 hitlWebApproval={hitlWebApproval}
                 useReranker={useReranker}
-                agentPatternId={agentPatternId}
-                agentPatternIsCustom={!isBuiltinAgentPattern(agentPatternId)}
-                agentPatterns={agentPatterns}
+                agentWorkflowId={agentWorkflowId}
+                agentWorkflowIsCustom={!isBuiltinAgentWorkflow(agentWorkflowId)}
+                agentWorkflows={agentWorkflows}
                 systemRole={systemRole}
                 toolInstructions={toolInstructions}
                 customInstructions={customInstructions}
@@ -2226,8 +2218,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onReplansChange={(value) => setReplans(value)}
                 onHitlWebApprovalChange={(checked) => setHitlWebApproval(checked)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
-                onAgentPatternChange={(value) => {
-                    setAgentPatternId(value);
+                onAgentWorkflowChange={(value) => {
+                    setAgentWorkflowId(value);
                 }}
                 onSystemRoleChange={(value) => setSystemRole(value)}
                 onToolInstructionChange={(toolId, value) =>

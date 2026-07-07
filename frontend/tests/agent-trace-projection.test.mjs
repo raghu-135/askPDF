@@ -166,7 +166,7 @@ const backendDebug = {
 
 const traceBackedRun = {
   id: 'run-1',
-  template_id: 'plan_execute_rag_agent',
+  workflow_id: 'plan_execute_rag_agent',
   metrics_json: { duration_ms: 99 },
   debug: backendDebug,
 };
