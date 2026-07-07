@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 import logging
 from typing import Any, Dict, Optional
@@ -19,6 +20,11 @@ from app.db import get_thread_settings
 
 
 logger = logging.getLogger(__name__)
+
+
+def custom_agent_patterns_enabled() -> bool:
+    value = os.environ.get("ASKPDF_CUSTOM_AGENT_PATTERNS_ENABLED", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 class AgentRunService:
@@ -186,6 +192,7 @@ class AgentRunService:
         try:
             logger.info("Invoking compiled agent pattern for thread %s | template=%s", thread_id, template.id)
             from app.agent_patterns.router_runtime import (
+                handle_custom_rag_chat,
                 handle_evaluator_replanner_rag_chat,
                 handle_plan_execute_rag_chat,
                 handle_router_rag_chat,
@@ -195,8 +202,10 @@ class AgentRunService:
                 handler = handle_evaluator_replanner_rag_chat
             elif template.id == PLAN_EXECUTE_RAG_AGENT_ID:
                 handler = handle_plan_execute_rag_chat
-            else:
+            elif template.id == ROUTER_RAG_AGENT_ID:
                 handler = handle_router_rag_chat
+            else:
+                handler = handle_custom_rag_chat
             async with open_agent_checkpointer() as checkpointer:
                 result = await handler(
                     thread_id,

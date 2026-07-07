@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 
 from app.agent.prompting import normalize_tool_instructions
-from app.agent_patterns.service import AgentRunService
+from app.agent_patterns.service import AgentRunService, custom_agent_patterns_enabled
 from app.agent_patterns.templates import EVALUATOR_REPLANNER_RAG_AGENT_ID
 from app.db import (
     MessageRole,
@@ -209,7 +209,9 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
             )
         if req.custom_instructions_override is None:
             req.custom_instructions_override = thread_settings["custom_instructions"]
-        result = await AgentRunService().run_thread_chat(thread_id, req, thread.embed_model)
+        result = await AgentRunService(
+            allow_custom_agent_patterns=custom_agent_patterns_enabled(),
+        ).run_thread_chat(thread_id, req, thread.embed_model)
         return result
     except HTTPException:
         raise

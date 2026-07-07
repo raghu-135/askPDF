@@ -315,6 +315,34 @@ async def handle_evaluator_replanner_rag_chat(
     )
 
 
+async def handle_custom_rag_chat(
+    thread_id: str,
+    req: Any,
+    embed_model: str,
+    *,
+    resolved_spec: Dict[str, Any],
+    agent_run_context: Dict[str, Any],
+    trace_recorder: Any,
+    checkpointer: Any = None,
+) -> Dict[str, Any]:
+    """Execute a validated custom DB-stored RAG graph and persist a chat turn."""
+    pattern_id = agent_run_context.get("agent_pattern_id") or resolved_spec.get("pattern_type") or "custom_agent_pattern"
+    return await _handle_compiled_rag_chat(
+        thread_id,
+        req,
+        embed_model,
+        resolved_spec=resolved_spec,
+        agent_run_context=agent_run_context,
+        trace_recorder=trace_recorder,
+        checkpointer=checkpointer,
+        runtime_label=f"Custom Agent Pattern ({pattern_id})",
+        failure_code="custom_agent_pattern_execution_failed",
+        failure_reason_prefix="Exception during custom agent pattern execution",
+        success_context="Context retrieved by compiled custom Agent pattern.",
+        failure_context="Compiled custom Agent pattern execution failed gracefully.",
+    )
+
+
 async def _handle_compiled_rag_chat(
     thread_id: str,
     req: Any,

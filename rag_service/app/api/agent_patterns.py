@@ -10,7 +10,7 @@ from app.agent_patterns.graph import normalize_hitl_policy_for_thread_settings
 from app.agent_patterns.node_catalog import get_node_catalog
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.route_registry import get_route_function_registry
-from app.agent_patterns.service import AgentRunService
+from app.agent_patterns.service import AgentRunService, custom_agent_patterns_enabled
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
     EVALUATOR_REPLANNER_RAG_AGENT_ID,
@@ -518,7 +518,9 @@ async def resume_agent_run(run_id: str, req: AgentRunResumeRequest):
     if not thread:
         raise HTTPException(status_code=404, detail="Agent run not found")
 
-    service = AgentRunService()
+    service = AgentRunService(
+        allow_custom_agent_patterns=custom_agent_patterns_enabled(),
+    )
     try:
         result = await service.resume_agent_run(
             run_id,

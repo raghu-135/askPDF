@@ -3312,7 +3312,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_pattern": {"template_id": "internal_custom_rag_agent", "allow_custom": True}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_custom_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
                     "answer": "custom ok",
@@ -3326,7 +3326,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_custom_rag_chat", fake_handle_custom_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3452,7 +3452,7 @@ class TestAgentRunService:
                     }
                 }
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_custom_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
                     "answer": "custom pinned ok",
@@ -3466,7 +3466,7 @@ class TestAgentRunService:
                 }
 
             monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_custom_rag_chat", fake_handle_custom_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3694,6 +3694,154 @@ class TestAgentRunService:
         assert debug_retrieval_node["category"] == "retrieval"
         assert debug_retrieval_node["capabilities"] == ["retrieval.document"]
         assert debug_retrieval_node["observability"]["span_kind"] == "tool_worker"
+
+    @pytest.mark.asyncio
+    async def test_chat_endpoint_runs_selected_custom_pattern_when_feature_flag_enabled(
+        self,
+        async_api_client,
+        monkeypatch,
+    ):
+        spec = builtin_router_rag_v2_spec()
+        spec["pattern_type"] = "internal_chat_endpoint_custom_agent"
+        captured_spec = {}
+
+        async def fake_handle_custom_rag_chat(
+            _thread_id,
+            _req,
+            _embed_model,
+            *,
+            resolved_spec,
+            agent_run_context,
+            trace_recorder,
+            **_kwargs,
+        ):
+            captured_spec.update(resolved_spec)
+            return {
+                "answer": "custom endpoint ok",
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+                "clarification_options": None,
+                "route": "direct",
+                "node_events": [],
+                **agent_run_context,
+            }
+
+        monkeypatch.setenv("ASKPDF_CUSTOM_AGENT_PATTERNS_ENABLED", "true")
+        monkeypatch.setattr("app.agent_patterns.router_runtime.handle_custom_rag_chat", fake_handle_custom_rag_chat)
+
+        thread_response = await async_api_client.post(
+            "/api/threads",
+            json={"name": "Custom Chat Endpoint Thread", "embed_model": "BAAI/bge-m3"},
+        )
+        assert thread_response.status_code == 200
+        thread_id = thread_response.json()["id"]
+
+        created = await async_api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": "internal_chat_endpoint_custom_agent",
+                "name": "Internal Chat Endpoint Custom Agent",
+                "spec_json": spec,
+            },
+        )
+        selected = await async_api_client.post(
+            f"/api/internal/threads/{thread_id}/agent-pattern",
+            json={"template_id": "internal_chat_endpoint_custom_agent"},
+        )
+        chat = await async_api_client.post(
+            f"/api/threads/{thread_id}/chat",
+            json={
+                "thread_id": thread_id,
+                "question": "Use the selected custom pattern.",
+                "llm_model": "test-llm",
+                "use_web_search": False,
+                "use_reranker": True,
+                "context_window": 4096,
+            },
+        )
+
+        assert created.status_code == 200
+        assert selected.status_code == 200
+        assert chat.status_code == 200
+        payload = chat.json()
+        assert payload["agent_pattern_id"] == "internal_chat_endpoint_custom_agent"
+        assert payload["answer"] == "custom endpoint ok"
+        assert captured_spec["pattern_type"] == "internal_chat_endpoint_custom_agent"
+
+    @pytest.mark.asyncio
+    async def test_chat_endpoint_falls_back_for_custom_pattern_when_feature_flag_disabled(
+        self,
+        async_api_client,
+        monkeypatch,
+    ):
+        spec = builtin_router_rag_v2_spec()
+        spec["pattern_type"] = "internal_chat_endpoint_disabled_agent"
+        captured_spec = {}
+
+        async def fake_handle_router_rag_chat(
+            _thread_id,
+            _req,
+            _embed_model,
+            *,
+            resolved_spec,
+            agent_run_context,
+            trace_recorder,
+            **_kwargs,
+        ):
+            captured_spec.update(resolved_spec)
+            return {
+                "answer": "router endpoint fallback",
+                "document_sources": [],
+                "web_sources": [],
+                "used_chat_ids": [],
+                "clarification_options": None,
+                "route": "direct",
+                "node_events": [],
+                **agent_run_context,
+            }
+
+        monkeypatch.delenv("ASKPDF_CUSTOM_AGENT_PATTERNS_ENABLED", raising=False)
+        monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+
+        thread_response = await async_api_client.post(
+            "/api/threads",
+            json={"name": "Custom Disabled Chat Endpoint Thread", "embed_model": "BAAI/bge-m3"},
+        )
+        assert thread_response.status_code == 200
+        thread_id = thread_response.json()["id"]
+
+        created = await async_api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": "internal_chat_endpoint_disabled_agent",
+                "name": "Internal Chat Endpoint Disabled Agent",
+                "spec_json": spec,
+            },
+        )
+        selected = await async_api_client.post(
+            f"/api/internal/threads/{thread_id}/agent-pattern",
+            json={"template_id": "internal_chat_endpoint_disabled_agent"},
+        )
+        chat = await async_api_client.post(
+            f"/api/threads/{thread_id}/chat",
+            json={
+                "thread_id": thread_id,
+                "question": "Feature flag is off.",
+                "llm_model": "test-llm",
+                "use_web_search": False,
+                "use_reranker": True,
+                "context_window": 4096,
+            },
+        )
+
+        assert created.status_code == 200
+        assert selected.status_code == 200
+        assert chat.status_code == 200
+        payload = chat.json()
+        assert payload["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
+        assert payload["answer"] == "router endpoint fallback"
+        assert captured_spec["pattern_type"] == ROUTER_RAG_AGENT_ID
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_plan_execute_rag_when_selected(self, engine, sample_thread, monkeypatch):
