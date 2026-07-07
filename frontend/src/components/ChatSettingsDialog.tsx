@@ -16,6 +16,7 @@ import {
     MenuItem,
 } from '@mui/material';
 import ReplayIcon from '@mui/icons-material/Replay';
+import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import { PromptToolDefinition } from '../lib/api';
 
 interface ChatSettingsDialogProps {
@@ -111,17 +112,27 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                         </IconButton>
                     </Tooltip>
                 </Box>
-                <TextField
-                    select
-                    label="Agent pattern"
-                    value={agentPatternId}
-                    onChange={(e) => onAgentPatternChange(e.target.value)}
-                    helperText="Router RAG remains the default; advanced patterns are opt-in."
-                >
-                    <MenuItem value="router_rag_agent">Router RAG Agent</MenuItem>
-                    <MenuItem value="plan_execute_rag_agent">Plan-and-Execute RAG Agent</MenuItem>
-                    <MenuItem value="evaluator_replanner_rag_agent">Evaluator/Replanner RAG Agent</MenuItem>
-                </TextField>
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) auto' }, gap: 1, alignItems: 'start' }}>
+                    <TextField
+                        select
+                        label="Agent pattern"
+                        value={agentPatternId}
+                        onChange={(e) => onAgentPatternChange(e.target.value)}
+                        helperText="Router RAG remains the default; advanced patterns are opt-in."
+                    >
+                        <MenuItem value="router_rag_agent">Router RAG Agent</MenuItem>
+                        <MenuItem value="plan_execute_rag_agent">Plan-and-Execute RAG Agent</MenuItem>
+                        <MenuItem value="evaluator_replanner_rag_agent">Evaluator/Replanner RAG Agent</MenuItem>
+                    </TextField>
+                    <Button
+                        variant="outlined"
+                        startIcon={<AccountTreeIcon />}
+                        onClick={() => window.open('/agent-pattern-builder', '_blank', 'noopener,noreferrer')}
+                        sx={{ borderRadius: 1, minHeight: 40, whiteSpace: 'nowrap' }}
+                    >
+                        Open Builder
+                    </Button>
+                </Box>
                 {replansEnabled ? (
                     replansLimit !== null ? (
                         <TextField

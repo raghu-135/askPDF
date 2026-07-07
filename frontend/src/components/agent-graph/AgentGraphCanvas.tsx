@@ -21,6 +21,7 @@ import type {
   AgentGraphEdge,
   AgentGraphMode,
   AgentGraphNode as AgentGraphNodeModel,
+  AgentNodeCatalog,
   AgentGraphSelection,
   AgentTraceRefs,
 } from './agent-graph-types';
@@ -135,13 +136,19 @@ function AgentGraphCanvasInner({
   templateId,
   traceView,
   focusedTraceRefs,
+  nodeCatalog,
   mode,
+  showInspector,
+  onSelectionChange,
 }: {
   resolvedSpec?: Record<string, any>;
   templateId?: string;
   traceView?: TraceRunView;
   focusedTraceRefs?: AgentTraceRefs | null;
+  nodeCatalog?: AgentNodeCatalog;
   mode: AgentGraphMode;
+  showInspector: boolean;
+  onSelectionChange?: (selection: AgentGraphSelection) => void;
 }) {
   const theme = useTheme();
   const { fitView } = useReactFlow();
@@ -157,6 +164,7 @@ function AgentGraphCanvasInner({
       baseGraph = buildAgentGraph(graphSpec, mode === 'run-debug' && traceView ? {
         route: traceView.route,
         metrics: traceView.metrics,
+        nodeCatalog,
         nodeRows: traceView.nodes.map((node) => ({ ...node.raw, node: node.id, node_type: node.type })),
         toolRows: traceView.tools.map((tool) => ({
           ...tool.raw,
@@ -164,10 +172,10 @@ function AgentGraphCanvasInner({
           caller_node: tool.callerNode,
           caller_node_type: tool.callerNodeType,
         })),
-      } : {});
+      } : { nodeCatalog });
     }
     return applyTraceFocusToGraph(baseGraph, focusedTraceRefs);
-  }, [focusedTraceRefs, mode, resolvedSpec, templateId, traceView]);
+  }, [focusedTraceRefs, mode, nodeCatalog, resolvedSpec, templateId, traceView]);
   const focusSignature = useMemo(() => JSON.stringify({
     node_ids: focusedTraceRefs?.node_ids || [],
     span_ids: focusedTraceRefs?.span_ids || [],
@@ -238,6 +246,10 @@ function AgentGraphCanvasInner({
   }, [graph.edges, graph.nodes, selection]);
 
   useEffect(() => {
+    onSelectionChange?.(selection);
+  }, [onSelectionChange, selection]);
+
+  useEffect(() => {
     const hasFocusRefs = Boolean(focusedTraceRefs?.node_ids?.length || focusedTraceRefs?.span_ids?.length);
     if (!hasFocusRefs) {
       setSelection(null);
@@ -305,8 +317,8 @@ function AgentGraphCanvasInner({
             nodes={flowNodes}
             edges={flowEdges}
             nodeTypes={nodeTypes}
-            nodesDraggable={mode === 'builder'}
-            nodesConnectable={mode === 'builder'}
+            nodesDraggable={false}
+            nodesConnectable={false}
             elementsSelectable
             fitView
             fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
@@ -325,7 +337,7 @@ function AgentGraphCanvasInner({
           </ReactFlow>
         </AgentGraphErrorBoundary>
       </Box>
-      <AgentGraphInspector selection={selection} />
+      {showInspector ? <AgentGraphInspector selection={selection} /> : null}
       {graph.executionPlan.length > 0 && (
         <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', gridColumn: '1 / -1' }}>
           Execution plan: {graph.executionPlan.join(' -> ')}
@@ -340,11 +352,14 @@ export default function AgentGraphCanvas(props: {
   templateId?: string;
   traceView?: TraceRunView;
   focusedTraceRefs?: AgentTraceRefs | null;
+  nodeCatalog?: AgentNodeCatalog;
   mode?: AgentGraphMode;
+  showInspector?: boolean;
+  onSelectionChange?: (selection: AgentGraphSelection) => void;
 }) {
   return (
     <ReactFlowProvider>
-      <AgentGraphCanvasInner {...props} mode={props.mode || 'run-debug'} />
+      <AgentGraphCanvasInner {...props} mode={props.mode || 'run-debug'} showInspector={props.showInspector !== false} />
     </ReactFlowProvider>
   );
 }
