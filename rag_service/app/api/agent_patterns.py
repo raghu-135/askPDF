@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -32,6 +33,10 @@ from app.time_utils import iso_utc_z
 router = APIRouter(tags=["agent-patterns"])
 
 
+def _new_custom_template_id() -> str:
+    return f"custom_pat_{uuid.uuid4().hex}"
+
+
 class TemplateValidationRequest(BaseModel):
     spec: Dict[str, Any] = Field(default_factory=dict)
 
@@ -41,7 +46,7 @@ class ThreadAgentConfigValidationRequest(BaseModel):
 
 
 class InternalAgentPatternCreateRequest(BaseModel):
-    template_id: str = Field(..., min_length=1)
+    template_id: Optional[str] = Field(default=None, min_length=1)
     name: str = Field(..., min_length=1)
     description: str = ""
     owner_id: Optional[str] = None
@@ -308,15 +313,16 @@ async def validate_agent_pattern(req: TemplateValidationRequest):
 async def create_internal_agent_pattern(req: InternalAgentPatternCreateRequest):
     repo = AgentPatternRepository()
     try:
-        template, version = await repo.create_internal_template_version(
-            template_id=req.template_id,
+        template_id = (req.template_id or "").strip() or _new_custom_template_id()
+        spec_json = dict(req.spec_json)
+        spec_json["pattern_type"] = template_id
+        template, version = await repo.save_internal_template(
+            template_id=template_id,
             name=req.name,
             description=req.description,
             owner_id=req.owner_id,
-            version=req.version,
             changelog=req.changelog,
-            spec_json=req.spec_json,
-            set_current=req.set_current,
+            spec_json=spec_json,
         )
     except (TemplateValidationError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

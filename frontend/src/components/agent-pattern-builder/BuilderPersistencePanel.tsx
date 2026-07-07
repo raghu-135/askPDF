@@ -1,6 +1,5 @@
 import React from 'react';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import SaveIcon from '@mui/icons-material/Save';
 import {
   Alert,
@@ -18,8 +17,6 @@ export interface BuilderPersistenceState {
   templateId: string;
   name: string;
   description: string;
-  ownerId: string;
-  changelog: string;
 }
 
 export interface BuilderPersistedPattern {
@@ -42,7 +39,6 @@ export default function BuilderPersistencePanel({
   canSave,
   authoringDisabled,
   boundaryMessages,
-  onGenerateTemplateId,
   onSave,
   onDelete,
 }: {
@@ -55,12 +51,10 @@ export default function BuilderPersistencePanel({
   canSave: boolean;
   authoringDisabled?: boolean;
   boundaryMessages?: BuilderBoundaryMessage[];
-  onGenerateTemplateId: () => void;
   onSave: () => void;
   onDelete: () => void;
 }) {
   const savedTemplateId = persisted?.template.id;
-  const savedVersion = persisted?.version.version;
   const saveDisabled = authoringDisabled || !canSave || busyAction === 'save';
   const deleteDisabled = authoringDisabled || !persisted || Boolean(persisted.template.is_builtin) || Boolean(busyAction);
   const formDisabled = authoringDisabled || Boolean(busyAction);
@@ -72,7 +66,7 @@ export default function BuilderPersistencePanel({
           Save Pattern
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          Internal custom pattern version available to every thread
+          Custom pattern available to every thread after saving
         </Typography>
       </Box>
       <Divider />
@@ -87,7 +81,6 @@ export default function BuilderPersistencePanel({
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
           <Chip size="small" color="success" label="Saved" />
           <Chip size="small" variant="outlined" label={savedTemplateId} />
-          <Chip size="small" variant="outlined" label={`v${savedVersion}`} />
         </Box>
       ) : null}
       <TextField
@@ -97,30 +90,6 @@ export default function BuilderPersistencePanel({
         disabled={formDisabled}
         onChange={(event) => onFormChange({ name: event.target.value })}
       />
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 1, alignItems: 'start' }}>
-        <TextField
-          size="small"
-          label="Template ID"
-          value={form.templateId}
-          disabled={formDisabled}
-          onChange={(event) => onFormChange({ templateId: event.target.value })}
-          helperText="Internal ID; must not collide with built-ins."
-        />
-        <Tooltip title="Generate from name">
-          <span>
-            <Button
-              size="small"
-              variant="outlined"
-              startIcon={<DriveFileRenameOutlineIcon />}
-              onClick={onGenerateTemplateId}
-              disabled={formDisabled}
-              sx={{ borderRadius: 1, minHeight: 40 }}
-            >
-              Slug
-            </Button>
-          </span>
-        </Tooltip>
-      </Box>
       <TextField
         size="small"
         label="Description"
@@ -129,22 +98,6 @@ export default function BuilderPersistencePanel({
         minRows={2}
         disabled={formDisabled}
         onChange={(event) => onFormChange({ description: event.target.value })}
-      />
-      <TextField
-        size="small"
-        label="Owner ID"
-        value={form.ownerId}
-        disabled={formDisabled}
-        onChange={(event) => onFormChange({ ownerId: event.target.value })}
-      />
-      <TextField
-        size="small"
-        label="Changelog"
-        value={form.changelog}
-        multiline
-        minRows={2}
-        disabled={formDisabled}
-        onChange={(event) => onFormChange({ changelog: event.target.value })}
       />
       <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 1 }}>
         <Button

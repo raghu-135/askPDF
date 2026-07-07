@@ -317,7 +317,7 @@ export interface AgentPatternListResponse {
 }
 
 export interface CreateInternalAgentPatternPayload {
-  template_id: string;
+  template_id?: string;
   name: string;
   description?: string;
   owner_id?: string | null;

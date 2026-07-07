@@ -452,6 +452,96 @@ class AgentPatternRepository:
             await session.flush()
             return template, template_version
 
+    async def save_internal_template(
+        self,
+        *,
+        template_id: str,
+        name: str,
+        spec_json: Dict[str, Any],
+        description: str = "",
+        owner_id: Optional[str] = None,
+        changelog: Optional[str] = None,
+        visibility: str = "internal",
+    ) -> tuple[AgentPatternTemplate, AgentPatternTemplateVersion]:
+        """Create or update the latest mutable internal/custom pattern spec."""
+        if not isinstance(template_id, str) or not template_id:
+            raise ValueError("template_id must be a non-empty string")
+        if template_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            raise ValueError("built-in agent pattern templates cannot be authored through the internal path")
+        if not isinstance(name, str) or not name:
+            raise ValueError("name must be a non-empty string")
+        if not isinstance(spec_json, dict):
+            raise TemplateValidationError("spec must be an object")
+        if spec_json.get("schema_version") != 2:
+            raise TemplateValidationError("internal custom agent pattern specs must use schema_version 2")
+
+        validation_result = TemplateValidator().validate(spec_json)
+        session = await self._get_session()
+        async with session.begin():
+            template = await session.get(AgentPatternTemplate, template_id)
+            if template is None:
+                template = AgentPatternTemplate(
+                    id=template_id,
+                    name=name,
+                    description=description,
+                    visibility=visibility,
+                    owner_id=owner_id,
+                    is_builtin=False,
+                    current_version_id=f"{template_id}:v1",
+                )
+                session.add(template)
+                template_version = AgentPatternTemplateVersion(
+                    id=f"{template_id}:v1",
+                    template_id=template_id,
+                    version=1,
+                    schema_version=2,
+                    spec_json=spec_json,
+                    validation_result_json=validation_result,
+                    changelog=changelog,
+                )
+                session.add(template_version)
+            else:
+                if template.is_builtin:
+                    raise ValueError("built-in agent pattern templates cannot be authored through the internal path")
+                template.name = name
+                template.description = description
+                template.visibility = visibility
+                template.owner_id = owner_id
+                template.is_builtin = False
+                template.updated_at = utc_now()
+
+                template_version = None
+                if template.current_version_id:
+                    template_version = await session.get(AgentPatternTemplateVersion, template.current_version_id)
+                if template_version is None:
+                    result = await session.execute(
+                        select(AgentPatternTemplateVersion)
+                        .where(AgentPatternTemplateVersion.template_id == template_id)
+                        .order_by(AgentPatternTemplateVersion.version.desc())
+                        .limit(1)
+                    )
+                    template_version = result.scalar_one_or_none()
+                if template_version is None:
+                    template_version = AgentPatternTemplateVersion(
+                        id=f"{template_id}:v1",
+                        template_id=template_id,
+                        version=1,
+                        schema_version=2,
+                        spec_json=spec_json,
+                        validation_result_json=validation_result,
+                        changelog=changelog,
+                    )
+                    session.add(template_version)
+                else:
+                    template_version.schema_version = 2
+                    replace_jsonb_field(template_version, "spec_json", spec_json)
+                    replace_jsonb_field(template_version, "validation_result_json", validation_result)
+                    template_version.changelog = changelog
+                template.current_version_id = template_version.id
+
+            await session.flush()
+            return template, template_version
+
     async def get_run(self, run_id: str) -> Optional[AgentRun]:
         session = await self._get_session()
         async with session.begin():

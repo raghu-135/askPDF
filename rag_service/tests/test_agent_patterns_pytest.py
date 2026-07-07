@@ -5444,6 +5444,48 @@ class TestAgentPatternApi:
         assert public_detail.status_code == 200
         assert public_detail.json()["current_version"]["id"] == "internal_api_agent:v1"
 
+    def test_internal_agent_pattern_endpoint_generates_ids_and_updates_latest_spec(self, api_client):
+        spec = builtin_router_rag_v2_spec()
+        spec["pattern_type"] = "client_side_placeholder"
+
+        created = api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "name": "Generated ID Agent",
+                "description": "Created without a caller-owned ID.",
+                "spec_json": spec,
+            },
+        )
+        assert created.status_code == 200
+        created_payload = created.json()
+        template_id = created_payload["agent_pattern"]["id"]
+        assert template_id.startswith("custom_pat_")
+        assert created_payload["version"]["id"] == f"{template_id}:v1"
+        assert created_payload["version"]["version"] == 1
+        assert created_payload["version"]["spec_json"]["pattern_type"] == template_id
+
+        updated_spec = builtin_router_rag_v2_spec()
+        updated_spec["pattern_type"] = "another_placeholder"
+        updated_spec["config"]["context_policy"]["evidence_packet_limit"] = 4
+        updated = api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": template_id,
+                "name": "Renamed Generated ID Agent",
+                "description": "Updated in place.",
+                "spec_json": updated_spec,
+            },
+        )
+        fetched = api_client.get(f"/api/agent-patterns/{template_id}")
+
+        assert updated.status_code == 200
+        assert updated.json()["version"]["id"] == f"{template_id}:v1"
+        assert updated.json()["version"]["version"] == 1
+        assert fetched.status_code == 200
+        assert fetched.json()["agent_pattern"]["name"] == "Renamed Generated ID Agent"
+        assert fetched.json()["current_version"]["spec_json"]["pattern_type"] == template_id
+        assert fetched.json()["current_version"]["spec_json"]["config"]["context_policy"]["evidence_packet_limit"] == 4
+
     def test_internal_agent_pattern_delete_hides_custom_pattern(self, api_client):
         spec = builtin_router_rag_v2_spec()
         spec["pattern_type"] = "internal_api_delete_agent"

@@ -72,16 +72,6 @@ const templateIdFromCustomStarter = (value: string) => (
   value.startsWith('custom:') ? value.slice('custom:'.length) : null
 );
 
-const slugifyTemplateId = (name: string) => {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 72);
-  return slug ? `internal_${slug}` : 'internal_custom_agent';
-};
-
 const edgeIndexFromSource = (state: AgentPatternBuilderState, sourceId: string) => (
   state.edges.findIndex((edge) => edge.from === sourceId)
 );
@@ -155,10 +145,12 @@ const deriveInternalBoundary = (catalog: AgentPatternCatalogResponse | null): Bu
   const messages: BuilderBoundaryMessage[] = [];
 
   if (!hasMetadata) {
-    messages.push({
-      severity: 'info',
-      message: 'Catalog flag metadata is unavailable; authoring will rely on endpoint responses.',
-    });
+    return {
+      hasMetadata,
+      authoringEnabled,
+      runtimeEnabled,
+      messages,
+    };
   }
   if (!authoringEnabled) {
     messages.push({
@@ -211,11 +203,9 @@ export default function AgentPatternBuilderPage() {
   const [threadPreviewError, setThreadPreviewError] = useState<string | null>(null);
   const [previewingThread, setPreviewingThread] = useState(false);
   const [persistenceForm, setPersistenceForm] = useState<BuilderPersistenceState>({
-    templateId: 'internal_custom_agent',
+    templateId: '',
     name: 'Internal Custom Agent',
     description: '',
-    ownerId: '',
-    changelog: '',
   });
   const [persistedPattern, setPersistedPattern] = useState<BuilderPersistedPattern | null>(null);
   const [busyAction, setBusyAction] = useState<'save' | 'delete' | null>(null);
@@ -299,15 +289,13 @@ export default function AgentPatternBuilderPage() {
         templateId: response.agent_pattern.id,
         name: response.agent_pattern.name || response.agent_pattern.id,
         description: response.agent_pattern.description || '',
-        ownerId: response.agent_pattern.owner_id || '',
-        changelog: '',
       });
       setPersistedPattern({ template: response.agent_pattern, version: response.current_version });
       setSelection(null);
       setValidation(null);
       setThreadPreview(null);
       setThreadPreviewError(null);
-      setPersistenceStatus(`Loaded ${response.agent_pattern.id} v${response.current_version.version}.`);
+      setPersistenceStatus(`Loaded ${response.agent_pattern.name || response.agent_pattern.id}.`);
       setPersistenceError(null);
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
@@ -441,11 +429,6 @@ export default function AgentPatternBuilderPage() {
     setPersistenceError(null);
   };
 
-  const handleGenerateTemplateId = () => {
-    if (authoringDisabled) return;
-    updatePersistenceForm({ templateId: slugifyTemplateId(persistenceForm.name) });
-  };
-
   const handleSaveInternalVersion = async () => {
     if (!builderState || !spec) return;
     if (authoringDisabled) {
@@ -456,11 +439,8 @@ export default function AgentPatternBuilderPage() {
       setBusyAction('save');
       setPersistenceError(null);
       setPersistenceStatus(null);
-      const templateId = persistenceForm.templateId.trim();
-      const saveSpec = {
-        ...spec,
-        pattern_type: templateId || spec.pattern_type,
-      };
+      const templateId = persistedPattern?.template.id;
+      const saveSpec = { ...spec };
       const report = await validateAgentPatternSpec(saveSpec);
       setValidation(report);
       if (!report.valid) {
@@ -468,18 +448,19 @@ export default function AgentPatternBuilderPage() {
         return;
       }
       const response = await createInternalAgentPattern({
-        template_id: templateId,
+        ...(templateId ? { template_id: templateId } : {}),
         name: persistenceForm.name.trim(),
         description: persistenceForm.description,
-        owner_id: persistenceForm.ownerId.trim() || null,
-        changelog: persistenceForm.changelog || null,
         spec_json: saveSpec,
-        set_current: true,
       });
       setPersistedPattern({ template: response.agent_pattern, version: response.version });
+      setPersistenceForm((previous) => ({
+        ...previous,
+        templateId: response.agent_pattern.id,
+      }));
       setStarter(customStarterValue(response.agent_pattern.id));
       await refreshCustomPatterns();
-      setPersistenceStatus(`Saved ${response.agent_pattern.id} v${response.version.version}.`);
+      setPersistenceStatus(`Saved ${response.agent_pattern.name || response.agent_pattern.id}.`);
     } catch (err) {
       setPersistenceError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -501,8 +482,7 @@ export default function AgentPatternBuilderPage() {
       await refreshCustomPatterns();
       setPersistenceForm((previous) => ({
         ...previous,
-        templateId,
-        changelog: '',
+        templateId: '',
       }));
       resetToStarter('router');
       setPersistedPattern(null);
@@ -587,10 +567,9 @@ export default function AgentPatternBuilderPage() {
                 busyAction={busyAction}
                 statusMessage={persistenceStatus}
                 errorMessage={persistenceError}
-                canSave={Boolean(spec && persistenceForm.templateId.trim() && persistenceForm.name.trim())}
+                canSave={Boolean(spec && persistenceForm.name.trim())}
                 authoringDisabled={authoringDisabled}
                 boundaryMessages={boundary.messages}
-                onGenerateTemplateId={handleGenerateTemplateId}
                 onSave={handleSaveInternalVersion}
                 onDelete={handleDeleteInternalPattern}
               />
