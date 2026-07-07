@@ -6020,6 +6020,60 @@ class TestAgentPatternApi:
         assert payload["validation"]["valid"] is False
         assert payload["validation"]["unknown_allowed_tool_ids"] == ["mystery_tool"]
 
+    def test_validate_and_preview_thread_agent_config_support_custom_db_pattern(
+        self,
+        api_client,
+        sample_thread,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
+        spec = builtin_plan_execute_rag_v2_spec()
+        spec["pattern_type"] = "custom_rag_agent"
+
+        created = api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": "internal_settings_preview_agent",
+                "name": "Internal Settings Preview Agent",
+                "spec_json": spec,
+            },
+        )
+        selected = api_client.post(
+            f"/api/internal/threads/{sample_thread.id}/agent-pattern",
+            json={"template_id": "internal_settings_preview_agent"},
+        )
+        validated = api_client.post(
+            f"/api/threads/{sample_thread.id}/agent-config/validate",
+            json={"overrides": {"use_web_search": True}},
+        )
+        preview = api_client.post(
+            f"/api/threads/{sample_thread.id}/agent-config/preview",
+            json={"overrides": {"system_role": "Preview role."}},
+        )
+
+        assert created.status_code == 200
+        assert selected.status_code == 200
+        assert validated.status_code == 200
+        validated_payload = validated.json()
+        assert validated_payload["valid"] is True
+        assert validated_payload["template_id"] == "internal_settings_preview_agent"
+        assert validated_payload["selection"]["requested_template_id"] == "internal_settings_preview_agent"
+        assert validated_payload["selection"]["fallback"] is False
+        assert validated_payload["resolved_spec_json"]["pattern_type"] == "custom_rag_agent"
+        assert validated_payload["resolved_spec_json"]["config"]["use_web_search"] is True
+        assert any(
+            node["id"] == "planner"
+            for node in validated_payload["graph_preview"]["nodes"]
+        )
+
+        assert preview.status_code == 200
+        preview_payload = preview.json()
+        assert preview_payload["template_id"] == "internal_settings_preview_agent"
+        assert "# Planner Node Prompt" in preview_payload["prompt"]
+        assert "# Router Node Prompt" not in preview_payload["prompt"]
+        assert "# Final Answer Prompt" in preview_payload["prompt"]
+        assert preview_payload["graph_preview"]["nodes"][0]["id"] == "context_loader"
+
     @pytest.mark.asyncio
     async def test_list_thread_agent_runs_returns_recent_compact_summaries(self, api_client, engine, sample_thread):
         session_factory = async_sessionmaker(
@@ -6183,6 +6237,50 @@ class TestAgentPatternApi:
         assert second_payload["outcome"] == "resumed"
         assert second_payload["duplicate"] is True
         assert second_payload["agent_run"]["metrics_json"]["interrupt_resolution_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_agent_run_inspector_renders_custom_resolved_graph_without_debug(
+        self,
+        api_client,
+        engine,
+        sample_thread,
+    ):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        spec = builtin_plan_execute_rag_v2_spec()
+        spec["pattern_type"] = "custom_rag_agent"
+        async with session_factory() as repo_session:
+            repo = AgentPatternRepository(repo_session)
+            template, version = await repo.create_internal_template_version(
+                template_id="internal_inspector_agent",
+                name="Internal Inspector Agent",
+                spec_json=spec,
+            )
+            resolved_spec = TemplateCompiler().materialize_spec(version.spec_json)
+            run = await repo.create_run(
+                thread_id=sample_thread.id,
+                template_id=template.id,
+                template_version_id=version.id,
+                template_version=version.version,
+                resolved_spec_json=resolved_spec,
+            )
+
+        response = api_client.get(f"/api/agent-runs/{run.id}?thread_id={sample_thread.id}")
+
+        assert response.status_code == 200
+        payload = response.json()["agent_run"]
+        assert payload["template_id"] == "internal_inspector_agent"
+        assert payload["debug"] is None
+        inspector = payload["inspector"]
+        assert inspector["template_id"] == "internal_inspector_agent"
+        assert inspector["pattern_type"] == "custom_rag_agent"
+        assert inspector["validation"]["valid"] is True
+        assert any(node["id"] == "planner" for node in inspector["graph"]["nodes"])
+        assert any(edge["source"] == "planner" for edge in inspector["graph"]["edges"])
 
     @pytest.mark.asyncio
     async def test_resume_agent_run_requires_matching_thread_id(self, api_client, engine, sample_thread):

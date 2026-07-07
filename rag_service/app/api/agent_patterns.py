@@ -6,9 +6,12 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.agent.prompting import normalize_tool_instructions
 from app.agent.tool_registry import tool_contracts_by_id
-from app.agent_patterns.graph import normalize_hitl_policy_for_thread_settings
+from app.agent_patterns.debug_trace import build_debug_graph
+from app.agent_patterns.graph import TemplateCompiler, normalize_hitl_policy_for_thread_settings
 from app.agent_patterns.node_catalog import get_node_catalog
+from app.agent_patterns.prompting import build_agent_pattern_prompt_preview
 from app.agent_patterns.repository import (
     AgentPatternRepository,
     AgentRunInterruptError,
@@ -33,6 +36,7 @@ from app.agent_patterns.templates import (
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
 from app.db import get_thread, get_thread_settings, update_thread_settings
+from app.models.llm_server_client import merge_thread_settings
 from app.time_utils import iso_utc_z
 
 
@@ -44,6 +48,10 @@ class TemplateValidationRequest(BaseModel):
 
 
 class ThreadAgentConfigValidationRequest(BaseModel):
+    overrides: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ThreadAgentConfigPreviewRequest(BaseModel):
     overrides: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -148,6 +156,199 @@ def _is_compatible_version(version) -> bool:
     return True
 
 
+def _coerce_optional_positive_int(value: Any) -> Optional[int]:
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return None
+    return coerced if coerced >= 1 else None
+
+
+async def _selected_thread_agent_pattern(
+    repo: AgentPatternRepository,
+    thread_settings: Dict[str, Any],
+) -> Dict[str, Any]:
+    await repo.seed_builtin_templates()
+    agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
+    agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
+    requested_template_id = str(agent_settings.get("template_id") or ROUTER_RAG_AGENT_ID)
+    requested_template_version = _coerce_optional_positive_int(agent_settings.get("template_version"))
+    allow_custom_marker = bool(agent_settings.get("allow_custom"))
+    custom_requested = requested_template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS
+    fallback_reason = None
+    template_id = requested_template_id
+
+    if custom_requested and not allow_custom_marker:
+        template_id = ROUTER_RAG_AGENT_ID
+        fallback_reason = "custom_selection_missing_allow_custom_marker"
+
+    template = None
+    version = None
+    if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+        if requested_template_version is not None:
+            template, version = await repo.get_template_version(
+                template_id,
+                requested_template_version,
+                include_custom=True,
+            )
+        else:
+            template, version = await repo.get_template_with_current_version(
+                template_id,
+                include_custom=True,
+            )
+        if template is not None and not template_is_published_internal(template):
+            raise TemplateValidationError(
+                "selected custom agent pattern is not published: "
+                f"{template_lifecycle_state(template)}"
+            )
+        if template is None or version is None:
+            fallback_reason = "custom_selection_unavailable"
+            template_id = ROUTER_RAG_AGENT_ID
+
+    if template_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+        if requested_template_version is not None and not custom_requested:
+            template, version = await repo.get_template_version(template_id, requested_template_version)
+        else:
+            template, version = await repo.get_template_with_current_version(template_id)
+
+    if template is None or version is None:
+        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        fallback_reason = fallback_reason or "selected_template_unavailable"
+
+    if template is None or version is None:
+        raise RuntimeError("Default agent pattern is unavailable")
+
+    return {
+        "template": template,
+        "version": version,
+        "selection": {
+            "requested_template_id": requested_template_id,
+            "requested_template_version": requested_template_version,
+            "selected_template_id": template.id,
+            "selected_template_version": version.version,
+            "selected_template_version_id": version.id,
+            "allow_custom": allow_custom_marker,
+            "custom_requested": custom_requested,
+            "fallback": fallback_reason is not None,
+            "fallback_reason": fallback_reason,
+            "custom_runtime_enabled": custom_agent_patterns_enabled(),
+        },
+    }
+
+
+def _candidate_spec_with_overrides(
+    spec_json: Dict[str, Any],
+    thread_settings: Dict[str, Any],
+    request_overrides: Dict[str, Any],
+) -> Dict[str, Any]:
+    candidate = dict(spec_json or {})
+    candidate_config = dict(candidate.get("config") or {})
+    for source in (thread_settings or {}, request_overrides or {}):
+        for key in ALLOWED_ROUTER_RAG_CONFIG_KEYS:
+            value = source.get(key) if isinstance(source, dict) else None
+            if value is not None:
+                candidate_config[key] = value
+    candidate["config"] = candidate_config
+    return candidate
+
+
+def _materialize_resolved_spec(
+    resolved_spec: Dict[str, Any],
+    thread_settings: Dict[str, Any],
+) -> Dict[str, Any]:
+    materialized = dict(resolved_spec)
+    resolved_config = materialized.get("config") if isinstance(materialized.get("config"), dict) else {}
+    resolved_config = dict(resolved_config)
+    resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
+        resolved_config.get("hitl_policy"),
+        thread_settings,
+    )
+    materialized["config"] = resolved_config
+    return TemplateCompiler().materialize_spec(materialized)
+
+
+def _graph_preview_payload(resolved_spec: Dict[str, Any]) -> Dict[str, Any]:
+    return build_debug_graph(resolved_spec=resolved_spec, summary={})
+
+
+async def _thread_agent_config_payload(
+    thread_id: str,
+    overrides: Dict[str, Any],
+    *,
+    include_prompt_preview: bool = False,
+) -> Dict[str, Any]:
+    thread = await get_thread(thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    repo = AgentPatternRepository()
+    raw_thread_settings = await get_thread_settings(thread_id)
+    thread_settings = merge_thread_settings(raw_thread_settings)
+    selected = await _selected_thread_agent_pattern(repo, thread_settings)
+    template = selected["template"]
+    version = selected["version"]
+    resolver = TemplateResolver()
+    request_overrides = overrides if isinstance(overrides, dict) else {}
+
+    try:
+        resolved_spec = resolver.resolve(
+            version.spec_json,
+            thread_settings=thread_settings,
+            request_overrides=request_overrides,
+        )
+    except TemplateValidationError as exc:
+        candidate = _candidate_spec_with_overrides(version.spec_json, thread_settings, request_overrides)
+        try:
+            report = TemplateValidator().report(candidate)
+        except Exception as report_exc:
+            report = {"valid": False, "errors": [str(report_exc)], "warnings": []}
+        report["errors"] = report["errors"] or [str(exc)]
+        return {
+            "valid": False,
+            "template_id": template.id,
+            "template_version": version.version,
+            "template_version_id": version.id,
+            "template": _template_payload(template),
+            "selection": selected["selection"],
+            "validation": report,
+            "resolved_spec_json": candidate,
+            "graph_preview": None,
+        }
+
+    materialized_spec = _materialize_resolved_spec(resolved_spec, thread_settings)
+    validation = TemplateValidator().report(materialized_spec)
+    payload = {
+        "valid": validation["valid"],
+        "template_id": template.id,
+        "template_version": version.version,
+        "template_version_id": version.id,
+        "template": _template_payload(template),
+        "selection": selected["selection"],
+        "validation": validation,
+        "resolved_spec_json": materialized_spec,
+        "graph_preview": _graph_preview_payload(materialized_spec),
+    }
+    if include_prompt_preview:
+        config = materialized_spec.get("config") if isinstance(materialized_spec.get("config"), dict) else {}
+        prompt_settings = {**thread_settings, **request_overrides, **config}
+        prompt_settings["tool_instructions"] = normalize_tool_instructions(
+            prompt_settings.get("tool_instructions", {})
+        )
+        payload["prompt"] = build_agent_pattern_prompt_preview(
+            pattern_id=template.id,
+            context_window=_coerce_optional_positive_int(prompt_settings.get("context_window")) or 8192,
+            system_role=str(prompt_settings.get("system_role") or ""),
+            tool_instructions=prompt_settings.get("tool_instructions") or {},
+            custom_instructions=str(prompt_settings.get("custom_instructions") or ""),
+            use_web_search=bool(prompt_settings.get("use_web_search")),
+            client_timezone=prompt_settings.get("client_timezone"),
+            client_locale=prompt_settings.get("client_locale"),
+            client_now_iso=prompt_settings.get("client_now_iso"),
+            resolved_spec=materialized_spec,
+        )
+    return payload
+
+
 def _debug_payload_for_response(run) -> Dict[str, Any] | None:
     debug = run.debug_trace_json if isinstance(run.debug_trace_json, dict) else None
     if not debug or debug.get("version") != 1:
@@ -160,6 +361,30 @@ def _debug_payload_for_response(run) -> Dict[str, Any] | None:
         **debug,
         "trace": trace,
         "summary": summary,
+    }
+
+
+def _run_inspector_payload(run) -> Dict[str, Any] | None:
+    resolved_spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
+    if not resolved_spec:
+        return None
+    debug = _debug_payload_for_response(run)
+    debug_graph = debug.get("graph") if isinstance(debug, dict) and isinstance(debug.get("graph"), dict) else None
+    try:
+        validation = TemplateValidator().report(resolved_spec)
+    except Exception as exc:
+        validation = {"valid": False, "errors": [str(exc)], "warnings": []}
+    try:
+        graph = debug_graph or _graph_preview_payload(resolved_spec)
+    except Exception:
+        graph = debug_graph
+    return {
+        "template_id": run.template_id,
+        "template_version": run.template_version,
+        "template_version_id": run.template_version_id,
+        "pattern_type": resolved_spec.get("pattern_type"),
+        "validation": validation,
+        "graph": graph,
     }
 
 
@@ -196,6 +421,7 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "error_json": run.error_json,
         "metrics_json": run.metrics_json,
         "debug": _debug_payload_for_response(run),
+        "inspector": _run_inspector_payload(run),
     }
     return payload
 
@@ -509,67 +735,43 @@ async def select_internal_thread_agent_pattern(
 
 @router.post("/threads/{thread_id}/agent-config/validate")
 async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigValidationRequest):
-    thread = await get_thread(thread_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    repo = AgentPatternRepository()
-    await repo.seed_builtin_templates()
-    thread_settings = await get_thread_settings(thread_id)
-    agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
-    agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
-    template_id = agent_settings.get("template_id") or ROUTER_RAG_AGENT_ID
-    if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
-        template_id = ROUTER_RAG_AGENT_ID
-
-    template, version = await repo.get_template_with_current_version(template_id)
-    if not template or not version:
-        raise HTTPException(status_code=404, detail="Agent pattern not found")
-
-    resolver = TemplateResolver()
     try:
-        resolved_spec = resolver.resolve(
-            version.spec_json,
-            thread_settings=thread_settings,
-            request_overrides=req.overrides,
+        return await _thread_agent_config_payload(
+            thread_id,
+            req.overrides,
+            include_prompt_preview=False,
         )
     except TemplateValidationError as exc:
-        candidate = dict(version.spec_json or {})
-        candidate_config = dict(candidate.get("config") or {})
-        for source in (thread_settings or {}, req.overrides or {}):
-            for key in ALLOWED_ROUTER_RAG_CONFIG_KEYS:
-                value = source.get(key) if isinstance(source, dict) else None
-                if value is not None:
-                    candidate_config[key] = value
-        candidate["config"] = candidate_config
-        try:
-            report = TemplateValidator().report(candidate)
-        except Exception as report_exc:
-            report = {"valid": False, "errors": [str(report_exc)], "warnings": []}
-        report["errors"] = report["errors"] or [str(exc)]
         return {
             "valid": False,
-            "template_id": template.id,
-            "template_version": version.version,
-            "template_version_id": version.id,
-            "validation": report,
-            "resolved_spec_json": candidate,
+            "template_id": None,
+            "template_version": None,
+            "template_version_id": None,
+            "validation": {"valid": False, "errors": [str(exc)], "warnings": []},
+            "resolved_spec_json": {},
+            "graph_preview": None,
         }
 
-    resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
-    resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
-        resolved_config.get("hitl_policy"),
-        thread_settings,
-    )
-    resolved_spec["config"] = resolved_config
-    return {
-        "valid": True,
-        "template_id": template.id,
-        "template_version": version.version,
-        "template_version_id": version.id,
-        "validation": TemplateValidator().report(resolved_spec),
-        "resolved_spec_json": resolved_spec,
-    }
+
+@router.post("/threads/{thread_id}/agent-config/preview")
+async def preview_thread_agent_config(thread_id: str, req: ThreadAgentConfigPreviewRequest):
+    try:
+        return await _thread_agent_config_payload(
+            thread_id,
+            req.overrides,
+            include_prompt_preview=True,
+        )
+    except TemplateValidationError as exc:
+        return {
+            "valid": False,
+            "template_id": None,
+            "template_version": None,
+            "template_version_id": None,
+            "validation": {"valid": False, "errors": [str(exc)], "warnings": []},
+            "resolved_spec_json": {},
+            "graph_preview": None,
+            "prompt": "",
+        }
 
 
 @router.get("/threads/{thread_id}/agent-runs")

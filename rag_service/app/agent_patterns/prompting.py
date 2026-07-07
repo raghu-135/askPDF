@@ -190,6 +190,7 @@ def build_agent_pattern_prompt_preview(
     client_timezone: Optional[str] = None,
     client_locale: Optional[str] = None,
     client_now_iso: Optional[str] = None,
+    resolved_spec: Optional[Dict[str, Any]] = None,
 ) -> str:
     state = {
         "question": QUESTION_PLACEHOLDER,
@@ -205,7 +206,48 @@ def build_agent_pattern_prompt_preview(
     }
     final_messages = build_final_answer_messages(state, CONTEXT_PLACEHOLDER)
     sections: List[str] = []
-    if pattern_id == "evaluator_replanner_rag_agent":
+
+    graph_nodes = []
+    if isinstance(resolved_spec, dict):
+        graph = (resolved_spec.get("config") or {}).get("graph") if isinstance(resolved_spec.get("config"), dict) else {}
+        if isinstance(graph, dict):
+            graph_nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+    node_types = [str(node.get("type") or node.get("id") or "") for node in graph_nodes]
+    if node_types:
+        if "planner" in node_types:
+            sections.append(
+                "# Planner Node Prompt\n\n"
+                "This is the system + human prompt for the planner LLM call. It decides route and worker inclusion only.\n\n"
+                "## System Message\n\nYou are a strict planner for a scoped RAG workflow.\n\n"
+                "## Human Message\n\n"
+                + build_planner_prompt(state)
+            )
+        if "evidence_evaluator" in node_types:
+            sections.append(
+                "# Evidence Evaluator Prompt\n\n"
+                "This is the system + human prompt for the evidence evaluator LLM call. It decides whether evidence is sufficient or one bounded replan is needed.\n\n"
+                "## System Message\n\nYou are a strict evidence evaluator for a bounded RAG workflow.\n\n"
+                "## Human Message\n\n"
+                + build_evaluator_prompt(state)
+            )
+        if "replanner" in node_types:
+            sections.append(
+                "# Replanner Prompt\n\n"
+                "This is the system + human prompt for the replanner LLM call. It revises worker inclusion under the remaining replan budget.\n\n"
+                "## System Message\n\nYou are a strict replanner for a bounded RAG workflow.\n\n"
+                "## Human Message\n\n"
+                + build_replanner_prompt(state)
+            )
+        if "router" in node_types or not sections:
+            sections.insert(
+                0,
+                "# Router Node Prompt\n\n"
+                "This is the system + human prompt for the router LLM call. It chooses the next graph route only.\n\n"
+                "## System Message\n\nYou are a strict router for a RAG workflow.\n\n"
+                "## Human Message\n\n"
+                + build_router_prompt(state),
+            )
+    elif pattern_id == "evaluator_replanner_rag_agent":
         sections.append(
             "# Planner Node Prompt\n\n"
             "This is the system + human prompt for the planner LLM call. It decides route and initial worker inclusion only.\n\n"
