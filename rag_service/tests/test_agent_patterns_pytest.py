@@ -652,17 +652,26 @@ class TestRouterRagTemplateValidator:
         assert retrieval["context_policy"]["mode"] == "append_evidence"
         assert retrieval["observability"]["span_kind"] == "tool_worker"
         assert retrieval["max_instances"] >= 1
+        assert retrieval["builder_exposable"] is True
+        assert retrieval["v1_requires_canonical_id"] is True
+        assert retrieval["runtime_max_instances"] == 1
+        assert catalog["hitl_gate"]["v1_requires_canonical_id"] is False
+        assert catalog["hitl_gate"]["runtime_max_instances"] >= 1
 
     def test_node_catalog_shape_validation_reports_bad_metadata(self):
         catalog = get_node_catalog()
         catalog["retrieval_worker"].pop("state_reads")
         catalog["router"]["max_instances"] = 0
+        catalog["router"]["runtime_max_instances"] = 0
+        catalog["router"]["builder_exposable"] = "yes"
 
         errors = collect_node_catalog_errors(catalog)
 
         assert "retrieval_worker missing catalog keys: state_reads" in errors
         assert "retrieval_worker.state_reads must be a list of non-empty strings" in errors
         assert "router.max_instances must be a positive integer" in errors
+        assert "router.runtime_max_instances must be a positive integer" in errors
+        assert "router.builder_exposable must be a boolean" in errors
 
     def test_route_function_registry_shape_validation_reports_bad_metadata(self):
         registry = get_route_function_registry()
@@ -1048,7 +1057,7 @@ class TestRouterRagGraphToolConsumers:
                 tool_name="search_documents",
             )
 
-    def test_v2_custom_graph_validates_and_compiles_with_instance_ids(self):
+    def test_v2_custom_graph_rejects_custom_executable_node_ids_for_v1(self):
         spec = {
             "schema_version": 2,
             "pattern_type": "custom_rag_agent",
@@ -1080,8 +1089,26 @@ class TestRouterRagGraphToolConsumers:
             },
         }
 
-        assert TemplateValidator().validate(spec)["valid"] is True
-        assert TemplateCompiler().compile(spec) is not None
+        errors = TemplateValidator().collect_errors(spec)
+
+        assert "graph node context_1 type context_loader must use canonical id context_loader in V1" in errors
+        assert "graph node router_1 type router must use canonical id router in V1" in errors
+        assert "graph node retrieval_1 type retrieval_worker must use canonical id retrieval_worker in V1" in errors
+        assert "graph node final_1 type finalizer must use canonical id finalizer in V1" in errors
+
+    def test_v2_custom_graph_checks_target_allowed_parent_types(self, monkeypatch):
+        catalog = get_node_catalog()
+        catalog["retrieval_worker"]["allowed_parent_types"] = ["planner"]
+        monkeypatch.setattr("app.agent_patterns.validator.get_node_catalog", lambda: catalog)
+
+        spec = builtin_router_rag_v2_spec()
+
+        errors = TemplateValidator().collect_errors(spec)
+
+        assert (
+            "node retrieval_worker type retrieval_worker cannot have parent router type router"
+            in errors
+        )
 
     def test_v2_custom_graph_rejects_incompatible_node_catalog(self, monkeypatch):
         catalog = get_node_catalog()
@@ -1361,39 +1388,43 @@ class TestRouterRagGraphToolConsumers:
                     "max_total_visits": 9,
                     "default_max_node_visits": 1,
                     "node_visit_limits": {
-                        "retrieval_1": 2,
-                        "evaluator_1": 2,
+                        "retrieval_worker": 2,
+                        "evidence_evaluator": 2,
                     },
                 },
                 "graph": {
                     "nodes": [
-                        {"id": "context_1", "type": "context_loader"},
-                        {"id": "planner_1", "type": "planner"},
-                        {"id": "retrieval_1", "type": "retrieval_worker"},
-                        {"id": "evaluator_1", "type": "evidence_evaluator"},
-                        {"id": "replanner_1", "type": "replanner"},
-                        {"id": "synth_1", "type": "synthesizer"},
-                        {"id": "final_1", "type": "finalizer"},
+                        {"id": "context_loader", "type": "context_loader"},
+                        {"id": "planner", "type": "planner"},
+                        {"id": "retrieval_worker", "type": "retrieval_worker"},
+                        {"id": "evidence_evaluator", "type": "evidence_evaluator"},
+                        {"id": "replanner", "type": "replanner"},
+                        {"id": "synthesizer", "type": "synthesizer"},
+                        {"id": "finalizer", "type": "finalizer"},
                     ],
                     "edges": [
-                        {"from": "START", "to": "context_1"},
-                        {"from": "context_1", "to": "planner_1"},
+                        {"from": "START", "to": "context_loader"},
+                        {"from": "context_loader", "to": "planner"},
                         {
-                            "from": "planner_1",
+                            "from": "planner",
                             "conditional": True,
                             "route_fn": "planner_route",
-                            "routes": {"execute": "retrieval_1", "direct": "final_1", "clarify": "final_1"},
+                            "routes": {"execute": "retrieval_worker", "direct": "finalizer", "clarify": "finalizer"},
                         },
-                        {"from": "retrieval_1", "to": "evaluator_1"},
+                        {"from": "retrieval_worker", "to": "evidence_evaluator"},
                         {
-                            "from": "evaluator_1",
+                            "from": "evidence_evaluator",
                             "conditional": True,
                             "route_fn": "evaluator_route",
-                            "routes": {"answer": "synth_1", "replan": "replanner_1", "answer_budget_exhausted": "synth_1"},
+                            "routes": {
+                                "answer": "synthesizer",
+                                "replan": "replanner",
+                                "answer_budget_exhausted": "synthesizer",
+                            },
                         },
-                        {"from": "replanner_1", "to": "retrieval_1"},
-                        {"from": "synth_1", "to": "final_1"},
-                        {"from": "final_1", "to": "END"},
+                        {"from": "replanner", "to": "retrieval_worker"},
+                        {"from": "synthesizer", "to": "finalizer"},
+                        {"from": "finalizer", "to": "END"},
                     ],
                 },
             },
@@ -3494,7 +3525,7 @@ class TestAgentRunService:
         assert captured_spec["pattern_type"] == "internal_custom_rag_agent_v1"
 
     @pytest.mark.asyncio
-    async def test_internal_custom_pattern_create_select_and_run_keeps_instance_node_identity(
+    async def test_internal_custom_pattern_create_select_and_run_keeps_canonical_node_identity(
         self,
         async_api_client,
         monkeypatch,
@@ -3506,27 +3537,27 @@ class TestAgentRunService:
                 "allowed_tool_ids": ["document_evidence"],
                 "graph": {
                     "nodes": [
-                        {"id": "context_1", "type": "context_loader"},
-                        {"id": "router_1", "type": "router"},
-                        {"id": "retrieval_1", "type": "retrieval_worker"},
-                        {"id": "synth_1", "type": "synthesizer"},
-                        {"id": "final_1", "type": "finalizer"},
+                        {"id": "context_loader", "type": "context_loader"},
+                        {"id": "router", "type": "router"},
+                        {"id": "retrieval_worker", "type": "retrieval_worker"},
+                        {"id": "synthesizer", "type": "synthesizer"},
+                        {"id": "finalizer", "type": "finalizer"},
                     ],
                     "edges": [
-                        {"from": "START", "to": "context_1"},
-                        {"from": "context_1", "to": "router_1"},
+                        {"from": "START", "to": "context_loader"},
+                        {"from": "context_loader", "to": "router"},
                         {
-                            "from": "router_1",
+                            "from": "router",
                             "conditional": True,
                             "route_fn": "router_route",
                             "routes": {
-                                "document": "retrieval_1",
-                                "direct": "final_1",
+                                "document": "retrieval_worker",
+                                "direct": "finalizer",
                             },
                         },
-                        {"from": "retrieval_1", "to": "synth_1"},
-                        {"from": "synth_1", "to": "final_1"},
-                        {"from": "final_1", "to": "END"},
+                        {"from": "retrieval_worker", "to": "synthesizer"},
+                        {"from": "synthesizer", "to": "finalizer"},
+                        {"from": "finalizer", "to": "END"},
                     ],
                 },
             },
@@ -3540,7 +3571,7 @@ class TestAgentRunService:
                 self.calls += 1
                 if self.calls == 1:
                     return SimpleNamespace(content='{"route":"document","reason":"Need document evidence."}')
-                return SimpleNamespace(content="Custom graph answer from retrieval_1.")
+                return SimpleNamespace(content="Custom graph answer from retrieval_worker.")
 
         class FakeDocumentTool:
             name = "search_documents"
@@ -3648,9 +3679,9 @@ class TestAgentRunService:
         retrieval_node = next(
             node
             for node in run.resolved_spec_json["config"]["graph"]["nodes"]
-            if node.get("id") == "retrieval_1"
+            if node.get("id") == "retrieval_worker"
         )
-        assert retrieval_node["id"] == "retrieval_1"
+        assert retrieval_node["id"] == "retrieval_worker"
         assert retrieval_node["type"] == "retrieval_worker"
         assert retrieval_node["label"] == "Document Retrieval"
         assert retrieval_node["category"] == "retrieval"
@@ -3661,11 +3692,11 @@ class TestAgentRunService:
         assert retrieval_node["observability"]["span_kind"] == "tool_worker"
         assert retrieval_node["max_instances"] >= 1
         assert any(
-            event.get("node") == "retrieval_1" and event.get("node_type") == "retrieval_worker"
+            event.get("node") == "retrieval_worker" and event.get("node_type") == "retrieval_worker"
             for event in result["node_events"]
         )
         assert any(
-            event.get("caller_node") == "retrieval_1"
+            event.get("caller_node") == "retrieval_worker"
             and event.get("caller_node_type") == "retrieval_worker"
             for event in result["tool_events"]
         )
@@ -3674,7 +3705,7 @@ class TestAgentRunService:
             for span in (run.debug_trace_json or {}).get("trace", {}).get("spans", [])
         ]
         assert any(
-            attrs.get("askpdf.node.id") == "retrieval_1"
+            attrs.get("askpdf.node.id") == "retrieval_worker"
             and attrs.get("askpdf.node.type") == "retrieval_worker"
             and attrs.get("askpdf.node.name") == "Document Retrieval"
             and attrs.get("askpdf.node.category") == "retrieval"
@@ -3689,7 +3720,7 @@ class TestAgentRunService:
             for attrs in span_attrs
         )
         graph_nodes = (run.debug_trace_json or {}).get("graph", {}).get("nodes", [])
-        debug_retrieval_node = next(node for node in graph_nodes if node.get("id") == "retrieval_1")
+        debug_retrieval_node = next(node for node in graph_nodes if node.get("id") == "retrieval_worker")
         assert debug_retrieval_node["label"] == "Document Retrieval"
         assert debug_retrieval_node["category"] == "retrieval"
         assert debug_retrieval_node["capabilities"] == ["retrieval.document"]
@@ -5618,6 +5649,10 @@ class TestAgentPatternApi:
         assert node_catalog["retrieval_worker"]["observability"]["span_kind"] == "tool_worker"
         assert "evidence_packets" in node_catalog["retrieval_worker"]["state_writes"]
         assert node_catalog["retrieval_worker"]["max_instances"] >= 1
+        assert node_catalog["retrieval_worker"]["builder_exposable"] is True
+        assert node_catalog["retrieval_worker"]["v1_requires_canonical_id"] is True
+        assert node_catalog["retrieval_worker"]["runtime_max_instances"] == 1
+        assert node_catalog["hitl_gate"]["v1_requires_canonical_id"] is False
         assert "implementation" not in node_catalog["retrieval_worker"]
         assert "callable" not in node_catalog["retrieval_worker"]
 

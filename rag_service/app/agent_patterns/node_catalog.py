@@ -362,6 +362,14 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
 for _node_type, _metadata in _NODE_CATALOG_METADATA.items():
     NODE_CATALOG[_node_type].update(deepcopy(_metadata))
 
+for _node_type, _metadata in NODE_CATALOG.items():
+    _metadata.setdefault("builder_exposable", True)
+    _metadata.setdefault("v1_requires_canonical_id", _node_type != "hitl_gate")
+    _metadata.setdefault(
+        "runtime_max_instances",
+        8 if _node_type == "hitl_gate" else 1,
+    )
+
 REQUIRED_NODE_CATALOG_KEYS = {
     "display_name",
     "category",
@@ -377,6 +385,9 @@ REQUIRED_NODE_CATALOG_KEYS = {
     "context_policy",
     "observability",
     "max_instances",
+    "builder_exposable",
+    "v1_requires_canonical_id",
+    "runtime_max_instances",
 }
 
 
@@ -431,6 +442,18 @@ def collect_node_catalog_errors(catalog: Dict[str, Dict[str, Any]] | None = None
         max_instances = metadata.get("max_instances")
         if not isinstance(max_instances, int) or isinstance(max_instances, bool) or max_instances < 1:
             errors.append(f"{node_type}.max_instances must be a positive integer")
+
+        runtime_max_instances = metadata.get("runtime_max_instances")
+        if (
+            not isinstance(runtime_max_instances, int)
+            or isinstance(runtime_max_instances, bool)
+            or runtime_max_instances < 1
+        ):
+            errors.append(f"{node_type}.runtime_max_instances must be a positive integer")
+
+        for key in ("builder_exposable", "v1_requires_canonical_id"):
+            if not isinstance(metadata.get(key), bool):
+                errors.append(f"{node_type}.{key} must be a boolean")
     return errors
 
 

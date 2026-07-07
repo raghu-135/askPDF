@@ -665,6 +665,11 @@ class GenericGraphValidator:
             if node_type not in known_types:
                 errors.append(f"graph node {node_id} has unknown type: {node_type}")
                 continue
+            metadata = node_catalog.get(node_type) or {}
+            if metadata.get("v1_requires_canonical_id") is True and node_id != node_type:
+                errors.append(
+                    f"graph node {node_id} type {node_type} must use canonical id {node_type} in V1"
+                )
             node_types_by_id[node_id] = node_type
             node_type_counts[node_type] = node_type_counts.get(node_type, 0) + 1
             graph_supported_tool_ids.update(node_type_allowed_tool_contract_ids(node_type))
@@ -696,6 +701,16 @@ class GenericGraphValidator:
             max_instances = (node_catalog.get(node_type) or {}).get("max_instances")
             if isinstance(max_instances, int) and not isinstance(max_instances, bool) and count > max_instances:
                 errors.append(f"graph has {count} nodes of type {node_type}; maximum allowed is {max_instances}")
+            runtime_max_instances = (node_catalog.get(node_type) or {}).get("runtime_max_instances")
+            if (
+                isinstance(runtime_max_instances, int)
+                and not isinstance(runtime_max_instances, bool)
+                and count > runtime_max_instances
+            ):
+                errors.append(
+                    f"graph has {count} runtime nodes of type {node_type}; "
+                    f"V1 supports at most {runtime_max_instances}"
+                )
 
         valid_sources = set(node_ids) | {"START"}
         valid_targets = set(node_ids) | {"END"}
@@ -977,15 +992,32 @@ class GenericGraphValidator:
         node_catalog: Dict[str, Dict[str, Any]],
     ) -> list[str]:
         if source == "START" or target == "END":
-            return []
+            errors: list[str] = []
+            if source == "START":
+                target_type = node_types_by_id.get(target)
+                if target_type:
+                    allowed_parents = set((node_catalog.get(target_type) or {}).get("allowed_parent_types") or [])
+                    if "START" not in allowed_parents:
+                        errors.append(f"node {target} type {target_type} cannot have parent START")
+            if target == "END":
+                source_type = node_types_by_id.get(source)
+                if source_type:
+                    allowed_children = set((node_catalog.get(source_type) or {}).get("allowed_child_types") or [])
+                    if "END" not in allowed_children:
+                        errors.append(f"node {source} type {source_type} cannot connect to END")
+            return errors
         source_type = node_types_by_id.get(source)
         target_type = node_types_by_id.get(target)
         if not source_type or not target_type:
             return []
+        errors: list[str] = []
         allowed_children = set((node_catalog.get(source_type) or {}).get("allowed_child_types") or [])
         if target_type not in allowed_children:
-            return [f"node {source} type {source_type} cannot connect to {target} type {target_type}"]
-        return []
+            errors.append(f"node {source} type {source_type} cannot connect to {target} type {target_type}")
+        allowed_parents = set((node_catalog.get(target_type) or {}).get("allowed_parent_types") or [])
+        if source_type not in allowed_parents:
+            errors.append(f"node {target} type {target_type} cannot have parent {source} type {source_type}")
+        return errors
 
     def _collect_loop_policy_errors(
         self,
