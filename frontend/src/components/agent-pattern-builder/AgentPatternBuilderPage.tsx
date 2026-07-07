@@ -11,9 +11,11 @@ import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../../theme';
 import {
   getInternalAgentPatternCatalog,
+  previewThreadAgentConfig,
   validateAgentPatternSpec,
   type AgentPatternCatalogResponse,
   type AgentPatternValidationReport,
+  type ThreadAgentConfigPreviewResponse,
 } from '../../lib/api';
 import {
   assembleAgentPatternSpec,
@@ -33,11 +35,64 @@ import BuilderActionsBar from './BuilderActionsBar';
 import BuilderGraphEditor from './BuilderGraphEditor';
 import BuilderInspector from './BuilderInspector';
 import BuilderNodePalette from './BuilderNodePalette';
-import type { BuilderSelection } from './types';
+import BuilderValidationPanel from './BuilderValidationPanel';
+import type { BuilderSelection, BuilderValidationIssue } from './types';
 
 const collectNodeToolIds = (nodes: BuilderNodeState[]) => (
   Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
 );
+
+const edgeIndexFromSource = (state: AgentPatternBuilderState, sourceId: string) => (
+  state.edges.findIndex((edge) => edge.from === sourceId)
+);
+
+const edgeIndexFromSourceTarget = (state: AgentPatternBuilderState, sourceId: string, targetId: string) => (
+  state.edges.findIndex((edge) => edge.from === sourceId && (edge.to === targetId || Object.values(edge.routes || {}).includes(targetId)))
+);
+
+const inferIssueSelection = (state: AgentPatternBuilderState, message: string): BuilderSelection => {
+  const explicitNode = message.match(/graph node ([^. ]+)/)?.[1]
+    || message.match(/duplicate graph node id: ([^ ]+)/)?.[1]
+    || message.match(/node_visit_limits\.([^ ]+)/)?.[1];
+  if (explicitNode && state.nodes.some((node) => node.id === explicitNode)) {
+    return { kind: 'node', nodeId: explicitNode };
+  }
+
+  const conditionalSource = message.match(/graph conditional edge from ([^ ]+)/)?.[1];
+  if (conditionalSource) {
+    const edgeIndex = edgeIndexFromSource(state, conditionalSource);
+    if (edgeIndex >= 0) return { kind: 'edge', edgeIndex };
+  }
+
+  const incompatibleEdge = message.match(/node ([^ ]+) type [^ ]+ cannot connect to ([^ ]+) type/) || [];
+  if (incompatibleEdge[1] && incompatibleEdge[2]) {
+    const edgeIndex = edgeIndexFromSourceTarget(state, incompatibleEdge[1], incompatibleEdge[2]);
+    if (edgeIndex >= 0) return { kind: 'edge', edgeIndex };
+  }
+
+  return null;
+};
+
+const buildValidationIssues = (
+  state: AgentPatternBuilderState | null,
+  validation: AgentPatternValidationReport | null,
+): BuilderValidationIssue[] => {
+  if (!state || !validation) return [];
+  return [
+    ...(validation.errors || []).map((message, index) => ({
+      id: `error-${index}-${message}`,
+      severity: 'error' as const,
+      message,
+      selection: inferIssueSelection(state, message),
+    })),
+    ...(validation.warnings || []).map((message, index) => ({
+      id: `warning-${index}-${message}`,
+      severity: 'warning' as const,
+      message,
+      selection: inferIssueSelection(state, message),
+    })),
+  ];
+};
 
 const usePrefersDarkMode = () => {
   const [darkMode, setDarkMode] = useState(false);
@@ -63,6 +118,10 @@ export default function AgentPatternBuilderPage() {
   const [selection, setSelection] = useState<BuilderSelection>(null);
   const [validation, setValidation] = useState<AgentPatternValidationReport | null>(null);
   const [validating, setValidating] = useState(false);
+  const [threadPreviewId, setThreadPreviewId] = useState('');
+  const [threadPreview, setThreadPreview] = useState<ThreadAgentConfigPreviewResponse | null>(null);
+  const [threadPreviewError, setThreadPreviewError] = useState<string | null>(null);
+  const [previewingThread, setPreviewingThread] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +156,8 @@ export default function AgentPatternBuilderPage() {
       };
     });
     setValidation(null);
+    setThreadPreview(null);
+    setThreadPreviewError(null);
   }, [catalog]);
 
   const resetToStarter = useCallback((nextStarter = starter) => {
@@ -104,6 +165,8 @@ export default function AgentPatternBuilderPage() {
     setBuilderState(createInitialBuilderState(catalog, nextStarter));
     setSelection(null);
     setValidation(null);
+    setThreadPreview(null);
+    setThreadPreviewError(null);
   }, [catalog, starter]);
 
   const handleStarterChange = (nextStarter: AgentPatternStarter) => {
@@ -200,10 +263,26 @@ export default function AgentPatternBuilderPage() {
     }
   };
 
-  const validationIssues = [
-    ...(validation?.errors || []),
-    ...(validation?.warnings || []).map((warning) => `Warning: ${warning}`),
-  ];
+  const spec = useMemo(() => (
+    builderState ? assembleAgentPatternSpec(builderState) : null
+  ), [builderState]);
+  const validationIssues = useMemo(() => (
+    buildValidationIssues(builderState, validation)
+  ), [builderState, validation]);
+
+  const handleThreadPreview = async () => {
+    if (!threadPreviewId.trim()) return;
+    try {
+      setPreviewingThread(true);
+      setThreadPreviewError(null);
+      setThreadPreview(await previewThreadAgentConfig(threadPreviewId.trim()));
+    } catch (err) {
+      setThreadPreview(null);
+      setThreadPreviewError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreviewingThread(false);
+    }
+  };
 
   return (
     <ThemeProvider theme={theme}>
@@ -238,21 +317,26 @@ export default function AgentPatternBuilderPage() {
               <BuilderNodePalette catalog={catalog} state={builderState} onAddNodeType={handleAddNodeType} />
             </Box>
             <Box sx={{ minHeight: 0, overflow: 'auto', p: 1.5 }}>
-              {validationIssues.length > 0 ? (
-                <Alert severity={validation?.valid ? 'success' : 'error'} sx={{ mb: 1 }}>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-                    {validationIssues.map((issue, index) => (
-                      <Typography key={`${issue}-${index}`} variant="caption">
-                        {issue}
-                      </Typography>
-                    ))}
-                  </Box>
-                </Alert>
+              {spec ? (
+                <BuilderValidationPanel
+                  catalog={catalog}
+                  spec={spec}
+                  validation={validation}
+                  issues={validationIssues}
+                  threadPreviewId={threadPreviewId}
+                  onThreadPreviewIdChange={setThreadPreviewId}
+                  onPreviewThread={handleThreadPreview}
+                  previewing={previewingThread}
+                  previewResult={threadPreview}
+                  previewError={threadPreviewError}
+                  onSelectIssue={setSelection}
+                />
               ) : null}
               <BuilderGraphEditor
                 catalog={catalog}
                 state={builderState}
                 selection={selection}
+                validationIssues={validationIssues}
                 onSelectionChange={setSelection}
                 onAddEdge={handleAddEdge}
               />
@@ -279,4 +363,3 @@ export default function AgentPatternBuilderPage() {
     </ThemeProvider>
   );
 }
-

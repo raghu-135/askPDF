@@ -19,7 +19,7 @@ import type { AgentPatternCatalogResponse } from '../../lib/api';
 import type { AgentGraphSelection } from '../agent-graph/agent-graph-types';
 import type { AgentPatternBuilderState, BuilderEdgeState } from '../../lib/agent-pattern-builder';
 import { assembleAgentPatternSpec, canConnectNodes } from '../../lib/agent-pattern-builder';
-import type { BuilderSelection } from './types';
+import type { BuilderSelection, BuilderValidationIssue } from './types';
 
 const AgentGraphCanvas = dynamic(() => import('../agent-graph/AgentGraphCanvas'), { ssr: false });
 
@@ -44,12 +44,14 @@ export default function BuilderGraphEditor({
   catalog,
   state,
   selection,
+  validationIssues,
   onSelectionChange,
   onAddEdge,
 }: {
   catalog: AgentPatternCatalogResponse;
   state: AgentPatternBuilderState;
   selection: BuilderSelection;
+  validationIssues: BuilderValidationIssue[];
   onSelectionChange: (selection: BuilderSelection) => void;
   onAddEdge: (edge: BuilderEdgeState) => void;
 }) {
@@ -57,6 +59,18 @@ export default function BuilderGraphEditor({
   const [target, setTarget] = useState(state.nodes[0]?.id || 'END');
   const spec = useMemo(() => assembleAgentPatternSpec(state), [state]);
   const compatibility = canConnectNodes(catalog, state, source, target);
+  const issueCountForSelection = useCallback((targetSelection: BuilderSelection) => (
+    validationIssues.filter((issue) => {
+      if (!issue.selection || !targetSelection || issue.selection.kind !== targetSelection.kind) return false;
+      if (issue.selection.kind === 'node' && targetSelection.kind === 'node') {
+        return issue.selection.nodeId === targetSelection.nodeId;
+      }
+      if (issue.selection.kind === 'edge' && targetSelection.kind === 'edge') {
+        return issue.selection.edgeIndex === targetSelection.edgeIndex;
+      }
+      return false;
+    }).length
+  ), [validationIssues]);
 
   const handleGraphSelection = useCallback((graphSelection: AgentGraphSelection) => {
     if (!graphSelection) {
@@ -105,26 +119,34 @@ export default function BuilderGraphEditor({
           <Divider sx={{ my: 1 }} />
           <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', rowGap: 0.75 }}>
             {state.nodes.map((node) => (
-              <Chip
-                key={node.id}
-                clickable
-                color={selection?.kind === 'node' && selection.nodeId === node.id ? 'primary' : 'default'}
-                variant={selection?.kind === 'node' && selection.nodeId === node.id ? 'filled' : 'outlined'}
-                label={`${node.id} · ${node.type}`}
-                onClick={() => onSelectionChange({ kind: 'node', nodeId: node.id })}
-              />
+              <Box key={node.id} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35 }}>
+                <Chip
+                  clickable
+                  color={selection?.kind === 'node' && selection.nodeId === node.id ? 'primary' : 'default'}
+                  variant={selection?.kind === 'node' && selection.nodeId === node.id ? 'filled' : 'outlined'}
+                  label={`${node.id} · ${node.type}`}
+                  onClick={() => onSelectionChange({ kind: 'node', nodeId: node.id })}
+                />
+                {issueCountForSelection({ kind: 'node', nodeId: node.id }) > 0 ? (
+                  <Chip size="small" color="error" label={issueCountForSelection({ kind: 'node', nodeId: node.id })} />
+                ) : null}
+              </Box>
             ))}
           </Stack>
           <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', rowGap: 0.75, mt: 1 }}>
             {state.edges.map((edge, index) => (
-              <Chip
-                key={`${edge.from}-${edge.to || 'routes'}-${index}`}
-                clickable
-                color={selection?.kind === 'edge' && selection.edgeIndex === index ? 'primary' : 'default'}
-                variant={selection?.kind === 'edge' && selection.edgeIndex === index ? 'filled' : 'outlined'}
-                label={edgeLabel(edge)}
-                onClick={() => onSelectionChange({ kind: 'edge', edgeIndex: index })}
-              />
+              <Box key={`${edge.from}-${edge.to || 'routes'}-${index}`} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35 }}>
+                <Chip
+                  clickable
+                  color={selection?.kind === 'edge' && selection.edgeIndex === index ? 'primary' : 'default'}
+                  variant={selection?.kind === 'edge' && selection.edgeIndex === index ? 'filled' : 'outlined'}
+                  label={edgeLabel(edge)}
+                  onClick={() => onSelectionChange({ kind: 'edge', edgeIndex: index })}
+                />
+                {issueCountForSelection({ kind: 'edge', edgeIndex: index }) > 0 ? (
+                  <Chip size="small" color="error" label={issueCountForSelection({ kind: 'edge', edgeIndex: index })} />
+                ) : null}
+              </Box>
             ))}
           </Stack>
         </Box>
@@ -182,4 +204,3 @@ export default function BuilderGraphEditor({
     </Box>
   );
 }
-
