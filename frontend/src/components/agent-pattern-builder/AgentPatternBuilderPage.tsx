@@ -10,8 +10,12 @@ import {
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../../theme';
 import {
+  archiveInternalAgentPattern,
+  createInternalAgentPattern,
   getInternalAgentPatternCatalog,
+  publishInternalAgentPattern,
   previewThreadAgentConfig,
+  selectInternalThreadAgentPattern,
   validateAgentPatternSpec,
   type AgentPatternCatalogResponse,
   type AgentPatternValidationReport,
@@ -35,12 +39,26 @@ import BuilderActionsBar from './BuilderActionsBar';
 import BuilderGraphEditor from './BuilderGraphEditor';
 import BuilderInspector from './BuilderInspector';
 import BuilderNodePalette from './BuilderNodePalette';
+import BuilderPersistencePanel, {
+  type BuilderPersistedPattern,
+  type BuilderPersistenceState,
+} from './BuilderPersistencePanel';
 import BuilderValidationPanel from './BuilderValidationPanel';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
 
 const collectNodeToolIds = (nodes: BuilderNodeState[]) => (
   Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
 );
+
+const slugifyTemplateId = (name: string) => {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 72);
+  return slug ? `internal_${slug}` : 'internal_custom_agent';
+};
 
 const edgeIndexFromSource = (state: AgentPatternBuilderState, sourceId: string) => (
   state.edges.findIndex((edge) => edge.from === sourceId)
@@ -122,6 +140,18 @@ export default function AgentPatternBuilderPage() {
   const [threadPreview, setThreadPreview] = useState<ThreadAgentConfigPreviewResponse | null>(null);
   const [threadPreviewError, setThreadPreviewError] = useState<string | null>(null);
   const [previewingThread, setPreviewingThread] = useState(false);
+  const [persistenceForm, setPersistenceForm] = useState<BuilderPersistenceState>({
+    templateId: 'internal_custom_agent',
+    name: 'Internal Custom Agent',
+    description: '',
+    ownerId: '',
+    changelog: '',
+    selectThreadId: '',
+  });
+  const [persistedPattern, setPersistedPattern] = useState<BuilderPersistedPattern | null>(null);
+  const [busyAction, setBusyAction] = useState<'save' | 'publish' | 'archive' | 'select' | null>(null);
+  const [persistenceStatus, setPersistenceStatus] = useState<string | null>(null);
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,6 +188,7 @@ export default function AgentPatternBuilderPage() {
     setValidation(null);
     setThreadPreview(null);
     setThreadPreviewError(null);
+    setPersistenceStatus(null);
   }, [catalog]);
 
   const resetToStarter = useCallback((nextStarter = starter) => {
@@ -167,6 +198,9 @@ export default function AgentPatternBuilderPage() {
     setValidation(null);
     setThreadPreview(null);
     setThreadPreviewError(null);
+    setPersistedPattern(null);
+    setPersistenceStatus(null);
+    setPersistenceError(null);
   }, [catalog, starter]);
 
   const handleStarterChange = (nextStarter: AgentPatternStarter) => {
@@ -284,6 +318,102 @@ export default function AgentPatternBuilderPage() {
     }
   };
 
+  const updatePersistenceForm = (patch: Partial<BuilderPersistenceState>) => {
+    setPersistenceForm((previous) => ({ ...previous, ...patch }));
+    setPersistenceStatus(null);
+    setPersistenceError(null);
+  };
+
+  const handleGenerateTemplateId = () => {
+    updatePersistenceForm({ templateId: slugifyTemplateId(persistenceForm.name) });
+  };
+
+  const handleSaveInternalVersion = async () => {
+    if (!builderState || !spec) return;
+    try {
+      setBusyAction('save');
+      setPersistenceError(null);
+      setPersistenceStatus(null);
+      const templateId = persistenceForm.templateId.trim();
+      const saveSpec = {
+        ...spec,
+        pattern_type: templateId || spec.pattern_type,
+      };
+      const report = await validateAgentPatternSpec(saveSpec);
+      setValidation(report);
+      if (!report.valid) {
+        setPersistenceError('Validation failed. Fix the reported issues before saving.');
+        return;
+      }
+      const response = await createInternalAgentPattern({
+        template_id: templateId,
+        name: persistenceForm.name.trim(),
+        description: persistenceForm.description,
+        owner_id: persistenceForm.ownerId.trim() || null,
+        changelog: persistenceForm.changelog || null,
+        spec_json: saveSpec,
+        set_current: true,
+      });
+      setPersistedPattern({ template: response.agent_pattern, version: response.version });
+      setPersistenceStatus(`Saved ${response.agent_pattern.id} v${response.version.version}.`);
+    } catch (err) {
+      setPersistenceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handlePublish = async () => {
+    const templateId = persistedPattern?.template.id;
+    if (!templateId) return;
+    try {
+      setBusyAction('publish');
+      setPersistenceError(null);
+      setPersistenceStatus(null);
+      const response = await publishInternalAgentPattern(templateId);
+      setPersistenceStatus(`Publish completed for ${response.agent_pattern.id}.`);
+    } catch (err) {
+      setPersistenceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleArchive = async () => {
+    const templateId = persistedPattern?.template.id;
+    if (!templateId) return;
+    try {
+      setBusyAction('archive');
+      setPersistenceError(null);
+      setPersistenceStatus(null);
+      const response = await archiveInternalAgentPattern(templateId);
+      setPersistenceStatus(`Archive completed for ${response.agent_pattern.id}.`);
+    } catch (err) {
+      setPersistenceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleSelectForThread = async () => {
+    const templateId = persistedPattern?.template.id;
+    if (!templateId || !persistenceForm.selectThreadId.trim()) return;
+    try {
+      setBusyAction('select');
+      setPersistenceError(null);
+      setPersistenceStatus(null);
+      const response = await selectInternalThreadAgentPattern(persistenceForm.selectThreadId.trim(), {
+        template_id: templateId,
+        template_version: persistedPattern?.version.version,
+      });
+      setPersistenceStatus(`Selected ${response.template.id} v${response.version.version} for thread ${response.thread_id}.`);
+    } catch (err) {
+      setPersistenceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -342,6 +472,21 @@ export default function AgentPatternBuilderPage() {
               />
             </Box>
             <Box sx={{ minHeight: 0, overflow: 'auto', borderLeft: { lg: 1 }, borderColor: 'divider', p: 1.5 }}>
+              <BuilderPersistencePanel
+                form={persistenceForm}
+                onFormChange={updatePersistenceForm}
+                persisted={persistedPattern}
+                busyAction={busyAction}
+                statusMessage={persistenceStatus}
+                errorMessage={persistenceError}
+                canSave={Boolean(spec && persistenceForm.templateId.trim() && persistenceForm.name.trim())}
+                onGenerateTemplateId={handleGenerateTemplateId}
+                onSave={handleSaveInternalVersion}
+                onPublish={handlePublish}
+                onArchive={handleArchive}
+                onSelectForThread={handleSelectForThread}
+              />
+              <Divider sx={{ my: 1.5 }} />
               <BuilderInspector
                 catalog={catalog}
                 state={builderState}

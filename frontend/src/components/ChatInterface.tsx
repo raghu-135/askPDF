@@ -96,10 +96,14 @@ type PendingHumanReview = {
     localAssistantMessageId: string;
 };
 
+const BUILTIN_AGENT_PATTERN_IDS = ['router_rag_agent', 'plan_execute_rag_agent', 'evaluator_replanner_rag_agent'];
+
 const normalizeAgentPatternForUi = (templateId?: string | null) => (
-    ['router_rag_agent', 'plan_execute_rag_agent', 'evaluator_replanner_rag_agent'].includes(templateId || '')
-        ? String(templateId)
-        : 'router_rag_agent'
+    templateId ? String(templateId) : 'router_rag_agent'
+);
+
+const isBuiltinAgentPattern = (templateId?: string | null) => (
+    BUILTIN_AGENT_PATTERN_IDS.includes(templateId || '')
 );
 
 const isEvaluatorReplannerPattern = (templateId?: string | null) => (
@@ -173,6 +177,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
     const [agentPatternId, setAgentPatternId] = useState('router_rag_agent');
+    const [agentPatternConfig, setAgentPatternConfig] = useState<Thread['settings']['agent_pattern'] | undefined>(undefined);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -214,6 +219,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setHitlWebApproval(settings?.hitl_web_approval ?? defaultHitlWebApproval);
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
         setAgentPatternId(normalizeAgentPatternForUi(settings?.agent_pattern?.template_id));
+        setAgentPatternConfig(settings?.agent_pattern);
     }, [
         defaultCustomInstructions,
         defaultSystemRole,
@@ -613,6 +619,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setHitlWebApproval(defaultHitlWebApproval);
         setUseReranker(defaultUseReranker);
         setAgentPatternId('router_rag_agent');
+        setAgentPatternConfig({ template_id: 'router_rag_agent' });
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -1237,7 +1244,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 custom_instructions: customInstructions,
                 hitl_web_approval: hitlWebApproval,
                 use_reranker: useReranker,
-                agent_pattern: { template_id: normalizeAgentPatternForUi(agentPatternId) },
+                agent_pattern: isBuiltinAgentPattern(agentPatternId)
+                    ? { template_id: normalizeAgentPatternForUi(agentPatternId) }
+                    : {
+                        ...(agentPatternConfig || {}),
+                        template_id: normalizeAgentPatternForUi(agentPatternId),
+                        allow_custom: agentPatternConfig?.allow_custom ?? true,
+                        source: agentPatternConfig?.source ?? 'internal',
+                    },
             };
             if (isEvaluatorReplannerPattern(agentPatternId) && replansLimit !== null) {
                 nextSettings.replans = Math.max(1, Math.min(replansLimit, replans));
@@ -2182,6 +2196,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 hitlWebApproval={hitlWebApproval}
                 useReranker={useReranker}
                 agentPatternId={agentPatternId}
+                agentPatternIsCustom={!isBuiltinAgentPattern(agentPatternId)}
                 systemRole={systemRole}
                 toolInstructions={toolInstructions}
                 customInstructions={customInstructions}
@@ -2191,7 +2206,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onReplansChange={(value) => setReplans(value)}
                 onHitlWebApprovalChange={(checked) => setHitlWebApproval(checked)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
-                onAgentPatternChange={(value) => setAgentPatternId(value)}
+                onAgentPatternChange={(value) => {
+                    setAgentPatternId(value);
+                    if (isBuiltinAgentPattern(value)) {
+                        setAgentPatternConfig({ template_id: value });
+                    }
+                }}
                 onSystemRoleChange={(value) => setSystemRole(value)}
                 onToolInstructionChange={(toolId, value) =>
                     setToolInstructions((prev) => ({

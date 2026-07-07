@@ -31,6 +31,7 @@ interface ChatSettingsDialogProps {
     hitlWebApproval: boolean;
     useReranker: boolean;
     agentPatternId: string;
+    agentPatternIsCustom?: boolean;
     systemRole: string;
     toolInstructions: Record<string, string>;
     customInstructions: string;
@@ -64,6 +65,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     hitlWebApproval,
     useReranker,
     agentPatternId,
+    agentPatternIsCustom = false,
     systemRole,
     toolInstructions,
     customInstructions,
@@ -123,6 +125,11 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                         <MenuItem value="router_rag_agent">Router RAG Agent</MenuItem>
                         <MenuItem value="plan_execute_rag_agent">Plan-and-Execute RAG Agent</MenuItem>
                         <MenuItem value="evaluator_replanner_rag_agent">Evaluator/Replanner RAG Agent</MenuItem>
+                        {agentPatternIsCustom ? (
+                            <MenuItem value={agentPatternId}>
+                                Custom: {agentPatternId}
+                            </MenuItem>
+                        ) : null}
                     </TextField>
                     <Button
                         variant="outlined"
