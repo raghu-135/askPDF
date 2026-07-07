@@ -147,8 +147,251 @@ export interface ThreadSettings {
   use_reranker: boolean;
   agent_pattern?: {
     template_id: 'router_rag_agent' | string;
+    template_version?: number | string;
+    allow_custom?: boolean;
+    source?: 'builtin' | 'internal' | string;
   };
 }
+
+// ============ Agent Pattern Builder API ============
+
+export interface AgentPatternGraphSpec {
+  nodes?: {
+    id: string;
+    type: string;
+    [key: string]: any;
+  }[];
+  edges?: {
+    from: string;
+    to?: string;
+    conditional?: boolean;
+    routes?: Record<string, string>;
+    [key: string]: any;
+  }[];
+}
+
+export interface AgentPatternBuilderSpec {
+  schema_version: 2;
+  pattern_type: 'custom_rag_agent' | string;
+  config: {
+    graph?: AgentPatternGraphSpec;
+    loop_policy?: Record<string, any>;
+    hitl_policy?: Record<string, any>;
+    allowed_tool_ids?: string[];
+    tool_contract_ids?: string[];
+    [key: string]: any;
+  };
+  [key: string]: any;
+}
+
+export interface AgentPatternContextPolicy {
+  mode?: string;
+  input_budget?: string;
+  output_budget?: string;
+  evidence_packet_limit?: number;
+  evidence_packet_content_limit?: number;
+  final_prompt_assembly?: string;
+  [key: string]: any;
+}
+
+export interface AgentPatternObservability {
+  span_kind?: string;
+  event_prefix?: string;
+  summary_fields?: string[];
+  raw_payload?: string;
+  [key: string]: any;
+}
+
+export interface AgentPatternNodeCatalogEntry {
+  display_name: string;
+  displayName?: string;
+  category: string;
+  capabilities: string[];
+  allowed_route_functions: string[];
+  allowed_tool_contract_ids: string[];
+  allowed_parent_types: string[];
+  allowed_child_types: string[];
+  limits: Record<string, any>;
+  state_reads: string[];
+  state_writes: string[];
+  prompt_slots: string[];
+  context_policy: AgentPatternContextPolicy;
+  observability: AgentPatternObservability;
+  max_instances: number;
+  [key: string]: any;
+}
+
+export interface AgentPatternRouteFunctionMetadata {
+  id?: string;
+  name?: string;
+  display_name?: string;
+  description?: string;
+  allowed_source_node_types?: string[];
+  route_labels?: string[];
+  routes?: string[];
+  [key: string]: any;
+}
+
+export interface AgentPatternToolContract {
+  id: string;
+  category?: string;
+  display_name?: string;
+  description?: string;
+  canonical_tools: string[];
+  allowed_node_types: string[];
+  required_node_capabilities: string[];
+  artifact_keys: string[];
+  warning_codes: string[];
+  [key: string]: any;
+}
+
+export interface AgentPatternCatalogResponse {
+  schema_version: number;
+  spec_schema_version: 2 | number;
+  graph_spec: {
+    required_schema_version: 2 | number;
+    requires_explicit_route_fn: boolean;
+    reserved_node_ids: string[];
+    start_node: string;
+    end_node: string;
+    [key: string]: any;
+  };
+  node_catalog: Record<string, AgentPatternNodeCatalogEntry>;
+  route_functions: Record<string, AgentPatternRouteFunctionMetadata>;
+  tool_contracts: Record<string, AgentPatternToolContract>;
+  defaults: {
+    context_policy?: AgentPatternContextPolicy;
+    loop_policy?: Record<string, any>;
+    [key: string]: any;
+  };
+  auth_boundary?: {
+    authoring_enabled?: boolean;
+    custom_runtime_enabled?: boolean;
+    [key: string]: any;
+  };
+  [key: string]: any;
+}
+
+export interface AgentPatternTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  visibility?: string;
+  owner_id?: string | null;
+  current_version_id?: string | null;
+  is_builtin?: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AgentPatternValidationReport {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  schema_version?: number | null;
+  pattern_type?: string | null;
+  [key: string]: any;
+}
+
+export interface AgentPatternVersion {
+  id: string;
+  template_id: string;
+  version: number;
+  schema_version: number;
+  spec_json: AgentPatternBuilderSpec | Record<string, any>;
+  validation: AgentPatternValidationReport;
+  validation_result_json?: Record<string, any>;
+  changelog?: string | null;
+  created_at?: string | null;
+}
+
+export interface InternalAgentPatternResponse {
+  agent_pattern: AgentPatternTemplate;
+  version: AgentPatternVersion;
+}
+
+export interface InternalAgentPatternCurrentResponse {
+  agent_pattern: AgentPatternTemplate;
+  current_version: AgentPatternVersion;
+}
+
+export interface InternalAgentPatternLifecycleResponse {
+  agent_pattern: AgentPatternTemplate;
+  version?: AgentPatternVersion;
+  current_version?: AgentPatternVersion;
+}
+
+export interface CreateInternalAgentPatternPayload {
+  template_id: string;
+  name: string;
+  description?: string;
+  owner_id?: string | null;
+  version?: number;
+  changelog?: string | null;
+  spec_json: AgentPatternBuilderSpec | Record<string, any>;
+  set_current?: boolean;
+}
+
+export interface SelectInternalThreadAgentPatternPayload {
+  template_id: string;
+  template_version?: number;
+}
+
+export interface SelectInternalThreadAgentPatternResponse {
+  thread_id: string;
+  agent_pattern: {
+    template_id: string;
+    template_version?: number;
+    allow_custom: boolean;
+    source: 'internal' | string;
+  };
+  template: AgentPatternTemplate;
+  version: AgentPatternVersion;
+}
+
+export interface ThreadAgentConfigValidationResponse {
+  valid: boolean;
+  template_id: string;
+  template_version: number;
+  template_version_id: string;
+  validation: AgentPatternValidationReport;
+  resolved_spec_json: AgentPatternBuilderSpec | Record<string, any>;
+}
+
+export interface AgentPatternGraphPreview {
+  nodes?: Record<string, any>[];
+  edges?: Record<string, any>[];
+  executionPlan?: string[];
+  selectedRoute?: string;
+  [key: string]: any;
+}
+
+export interface ThreadAgentConfigPreviewResponse {
+  thread_id?: string;
+  template_id?: string;
+  template_version?: number;
+  template_version_id?: string;
+  validation?: AgentPatternValidationReport;
+  resolved_spec_json?: AgentPatternBuilderSpec | Record<string, any>;
+  graph?: AgentPatternGraphPreview;
+  prompt?: string;
+  prompt_preview?: string;
+  [key: string]: any;
+}
+
+const readApiError = async (res: Response): Promise<string> => {
+  const text = await res.text();
+  if (!text) return `${res.status} ${res.statusText}`.trim();
+  try {
+    const parsed = JSON.parse(text);
+    const detail = parsed?.detail;
+    if (typeof detail === 'string') return detail;
+    if (detail?.message) return String(detail.message);
+    return JSON.stringify(parsed);
+  } catch {
+    return text;
+  }
+};
 
 export interface PromptToolDefinition {
   id: string;
@@ -464,6 +707,103 @@ export async function getPromptPreview(payload: {
     })
   });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getInternalAgentPatternCatalog(): Promise<AgentPatternCatalogResponse> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/catalog`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function createInternalAgentPattern(
+  payload: CreateInternalAgentPatternPayload
+): Promise<InternalAgentPatternResponse> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-patterns`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getInternalAgentPattern(
+  templateId: string
+): Promise<InternalAgentPatternCurrentResponse> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/${encodeURIComponent(templateId)}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function publishInternalAgentPattern(
+  templateId: string
+): Promise<InternalAgentPatternLifecycleResponse> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/${encodeURIComponent(templateId)}/publish`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function archiveInternalAgentPattern(
+  templateId: string
+): Promise<InternalAgentPatternLifecycleResponse> {
+  const res = await fetch(`${API_BASE}/api/internal/agent-patterns/${encodeURIComponent(templateId)}/archive`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function validateAgentPatternSpec(
+  spec: AgentPatternBuilderSpec | Record<string, any>
+): Promise<AgentPatternValidationReport> {
+  const res = await fetch(`${API_BASE}/api/agent-patterns/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ spec }),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function validateThreadAgentConfig(
+  threadId: string,
+  overrides: Record<string, any> = {}
+): Promise<ThreadAgentConfigValidationResponse> {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/agent-config/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ overrides }),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function previewThreadAgentConfig(
+  threadId: string,
+  overrides: Record<string, any> = {}
+): Promise<ThreadAgentConfigPreviewResponse> {
+  const res = await fetch(`${API_BASE}/api/threads/${threadId}/agent-config/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ overrides }),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function selectInternalThreadAgentPattern(
+  threadId: string,
+  payload: SelectInternalThreadAgentPatternPayload
+): Promise<SelectInternalThreadAgentPatternResponse> {
+  const res = await fetch(`${API_BASE}/api/internal/threads/${threadId}/agent-pattern`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }
 
