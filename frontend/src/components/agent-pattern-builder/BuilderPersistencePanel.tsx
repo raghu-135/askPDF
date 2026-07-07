@@ -1,6 +1,5 @@
 import React from 'react';
 import ArchiveIcon from '@mui/icons-material/Archive';
-import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import PublishIcon from '@mui/icons-material/Publish';
 import SaveIcon from '@mui/icons-material/Save';
@@ -22,7 +21,6 @@ export interface BuilderPersistenceState {
   description: string;
   ownerId: string;
   changelog: string;
-  selectThreadId: string;
 }
 
 export interface BuilderPersistedPattern {
@@ -44,48 +42,43 @@ export default function BuilderPersistencePanel({
   errorMessage,
   canSave,
   authoringDisabled,
-  runtimeDisabled,
   lifecycleDisabled,
   boundaryMessages,
   onGenerateTemplateId,
   onSave,
   onPublish,
   onArchive,
-  onSelectForThread,
 }: {
   form: BuilderPersistenceState;
   onFormChange: (patch: Partial<BuilderPersistenceState>) => void;
   persisted: BuilderPersistedPattern | null;
-  busyAction: 'save' | 'publish' | 'archive' | 'select' | null;
+  busyAction: 'save' | 'publish' | 'archive' | null;
   statusMessage: string | null;
   errorMessage: string | null;
   canSave: boolean;
   authoringDisabled?: boolean;
-  runtimeDisabled?: boolean;
   lifecycleDisabled?: boolean;
   boundaryMessages?: BuilderBoundaryMessage[];
   onGenerateTemplateId: () => void;
   onSave: () => void;
   onPublish: () => void;
   onArchive: () => void;
-  onSelectForThread: () => void;
 }) {
   const savedTemplateId = persisted?.template.id;
   const savedVersion = persisted?.version.version;
   const saveDisabled = authoringDisabled || !canSave || busyAction === 'save';
   const publishDisabled = authoringDisabled || lifecycleDisabled || !persisted || busyAction === 'publish';
   const archiveDisabled = authoringDisabled || lifecycleDisabled || !persisted || busyAction === 'archive';
-  const selectDisabled = runtimeDisabled || !persisted || !form.selectThreadId.trim() || busyAction === 'select';
   const formDisabled = authoringDisabled || Boolean(busyAction);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
       <Box>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Save And Select
+          Save Pattern
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          Internal custom pattern version
+          Internal custom pattern version available to every thread
         </Typography>
       </Box>
       <Divider />
@@ -193,25 +186,9 @@ export default function BuilderPersistencePanel({
         </Button>
       </Box>
       <Divider />
-      <TextField
-        size="small"
-        label="Thread ID"
-        value={form.selectThreadId}
-        disabled={runtimeDisabled || Boolean(busyAction)}
-        onChange={(event) => onFormChange({ selectThreadId: event.target.value })}
-        helperText="Selects the saved current internal pattern for this thread."
-      />
-      <Button
-        size="small"
-        variant="contained"
-        color="secondary"
-        startIcon={<CloudUploadIcon />}
-        disabled={selectDisabled}
-        onClick={onSelectForThread}
-        sx={{ borderRadius: 1 }}
-      >
-        {busyAction === 'select' ? 'Selecting' : 'Select For Thread'}
-      </Button>
+      <Typography variant="caption" color="text.secondary">
+        Saved compatible patterns appear in the Agent pattern menu for all threads.
+      </Typography>
     </Box>
   );
 }

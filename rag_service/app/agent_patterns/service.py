@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from app.agent_patterns.checkpointing import open_agent_checkpointer
@@ -29,19 +30,22 @@ class AgentRunService:
         repository: Optional[AgentPatternRepository] = None,
         resolver: Optional[TemplateResolver] = None,
         *,
-        allow_custom_agent_patterns: bool = False,
+        allow_custom_agent_patterns: Optional[bool] = None,
     ):
         self.repository = repository or AgentPatternRepository()
         self.resolver = resolver or TemplateResolver()
-        self.allow_custom_agent_patterns = allow_custom_agent_patterns
+        self.allow_custom_agent_patterns = (
+            allow_custom_agent_patterns
+            if allow_custom_agent_patterns is not None
+            else os.getenv("ASKPDF_CUSTOM_AGENT_PATTERNS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        )
 
     async def run_thread_chat(self, thread_id: str, req: Any, embed_model: str) -> Dict[str, Any]:
         thread_settings = await get_thread_settings(thread_id)
         agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
         template_id = agent_settings.get("template_id") or ROUTER_RAG_AGENT_ID
-        custom_enabled_for_thread = bool(agent_settings.get("allow_custom"))
-        allow_custom_for_run = self.allow_custom_agent_patterns and custom_enabled_for_thread
+        allow_custom_for_run = self.allow_custom_agent_patterns
         if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS and not allow_custom_for_run:
             logger.warning(
                 "Unsupported agent pattern requested for thread %s | requested_template=%s fallback_template=%s",

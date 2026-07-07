@@ -15,7 +15,6 @@ import {
   getInternalAgentPatternCatalog,
   publishInternalAgentPattern,
   previewThreadAgentConfig,
-  selectInternalThreadAgentPattern,
   validateAgentPatternSpec,
   type AgentPatternCatalogResponse,
   type AgentPatternValidationReport,
@@ -219,15 +218,13 @@ export default function AgentPatternBuilderPage() {
     description: '',
     ownerId: '',
     changelog: '',
-    selectThreadId: '',
   });
   const [persistedPattern, setPersistedPattern] = useState<BuilderPersistedPattern | null>(null);
-  const [busyAction, setBusyAction] = useState<'save' | 'publish' | 'archive' | 'select' | null>(null);
+  const [busyAction, setBusyAction] = useState<'save' | 'publish' | 'archive' | null>(null);
   const [persistenceStatus, setPersistenceStatus] = useState<string | null>(null);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const boundary = useMemo(() => deriveInternalBoundary(catalog), [catalog]);
   const authoringDisabled = !boundary.authoringEnabled;
-  const runtimeDisabled = !boundary.runtimeEnabled;
   const lifecycleDisabled = !boundary.lifecycleEnabled;
 
   useEffect(() => {
@@ -494,29 +491,6 @@ export default function AgentPatternBuilderPage() {
     }
   };
 
-  const handleSelectForThread = async () => {
-    const templateId = persistedPattern?.template.id;
-    if (!templateId || !persistenceForm.selectThreadId.trim()) return;
-    if (runtimeDisabled) {
-      setPersistenceError('Custom pattern runtime execution is disabled, so this pattern cannot be selected for chat.');
-      return;
-    }
-    try {
-      setBusyAction('select');
-      setPersistenceError(null);
-      setPersistenceStatus(null);
-      const response = await selectInternalThreadAgentPattern(persistenceForm.selectThreadId.trim(), {
-        template_id: templateId,
-        template_version: persistedPattern?.version.version,
-      });
-      setPersistenceStatus(`Selected ${response.template.id} v${response.version.version} for thread ${response.thread_id}.`);
-    } catch (err) {
-      setPersistenceError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
-  };
-
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -591,14 +565,12 @@ export default function AgentPatternBuilderPage() {
                 errorMessage={persistenceError}
                 canSave={Boolean(spec && persistenceForm.templateId.trim() && persistenceForm.name.trim())}
                 authoringDisabled={authoringDisabled}
-                runtimeDisabled={runtimeDisabled}
                 lifecycleDisabled={lifecycleDisabled}
                 boundaryMessages={boundary.messages}
                 onGenerateTemplateId={handleGenerateTemplateId}
                 onSave={handleSaveInternalVersion}
                 onPublish={handlePublish}
                 onArchive={handleArchive}
-                onSelectForThread={handleSelectForThread}
               />
               <Divider sx={{ my: 1.5 }} />
               <BuilderInspector

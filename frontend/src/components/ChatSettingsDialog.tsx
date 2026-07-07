@@ -17,7 +17,7 @@ import {
 } from '@mui/material';
 import ReplayIcon from '@mui/icons-material/Replay';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import { PromptToolDefinition } from '../lib/api';
+import { AgentPatternTemplate, PromptToolDefinition } from '../lib/api';
 
 interface ChatSettingsDialogProps {
     open: boolean;
@@ -32,6 +32,7 @@ interface ChatSettingsDialogProps {
     useReranker: boolean;
     agentPatternId: string;
     agentPatternIsCustom?: boolean;
+    agentPatterns: AgentPatternTemplate[];
     systemRole: string;
     toolInstructions: Record<string, string>;
     customInstructions: string;
@@ -66,6 +67,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     useReranker,
     agentPatternId,
     agentPatternIsCustom = false,
+    agentPatterns,
     systemRole,
     toolInstructions,
     customInstructions,
@@ -85,6 +87,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onResetCustomInstructions,
 }) => {
     const replansEnabled = agentPatternId === 'evaluator_replanner_rag_agent';
+    const selectedPatternListed = agentPatterns.some((pattern) => pattern.id === agentPatternId);
 
     return (
         <Dialog
@@ -97,7 +100,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
             <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
                     <Typography variant="body2" color="text.secondary">
-                        These settings are saved per thread and used by default for every message.
+                        These settings are saved per thread and used by default for every message. Agent patterns are globally available.
                     </Typography>
                     <Tooltip title="Reset all settings to default">
                         <IconButton
@@ -122,10 +125,12 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                         onChange={(e) => onAgentPatternChange(e.target.value)}
                         helperText="Router RAG remains the default; advanced patterns are opt-in."
                     >
-                        <MenuItem value="router_rag_agent">Router RAG Agent</MenuItem>
-                        <MenuItem value="plan_execute_rag_agent">Plan-and-Execute RAG Agent</MenuItem>
-                        <MenuItem value="evaluator_replanner_rag_agent">Evaluator/Replanner RAG Agent</MenuItem>
-                        {agentPatternIsCustom ? (
+                        {agentPatterns.map((pattern) => (
+                            <MenuItem key={pattern.id} value={pattern.id}>
+                                {pattern.is_builtin ? pattern.name : `Custom: ${pattern.name || pattern.id}`}
+                            </MenuItem>
+                        ))}
+                        {agentPatternIsCustom && !selectedPatternListed ? (
                             <MenuItem value={agentPatternId}>
                                 Custom: {agentPatternId}
                             </MenuItem>

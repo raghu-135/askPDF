@@ -51,12 +51,14 @@ import {
     updateThreadSettings,
     getPromptTools,
     getPromptPreview,
+    listAgentPatterns,
     getAgentRun,
     listThreadAgentRuns,
     AgentRunDetails,
     AgentTraceRefs,
     AgentRunPendingInterrupt,
     AgentRunResumeAction,
+    AgentPatternTemplate,
     resumeAgentRun,
 } from '../lib/api';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
@@ -97,6 +99,24 @@ type PendingHumanReview = {
 };
 
 const BUILTIN_AGENT_PATTERN_IDS = ['router_rag_agent', 'plan_execute_rag_agent', 'evaluator_replanner_rag_agent'];
+
+const DEFAULT_AGENT_PATTERNS: AgentPatternTemplate[] = [
+    {
+        id: 'router_rag_agent',
+        name: 'Router RAG Agent',
+        is_builtin: true,
+    },
+    {
+        id: 'plan_execute_rag_agent',
+        name: 'Plan-and-Execute RAG Agent',
+        is_builtin: true,
+    },
+    {
+        id: 'evaluator_replanner_rag_agent',
+        name: 'Evaluator/Replanner RAG Agent',
+        is_builtin: true,
+    },
+];
 
 const normalizeAgentPatternForUi = (templateId?: string | null) => (
     templateId ? String(templateId) : 'router_rag_agent'
@@ -178,6 +198,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
     const [agentPatternId, setAgentPatternId] = useState('router_rag_agent');
     const [agentPatternConfig, setAgentPatternConfig] = useState<Thread['settings']['agent_pattern'] | undefined>(undefined);
+    const [agentPatterns, setAgentPatterns] = useState<AgentPatternTemplate[]>(DEFAULT_AGENT_PATTERNS);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -363,8 +384,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     useEffect(() => {
         const loadTools = async () => {
             try {
-                const res = await getPromptTools();
+                const [res, patterns] = await Promise.all([
+                    getPromptTools(),
+                    listAgentPatterns().catch((error) => {
+                        console.error('Failed to load agent patterns:', error);
+                        return { agent_patterns: DEFAULT_AGENT_PATTERNS };
+                    }),
+                ]);
                 setToolCatalog(res.tools || []);
+                setAgentPatterns(patterns.agent_patterns?.length ? patterns.agent_patterns : DEFAULT_AGENT_PATTERNS);
                 if (res.defaults) {
                     setReplansLimit(res.defaults.replans_limit);
                     setDefaultSystemRole(res.defaults.system_role ?? '');
@@ -385,6 +413,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             } catch (error) {
                 console.error('Failed to load prompt tools:', error);
                 setToolCatalog([]);
+                setAgentPatterns(DEFAULT_AGENT_PATTERNS);
             }
         };
         loadTools();
@@ -1249,7 +1278,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     : {
                         ...(agentPatternConfig || {}),
                         template_id: normalizeAgentPatternForUi(agentPatternId),
-                        allow_custom: agentPatternConfig?.allow_custom ?? true,
                         source: agentPatternConfig?.source ?? 'internal',
                     },
             };
@@ -2197,6 +2225,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 useReranker={useReranker}
                 agentPatternId={agentPatternId}
                 agentPatternIsCustom={!isBuiltinAgentPattern(agentPatternId)}
+                agentPatterns={agentPatterns}
                 systemRole={systemRole}
                 toolInstructions={toolInstructions}
                 customInstructions={customInstructions}
@@ -2210,6 +2239,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setAgentPatternId(value);
                     if (isBuiltinAgentPattern(value)) {
                         setAgentPatternConfig({ template_id: value });
+                    } else {
+                        setAgentPatternConfig({ template_id: value, source: 'internal' });
                     }
                 }}
                 onSystemRoleChange={(value) => setSystemRole(value)}

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy import delete
+from sqlalchemy import delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -269,12 +269,20 @@ class AgentPatternRepository:
                         replace_jsonb_field(version, "validation_result_json", validation_result)
                         version.changelog = version_def["changelog"]
 
-    async def list_templates(self) -> list[AgentPatternTemplate]:
+    async def list_templates(self, *, include_custom: bool = False) -> list[AgentPatternTemplate]:
         session = await self._get_session()
         async with session.begin():
+            visibility_filter = (
+                AgentPatternTemplate.id.in_(SUPPORTED_BUILTIN_TEMPLATE_IDS)
+                if not include_custom
+                else or_(
+                    AgentPatternTemplate.id.in_(SUPPORTED_BUILTIN_TEMPLATE_IDS),
+                    AgentPatternTemplate.visibility.in_(["public", "internal"]),
+                )
+            )
             result = await session.execute(
                 select(AgentPatternTemplate)
-                .where(AgentPatternTemplate.id.in_(SUPPORTED_BUILTIN_TEMPLATE_IDS))
+                .where(visibility_filter)
                 .order_by(AgentPatternTemplate.name.asc())
             )
             return list(result.scalars().all())

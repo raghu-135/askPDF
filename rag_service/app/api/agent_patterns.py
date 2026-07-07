@@ -25,7 +25,7 @@ from app.agent_patterns.templates import (
     SUPPORTED_BUILTIN_TEMPLATE_IDS,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
-from app.db import get_thread, get_thread_settings, update_thread_settings
+from app.db import get_thread, get_thread_settings
 from app.time_utils import iso_utc_z
 
 
@@ -49,11 +49,6 @@ class InternalAgentPatternCreateRequest(BaseModel):
     changelog: Optional[str] = None
     spec_json: Dict[str, Any] = Field(default_factory=dict)
     set_current: bool = True
-
-
-class InternalThreadAgentPatternSelectionRequest(BaseModel):
-    template_id: str = Field(..., min_length=1)
-    template_version: Optional[int] = Field(default=None, ge=1)
 
 
 class AgentRunResumeRequest(BaseModel):
@@ -270,11 +265,14 @@ def _agent_pattern_tool_contract_catalog() -> Dict[str, Any]:
 async def list_agent_patterns():
     repo = AgentPatternRepository()
     await repo.seed_builtin_templates()
-    templates = await repo.list_templates()
+    templates = await repo.list_templates(include_custom=True)
     compatible_templates = []
     for template in templates:
         try:
-            _, version = await repo.get_template_with_current_version(template.id)
+            _, version = await repo.get_template_with_current_version(
+                template.id,
+                include_custom=not template.is_builtin,
+            )
             if _is_compatible_version(version):
                 compatible_templates.append(template)
         except Exception:
@@ -286,7 +284,11 @@ async def list_agent_patterns():
 async def get_agent_pattern(template_id: str):
     repo = AgentPatternRepository()
     await repo.seed_builtin_templates()
-    template, version = await repo.get_template_with_current_version(template_id)
+    include_custom = template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS
+    template, version = await repo.get_template_with_current_version(
+        template_id,
+        include_custom=include_custom,
+    )
     if not template or not version or not _is_compatible_version(version):
         raise HTTPException(status_code=404, detail="Agent pattern not found")
     return {
@@ -364,52 +366,6 @@ async def get_internal_agent_pattern(template_id: str):
     }
 
 
-@router.post("/internal/threads/{thread_id}/agent-pattern")
-async def select_internal_thread_agent_pattern(
-    thread_id: str,
-    req: InternalThreadAgentPatternSelectionRequest,
-):
-    thread = await get_thread(thread_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    repo = AgentPatternRepository()
-    if req.template_version is not None:
-        template, version = await repo.get_template_version(
-            req.template_id,
-            req.template_version,
-            include_custom=True,
-        )
-    else:
-        template, version = await repo.get_template_with_current_version(
-            req.template_id,
-            include_custom=True,
-        )
-    if not template or not version or template.is_builtin or not _is_compatible_version(version):
-        raise HTTPException(status_code=404, detail="Internal agent pattern not found")
-
-    current_settings = await get_thread_settings(thread_id)
-    next_settings = dict(current_settings) if isinstance(current_settings, dict) else {}
-    agent_pattern: Dict[str, Any] = {
-        "template_id": template.id,
-        "allow_custom": True,
-        "source": "internal",
-    }
-    if req.template_version is not None:
-        agent_pattern["template_version"] = version.version
-    next_settings["agent_pattern"] = agent_pattern
-    persisted = await update_thread_settings(thread_id, next_settings)
-    if persisted is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    return {
-        "thread_id": thread_id,
-        "agent_pattern": agent_pattern,
-        "template": _template_payload(template),
-        "version": _version_payload(version),
-    }
-
-
 @router.post("/threads/{thread_id}/agent-config/validate")
 async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigValidationRequest):
     thread = await get_thread(thread_id)
@@ -422,10 +378,11 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
     agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
     template_id = agent_settings.get("template_id") or ROUTER_RAG_AGENT_ID
-    if template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
-        template_id = ROUTER_RAG_AGENT_ID
 
-    template, version = await repo.get_template_with_current_version(template_id)
+    template, version = await repo.get_template_with_current_version(
+        template_id,
+        include_custom=template_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS,
+    )
     if not template or not version:
         raise HTTPException(status_code=404, detail="Agent pattern not found")
 

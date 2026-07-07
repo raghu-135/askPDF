@@ -148,7 +148,6 @@ export interface ThreadSettings {
   agent_pattern?: {
     template_id: 'router_rag_agent' | string;
     template_version?: number | string;
-    allow_custom?: boolean;
     source?: 'builtin' | 'internal' | string;
   };
 }
@@ -321,6 +320,10 @@ export interface InternalAgentPatternLifecycleResponse {
   current_version?: AgentPatternVersion;
 }
 
+export interface AgentPatternListResponse {
+  agent_patterns: AgentPatternTemplate[];
+}
+
 export interface CreateInternalAgentPatternPayload {
   template_id: string;
   name: string;
@@ -330,23 +333,6 @@ export interface CreateInternalAgentPatternPayload {
   changelog?: string | null;
   spec_json: AgentPatternBuilderSpec | Record<string, any>;
   set_current?: boolean;
-}
-
-export interface SelectInternalThreadAgentPatternPayload {
-  template_id: string;
-  template_version?: number;
-}
-
-export interface SelectInternalThreadAgentPatternResponse {
-  thread_id: string;
-  agent_pattern: {
-    template_id: string;
-    template_version?: number;
-    allow_custom: boolean;
-    source: 'internal' | string;
-  };
-  template: AgentPatternTemplate;
-  version: AgentPatternVersion;
 }
 
 export interface ThreadAgentConfigValidationResponse {
@@ -716,6 +702,12 @@ export async function getInternalAgentPatternCatalog(): Promise<AgentPatternCata
   return res.json();
 }
 
+export async function listAgentPatterns(): Promise<AgentPatternListResponse> {
+  const res = await fetch(`${API_BASE}/api/agent-patterns`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
 export async function createInternalAgentPattern(
   payload: CreateInternalAgentPatternPayload
 ): Promise<InternalAgentPatternResponse> {
@@ -789,19 +781,6 @@ export async function previewThreadAgentConfig(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ overrides }),
-  });
-  if (!res.ok) throw new Error(await readApiError(res));
-  return res.json();
-}
-
-export async function selectInternalThreadAgentPattern(
-  threadId: string,
-  payload: SelectInternalThreadAgentPatternPayload
-): Promise<SelectInternalThreadAgentPatternResponse> {
-  const res = await fetch(`${API_BASE}/api/internal/threads/${threadId}/agent-pattern`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
