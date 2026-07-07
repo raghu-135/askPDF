@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -8,7 +9,13 @@ from pydantic import BaseModel, Field
 from app.agent.tool_registry import tool_contracts_by_id
 from app.agent_patterns.graph import normalize_hitl_policy_for_thread_settings
 from app.agent_patterns.node_catalog import get_node_catalog
-from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
+from app.agent_patterns.repository import (
+    AgentPatternRepository,
+    AgentRunInterruptError,
+    TEMPLATE_LIFECYCLE_PUBLISHED,
+    template_is_published_internal,
+    template_lifecycle_state,
+)
 from app.agent_patterns.route_registry import get_route_function_registry
 from app.agent_patterns.service import AgentRunService, custom_agent_patterns_enabled
 from app.agent_patterns.templates import (
@@ -49,6 +56,11 @@ class InternalAgentPatternCreateRequest(BaseModel):
     changelog: Optional[str] = None
     spec_json: Dict[str, Any] = Field(default_factory=dict)
     set_current: bool = True
+    lifecycle_state: str = TEMPLATE_LIFECYCLE_PUBLISHED
+
+
+class InternalAgentPatternPublishRequest(BaseModel):
+    template_version: int = Field(..., ge=1)
 
 
 class InternalThreadAgentPatternSelectionRequest(BaseModel):
@@ -73,6 +85,7 @@ def _template_payload(template) -> Dict[str, Any]:
         "name": template.name,
         "description": template.description,
         "visibility": template.visibility,
+        "lifecycle_state": template_lifecycle_state(template),
         "owner_id": template.owner_id,
         "current_version_id": template.current_version_id,
         "is_builtin": template.is_builtin,
@@ -103,6 +116,26 @@ def _version_payload(version) -> Dict[str, Any]:
         "changelog": version.changelog,
         "created_at": iso_utc_z(version.created_at) if version.created_at else None,
     }
+
+
+def internal_agent_pattern_authoring_enabled() -> bool:
+    return os.getenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _require_internal_agent_pattern_authoring_enabled() -> None:
+    if not internal_agent_pattern_authoring_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "internal_agent_pattern_authoring_disabled",
+                "message": "Internal agent pattern authoring is disabled.",
+            },
+        )
 
 
 def _is_compatible_version(version) -> bool:
@@ -304,6 +337,7 @@ async def validate_agent_pattern(req: TemplateValidationRequest):
 
 @router.post("/internal/agent-patterns")
 async def create_internal_agent_pattern(req: InternalAgentPatternCreateRequest):
+    _require_internal_agent_pattern_authoring_enabled()
     repo = AgentPatternRepository()
     try:
         template, version = await repo.create_internal_template_version(
@@ -314,6 +348,7 @@ async def create_internal_agent_pattern(req: InternalAgentPatternCreateRequest):
             version=req.version,
             changelog=req.changelog,
             spec_json=req.spec_json,
+            lifecycle_state=req.lifecycle_state,
             set_current=req.set_current,
         )
     except (TemplateValidationError, ValueError) as exc:
@@ -337,6 +372,22 @@ async def get_internal_agent_pattern_catalog():
             "start_node": "START",
             "end_node": "END",
         },
+        "auth_boundary": {
+            "surface": "internal",
+            "authentication_enforced": False,
+            "authenticated_builder_api_available": False,
+            "authoring_feature_flag": "ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED",
+            "authoring_enabled": internal_agent_pattern_authoring_enabled(),
+            "runtime_feature_flag": "ASKPDF_CUSTOM_AGENT_PATTERNS_ENABLED",
+            "runtime_enabled": custom_agent_patterns_enabled(),
+        },
+        "lifecycle": {
+            "states": ["draft", "published", "archived"],
+            "create_default": "published",
+            "drafts_selectable": False,
+            "archived_selectable": False,
+            "published_selectable": True,
+        },
         "node_catalog": get_node_catalog(),
         "route_functions": get_route_function_registry(),
         "tool_contracts": _agent_pattern_tool_contract_catalog(),
@@ -350,6 +401,41 @@ async def get_internal_agent_pattern_catalog():
                 "default_max_node_visits": 1,
             },
         },
+    }
+
+
+@router.post("/internal/agent-patterns/{template_id}/publish")
+async def publish_internal_agent_pattern(
+    template_id: str,
+    req: InternalAgentPatternPublishRequest,
+):
+    _require_internal_agent_pattern_authoring_enabled()
+    repo = AgentPatternRepository()
+    try:
+        template, version = await repo.publish_internal_template_version(
+            template_id,
+            req.template_version,
+        )
+    except (TemplateValidationError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "agent_pattern": _template_payload(template),
+        "current_version": _version_payload(version),
+    }
+
+
+@router.post("/internal/agent-patterns/{template_id}/archive")
+async def archive_internal_agent_pattern(template_id: str):
+    _require_internal_agent_pattern_authoring_enabled()
+    repo = AgentPatternRepository()
+    try:
+        template = await repo.archive_internal_template(template_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _, version = await repo.get_template_with_current_version(template_id, include_custom=True)
+    return {
+        "agent_pattern": _template_payload(template),
+        "current_version": _version_payload(version) if version else None,
     }
 
 
@@ -370,6 +456,7 @@ async def select_internal_thread_agent_pattern(
     thread_id: str,
     req: InternalThreadAgentPatternSelectionRequest,
 ):
+    _require_internal_agent_pattern_authoring_enabled()
     thread = await get_thread(thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
@@ -388,6 +475,15 @@ async def select_internal_thread_agent_pattern(
         )
     if not template or not version or template.is_builtin or not _is_compatible_version(version):
         raise HTTPException(status_code=404, detail="Internal agent pattern not found")
+    if not template_is_published_internal(template):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "internal_agent_pattern_not_published",
+                "message": "Only published internal agent patterns can be selected for chat execution.",
+                "lifecycle_state": template_lifecycle_state(template),
+            },
+        )
 
     current_settings = await get_thread_settings(thread_id)
     next_settings = dict(current_settings) if isinstance(current_settings, dict) else {}

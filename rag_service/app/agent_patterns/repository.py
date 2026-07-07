@@ -59,6 +59,51 @@ PENDING_INTERRUPT_LIST_LIMIT = 20
 PENDING_INTERRUPT_DICT_LIMIT = 50
 SUPPORTED_SPEC_SCHEMA_VERSION = 2
 INTERRUPT_COMPATIBILITY_SCHEMA_VERSION = 1
+INTERNAL_TEMPLATE_VISIBILITY = "internal"
+INTERNAL_TEMPLATE_DRAFT_VISIBILITY = "internal_draft"
+INTERNAL_TEMPLATE_ARCHIVED_VISIBILITY = "internal_archived"
+INTERNAL_TEMPLATE_VISIBILITIES = {
+    INTERNAL_TEMPLATE_VISIBILITY,
+    INTERNAL_TEMPLATE_DRAFT_VISIBILITY,
+    INTERNAL_TEMPLATE_ARCHIVED_VISIBILITY,
+}
+TEMPLATE_LIFECYCLE_DRAFT = "draft"
+TEMPLATE_LIFECYCLE_PUBLISHED = "published"
+TEMPLATE_LIFECYCLE_ARCHIVED = "archived"
+TEMPLATE_LIFECYCLE_STATES = {
+    TEMPLATE_LIFECYCLE_DRAFT,
+    TEMPLATE_LIFECYCLE_PUBLISHED,
+    TEMPLATE_LIFECYCLE_ARCHIVED,
+}
+
+
+def template_lifecycle_state(template: AgentPatternTemplate) -> str:
+    visibility = getattr(template, "visibility", None)
+    if visibility == INTERNAL_TEMPLATE_DRAFT_VISIBILITY:
+        return TEMPLATE_LIFECYCLE_DRAFT
+    if visibility == INTERNAL_TEMPLATE_ARCHIVED_VISIBILITY:
+        return TEMPLATE_LIFECYCLE_ARCHIVED
+    return TEMPLATE_LIFECYCLE_PUBLISHED
+
+
+def template_is_published_internal(template: AgentPatternTemplate) -> bool:
+    return (
+        getattr(template, "is_builtin", False) is False
+        and getattr(template, "visibility", None) == INTERNAL_TEMPLATE_VISIBILITY
+    )
+
+
+def visibility_for_lifecycle_state(lifecycle_state: str) -> str:
+    if lifecycle_state == TEMPLATE_LIFECYCLE_DRAFT:
+        return INTERNAL_TEMPLATE_DRAFT_VISIBILITY
+    if lifecycle_state == TEMPLATE_LIFECYCLE_ARCHIVED:
+        return INTERNAL_TEMPLATE_ARCHIVED_VISIBILITY
+    if lifecycle_state == TEMPLATE_LIFECYCLE_PUBLISHED:
+        return INTERNAL_TEMPLATE_VISIBILITY
+    raise ValueError(
+        "lifecycle_state must be one of: "
+        + ", ".join(sorted(TEMPLATE_LIFECYCLE_STATES))
+    )
 
 
 class AgentRunInterruptError(ValueError):
@@ -350,7 +395,8 @@ class AgentPatternRepository:
         owner_id: Optional[str] = None,
         version: Optional[int] = None,
         changelog: Optional[str] = None,
-        visibility: str = "internal",
+        lifecycle_state: str = TEMPLATE_LIFECYCLE_PUBLISHED,
+        visibility: Optional[str] = None,
         set_current: bool = True,
     ) -> tuple[AgentPatternTemplate, AgentPatternTemplateVersion]:
         """Create a validated internal/custom v2 pattern version.
@@ -369,6 +415,13 @@ class AgentPatternRepository:
             raise TemplateValidationError("spec must be an object")
         if spec_json.get("schema_version") != 2:
             raise TemplateValidationError("internal custom agent pattern specs must use schema_version 2")
+        if lifecycle_state == TEMPLATE_LIFECYCLE_ARCHIVED:
+            raise ValueError("new internal agent pattern versions cannot be created as archived")
+        lifecycle_visibility = visibility or visibility_for_lifecycle_state(lifecycle_state)
+        if lifecycle_visibility not in INTERNAL_TEMPLATE_VISIBILITIES:
+            raise ValueError("internal custom agent pattern visibility must stay internal")
+        if lifecycle_visibility == INTERNAL_TEMPLATE_DRAFT_VISIBILITY:
+            set_current = False
 
         validation_result = TemplateValidator().validate(spec_json)
         session = await self._get_session()
@@ -379,7 +432,7 @@ class AgentPatternRepository:
                     id=template_id,
                     name=name,
                     description=description,
-                    visibility=visibility,
+                    visibility=lifecycle_visibility,
                     owner_id=owner_id,
                     is_builtin=False,
                 )
@@ -389,7 +442,7 @@ class AgentPatternRepository:
                     raise ValueError("built-in agent pattern templates cannot be authored through the internal path")
                 template.name = name
                 template.description = description
-                template.visibility = visibility
+                template.visibility = lifecycle_visibility
                 template.owner_id = owner_id
                 template.is_builtin = False
                 template.updated_at = utc_now()
@@ -426,6 +479,53 @@ class AgentPatternRepository:
                 template.updated_at = utc_now()
             await session.flush()
             return template, template_version
+
+    async def publish_internal_template_version(
+        self,
+        template_id: str,
+        version: int,
+    ) -> tuple[AgentPatternTemplate, AgentPatternTemplateVersion]:
+        if not isinstance(template_id, str) or not template_id:
+            raise ValueError("template_id must be a non-empty string")
+        if template_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            raise ValueError("built-in agent pattern templates cannot be published through the internal path")
+        if version < 1:
+            raise ValueError("version must be a positive integer")
+
+        session = await self._get_session()
+        async with session.begin():
+            template = await session.get(AgentPatternTemplate, template_id)
+            if template is None or template.is_builtin:
+                raise ValueError("internal agent pattern not found")
+            version_id = f"{template_id}:v{version}"
+            template_version = await session.get(AgentPatternTemplateVersion, version_id)
+            if template_version is None or template_version.template_id != template_id:
+                raise ValueError("internal agent pattern version not found")
+            TemplateValidator().validate(template_version.spec_json)
+            template.visibility = INTERNAL_TEMPLATE_VISIBILITY
+            template.current_version_id = version_id
+            template.updated_at = utc_now()
+            await session.flush()
+            return template, template_version
+
+    async def archive_internal_template(
+        self,
+        template_id: str,
+    ) -> AgentPatternTemplate:
+        if not isinstance(template_id, str) or not template_id:
+            raise ValueError("template_id must be a non-empty string")
+        if template_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+            raise ValueError("built-in agent pattern templates cannot be archived through the internal path")
+
+        session = await self._get_session()
+        async with session.begin():
+            template = await session.get(AgentPatternTemplate, template_id)
+            if template is None or template.is_builtin:
+                raise ValueError("internal agent pattern not found")
+            template.visibility = INTERNAL_TEMPLATE_ARCHIVED_VISIBILITY
+            template.updated_at = utc_now()
+            await session.flush()
+            return template
 
     async def get_run(self, run_id: str) -> Optional[AgentRun]:
         session = await self._get_session()

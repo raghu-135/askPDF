@@ -2237,6 +2237,43 @@ class TestAgentPatternRepository:
         assert TemplateCompiler().compile(loaded_version.spec_json) is not None
 
     @pytest.mark.asyncio
+    async def test_internal_custom_template_lifecycle_draft_publish_archive(self, repo):
+        spec = builtin_router_rag_v2_spec()
+        spec["pattern_type"] = "internal_lifecycle_agent"
+
+        draft_template, draft_version = await repo.create_internal_template_version(
+            template_id="internal_lifecycle_agent",
+            name="Internal Lifecycle Agent",
+            spec_json=spec,
+            lifecycle_state="draft",
+            changelog="Initial draft.",
+        )
+        loaded_draft, loaded_current = await repo.get_template_with_current_version(
+            "internal_lifecycle_agent",
+            include_custom=True,
+        )
+
+        assert draft_template.visibility == "internal_draft"
+        assert draft_template.current_version_id is None
+        assert draft_version.id == "internal_lifecycle_agent:v1"
+        assert loaded_draft.visibility == "internal_draft"
+        assert loaded_current.id == draft_version.id
+
+        published_template, published_version = await repo.publish_internal_template_version(
+            "internal_lifecycle_agent",
+            1,
+        )
+
+        assert published_template.visibility == "internal"
+        assert published_template.current_version_id == "internal_lifecycle_agent:v1"
+        assert published_version.id == draft_version.id
+
+        archived_template = await repo.archive_internal_template("internal_lifecycle_agent")
+
+        assert archived_template.visibility == "internal_archived"
+        assert archived_template.current_version_id == "internal_lifecycle_agent:v1"
+
+    @pytest.mark.asyncio
     async def test_create_internal_custom_template_rejects_invalid_or_non_v2_specs(self, repo):
         invalid_spec = builtin_router_rag_v2_spec()
         invalid_spec["config"]["graph"]["edges"][2].pop("route_fn")
@@ -3702,6 +3739,7 @@ class TestAgentRunService:
             return None
 
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
         monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeDocumentTool())
@@ -3843,6 +3881,7 @@ class TestAgentRunService:
             }
 
         monkeypatch.setenv("ASKPDF_CUSTOM_AGENT_PATTERNS_ENABLED", "true")
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
         monkeypatch.setattr("app.agent_patterns.router_runtime.handle_custom_rag_chat", fake_handle_custom_rag_chat)
 
         thread_response = await async_api_client.post(
@@ -3917,6 +3956,7 @@ class TestAgentRunService:
             }
 
         monkeypatch.delenv("ASKPDF_CUSTOM_AGENT_PATTERNS_ENABLED", raising=False)
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
         monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
         thread_response = await async_api_client.post(
@@ -5652,7 +5692,25 @@ class TestAgentPatternApi:
         }
         assert detail.status_code == 404
 
-    def test_internal_agent_pattern_endpoint_creates_and_fetches_custom_v2_spec(self, api_client):
+    def test_internal_agent_pattern_endpoint_rejects_authoring_when_feature_flag_disabled(self, api_client, monkeypatch):
+        monkeypatch.delenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", raising=False)
+        spec = builtin_router_rag_v2_spec()
+        spec["pattern_type"] = "internal_api_disabled_agent"
+
+        response = api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": "internal_api_disabled_agent",
+                "name": "Internal API Disabled Agent",
+                "spec_json": spec,
+            },
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "internal_agent_pattern_authoring_disabled"
+
+    def test_internal_agent_pattern_endpoint_creates_and_fetches_custom_v2_spec(self, api_client, monkeypatch):
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
         spec = builtin_router_rag_v2_spec()
         spec["pattern_type"] = "internal_api_agent"
 
@@ -5673,6 +5731,7 @@ class TestAgentPatternApi:
         created_payload = created.json()
         assert created_payload["agent_pattern"]["id"] == "internal_api_agent"
         assert created_payload["agent_pattern"]["visibility"] == "internal"
+        assert created_payload["agent_pattern"]["lifecycle_state"] == "published"
         assert created_payload["version"]["id"] == "internal_api_agent:v1"
         assert created_payload["version"]["schema_version"] == 2
         assert created_payload["version"]["validation"]["valid"] is True
@@ -5681,7 +5740,8 @@ class TestAgentPatternApi:
         assert fetched.json()["current_version"]["id"] == "internal_api_agent:v1"
         assert public_detail.status_code == 404
 
-    def test_internal_agent_pattern_endpoint_rejects_invalid_specs_without_storing(self, api_client):
+    def test_internal_agent_pattern_endpoint_rejects_invalid_specs_without_storing(self, api_client, monkeypatch):
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
         invalid_spec = builtin_router_rag_v2_spec()
         invalid_spec["pattern_type"] = "internal_api_invalid_agent"
         invalid_spec["config"]["graph"]["edges"][2].pop("route_fn")
@@ -5700,7 +5760,8 @@ class TestAgentPatternApi:
         assert "must declare route_fn" in invalid.json()["detail"]
         assert fetched.status_code == 404
 
-    def test_internal_agent_pattern_endpoint_rejects_builtin_ids(self, api_client):
+    def test_internal_agent_pattern_endpoint_rejects_builtin_ids(self, api_client, monkeypatch):
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
         spec = builtin_router_rag_v2_spec()
         rejected = api_client.post(
             "/api/internal/agent-patterns",
@@ -5724,6 +5785,13 @@ class TestAgentPatternApi:
         assert payload["graph_spec"]["requires_explicit_route_fn"] is True
         assert payload["graph_spec"]["supports_user_defined_route_functions"] is False
         assert payload["graph_spec"]["reserved_node_ids"] == ["START", "END"]
+        assert payload["auth_boundary"]["surface"] == "internal"
+        assert payload["auth_boundary"]["authentication_enforced"] is False
+        assert payload["auth_boundary"]["authenticated_builder_api_available"] is False
+        assert payload["auth_boundary"]["authoring_feature_flag"] == "ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED"
+        assert payload["lifecycle"]["states"] == ["draft", "published", "archived"]
+        assert payload["lifecycle"]["drafts_selectable"] is False
+        assert payload["lifecycle"]["published_selectable"] is True
 
         node_catalog = payload["node_catalog"]
         assert node_catalog["retrieval_worker"]["display_name"] == "Document Retrieval"
@@ -5762,7 +5830,13 @@ class TestAgentPatternApi:
         assert "default_prompt" not in document_contract
         assert "tool_name" not in document_contract
 
-    def test_internal_thread_agent_pattern_selection_endpoint_persists_custom_marker(self, api_client, sample_thread):
+    def test_internal_thread_agent_pattern_selection_endpoint_persists_custom_marker(
+        self,
+        api_client,
+        sample_thread,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
         spec = builtin_router_rag_v2_spec()
         spec["pattern_type"] = "internal_thread_selected_agent"
         created = api_client.post(
@@ -5795,7 +5869,73 @@ class TestAgentPatternApi:
         assert payload["version"]["id"] == "internal_thread_selected_agent:v1"
         assert raw_settings["agent_pattern"] == payload["agent_pattern"]
 
-    def test_internal_thread_agent_pattern_selection_endpoint_rejects_builtin_or_missing_patterns(self, api_client, sample_thread):
+    def test_internal_thread_agent_pattern_selection_rejects_draft_until_published(
+        self,
+        api_client,
+        sample_thread,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
+        spec = builtin_router_rag_v2_spec()
+        spec["pattern_type"] = "internal_draft_selected_agent"
+        created = api_client.post(
+            "/api/internal/agent-patterns",
+            json={
+                "template_id": "internal_draft_selected_agent",
+                "name": "Internal Draft Selected Agent",
+                "spec_json": spec,
+                "lifecycle_state": "draft",
+            },
+        )
+        draft_selected = api_client.post(
+            f"/api/internal/threads/{sample_thread.id}/agent-pattern",
+            json={
+                "template_id": "internal_draft_selected_agent",
+                "template_version": 1,
+            },
+        )
+        published = api_client.post(
+            "/api/internal/agent-patterns/internal_draft_selected_agent/publish",
+            json={"template_version": 1},
+        )
+        published_selected = api_client.post(
+            f"/api/internal/threads/{sample_thread.id}/agent-pattern",
+            json={
+                "template_id": "internal_draft_selected_agent",
+                "template_version": 1,
+            },
+        )
+        archived = api_client.post("/api/internal/agent-patterns/internal_draft_selected_agent/archive")
+        archived_selected = api_client.post(
+            f"/api/internal/threads/{sample_thread.id}/agent-pattern",
+            json={
+                "template_id": "internal_draft_selected_agent",
+                "template_version": 1,
+            },
+        )
+
+        assert created.status_code == 200
+        assert created.json()["agent_pattern"]["lifecycle_state"] == "draft"
+        assert created.json()["agent_pattern"]["current_version_id"] is None
+        assert draft_selected.status_code == 409
+        assert draft_selected.json()["detail"]["code"] == "internal_agent_pattern_not_published"
+        assert draft_selected.json()["detail"]["lifecycle_state"] == "draft"
+        assert published.status_code == 200
+        assert published.json()["agent_pattern"]["lifecycle_state"] == "published"
+        assert published.json()["agent_pattern"]["current_version_id"] == "internal_draft_selected_agent:v1"
+        assert published_selected.status_code == 200
+        assert archived.status_code == 200
+        assert archived.json()["agent_pattern"]["lifecycle_state"] == "archived"
+        assert archived_selected.status_code == 409
+        assert archived_selected.json()["detail"]["lifecycle_state"] == "archived"
+
+    def test_internal_thread_agent_pattern_selection_endpoint_rejects_builtin_or_missing_patterns(
+        self,
+        api_client,
+        sample_thread,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("ASKPDF_INTERNAL_AGENT_PATTERN_AUTHORING_ENABLED", "true")
         builtin = api_client.post(
             f"/api/internal/threads/{sample_thread.id}/agent-pattern",
             json={"template_id": ROUTER_RAG_AGENT_ID},
