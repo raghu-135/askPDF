@@ -30,7 +30,7 @@ from app.agent_patterns.prompting import (
     build_router_prompt,
 )
 from app.agent_patterns.node_catalog import get_node_type_metadata, node_type_capabilities, node_type_default_max_visits
-from app.agent_patterns.route_registry import route_function_allowed_for_node_type
+from app.agent_patterns.route_registry import route_function_allowed_for_node_type, route_function_runtime_supported
 from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES, WEB_APPROVAL_GATE_ID
 from app.agent_patterns.trace import (
     available_document_refs,
@@ -2258,6 +2258,8 @@ def _route_function_for_edge(
     if isinstance(route_fn_id, str) and route_fn_id:
         if source_type and not route_function_allowed_for_node_type(route_fn_id, source_type):
             raise ValueError(f"Route function {route_fn_id} is not allowed from node type {source_type}")
+        if not route_function_runtime_supported(route_fn_id):
+            raise ValueError(f"Route function {route_fn_id} is not runtime-supported in V1")
         if route_fn_id == "hitl_gate_route":
             return hitl_gate_route_for(str(source))
         if route_fn_id == "planner_route":

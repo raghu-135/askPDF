@@ -673,16 +673,33 @@ class TestRouterRagTemplateValidator:
         assert "router.runtime_max_instances must be a positive integer" in errors
         assert "router.builder_exposable must be a boolean" in errors
 
+    def test_route_function_registry_exposes_builder_safe_metadata(self):
+        registry = get_route_function_registry()
+
+        assert collect_route_function_registry_errors(registry) == []
+        router_route = registry["router_route"]
+        assert router_route["display_name"] == "Router Route"
+        assert router_route["implementation_kind"] == "runtime_builtin"
+        assert router_route["runtime_supported"] is True
+        assert router_route["builder_exposable"] is True
+        assert router_route["allowed_source_types"] == ["router"]
+        assert "document" in router_route["route_labels"]
+        assert registry["hitl_gate_route"]["route_labels"] is None
+
     def test_route_function_registry_shape_validation_reports_bad_metadata(self):
         registry = get_route_function_registry()
         registry["router_route"].pop("allowed_source_types")
         registry["planner_route"]["route_labels"] = ["execute", ""]
+        registry["evaluator_route"]["implementation_kind"] = "user_defined"
+        registry["hitl_gate_route"]["builder_exposable"] = "yes"
 
         errors = collect_route_function_registry_errors(registry)
 
         assert "router_route missing registry keys: allowed_source_types" in errors
         assert "router_route.allowed_source_types must be a list of non-empty strings" in errors
         assert "planner_route.route_labels must be null or a list of non-empty strings" in errors
+        assert "evaluator_route.implementation_kind must be one of: metadata_only, runtime_builtin" in errors
+        assert "hitl_gate_route.builder_exposable must be a boolean" in errors
 
     def test_tool_contract_registry_shape_validation_reports_bad_metadata(self):
         records = [record for records in tool_contracts_by_id().values() for record in records]
@@ -1022,6 +1039,34 @@ class TestRouterRagTemplateValidator:
 
 
 class TestRouterRagGraphToolConsumers:
+    @staticmethod
+    def canonical_router_custom_spec(route_fn: str = "router_route") -> dict:
+        return {
+            "schema_version": 2,
+            "pattern_type": "custom_rag_agent",
+            "config": {
+                "allowed_tool_ids": ["thread_shape", "clarify_intent"],
+                "graph": {
+                    "nodes": [
+                        {"id": "context_loader", "type": "context_loader"},
+                        {"id": "router", "type": "router"},
+                        {"id": "finalizer", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_loader"},
+                        {"from": "context_loader", "to": "router"},
+                        {
+                            "from": "router",
+                            "conditional": True,
+                            "route_fn": route_fn,
+                            "routes": {"direct": "finalizer"},
+                        },
+                        {"from": "finalizer", "to": "END"},
+                    ],
+                },
+            },
+        }
+
     def test_tool_config_enforces_registry_contracts(self):
         from app.agent_patterns.graph import _tool_config
 
@@ -1138,6 +1183,45 @@ class TestRouterRagGraphToolConsumers:
         spec = builtin_router_rag_v2_spec()
 
         with pytest.raises(TemplateValidationError, match="node catalog type router allows route_fn router_route"):
+            TemplateValidator().validate(spec)
+
+    def test_v2_custom_graph_rejects_route_function_not_allowed_by_node_catalog(self, monkeypatch):
+        registry = get_route_function_registry()
+        registry["experimental_route"] = {
+            "display_name": "Experimental Route",
+            "description": "A registry-only route that is not approved by the node catalog.",
+            "implementation_kind": "runtime_builtin",
+            "runtime_supported": True,
+            "builder_exposable": True,
+            "allowed_source_types": ["router"],
+            "route_labels": ["direct"],
+        }
+        monkeypatch.setattr("app.agent_patterns.validator.get_route_function_registry", lambda: registry)
+
+        spec = self.canonical_router_custom_spec(route_fn="experimental_route")
+
+        with pytest.raises(TemplateValidationError, match="node catalog does not allow that route function"):
+            TemplateValidator().validate(spec)
+
+    def test_v2_custom_graph_rejects_metadata_only_route_functions_for_v1(self, monkeypatch):
+        registry = get_route_function_registry()
+        registry["experimental_route"] = {
+            "display_name": "Experimental Route",
+            "description": "A metadata-only route reserved for future runtime support.",
+            "implementation_kind": "metadata_only",
+            "runtime_supported": False,
+            "builder_exposable": False,
+            "allowed_source_types": ["router"],
+            "route_labels": ["direct"],
+        }
+        catalog = get_node_catalog()
+        catalog["router"]["allowed_route_functions"].append("experimental_route")
+        monkeypatch.setattr("app.agent_patterns.validator.get_route_function_registry", lambda: registry)
+        monkeypatch.setattr("app.agent_patterns.validator.get_node_catalog", lambda: catalog)
+
+        spec = self.canonical_router_custom_spec(route_fn="experimental_route")
+
+        with pytest.raises(TemplateValidationError, match="does not support it in the V1 runtime"):
             TemplateValidator().validate(spec)
 
     def test_v2_custom_graph_rejects_incompatible_tool_contract_registry(self, monkeypatch):
@@ -5638,6 +5722,7 @@ class TestAgentPatternApi:
         assert payload["schema_version"] == 1
         assert payload["spec_schema_version"] == 2
         assert payload["graph_spec"]["requires_explicit_route_fn"] is True
+        assert payload["graph_spec"]["supports_user_defined_route_functions"] is False
         assert payload["graph_spec"]["reserved_node_ids"] == ["START", "END"]
 
         node_catalog = payload["node_catalog"]
@@ -5657,6 +5742,10 @@ class TestAgentPatternApi:
         assert "callable" not in node_catalog["retrieval_worker"]
 
         route_functions = payload["route_functions"]
+        assert route_functions["router_route"]["display_name"] == "Router Route"
+        assert route_functions["router_route"]["implementation_kind"] == "runtime_builtin"
+        assert route_functions["router_route"]["runtime_supported"] is True
+        assert route_functions["router_route"]["builder_exposable"] is True
         assert route_functions["router_route"]["allowed_source_types"] == ["router"]
         assert "document" in route_functions["router_route"]["route_labels"]
         assert route_functions["planner_route"]["route_labels"] == ["execute", "direct", "clarify"]

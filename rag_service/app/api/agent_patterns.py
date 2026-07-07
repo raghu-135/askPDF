@@ -332,6 +332,7 @@ async def get_internal_agent_pattern_catalog():
         "graph_spec": {
             "required_schema_version": 2,
             "requires_explicit_route_fn": True,
+            "supports_user_defined_route_functions": False,
             "reserved_node_ids": ["START", "END"],
             "start_node": "START",
             "end_node": "END",

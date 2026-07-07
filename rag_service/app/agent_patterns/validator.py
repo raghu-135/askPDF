@@ -13,9 +13,6 @@ from app.agent_patterns.node_catalog import (
 from app.agent_patterns.route_registry import (
     collect_route_function_registry_errors,
     get_route_function_registry,
-    known_route_function_ids,
-    route_function_allowed_for_node_type,
-    route_function_labels,
 )
 from app.agent_patterns.templates import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
@@ -733,11 +730,31 @@ class GenericGraphValidator:
                 source_type = node_types_by_id.get(source)
                 if not isinstance(route_fn, str) or not route_fn:
                     errors.append(f"graph conditional edge from {source} must declare route_fn")
-                elif route_fn not in known_route_function_ids():
+                elif route_fn not in route_registry:
                     errors.append(f"graph conditional edge from {source} has unknown route_fn: {route_fn}")
-                elif source_type and not route_function_allowed_for_node_type(route_fn, source_type):
-                    errors.append(f"route_fn {route_fn} is not allowed from node {source} type {source_type}")
-                labels = route_function_labels(route_fn) if isinstance(route_fn, str) else None
+                else:
+                    route_metadata = route_registry.get(route_fn) or {}
+                    if source_type and source_type not in set(route_metadata.get("allowed_source_types") or []):
+                        errors.append(f"route_fn {route_fn} is not allowed from node {source} type {source_type}")
+                    if source_type:
+                        catalog_route_functions = set(
+                            (node_catalog.get(source_type) or {}).get("allowed_route_functions") or []
+                        )
+                        if route_fn not in catalog_route_functions:
+                            errors.append(
+                                f"route_fn {route_fn} is not allowed by node catalog "
+                                f"for node {source} type {source_type}"
+                            )
+                    if (
+                        route_metadata.get("runtime_supported") is not True
+                        or route_metadata.get("implementation_kind") != "runtime_builtin"
+                    ):
+                        errors.append(f"route_fn {route_fn} is not runtime-supported in V1")
+                route_metadata = route_registry.get(route_fn) if isinstance(route_fn, str) else None
+                labels = None
+                if isinstance(route_metadata, dict):
+                    raw_labels = route_metadata.get("route_labels")
+                    labels = {str(item) for item in raw_labels} if isinstance(raw_labels, list) else None
                 for route_name, route_target in routes.items():
                     if not isinstance(route_name, str) or not isinstance(route_target, str):
                         errors.append(f"graph conditional edge from {source} routes keys and values must be strings")
@@ -869,6 +886,34 @@ class GenericGraphValidator:
                     errors.append(
                         f"node catalog type {node_type} allows route_fn {route_fn}, "
                         "but route registry does not allow that source type"
+                    )
+                if (
+                    route_metadata.get("runtime_supported") is not True
+                    or route_metadata.get("implementation_kind") != "runtime_builtin"
+                ):
+                    errors.append(
+                        f"node catalog type {node_type} allows route_fn {route_fn}, "
+                        "but route registry does not support it in the V1 runtime"
+                    )
+                if route_metadata.get("builder_exposable") is not True:
+                    errors.append(
+                        f"node catalog type {node_type} allows route_fn {route_fn}, "
+                        "but route registry does not expose it to the builder"
+                    )
+        for route_fn, route_metadata in sorted(route_registry.items()):
+            if not isinstance(route_metadata, dict):
+                continue
+            if route_metadata.get("builder_exposable") is not True:
+                continue
+            for source_type in route_metadata.get("allowed_source_types") or []:
+                source_metadata = node_catalog.get(source_type)
+                if not isinstance(source_metadata, dict):
+                    errors.append(f"route registry {route_fn} allows unknown source type: {source_type}")
+                    continue
+                if route_fn not in set(source_metadata.get("allowed_route_functions") or []):
+                    errors.append(
+                        f"route registry {route_fn} allows source type {source_type}, "
+                        "but node catalog does not allow that route function"
                     )
         return errors
 
