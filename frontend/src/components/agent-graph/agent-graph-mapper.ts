@@ -10,123 +10,6 @@ import type {
 export { formatNodeLabel, formatNodeInstanceLabel } from './agent-node-labels.js';
 import { formatNodeLabel, formatNodeInstanceLabel } from './agent-node-labels.js';
 
-const BUILTIN_GRAPHS: Record<string, AgentPatternGraphSpec> = {
-  router_rag_agent: {
-    nodes: [
-      { id: 'context_loader', type: 'context_loader' },
-      { id: 'router', type: 'router' },
-      { id: 'retrieval_worker', type: 'retrieval_worker' },
-      { id: 'memory_worker', type: 'memory_worker' },
-      { id: 'timeline_worker', type: 'timeline_worker' },
-      { id: 'web_worker', type: 'web_worker' },
-      { id: 'direct_answer', type: 'direct_answer' },
-      { id: 'synthesizer', type: 'synthesizer' },
-      { id: 'finalizer', type: 'finalizer' },
-    ],
-    edges: [
-      { from: 'START', to: 'context_loader' },
-      { from: 'context_loader', to: 'router' },
-      {
-        from: 'router',
-        conditional: true,
-        routes: {
-          document: 'retrieval_worker',
-          memory: 'memory_worker',
-          timeline: 'timeline_worker',
-          web: 'web_worker',
-          direct: 'direct_answer',
-          clarify: 'finalizer',
-        },
-      },
-      { from: 'retrieval_worker', to: 'synthesizer' },
-      { from: 'memory_worker', to: 'synthesizer' },
-      { from: 'timeline_worker', to: 'synthesizer' },
-      { from: 'web_worker', to: 'synthesizer' },
-      { from: 'direct_answer', to: 'finalizer' },
-      { from: 'synthesizer', to: 'finalizer' },
-      { from: 'finalizer', to: 'END' },
-    ],
-  },
-  plan_execute_rag_agent: {
-    nodes: [
-      { id: 'context_loader', type: 'context_loader' },
-      { id: 'planner', type: 'planner' },
-      { id: 'direct_answer', type: 'direct_answer' },
-      { id: 'retrieval_worker', type: 'retrieval_worker' },
-      { id: 'memory_worker', type: 'memory_worker' },
-      { id: 'timeline_worker', type: 'timeline_worker' },
-      { id: 'web_worker', type: 'web_worker' },
-      { id: 'synthesizer', type: 'synthesizer' },
-      { id: 'finalizer', type: 'finalizer' },
-    ],
-    edges: [
-      { from: 'START', to: 'context_loader' },
-      { from: 'context_loader', to: 'planner' },
-      {
-        from: 'planner',
-        conditional: true,
-        routes: {
-          execute: 'retrieval_worker',
-          direct: 'direct_answer',
-          clarify: 'finalizer',
-        },
-      },
-      { from: 'direct_answer', to: 'finalizer' },
-      { from: 'retrieval_worker', to: 'memory_worker' },
-      { from: 'memory_worker', to: 'timeline_worker' },
-      { from: 'timeline_worker', to: 'web_worker' },
-      { from: 'web_worker', to: 'synthesizer' },
-      { from: 'synthesizer', to: 'finalizer' },
-      { from: 'finalizer', to: 'END' },
-    ],
-  },
-  evaluator_replanner_rag_agent: {
-    nodes: [
-      { id: 'context_loader', type: 'context_loader' },
-      { id: 'planner', type: 'planner' },
-      { id: 'direct_answer', type: 'direct_answer' },
-      { id: 'retrieval_worker', type: 'retrieval_worker' },
-      { id: 'memory_worker', type: 'memory_worker' },
-      { id: 'timeline_worker', type: 'timeline_worker' },
-      { id: 'web_worker', type: 'web_worker' },
-      { id: 'evidence_evaluator', type: 'evidence_evaluator' },
-      { id: 'replanner', type: 'replanner' },
-      { id: 'synthesizer', type: 'synthesizer' },
-      { id: 'finalizer', type: 'finalizer' },
-    ],
-    edges: [
-      { from: 'START', to: 'context_loader' },
-      { from: 'context_loader', to: 'planner' },
-      {
-        from: 'planner',
-        conditional: true,
-        routes: {
-          execute: 'retrieval_worker',
-          direct: 'direct_answer',
-          clarify: 'finalizer',
-        },
-      },
-      { from: 'direct_answer', to: 'finalizer' },
-      { from: 'retrieval_worker', to: 'memory_worker' },
-      { from: 'memory_worker', to: 'timeline_worker' },
-      { from: 'timeline_worker', to: 'web_worker' },
-      { from: 'web_worker', to: 'evidence_evaluator' },
-      {
-        from: 'evidence_evaluator',
-        conditional: true,
-        routes: {
-          answer: 'synthesizer',
-          replan: 'replanner',
-          answer_budget_exhausted: 'synthesizer',
-        },
-      },
-      { from: 'replanner', to: 'retrieval_worker' },
-      { from: 'synthesizer', to: 'finalizer' },
-      { from: 'finalizer', to: 'END' },
-    ],
-  },
-};
-
 const asArray = (value: any): Record<string, any>[] => (
   Array.isArray(value) ? value.filter((item): item is Record<string, any> => item && typeof item === 'object') : []
 );
@@ -139,6 +22,13 @@ const asStringArray = (value: any): string[] | undefined => {
   if (!Array.isArray(value)) return undefined;
   const items = value.filter((item): item is string => typeof item === 'string' && item.length > 0);
   return items.length > 0 ? items : undefined;
+};
+
+const asPosition = (value: any): { x: number; y: number } | undefined => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const x = Number(value.x);
+  const y = Number(value.y);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
 };
 
 const unique = (items: string[]) => Array.from(new Set(items.filter(Boolean)));
@@ -209,7 +99,7 @@ const selectedConditionalRoute = (
 export const getAgentGraphSpec = (resolvedSpec?: Record<string, any>, templateId?: string): AgentPatternGraphSpec => {
   const graph = resolvedSpec?.config?.graph;
   if (graph && Array.isArray(graph.nodes) && Array.isArray(graph.edges)) return graph;
-  return BUILTIN_GRAPHS[templateId || resolvedSpec?.pattern_type || ''] || { nodes: [], edges: [] };
+  return { nodes: [], edges: [] };
 };
 
 export const buildAgentGraph = (
@@ -263,6 +153,7 @@ export const buildAgentGraph = (
         instanceId: node.id,
         instanceLabel: formatNodeInstanceLabel(node.id, node.type),
         description: typeof node.description === 'string' ? node.description : undefined,
+        position: asPosition(node.position),
         status,
         elapsedMs: elapsedMs > 0 ? elapsedMs : undefined,
         route: typeof latestEvent.route === 'string' ? latestEvent.route : undefined,

@@ -338,6 +338,10 @@ export default function AgentPatternBuilderPage() {
     }));
   };
 
+  const handleNodePositionChange = (nodeId: string, position: { x: number; y: number }) => {
+    handleUpdateNode(nodeId, { position });
+  };
+
   const handleRemoveNode = (nodeId: string) => {
     updateState((previous) => ({
       ...previous,
@@ -557,6 +561,7 @@ export default function AgentPatternBuilderPage() {
                 disabled={authoringDisabled}
                 onSelectionChange={setSelection}
                 onAddEdge={handleAddEdge}
+                onNodePositionChange={handleNodePositionChange}
               />
             </Box>
             <Box sx={{ minHeight: 0, overflow: 'auto', borderLeft: { lg: 1 }, borderColor: 'divider', p: 1.5 }}>

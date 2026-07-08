@@ -16,6 +16,7 @@ export type AgentGraphNodeStatus = 'active' | 'planned' | 'skipped' | 'inactive'
 export interface AgentPatternGraphNodeSpec {
   id: string;
   type: string;
+  position?: { x: number; y: number };
   [key: string]: any;
 }
 
@@ -68,6 +69,7 @@ export interface AgentGraphNode {
   instanceId?: string;
   instanceLabel?: string;
   description?: string;
+  position?: { x: number; y: number };
   status: AgentGraphNodeStatus;
   focused?: boolean;
   focusedSpanIds?: string[];

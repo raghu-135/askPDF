@@ -48,6 +48,7 @@ export default function BuilderGraphEditor({
   disabled,
   onSelectionChange,
   onAddEdge,
+  onNodePositionChange,
 }: {
   catalog: AgentPatternCatalogResponse;
   state: AgentPatternBuilderState;
@@ -56,6 +57,7 @@ export default function BuilderGraphEditor({
   disabled?: boolean;
   onSelectionChange: (selection: BuilderSelection) => void;
   onAddEdge: (edge: BuilderEdgeState) => void;
+  onNodePositionChange: (nodeId: string, position: { x: number; y: number }) => void;
 }) {
   const [source, setSource] = useState('START');
   const [target, setTarget] = useState(state.nodes[0]?.id || 'END');
@@ -103,7 +105,9 @@ export default function BuilderGraphEditor({
           nodeCatalog={catalog.node_catalog}
           mode="builder"
           showInspector={false}
+          nodesDraggable={!disabled}
           onSelectionChange={handleGraphSelection}
+          onNodePositionChange={onNodePositionChange}
         />
       </Box>
       <Box

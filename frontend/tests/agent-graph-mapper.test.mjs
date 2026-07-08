@@ -7,9 +7,114 @@ import {
   getAgentGraphSpec,
 } from '../src/components/agent-graph/agent-graph-mapper.ts';
 
+const graphSpecs = {
+  router: {
+    nodes: [
+      { id: 'context_loader', type: 'context_loader' },
+      { id: 'router', type: 'router' },
+      { id: 'retrieval_worker', type: 'retrieval_worker' },
+      { id: 'memory_worker', type: 'memory_worker' },
+      { id: 'timeline_worker', type: 'timeline_worker' },
+      { id: 'web_worker', type: 'web_worker' },
+      { id: 'direct_answer', type: 'direct_answer' },
+      { id: 'synthesizer', type: 'synthesizer' },
+      { id: 'finalizer', type: 'finalizer' },
+    ],
+    edges: [
+      { from: 'START', to: 'context_loader' },
+      { from: 'context_loader', to: 'router' },
+      {
+        from: 'router',
+        conditional: true,
+        routes: {
+          document: 'retrieval_worker',
+          memory: 'memory_worker',
+          timeline: 'timeline_worker',
+          web: 'web_worker',
+          direct: 'direct_answer',
+          clarify: 'finalizer',
+        },
+      },
+      { from: 'retrieval_worker', to: 'synthesizer' },
+      { from: 'memory_worker', to: 'synthesizer' },
+      { from: 'timeline_worker', to: 'synthesizer' },
+      { from: 'web_worker', to: 'synthesizer' },
+      { from: 'direct_answer', to: 'finalizer' },
+      { from: 'synthesizer', to: 'finalizer' },
+      { from: 'finalizer', to: 'END' },
+    ],
+  },
+  planExecute: {
+    nodes: [
+      { id: 'context_loader', type: 'context_loader' },
+      { id: 'planner', type: 'planner' },
+      { id: 'direct_answer', type: 'direct_answer' },
+      { id: 'retrieval_worker', type: 'retrieval_worker' },
+      { id: 'memory_worker', type: 'memory_worker' },
+      { id: 'timeline_worker', type: 'timeline_worker' },
+      { id: 'web_worker', type: 'web_worker' },
+      { id: 'synthesizer', type: 'synthesizer' },
+      { id: 'finalizer', type: 'finalizer' },
+    ],
+    edges: [
+      { from: 'START', to: 'context_loader' },
+      { from: 'context_loader', to: 'planner' },
+      {
+        from: 'planner',
+        conditional: true,
+        routes: { execute: 'retrieval_worker', direct: 'direct_answer', clarify: 'finalizer' },
+      },
+      { from: 'direct_answer', to: 'finalizer' },
+      { from: 'retrieval_worker', to: 'memory_worker' },
+      { from: 'memory_worker', to: 'timeline_worker' },
+      { from: 'timeline_worker', to: 'web_worker' },
+      { from: 'web_worker', to: 'synthesizer' },
+      { from: 'synthesizer', to: 'finalizer' },
+      { from: 'finalizer', to: 'END' },
+    ],
+  },
+  evaluatorReplanner: {
+    nodes: [
+      { id: 'context_loader', type: 'context_loader' },
+      { id: 'planner', type: 'planner' },
+      { id: 'direct_answer', type: 'direct_answer' },
+      { id: 'retrieval_worker', type: 'retrieval_worker' },
+      { id: 'memory_worker', type: 'memory_worker' },
+      { id: 'timeline_worker', type: 'timeline_worker' },
+      { id: 'web_worker', type: 'web_worker' },
+      { id: 'evidence_evaluator', type: 'evidence_evaluator' },
+      { id: 'replanner', type: 'replanner' },
+      { id: 'synthesizer', type: 'synthesizer' },
+      { id: 'finalizer', type: 'finalizer' },
+    ],
+    edges: [
+      { from: 'START', to: 'context_loader' },
+      { from: 'context_loader', to: 'planner' },
+      {
+        from: 'planner',
+        conditional: true,
+        routes: { execute: 'retrieval_worker', direct: 'direct_answer', clarify: 'finalizer' },
+      },
+      { from: 'direct_answer', to: 'finalizer' },
+      { from: 'retrieval_worker', to: 'memory_worker' },
+      { from: 'memory_worker', to: 'timeline_worker' },
+      { from: 'timeline_worker', to: 'web_worker' },
+      { from: 'web_worker', to: 'evidence_evaluator' },
+      {
+        from: 'evidence_evaluator',
+        conditional: true,
+        routes: { answer: 'synthesizer', replan: 'replanner', answer_budget_exhausted: 'synthesizer' },
+      },
+      { from: 'replanner', to: 'retrieval_worker' },
+      { from: 'synthesizer', to: 'finalizer' },
+      { from: 'finalizer', to: 'END' },
+    ],
+  },
+};
+
 test('router graph maps conditional route edges and highlights selected route', () => {
   const graph = buildAgentGraph(
-    getAgentGraphSpec({ pattern_type: 'router_rag_agent' }),
+    graphSpecs.router,
     {
       route: 'document',
       nodeRows: [
@@ -38,7 +143,7 @@ test('router graph maps conditional route edges and highlights selected route', 
 
 test('plan execute graph marks planner plan and skipped workers', () => {
   const graph = buildAgentGraph(
-    getAgentGraphSpec({ pattern_type: 'plan_execute_rag_agent' }),
+    graphSpecs.planExecute,
     {
       route: 'execute',
       nodeRows: [
@@ -67,7 +172,7 @@ test('plan execute graph marks planner plan and skipped workers', () => {
 
 test('evaluator replanner graph marks evaluator branch and replan plan', () => {
   const graph = buildAgentGraph(
-    getAgentGraphSpec({ pattern_type: 'evaluator_replanner_rag_agent' }),
+    graphSpecs.evaluatorReplanner,
     {
       route: 'execute',
       nodeRows: [
@@ -101,7 +206,7 @@ test('evaluator replanner graph marks evaluator branch and replan plan', () => {
 
 test('graph mapper accepts trace-native graph rows', () => {
   const graph = buildAgentGraph(
-    getAgentGraphSpec({ pattern_type: 'router_rag_agent' }),
+    graphSpecs.router,
     {
       route: 'document',
       nodeRows: [
@@ -205,7 +310,7 @@ test('graph mapper labels custom node instances by catalog type while preserving
 
 test('graph mapper applies node and span focus refs', () => {
   const graph = buildAgentGraph(
-    getAgentGraphSpec({ pattern_type: 'plan_execute_rag_agent' }),
+    graphSpecs.planExecute,
     {
       route: 'execute',
       nodeRows: [
@@ -237,4 +342,12 @@ test('graph mapper applies node and span focus refs', () => {
   assert.deepEqual(retrieval?.focusedSpanIds, ['tool:search_documents:0']);
   assert.equal(retrieval?.focusedTraceSpans?.[0]?.output.sources, 2);
   assert.equal(memory?.focused, undefined);
+});
+
+test('graph spec mapper does not synthesize legacy builtins without stored topology', () => {
+  assert.deepEqual(getAgentGraphSpec({ pattern_type: 'router_rag_agent' }), { nodes: [], edges: [] });
+  assert.deepEqual(
+    getAgentGraphSpec({ config: { graph: graphSpecs.router } }),
+    graphSpecs.router,
+  );
 });

@@ -7,8 +7,11 @@ import {
   Edge,
   MarkerType,
   Node,
+  OnNodesChange,
+  OnNodeDrag,
   ReactFlow,
   ReactFlowProvider,
+  applyNodeChanges,
   useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -98,6 +101,7 @@ const layoutGraph = async (
   nodes: AgentGraphNodeModel[],
   edges: ReturnType<typeof buildAgentGraph>['edges'],
   direction: 'RIGHT' | 'DOWN',
+  preferStoredPositions = false,
 ) => {
   const graph = {
     id: 'agent-run-graph',
@@ -124,9 +128,9 @@ const layoutGraph = async (
   return nodes.map((node): Node<AgentGraphNodeModel> => ({
     id: node.id,
     type: 'agentGraphNode',
-    position: positions.get(node.id) || { x: 0, y: 0 },
+    position: preferStoredPositions && node.position ? node.position : positions.get(node.id) || { x: 0, y: 0 },
     data: { ...node, layoutDirection: direction },
-    draggable: false,
+    draggable: preferStoredPositions,
     selectable: true,
   }));
 };
@@ -139,7 +143,9 @@ function AgentGraphCanvasInner({
   nodeCatalog,
   mode,
   showInspector,
+  nodesDraggable,
   onSelectionChange,
+  onNodePositionChange,
 }: {
   resolvedSpec?: Record<string, any>;
   templateId?: string;
@@ -148,7 +154,9 @@ function AgentGraphCanvasInner({
   nodeCatalog?: AgentNodeCatalog;
   mode: AgentGraphMode;
   showInspector: boolean;
+  nodesDraggable: boolean;
   onSelectionChange?: (selection: AgentGraphSelection) => void;
+  onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
 }) {
   const theme = useTheme();
   const { fitView } = useReactFlow();
@@ -213,7 +221,7 @@ function AgentGraphCanvasInner({
 
   useEffect(() => {
     let cancelled = false;
-    layoutGraph(graph.nodes, graph.edges, layoutDirection)
+    layoutGraph(graph.nodes, graph.edges, layoutDirection, nodesDraggable)
       .then((layoutedNodes) => {
         if (cancelled) return;
         setFlowNodes(layoutedNodes);
@@ -226,14 +234,14 @@ function AgentGraphCanvasInner({
           type: 'agentGraphNode',
           position: layoutDirection === 'DOWN' ? { x: 0, y: index * 150 } : { x: index * 280, y: 0 },
           data: { ...node, layoutDirection },
-          draggable: false,
+          draggable: nodesDraggable,
           selectable: true,
         })));
       });
     return () => {
       cancelled = true;
     };
-  }, [fitView, graph.edges, graph.nodes, layoutDirection]);
+  }, [fitView, graph.edges, graph.nodes, layoutDirection, nodesDraggable]);
 
   useEffect(() => {
     if (!selection) return;
@@ -272,6 +280,17 @@ function AgentGraphCanvasInner({
   }
 
   const canvasBg = theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.65)';
+  const handleNodeDragStop: OnNodeDrag<Node<AgentGraphNodeModel>> = (_, node) => {
+    if (!nodesDraggable) return;
+    onNodePositionChange?.(node.id, {
+      x: Math.round(node.position.x),
+      y: Math.round(node.position.y),
+    });
+  };
+  const handleNodesChange: OnNodesChange<Node<AgentGraphNodeModel>> = (changes) => {
+    if (!nodesDraggable) return;
+    setFlowNodes((current) => applyNodeChanges(changes, current));
+  };
 
   return (
     <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 1, width: '100%' }}>
@@ -317,9 +336,10 @@ function AgentGraphCanvasInner({
             nodes={flowNodes}
             edges={flowEdges}
             nodeTypes={nodeTypes}
-            nodesDraggable={false}
+            nodesDraggable={nodesDraggable}
             nodesConnectable={false}
             elementsSelectable
+            onNodesChange={handleNodesChange}
             fitView
             fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
             minZoom={0.55}
@@ -328,6 +348,7 @@ function AgentGraphCanvasInner({
             zoomOnPinch
             preventScrolling={false}
             onNodeClick={(_, node) => setSelection({ kind: 'node', node: node.data as AgentGraphNodeModel })}
+            onNodeDragStop={handleNodeDragStop}
             onEdgeClick={(_, edge) => setSelection({ kind: 'edge', edge: edge.data as any })}
             onPaneClick={() => setSelection(null)}
             proOptions={{ hideAttribution: true }}
@@ -355,11 +376,18 @@ export default function AgentGraphCanvas(props: {
   nodeCatalog?: AgentNodeCatalog;
   mode?: AgentGraphMode;
   showInspector?: boolean;
+  nodesDraggable?: boolean;
   onSelectionChange?: (selection: AgentGraphSelection) => void;
+  onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
 }) {
   return (
     <ReactFlowProvider>
-      <AgentGraphCanvasInner {...props} mode={props.mode || 'run-debug'} showInspector={props.showInspector !== false} />
+      <AgentGraphCanvasInner
+        {...props}
+        mode={props.mode || 'run-debug'}
+        showInspector={props.showInspector !== false}
+        nodesDraggable={Boolean(props.nodesDraggable && (props.mode || 'run-debug') === 'builder')}
+      />
     </ReactFlowProvider>
   );
 }
