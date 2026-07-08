@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.agent_patterns.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
     LOCAL_EMBEDDING_MODEL,
     DEFAULT_TOKEN_BUDGET,
@@ -116,7 +117,7 @@ class ThreadSettingsResponse(BaseModel):
     )
     hitl_web_approval: bool = False
     use_reranker: bool = True
-    agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": "router_rag_agent"})
+    agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
 
 
 class ThreadSettingsUpdateRequest(BaseModel):

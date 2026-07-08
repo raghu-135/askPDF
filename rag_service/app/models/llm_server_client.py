@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import BaseModel as OpenAIBaseModel
 
+from app.agent_patterns.workflow_runtime import default_agent_workflow_key
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
 
 try:
@@ -188,7 +189,7 @@ def default_thread_settings():
         "custom_instructions": "",
         "hitl_web_approval": False,
         "use_reranker": True,
-        "agent_workflow": {"workflow_id": "router_rag_agent"},
+        "agent_workflow": {"workflow_id": default_agent_workflow_key()},
     }
 
 
@@ -208,10 +209,10 @@ def merge_thread_settings(overrides=None):
         merged["replans"] = 1
     agent_workflow = merged.get("agent_workflow")
     if isinstance(agent_workflow, dict):
-        workflow_id = agent_workflow.get("workflow_id") or "router_rag_agent"
+        workflow_id = agent_workflow.get("workflow_id") or default_agent_workflow_key()
         merged["agent_workflow"] = {"workflow_id": str(workflow_id)}
     else:
-        merged["agent_workflow"] = {"workflow_id": "router_rag_agent"}
+        merged["agent_workflow"] = {"workflow_id": default_agent_workflow_key()}
     return merged
 
 

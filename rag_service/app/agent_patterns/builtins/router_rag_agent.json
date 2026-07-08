@@ -135,6 +135,18 @@
       "use_web_search": false
     },
     "pattern_type": "router_rag_agent",
+    "runtime": {
+      "failure_code": "router_rag_execution_failed",
+      "failure_context": "Compiled Router RAG Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Router RAG execution",
+      "features": {
+        "supports_replans": false
+      },
+      "kind": "compiled_rag",
+      "label": "Router RAG",
+      "prompt_preview": "router",
+      "success_context": "Context retrieved by compiled Router RAG Agent pattern."
+    },
     "schema_version": 2
   },
   "visibility": "builtin"

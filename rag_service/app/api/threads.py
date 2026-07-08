@@ -29,10 +29,7 @@ from app.agent.prompting import (
 from app.agent_patterns.prompting import build_agent_pattern_prompt_preview
 from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.builtin_workflows import builtin_workflow_keys
-from app.agent_patterns.workflow_constants import (
-    EVALUATOR_REPLANNER_RAG_AGENT_ID,
-    ROUTER_RAG_AGENT_ID,
-)
+from app.agent_patterns.workflow_runtime import default_agent_workflow_key, workflow_supports_replans
 from app.time_utils import iso_utc_z
 from app.db import (
     ProcessStatus,
@@ -76,23 +73,14 @@ from app.services.thread_management_service import (
 router = APIRouter(tags=["threads"])
 
 
-def _is_evaluator_replanner_settings(settings: dict) -> bool:
-    agent_workflow = settings.get("agent_workflow")
-    if not isinstance(agent_workflow, dict):
-        return False
-    return agent_workflow.get("workflow_id") == EVALUATOR_REPLANNER_RAG_AGENT_ID
-
-
-async def _is_evaluator_replanner_settings_resolved(settings: dict) -> bool:
-    if _is_evaluator_replanner_settings(settings):
-        return True
+async def _settings_workflow_supports_replans(settings: dict) -> bool:
     agent_workflow = settings.get("agent_workflow")
     workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
     if not isinstance(workflow_id, str) or not workflow_id:
         return False
     workflow = await AgentPatternRepository().get_workflow(workflow_id, include_custom=True)
     spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
-    return spec.get("pattern_type") == EVALUATOR_REPLANNER_RAG_AGENT_ID
+    return workflow_supports_replans(spec)
 
 
 def _empty_thread_stats() -> dict:
@@ -174,17 +162,17 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
         requested_workflow = req.agent_workflow_id
         if not requested_workflow and isinstance(req.agent_workflow, dict):
             requested_workflow = req.agent_workflow.get("workflow_id")
+        repo = AgentPatternRepository()
+        await repo.seed_builtin_workflows()
         supported_builtin_workflow_keys = builtin_workflow_keys()
-        pattern_id = requested_workflow if requested_workflow in supported_builtin_workflow_keys else ROUTER_RAG_AGENT_ID
-        if requested_workflow and requested_workflow not in supported_builtin_workflow_keys:
-            repo = AgentPatternRepository()
-            workflow = await repo.get_workflow(requested_workflow, include_custom=True)
-            spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
-            workflow_pattern_type = spec.get("pattern_type")
-            if isinstance(workflow_pattern_type, str) and workflow_pattern_type in supported_builtin_workflow_keys:
-                pattern_id = workflow_pattern_type
+        workflow_id = requested_workflow if requested_workflow else default_agent_workflow_key()
+        workflow = await repo.get_workflow(workflow_id, include_custom=workflow_id not in supported_builtin_workflow_keys)
+        if workflow is None:
+            workflow = await repo.get_workflow(default_agent_workflow_key())
+        spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
+        runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
         prompt = build_agent_pattern_prompt_preview(
-            pattern_id=pattern_id,
+            prompt_profile=str(runtime.get("prompt_preview") or "router"),
             context_window=req.context_window,
             system_role=req.system_role or "",
             tool_instructions=tool_instructions,
@@ -425,7 +413,7 @@ async def update_thread_settings_endpoint(
         current = merge_thread_settings(await get_thread_settings(thread_id))
         updates = req.dict(exclude_none=True)
         next_settings = {**current, **updates}
-        if not await _is_evaluator_replanner_settings_resolved(next_settings):
+        if not await _settings_workflow_supports_replans(next_settings):
             next_settings.pop("replans", None)
         next_settings["tool_instructions"] = normalize_tool_instructions(
             next_settings.get("tool_instructions", {})

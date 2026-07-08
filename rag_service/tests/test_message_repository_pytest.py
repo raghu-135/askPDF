@@ -12,7 +12,7 @@ from sqlmodel import select
 
 
 from app.agent_workflows.repository import AgentPatternRepository
-from app.agent_patterns.workflow_constants import ROUTER_RAG_AGENT_ID
+from app.agent_patterns.workflow_runtime import default_agent_workflow_key
 from app.db.models_sqlmodel import ChatTurn, MessageRole
 from app.db.repositories.message_repo_sqlmodel import (
     MessageRepository,
@@ -32,11 +32,12 @@ async def _create_agent_run(engine, thread_id: str):
     async with session_factory() as repo_session:
         agent_repo = AgentPatternRepository(repo_session)
         await agent_repo.seed_builtin_workflows()
-        workflow = await agent_repo.get_workflow(ROUTER_RAG_AGENT_ID)
+        workflow_key = default_agent_workflow_key()
+        workflow = await agent_repo.get_workflow(workflow_key)
         return await agent_repo.create_run(
             thread_id=thread_id,
             workflow_id=workflow.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+            resolved_spec_json={"pattern_type": workflow_key},
         )
 
 

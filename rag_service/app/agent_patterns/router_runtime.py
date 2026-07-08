@@ -7,6 +7,7 @@ from typing import Any, Dict
 from langgraph.types import Command
 
 from app.agent_patterns.graph import TemplateCompiler
+from app.agent_patterns.workflow_runtime import runtime_execution_options
 from app.db import (
     create_chat_turn,
     increment_qa_stats,
@@ -232,7 +233,7 @@ async def _persist_success_turn(
     }
 
 
-async def handle_router_rag_chat(
+async def execute_compiled_rag_chat(
     thread_id: str,
     req: Any,
     embed_model: str,
@@ -242,7 +243,8 @@ async def handle_router_rag_chat(
     trace_recorder: Any,
     checkpointer: Any = None,
 ) -> Dict[str, Any]:
-    """Execute the compiled Router RAG v2 graph and persist a chat turn."""
+    """Execute a compiled RAG workflow using runtime metadata from the stored spec."""
+    runtime_options = runtime_execution_options(resolved_spec)
     return await _handle_compiled_rag_chat(
         thread_id,
         req,
@@ -251,65 +253,11 @@ async def handle_router_rag_chat(
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
-        runtime_label="Router RAG",
-        failure_code="router_rag_execution_failed",
-        failure_reason_prefix="Exception during Router RAG execution",
-        success_context="Context retrieved by compiled Router RAG Agent pattern.",
-        failure_context="Compiled Router RAG Agent execution failed gracefully.",
-    )
-
-
-async def handle_plan_execute_rag_chat(
-    thread_id: str,
-    req: Any,
-    embed_model: str,
-    *,
-    resolved_spec: Dict[str, Any],
-    agent_run_context: Dict[str, Any],
-    trace_recorder: Any,
-    checkpointer: Any = None,
-) -> Dict[str, Any]:
-    """Execute the compiled Plan-and-Execute RAG graph and persist a chat turn."""
-    return await _handle_compiled_rag_chat(
-        thread_id,
-        req,
-        embed_model,
-        resolved_spec=resolved_spec,
-        agent_run_context=agent_run_context,
-        trace_recorder=trace_recorder,
-        checkpointer=checkpointer,
-        runtime_label="Plan-and-Execute RAG",
-        failure_code="plan_execute_rag_execution_failed",
-        failure_reason_prefix="Exception during Plan-and-Execute RAG execution",
-        success_context="Context retrieved by compiled Plan-and-Execute RAG Agent pattern.",
-        failure_context="Compiled Plan-and-Execute RAG Agent execution failed gracefully.",
-    )
-
-
-async def handle_evaluator_replanner_rag_chat(
-    thread_id: str,
-    req: Any,
-    embed_model: str,
-    *,
-    resolved_spec: Dict[str, Any],
-    agent_run_context: Dict[str, Any],
-    trace_recorder: Any,
-    checkpointer: Any = None,
-) -> Dict[str, Any]:
-    """Execute the compiled Evaluator/Replanner RAG graph and persist a chat turn."""
-    return await _handle_compiled_rag_chat(
-        thread_id,
-        req,
-        embed_model,
-        resolved_spec=resolved_spec,
-        agent_run_context=agent_run_context,
-        trace_recorder=trace_recorder,
-        checkpointer=checkpointer,
-        runtime_label="Evaluator/Replanner RAG",
-        failure_code="evaluator_replanner_rag_execution_failed",
-        failure_reason_prefix="Exception during Evaluator/Replanner RAG execution",
-        success_context="Context retrieved by compiled Evaluator/Replanner RAG Agent pattern.",
-        failure_context="Compiled Evaluator/Replanner RAG Agent execution failed gracefully.",
+        runtime_label=runtime_options["label"],
+        failure_code=runtime_options["failure_code"],
+        failure_reason_prefix=runtime_options["failure_reason_prefix"],
+        success_context=runtime_options["success_context"],
+        failure_context=runtime_options["failure_context"],
     )
 
 

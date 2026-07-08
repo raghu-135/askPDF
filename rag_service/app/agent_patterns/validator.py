@@ -18,15 +18,15 @@ from app.agent_patterns.route_registry import (
     route_function_allowed_for_node_type,
     route_function_labels,
 )
-from app.agent_patterns.workflow_constants import (
-    ALLOWED_ROUTER_RAG_CONFIG_KEYS,
-    EVALUATOR_REPLANNER_RAG_AGENT_ID,
-    EVALUATOR_REPLANNER_REPEATABLE_NODE_TYPES,
-    PLAN_EXECUTE_RAG_AGENT_ID,
-    ROUTER_RAG_AGENT_ID,
-    WEB_APPROVAL_GATE_ID,
-)
 from app.agent_patterns.builtin_workflows import builtin_workflow_keys
+from app.agent_patterns.workflow_runtime import (
+    ALLOWED_WORKFLOW_CONFIG_KEYS,
+    RUNTIME_TEXT_FIELDS,
+    SUPPORTED_RUNTIME_KINDS,
+    normalize_runtime_for_validation,
+    replan_loop_policy,
+    workflow_supports_replans,
+)
 from app.models.llm_server_client import (
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
     REPLANS_LIMIT,
@@ -36,33 +36,6 @@ from app.models.llm_server_client import (
 
 class TemplateValidationError(ValueError):
     """Raised when an agent pattern template spec is invalid."""
-
-
-def evaluator_replanner_loop_policy(config: Dict[str, Any]) -> Dict[str, Any]:
-    graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
-    node_types = {
-        str(node.get("id")): str(node.get("type"))
-        for node in graph.get("nodes", [])
-        if isinstance(node, dict) and node.get("id") and node.get("type")
-    }
-    try:
-        replans = max(1, int(config.get("replans", 1)))
-    except (TypeError, ValueError):
-        replans = 1
-    node_visit_limits = {
-        node_id: replans + 1
-        for node_id, node_type in node_types.items()
-        if node_type in EVALUATOR_REPLANNER_REPEATABLE_NODE_TYPES
-    }
-    for node_id, node_type in node_types.items():
-        if node_type == "replanner":
-            node_visit_limits[node_id] = replans
-    max_total_visits = sum(node_visit_limits.get(node_id, 1) for node_id in node_types)
-    return {
-        "max_total_visits": max_total_visits,
-        "default_max_node_visits": 1,
-        "node_visit_limits": {node_id: node_visit_limits[node_id] for node_id in sorted(node_visit_limits)},
-    }
 
 
 def _known_tool_ids() -> set[str]:
@@ -143,7 +116,30 @@ class TemplateValidator:
             return ["spec must be an object"]
         if spec.get("schema_version") != 2:
             return ["schema_version must be 2"]
-        return GenericGraphValidator().collect_errors(spec)
+        errors = self._collect_runtime_errors(spec)
+        errors.extend(GenericGraphValidator().collect_errors(spec))
+        return errors
+
+    def _collect_runtime_errors(self, spec: Dict[str, Any]) -> list[str]:
+        errors: list[str] = []
+        runtime = normalize_runtime_for_validation(spec.get("runtime"))
+        if not runtime:
+            return ["runtime must be an object"]
+        kind = runtime.get("kind")
+        if kind not in SUPPORTED_RUNTIME_KINDS:
+            errors.append(f"runtime.kind must be one of: {', '.join(sorted(SUPPORTED_RUNTIME_KINDS))}")
+        for field in sorted(RUNTIME_TEXT_FIELDS):
+            if not isinstance(runtime.get(field), str) or not runtime.get(field):
+                errors.append(f"runtime.{field} must be a non-empty string")
+        features = runtime.get("features", {})
+        if not isinstance(features, dict):
+            errors.append("runtime.features must be an object")
+        elif "supports_replans" in features and not isinstance(features.get("supports_replans"), bool):
+            errors.append("runtime.features.supports_replans must be a boolean")
+        prompt_preview = runtime.get("prompt_preview")
+        if prompt_preview is not None and not isinstance(prompt_preview, str):
+            errors.append("runtime.prompt_preview must be a string")
+        return errors
 
     def report(self, spec: Dict[str, Any]) -> Dict[str, Any]:
         """Return a structured validation report for admin/debug API consumers."""
@@ -160,6 +156,7 @@ class TemplateValidator:
             "warnings": [],
             "schema_version": spec_obj.get("schema_version"),
             "pattern_type": spec_obj.get("pattern_type"),
+            "runtime": normalize_runtime_for_validation(spec_obj.get("runtime")),
             "supported_pattern_types": sorted([*builtin_workflow_keys(), "custom_rag_agent"]),
             "allowed_tool_ids": allowed_tool_ids,
             "required_tool_ids": sorted(workflow_required_tool_ids(spec_obj)),
@@ -254,8 +251,6 @@ class TemplateValidator:
                 errors.append(f"hitl_policy.gates.{gate_id}.phase inside_tool is reserved for tool wrappers")
 
             target = gate.get("target")
-            if gate_id == WEB_APPROVAL_GATE_ID and target is None:
-                target = {"node_id": "web_worker", "node_type": "web_worker"}
             if not isinstance(target, dict):
                 errors.append(f"hitl_policy.gates.{gate_id}.target must be an object")
             else:
@@ -331,308 +326,7 @@ class TemplateValidator:
                             seen_option_ids.add(option_id)
                         if not isinstance(target_node_id, str) or target_node_id not in node_types:
                             errors.append(f"hitl_policy.gates.{gate_id}.options.{option_id or '?'} target_node_id is unknown")
-                    if (
-                        pattern_type == ROUTER_RAG_AGENT_ID
-                        and gate.get("selection_mode") in {"multi", "single_or_multi"}
-                        and len(options) > 1
-                    ):
-                        errors.append(
-                            f"hitl_policy.gates.{gate_id} multi-option choice gates require a sequential topology such as {PLAN_EXECUTE_RAG_AGENT_ID}"
-                        )
         return errors
-
-    def _collect_router_graph_errors(self, graph: Any) -> list[str]:
-        errors: list[str] = []
-        if not isinstance(graph, dict):
-            return ["graph must be an object for router_rag_agent"]
-
-        nodes = graph.get("nodes")
-        edges = graph.get("edges")
-        if not isinstance(nodes, list) or not isinstance(edges, list):
-            return ["graph.nodes and graph.edges must be lists"]
-
-        expected_nodes = {
-            "context_loader": "context_loader",
-            "router": "router",
-            "retrieval_worker": "retrieval_worker",
-            "memory_worker": "memory_worker",
-            "timeline_worker": "timeline_worker",
-            "web_worker": "web_worker",
-            "direct_answer": "direct_answer",
-            "synthesizer": "synthesizer",
-            "finalizer": "finalizer",
-        }
-        actual_nodes: dict[str, str] = {}
-        for node in nodes:
-            if not isinstance(node, dict):
-                errors.append("graph node entries must be objects")
-                continue
-            node_id = node.get("id")
-            node_type = node.get("type")
-            if isinstance(node_id, str) and isinstance(node_type, str):
-                actual_nodes[node_id] = node_type
-        if graph.get("hitl_compiled"):
-            return self._collect_hitl_compiled_graph_errors(
-                graph,
-                expected_nodes=expected_nodes,
-                pattern_type=ROUTER_RAG_AGENT_ID,
-            )
-
-        if actual_nodes != expected_nodes:
-            errors.append("router_rag_agent graph nodes must match the built-in Router RAG topology")
-
-        has_start = any(edge.get("from") == "START" and edge.get("to") == "context_loader" for edge in edges if isinstance(edge, dict))
-        has_end = any(edge.get("from") == "finalizer" and edge.get("to") == "END" for edge in edges if isinstance(edge, dict))
-        router_edges = [
-            edge for edge in edges
-            if isinstance(edge, dict) and edge.get("from") == "router" and edge.get("conditional") is True
-        ]
-        if not has_start:
-            errors.append("router_rag_agent graph must start at context_loader")
-        if not has_end:
-            errors.append("router_rag_agent graph must end at finalizer")
-        if len(router_edges) != 1:
-            errors.append("router_rag_agent graph must have one conditional router edge")
-        else:
-            expected_routes = {
-                "document": "retrieval_worker",
-                "memory": "memory_worker",
-                "timeline": "timeline_worker",
-                "web": "web_worker",
-                "direct": "direct_answer",
-                "clarify": "finalizer",
-            }
-            if router_edges[0].get("routes") != expected_routes:
-                errors.append("router_rag_agent router routes must match the built-in route map")
-
-        return errors
-
-    def _collect_plan_execute_graph_errors(self, graph: Any) -> list[str]:
-        errors: list[str] = []
-        if not isinstance(graph, dict):
-            return ["graph must be an object for plan_execute_rag_agent"]
-
-        nodes = graph.get("nodes")
-        edges = graph.get("edges")
-        if not isinstance(nodes, list) or not isinstance(edges, list):
-            return ["graph.nodes and graph.edges must be lists"]
-
-        expected_nodes = {
-            "context_loader": "context_loader",
-            "planner": "planner",
-            "direct_answer": "direct_answer",
-            "retrieval_worker": "retrieval_worker",
-            "memory_worker": "memory_worker",
-            "timeline_worker": "timeline_worker",
-            "web_worker": "web_worker",
-            "synthesizer": "synthesizer",
-            "finalizer": "finalizer",
-        }
-        actual_nodes: dict[str, str] = {}
-        for node in nodes:
-            if not isinstance(node, dict):
-                errors.append("graph node entries must be objects")
-                continue
-            node_id = node.get("id")
-            node_type = node.get("type")
-            if isinstance(node_id, str) and isinstance(node_type, str):
-                actual_nodes[node_id] = node_type
-        if graph.get("hitl_compiled"):
-            return self._collect_hitl_compiled_graph_errors(
-                graph,
-                expected_nodes=expected_nodes,
-                pattern_type=PLAN_EXECUTE_RAG_AGENT_ID,
-            )
-        if actual_nodes != expected_nodes:
-            errors.append("plan_execute_rag_agent graph nodes must match the built-in Plan-and-Execute RAG topology")
-
-        expected_edges = [
-            {"from": "START", "to": "context_loader"},
-            {"from": "context_loader", "to": "planner"},
-            {
-                "from": "planner",
-                "conditional": True,
-                "routes": {
-                    "execute": "retrieval_worker",
-                    "direct": "direct_answer",
-                    "clarify": "finalizer",
-                },
-            },
-            {"from": "direct_answer", "to": "finalizer"},
-            {"from": "retrieval_worker", "to": "memory_worker"},
-            {"from": "memory_worker", "to": "timeline_worker"},
-            {"from": "timeline_worker", "to": "web_worker"},
-            {"from": "web_worker", "to": "synthesizer"},
-            {"from": "synthesizer", "to": "finalizer"},
-            {"from": "finalizer", "to": "END"},
-        ]
-        if edges != expected_edges:
-            errors.append("plan_execute_rag_agent graph edges must match the built-in fixed execution topology")
-
-        return errors
-
-    def _collect_evaluator_replanner_graph_errors(self, graph: Any) -> list[str]:
-        errors: list[str] = []
-        if not isinstance(graph, dict):
-            return ["graph must be an object for evaluator_replanner_rag_agent"]
-
-        nodes = graph.get("nodes")
-        edges = graph.get("edges")
-        if not isinstance(nodes, list) or not isinstance(edges, list):
-            return ["graph.nodes and graph.edges must be lists"]
-
-        expected_nodes = {
-            "context_loader": "context_loader",
-            "planner": "planner",
-            "direct_answer": "direct_answer",
-            "retrieval_worker": "retrieval_worker",
-            "memory_worker": "memory_worker",
-            "timeline_worker": "timeline_worker",
-            "web_worker": "web_worker",
-            "evidence_evaluator": "evidence_evaluator",
-            "replanner": "replanner",
-            "synthesizer": "synthesizer",
-            "finalizer": "finalizer",
-        }
-        actual_nodes: dict[str, str] = {}
-        for node in nodes:
-            if not isinstance(node, dict):
-                errors.append("graph node entries must be objects")
-                continue
-            node_id = node.get("id")
-            node_type = node.get("type")
-            if isinstance(node_id, str) and isinstance(node_type, str):
-                actual_nodes[node_id] = node_type
-        if graph.get("hitl_compiled"):
-            return self._collect_hitl_compiled_graph_errors(
-                graph,
-                expected_nodes=expected_nodes,
-                pattern_type=EVALUATOR_REPLANNER_RAG_AGENT_ID,
-            )
-        if actual_nodes != expected_nodes:
-            errors.append("evaluator_replanner_rag_agent graph nodes must match the built-in Evaluator/Replanner RAG topology")
-
-        expected_edges = [
-            {"from": "START", "to": "context_loader"},
-            {"from": "context_loader", "to": "planner"},
-            {
-                "from": "planner",
-                "conditional": True,
-                "routes": {
-                    "execute": "retrieval_worker",
-                    "direct": "direct_answer",
-                    "clarify": "finalizer",
-                },
-            },
-            {"from": "direct_answer", "to": "finalizer"},
-            {"from": "retrieval_worker", "to": "memory_worker"},
-            {"from": "memory_worker", "to": "timeline_worker"},
-            {"from": "timeline_worker", "to": "web_worker"},
-            {"from": "web_worker", "to": "evidence_evaluator"},
-            {
-                "from": "evidence_evaluator",
-                "conditional": True,
-                "routes": {
-                    "answer": "synthesizer",
-                    "replan": "replanner",
-                    "answer_budget_exhausted": "synthesizer",
-                },
-            },
-            {"from": "replanner", "to": "retrieval_worker"},
-            {"from": "synthesizer", "to": "finalizer"},
-            {"from": "finalizer", "to": "END"},
-        ]
-        if edges != expected_edges:
-            errors.append("evaluator_replanner_rag_agent graph edges must match the built-in fixed evaluation topology")
-
-        return errors
-
-    def _collect_hitl_compiled_graph_errors(
-        self,
-        graph: Dict[str, Any],
-        *,
-        expected_nodes: dict[str, str],
-        pattern_type: str,
-    ) -> list[str]:
-        """Validate materialized HITL overlays without hard-coding one gate topology."""
-
-        errors: list[str] = []
-        nodes = graph.get("nodes")
-        edges = graph.get("edges")
-        if not isinstance(nodes, list) or not isinstance(edges, list):
-            return ["graph.nodes and graph.edges must be lists"]
-
-        actual_nodes: dict[str, str] = {}
-        for node in nodes:
-            if not isinstance(node, dict):
-                errors.append("graph node entries must be objects")
-                continue
-            node_id = node.get("id")
-            node_type = node.get("type")
-            if isinstance(node_id, str) and isinstance(node_type, str):
-                actual_nodes[node_id] = node_type
-
-        for node_id, node_type in expected_nodes.items():
-            if actual_nodes.get(node_id) != node_type:
-                errors.append(f"{pattern_type} HITL graph missing base node: {node_id}")
-
-        hitl_gate_ids = {
-            node_id
-            for node_id, node_type in actual_nodes.items()
-            if node_id not in expected_nodes and node_type == "hitl_gate"
-        }
-        unexpected_nodes = sorted(
-            node_id
-            for node_id, node_type in actual_nodes.items()
-            if node_id not in expected_nodes and node_type != "hitl_gate"
-        )
-        if unexpected_nodes:
-            errors.append(f"{pattern_type} HITL graph contains unsupported non-HITL nodes: {', '.join(unexpected_nodes)}")
-        if not hitl_gate_ids:
-            errors.append(f"{pattern_type} HITL graph must include at least one hitl_gate node")
-
-        valid_sources = set(actual_nodes) | {"START"}
-        valid_targets = set(actual_nodes) | {"END"}
-        conditional_gate_sources: set[str] = set()
-        gate_incoming: set[str] = set()
-        for edge in edges:
-            if not isinstance(edge, dict):
-                errors.append("graph edge entries must be objects")
-                continue
-            source = edge.get("from")
-            if source not in valid_sources:
-                errors.append(f"{pattern_type} HITL graph edge source is unknown: {source}")
-
-            if edge.get("conditional"):
-                routes = edge.get("routes")
-                if not isinstance(routes, dict) or not routes:
-                    errors.append(f"{pattern_type} HITL graph conditional edge must define routes")
-                    continue
-                if source in hitl_gate_ids:
-                    conditional_gate_sources.add(str(source))
-                for route_name, route_target in routes.items():
-                    if not isinstance(route_name, str) or not isinstance(route_target, str):
-                        errors.append(f"{pattern_type} HITL graph route keys and values must be strings")
-                    elif route_target not in valid_targets:
-                        errors.append(f"{pattern_type} HITL graph route target is unknown: {route_target}")
-                    elif route_target in hitl_gate_ids:
-                        gate_incoming.add(route_target)
-                continue
-
-            target = edge.get("to")
-            if target not in valid_targets:
-                errors.append(f"{pattern_type} HITL graph edge target is unknown: {target}")
-            elif target in hitl_gate_ids:
-                gate_incoming.add(target)
-
-        missing_gate_edges = sorted(hitl_gate_ids - conditional_gate_sources)
-        if missing_gate_edges:
-            errors.append(f"{pattern_type} HITL gates missing conditional route edges: {', '.join(missing_gate_edges)}")
-        unreachable_gates = sorted(hitl_gate_ids - gate_incoming)
-        if unreachable_gates:
-            errors.append(f"{pattern_type} HITL gates are not reachable from the base graph: {', '.join(unreachable_gates)}")
-        return errors
-
 
 class GenericGraphValidator:
     """Catalog-backed validator for schema v2 graph specs."""
@@ -803,8 +497,7 @@ class GenericGraphValidator:
 
     def _collect_config_errors(self, config: Dict[str, Any], pattern_type: Any) -> list[str]:
         errors: list[str] = []
-        allowed_keys = ALLOWED_ROUTER_RAG_CONFIG_KEYS | {"context_policy", "loop_policy"}
-        unknown_keys = sorted(set(config) - allowed_keys)
+        unknown_keys = sorted(set(config) - ALLOWED_WORKFLOW_CONFIG_KEYS)
         if unknown_keys:
             errors.append(f"unknown config keys: {', '.join(unknown_keys)}")
 
@@ -1174,14 +867,16 @@ class TemplateResolver:
         config = dict(resolved.get("config") or {})
 
         for source in (thread_settings or {}, request_overrides or {}):
-            for key in ALLOWED_ROUTER_RAG_CONFIG_KEYS:
-                if key == "replans" and resolved.get("pattern_type") != EVALUATOR_REPLANNER_RAG_AGENT_ID:
+            for key in ALLOWED_WORKFLOW_CONFIG_KEYS:
+                if key == "replans" and not workflow_supports_replans(resolved):
                     continue
                 if key in source and source[key] is not None:
                     config[key] = source[key]
+        if not workflow_supports_replans(resolved):
+            config.pop("replans", None)
 
         resolved["config"] = config
-        if resolved.get("pattern_type") == EVALUATOR_REPLANNER_RAG_AGENT_ID:
-            config["loop_policy"] = evaluator_replanner_loop_policy(config)
+        if workflow_supports_replans(resolved):
+            config["loop_policy"] = replan_loop_policy(resolved, config)
         self.validator.validate(resolved)
         return resolved

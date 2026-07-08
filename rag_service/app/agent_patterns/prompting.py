@@ -181,7 +181,8 @@ def build_final_answer_messages(state: Dict[str, Any], context: str) -> Dict[str
 
 def build_agent_pattern_prompt_preview(
     *,
-    pattern_id: Optional[str],
+    pattern_id: Optional[str] = None,
+    prompt_profile: Optional[str] = None,
     context_window: int,
     system_role: str = "",
     tool_instructions: Optional[Dict[str, str]] = None,
@@ -205,7 +206,7 @@ def build_agent_pattern_prompt_preview(
     }
     final_messages = build_final_answer_messages(state, CONTEXT_PLACEHOLDER)
     sections: List[str] = []
-    if pattern_id == "evaluator_replanner_rag_agent":
+    if prompt_profile == "evaluator_replanner":
         sections.append(
             "# Planner Node Prompt\n\n"
             "This is the system + human prompt for the planner LLM call. It decides route and initial worker inclusion only.\n\n"
@@ -227,7 +228,7 @@ def build_agent_pattern_prompt_preview(
             "## Human Message\n\n"
             + build_replanner_prompt(state)
         )
-    elif pattern_id == "plan_execute_rag_agent":
+    elif prompt_profile == "planner":
         sections.append(
             "# Planner Node Prompt\n\n"
             "This is the system + human prompt for the planner LLM call. It decides route and worker inclusion only.\n\n"

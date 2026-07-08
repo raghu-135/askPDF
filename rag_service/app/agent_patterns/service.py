@@ -9,12 +9,8 @@ from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository, InterruptResolutionResult
-from app.agent_patterns.workflow_constants import (
-    EVALUATOR_REPLANNER_RAG_AGENT_ID,
-    PLAN_EXECUTE_RAG_AGENT_ID,
-    ROUTER_RAG_AGENT_ID,
-)
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError
+from app.agent_patterns.workflow_runtime import default_agent_workflow_key
 from app.db import get_thread_settings
 
 
@@ -43,7 +39,8 @@ class AgentRunService:
         thread_settings = await get_thread_settings(thread_id)
         agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
-        workflow_id = agent_settings.get("workflow_id") or ROUTER_RAG_AGENT_ID
+        default_workflow_key = default_agent_workflow_key()
+        workflow_id = agent_settings.get("workflow_id") or default_workflow_key
         include_custom_for_lookup = True
         logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
 
@@ -56,18 +53,18 @@ class AgentRunService:
                 "Unsupported custom agent workflow requested for thread %s | requested_workflow=%s fallback_workflow=%s",
                 thread_id,
                 workflow_id,
-                ROUTER_RAG_AGENT_ID,
+                default_workflow_key,
             )
             workflow = None
         if workflow is None:
-            if workflow_id != ROUTER_RAG_AGENT_ID:
+            if workflow_id != default_workflow_key:
                 logger.warning(
                     "Selected agent workflow unavailable; falling back to default | thread_id=%s requested_workflow=%s",
                     thread_id,
                     workflow_id,
                 )
-                workflow_id = ROUTER_RAG_AGENT_ID
-                workflow = await self.repository.get_workflow(ROUTER_RAG_AGENT_ID)
+                workflow_id = default_workflow_key
+                workflow = await self.repository.get_workflow(default_workflow_key)
         if workflow is None:
             raise RuntimeError("Default agent workflow is unavailable")
         logger.info(
@@ -91,8 +88,7 @@ class AgentRunService:
                 request_overrides=request_overrides,
             )
         except TemplateValidationError as exc:
-            workflow_pattern_type = workflow.spec_json.get("pattern_type") if isinstance(workflow.spec_json, dict) else None
-            if workflow_pattern_type == ROUTER_RAG_AGENT_ID:
+            if workflow_id == default_workflow_key:
                 logger.exception(
                     "Default agent workflow failed compatibility validation | thread_id=%s workflow_id=%s",
                     thread_id,
@@ -105,10 +101,10 @@ class AgentRunService:
                 workflow.id,
                 exc,
             )
-            fallback_workflow = await self.repository.get_workflow(ROUTER_RAG_AGENT_ID)
+            fallback_workflow = await self.repository.get_workflow(default_workflow_key)
             if fallback_workflow is None:
                 await self.repository.seed_builtin_workflows()
-                fallback_workflow = await self.repository.get_workflow(ROUTER_RAG_AGENT_ID)
+                fallback_workflow = await self.repository.get_workflow(default_workflow_key)
             if fallback_workflow is None:
                 raise RuntimeError("Default agent workflow is unavailable") from exc
             workflow = fallback_workflow
@@ -136,7 +132,6 @@ class AgentRunService:
         stored_resolved_spec = TemplateCompiler().materialize_spec(
             resolved_spec,
         )
-        pattern_type = stored_resolved_spec.get("pattern_type")
 
         run = await self.repository.create_run(
             thread_id=thread_id,
@@ -154,20 +149,9 @@ class AgentRunService:
 
         try:
             logger.info("Invoking compiled agent workflow for thread %s | workflow=%s", thread_id, workflow.id)
-            from app.agent_patterns.router_runtime import (
-                handle_evaluator_replanner_rag_chat,
-                handle_plan_execute_rag_chat,
-                handle_router_rag_chat,
-            )
-
-            if pattern_type == EVALUATOR_REPLANNER_RAG_AGENT_ID:
-                handler = handle_evaluator_replanner_rag_chat
-            elif pattern_type == PLAN_EXECUTE_RAG_AGENT_ID:
-                handler = handle_plan_execute_rag_chat
-            else:
-                handler = handle_router_rag_chat
+            from app.agent_patterns.router_runtime import execute_compiled_rag_chat
             async with open_agent_checkpointer() as checkpointer:
-                result = await handler(
+                result = await execute_compiled_rag_chat(
                     thread_id,
                     req,
                     embed_model,

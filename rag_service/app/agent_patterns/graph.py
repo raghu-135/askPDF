@@ -36,7 +36,6 @@ from app.agent_patterns.node_catalog import (
     node_type_max_visits,
 )
 from app.agent_patterns.route_registry import route_function_allowed_for_node_type
-from app.agent_patterns.workflow_constants import PLAN_EXECUTE_WORKER_NODES, WEB_APPROVAL_GATE_ID
 from app.agent_patterns.trace import (
     available_document_refs,
     compact_preview,
@@ -57,7 +56,14 @@ RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarif
 
 logger = logging.getLogger(__name__)
 FINAL_REVIEW_GATE_ID = "human_review_gate"
+WEB_APPROVAL_GATE_ID = "web_approval_gate"
 NODE_RUNTIME_CONFIG_KEY = "agent_pattern_node_runtime"
+WORKER_NODE_ORDER = [
+    "retrieval_worker",
+    "memory_worker",
+    "timeline_worker",
+    "web_worker",
+]
 
 
 TEMPORAL_PLAN_RE = re.compile(
@@ -902,7 +908,7 @@ def infer_required_plan_steps(question: Optional[str]) -> List[str]:
 
 
 def _ordered_plan_steps(steps: List[str]) -> List[str]:
-    return [node for node in PLAN_EXECUTE_WORKER_NODES if node in steps]
+    return [node for node in WORKER_NODE_ORDER if node in steps]
 
 
 def _fallback_clarification_options() -> List[str]:
@@ -1066,7 +1072,7 @@ def normalize_execution_plan(
                 node = step.get("node") or step.get("worker") or step.get("id")
             else:
                 continue
-            if node in PLAN_EXECUTE_WORKER_NODES and node not in steps:
+            if node in WORKER_NODE_ORDER and node not in steps:
                 steps.append(node)
     if not use_web_search and "web_worker" in steps:
         steps = [step for step in steps if step != "web_worker"]
@@ -1166,7 +1172,7 @@ def _normalize_replanner_execution_plan(
                 node = step.get("node") or step.get("worker") or step.get("id")
             else:
                 continue
-            if node in PLAN_EXECUTE_WORKER_NODES and node not in steps:
+            if node in WORKER_NODE_ORDER and node not in steps:
                 steps.append(node)
     if not use_web_search and "web_worker" in steps:
         steps = [step for step in steps if step != "web_worker"]
@@ -1321,7 +1327,7 @@ class NodeRegistry:
         )
         worker_summary = selected_and_skipped_workers(
             normalized["execution_plan"],
-            PLAN_EXECUTE_WORKER_NODES,
+            WORKER_NODE_ORDER,
         )
         data = {
             "status": "completed",
@@ -2140,8 +2146,8 @@ class NodeRegistry:
         selected_targets = _hitl_option_targets(gate_policy, selected_option_ids)
         execution_plan = state.get("execution_plan")
         execution_plan_update = None
-        if selected_targets and all(target in PLAN_EXECUTE_WORKER_NODES for target in selected_targets):
-            execution_plan_update = [target for target in PLAN_EXECUTE_WORKER_NODES if target in selected_targets]
+        if selected_targets and all(target in WORKER_NODE_ORDER for target in selected_targets):
+            execution_plan_update = [target for target in WORKER_NODE_ORDER if target in selected_targets]
 
         update: Dict[str, Any] = {
             "hitl_gate_route": route,

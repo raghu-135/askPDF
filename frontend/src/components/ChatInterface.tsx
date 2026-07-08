@@ -97,36 +97,16 @@ type PendingHumanReview = {
     localAssistantMessageId: string;
 };
 
-const BUILTIN_AGENT_WORKFLOW_IDS = ['router_rag_agent', 'plan_execute_rag_agent', 'evaluator_replanner_rag_agent'];
-
-const DEFAULT_AGENT_WORKFLOWS: AgentWorkflow[] = [
-    {
-        id: 'router_rag_agent',
-        name: 'Router RAG Agent',
-        is_builtin: true,
-    },
-    {
-        id: 'plan_execute_rag_agent',
-        name: 'Plan-and-Execute RAG Agent',
-        is_builtin: true,
-    },
-    {
-        id: 'evaluator_replanner_rag_agent',
-        name: 'Evaluator/Replanner RAG Agent',
-        is_builtin: true,
-    },
-];
-
 const normalizeAgentWorkflowForUi = (workflowId?: string | null) => (
-    workflowId ? String(workflowId) : 'router_rag_agent'
+    workflowId ? String(workflowId) : ''
 );
 
-const isBuiltinAgentWorkflow = (workflowId?: string | null) => (
-    BUILTIN_AGENT_WORKFLOW_IDS.includes(workflowId || '')
+const isBuiltinAgentWorkflow = (workflows: AgentWorkflow[], workflowId?: string | null) => (
+    Boolean(workflows.find((workflow) => workflow.id === workflowId)?.is_builtin)
 );
 
-const isEvaluatorReplannerWorkflow = (workflowId?: string | null) => (
-    normalizeAgentWorkflowForUi(workflowId) === 'evaluator_replanner_rag_agent'
+const workflowSupportsReplans = (workflows: AgentWorkflow[], workflowId?: string | null) => (
+    Boolean(workflows.find((workflow) => workflow.id === workflowId)?.supports_replans)
 );
 
 interface ChatInterfaceProps {
@@ -195,8 +175,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
-    const [agentWorkflowId, setAgentWorkflowId] = useState('router_rag_agent');
-    const [agentWorkflows, setAgentWorkflows] = useState<AgentWorkflow[]>(DEFAULT_AGENT_WORKFLOWS);
+    const [agentWorkflowId, setAgentWorkflowId] = useState('');
+    const [agentWorkflows, setAgentWorkflows] = useState<AgentWorkflow[]>([]);
 
     // Model selection
     const [llmModel, setLlmModel] = useState('');
@@ -385,11 +365,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     getPromptTools(),
                     listAgentWorkflows().catch((error) => {
                         console.error('Failed to load agent patterns:', error);
-                        return { agent_workflows: DEFAULT_AGENT_WORKFLOWS };
+                        return { agent_workflows: [] };
                     }),
                 ]);
                 setToolCatalog(res.tools || []);
-                setAgentWorkflows(patterns.agent_workflows?.length ? patterns.agent_workflows : DEFAULT_AGENT_WORKFLOWS);
+                setAgentWorkflows(patterns.agent_workflows || []);
                 if (res.defaults) {
                     setReplansLimit(res.defaults.replans_limit);
                     setDefaultSystemRole(res.defaults.system_role ?? '');
@@ -405,12 +385,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
                         setHitlWebApproval(res.defaults.hitl_web_approval ?? false);
                         setUseReranker(res.defaults.use_reranker ?? true);
+                        setAgentWorkflowId(normalizeAgentWorkflowForUi(res.defaults.agent_workflow?.workflow_id));
                     }
                 }
             } catch (error) {
                 console.error('Failed to load prompt tools:', error);
                 setToolCatalog([]);
-                setAgentWorkflows(DEFAULT_AGENT_WORKFLOWS);
+                setAgentWorkflows([]);
             }
         };
         loadTools();
@@ -643,7 +624,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setCustomInstructions(defaultCustomInstructions);
         setHitlWebApproval(defaultHitlWebApproval);
         setUseReranker(defaultUseReranker);
-        setAgentWorkflowId('router_rag_agent');
+        setAgentWorkflowId(agentWorkflows[0]?.id || '');
     };
 
     const resetToolInstructionToDefault = (toolId: string) => {
@@ -993,7 +974,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 useWebSearch,
                 useReranker,
                 contextWindow,
-                isEvaluatorReplannerWorkflow(agentWorkflowId) ? replans : undefined,
+                workflowSupportsReplans(agentWorkflows, agentWorkflowId) ? replans : undefined,
                 systemRole,
                 effectiveToolInstructions,
                 customInstructions
@@ -1264,9 +1245,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 custom_instructions: customInstructions,
                 hitl_web_approval: hitlWebApproval,
                 use_reranker: useReranker,
-                agent_workflow: { workflow_id: normalizeAgentWorkflowForUi(agentWorkflowId) },
             };
-            if (isEvaluatorReplannerWorkflow(agentWorkflowId) && replansLimit !== null) {
+            const normalizedWorkflowId = normalizeAgentWorkflowForUi(agentWorkflowId);
+            if (normalizedWorkflowId) {
+                nextSettings.agent_workflow = { workflow_id: normalizedWorkflowId };
+            }
+            if (workflowSupportsReplans(agentWorkflows, agentWorkflowId) && replansLimit !== null) {
                 nextSettings.replans = Math.max(1, Math.min(replansLimit, replans));
             }
             const saved = await updateThreadSettings(activeThread.id, nextSettings);
@@ -2207,7 +2191,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 hitlWebApproval={hitlWebApproval}
                 useReranker={useReranker}
                 agentWorkflowId={agentWorkflowId}
-                agentWorkflowIsCustom={!isBuiltinAgentWorkflow(agentWorkflowId)}
+                agentWorkflowIsCustom={!isBuiltinAgentWorkflow(agentWorkflows, agentWorkflowId)}
                 agentWorkflows={agentWorkflows}
                 systemRole={systemRole}
                 toolInstructions={toolInstructions}

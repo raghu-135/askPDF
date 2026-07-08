@@ -11,11 +11,6 @@ from app.agent_patterns.node_catalog import get_node_catalog
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.route_registry import get_route_function_registry
 from app.agent_patterns.service import AgentRunService
-from app.agent_patterns.workflow_constants import (
-    ALLOWED_ROUTER_RAG_CONFIG_KEYS,
-    EVALUATOR_REPLANNER_RAG_AGENT_ID,
-    ROUTER_RAG_AGENT_ID,
-)
 from app.agent_patterns.builtin_workflows import builtin_workflow_keys
 from app.agent_patterns.validator import (
     TemplateResolver,
@@ -23,6 +18,12 @@ from app.agent_patterns.validator import (
     TemplateValidator,
     workflow_node_tool_requirements,
     workflow_required_tool_ids,
+)
+from app.agent_patterns.workflow_runtime import (
+    ALLOWED_WORKFLOW_CONFIG_KEYS,
+    default_agent_workflow_key,
+    with_default_runtime,
+    workflow_supports_replans,
 )
 from app.db import get_thread, get_thread_settings
 from app.time_utils import iso_utc_z
@@ -58,6 +59,7 @@ class AgentRunResumeRequest(BaseModel):
 
 
 def _workflow_payload(workflow) -> Dict[str, Any]:
+    spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
     return {
         "id": workflow.id,
         "workflow_id": workflow.id,
@@ -65,6 +67,7 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
         "description": workflow.description,
         "visibility": workflow.visibility,
         "is_builtin": workflow.is_builtin,
+        "supports_replans": workflow_supports_replans(spec),
         "created_at": iso_utc_z(workflow.created_at) if workflow.created_at else None,
         "updated_at": iso_utc_z(workflow.updated_at) if workflow.updated_at else None,
     }
@@ -130,12 +133,6 @@ def _turn_summary_payload(turn) -> Dict[str, Any]:
 def _pending_interrupt_payload(run) -> Dict[str, Any] | None:
     pending = run.pending_interrupt_json if isinstance(run.pending_interrupt_json, dict) else None
     return dict(pending) if pending else None
-
-
-def _workflow_pattern_type(workflow) -> str:
-    spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
-    pattern_type = spec.get("pattern_type")
-    return pattern_type if isinstance(pattern_type, str) and pattern_type else workflow.id
 
 
 def _run_payload(run, turns=None) -> Dict[str, Any]:
@@ -288,7 +285,7 @@ async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
     repo = AgentPatternRepository()
     try:
         workflow_id = (req.workflow_id or "").strip() or None
-        spec_json = dict(req.spec_json)
+        spec_json = with_default_runtime(dict(req.spec_json))
         spec_json["pattern_type"] = str(spec_json.get("pattern_type") or "custom_rag_agent")
         workflow = await repo.save_custom_workflow(
             workflow_id=workflow_id,
@@ -367,7 +364,7 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     thread_settings = await get_thread_settings(thread_id)
     agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
     agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
-    workflow_id = agent_settings.get("workflow_id") or ROUTER_RAG_AGENT_ID
+    workflow_id = agent_settings.get("workflow_id") or default_agent_workflow_key()
 
     workflow = await repo.get_workflow(
         workflow_id,
@@ -387,7 +384,7 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
         candidate = dict(workflow.spec_json or {})
         candidate_config = dict(candidate.get("config") or {})
         for source in (thread_settings or {}, req.overrides or {}):
-            for key in ALLOWED_ROUTER_RAG_CONFIG_KEYS:
+            for key in ALLOWED_WORKFLOW_CONFIG_KEYS:
                 value = source.get(key) if isinstance(source, dict) else None
                 if value is not None:
                     candidate_config[key] = value

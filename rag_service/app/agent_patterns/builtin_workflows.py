@@ -6,6 +6,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict
 
+from app.agent_patterns.workflow_runtime import RUNTIME_TEXT_FIELDS, SUPPORTED_RUNTIME_KINDS
+
 
 BUILTIN_WORKFLOW_DIR = Path(__file__).with_name("builtins")
 
@@ -22,6 +24,12 @@ def _builtin_workflow_payloads() -> tuple[Dict[str, Any], ...]:
         spec_json = payload.get("spec_json")
         if not isinstance(spec_json, dict) or spec_json.get("schema_version") != 2:
             raise ValueError(f"Builtin workflow file {path} must contain schema_version 2 spec_json")
+        runtime = spec_json.get("runtime")
+        if not isinstance(runtime, dict) or runtime.get("kind") not in SUPPORTED_RUNTIME_KINDS:
+            raise ValueError(f"Builtin workflow file {path} must contain supported spec_json.runtime")
+        missing_runtime_fields = sorted(field for field in RUNTIME_TEXT_FIELDS if not isinstance(runtime.get(field), str) or not runtime.get(field))
+        if missing_runtime_fields:
+            raise ValueError(f"Builtin workflow file {path} runtime is missing: {', '.join(missing_runtime_fields)}")
         payloads.append(payload)
     return tuple(payloads)
 

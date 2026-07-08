@@ -27,25 +27,7 @@ from app.agent_patterns.node_catalog import collect_node_catalog_errors, get_nod
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_patterns.service import AgentRunService
-from app.agent_patterns.builtin_workflows import (
-    EVALUATOR_REPLANNER_RAG_AGENT_ID,
-    EVALUATOR_REPLANNER_RAG_AGENT_VERSION,
-    EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION,
-    PLAN_EXECUTE_RAG_AGENT_ID,
-    PLAN_EXECUTE_RAG_AGENT_VERSION,
-    PLAN_EXECUTE_RAG_AGENT_V2_VERSION,
-    ROUTER_RAG_AGENT_ID,
-    ROUTER_RAG_AGENT_VERSION,
-    ROUTER_RAG_AGENT_V2_VERSION,
-    builtin_evaluator_replanner_rag_spec,
-    builtin_evaluator_replanner_rag_v2_spec,
-    builtin_plan_execute_rag_spec,
-    builtin_plan_execute_rag_v2_spec,
-    builtin_router_rag_hitl_web_spec,
-    builtin_router_rag_spec,
-    builtin_router_rag_v2_spec,
-    legacy_builtin_router_rag_v1_spec,
-)
+from app.agent_patterns.builtin_workflows import load_builtin_workflows
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
 from app.db import get_thread_settings
 from app.db.models_sqlmodel import AgentPatternTemplate, AgentRun, ChatTurn, Thread
@@ -56,6 +38,55 @@ from app.time_utils import iso_utc_z, utc_now
 
 SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 TRACE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "docs" / "agent_debug_trace_v1.schema.json"
+
+ROUTER_RAG_AGENT_ID = "router_rag_agent"
+PLAN_EXECUTE_RAG_AGENT_ID = "plan_execute_rag_agent"
+EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
+ROUTER_RAG_AGENT_VERSION = 2
+PLAN_EXECUTE_RAG_AGENT_VERSION = 2
+EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 2
+ROUTER_RAG_AGENT_V2_VERSION = 2
+PLAN_EXECUTE_RAG_AGENT_V2_VERSION = 2
+EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION = 2
+
+
+def _builtin_spec(builtin_key: str) -> dict:
+    for workflow in load_builtin_workflows():
+        if workflow.get("builtin_key") == builtin_key:
+            return workflow["spec_json"]
+    raise AssertionError(f"Missing builtin workflow fixture: {builtin_key}")
+
+
+def builtin_router_rag_spec() -> dict:
+    return _builtin_spec(ROUTER_RAG_AGENT_ID)
+
+
+def builtin_router_rag_v2_spec() -> dict:
+    return _builtin_spec(ROUTER_RAG_AGENT_ID)
+
+
+def legacy_builtin_router_rag_v1_spec() -> dict:
+    return _builtin_spec(ROUTER_RAG_AGENT_ID)
+
+
+def builtin_router_rag_hitl_web_spec() -> dict:
+    return _builtin_spec(ROUTER_RAG_AGENT_ID)
+
+
+def builtin_plan_execute_rag_spec() -> dict:
+    return _builtin_spec(PLAN_EXECUTE_RAG_AGENT_ID)
+
+
+def builtin_plan_execute_rag_v2_spec() -> dict:
+    return _builtin_spec(PLAN_EXECUTE_RAG_AGENT_ID)
+
+
+def builtin_evaluator_replanner_rag_spec() -> dict:
+    return _builtin_spec(EVALUATOR_REPLANNER_RAG_AGENT_ID)
+
+
+def builtin_evaluator_replanner_rag_v2_spec() -> dict:
+    return _builtin_spec(EVALUATOR_REPLANNER_RAG_AGENT_ID)
 
 
 def make_trace_recorder(run_id: str, thread_id: str, spec: dict, template_id: str = ROUTER_RAG_AGENT_ID) -> AgentTraceRecorder:

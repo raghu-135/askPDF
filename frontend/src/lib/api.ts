@@ -146,7 +146,7 @@ export interface ThreadSettings {
   hitl_web_approval: boolean;
   use_reranker: boolean;
   agent_workflow?: {
-    workflow_id: 'router_rag_agent' | string;
+    workflow_id: string;
   };
 }
 
@@ -276,6 +276,7 @@ export interface AgentWorkflow {
   description?: string;
   visibility?: string;
   is_builtin?: boolean;
+  supports_replans?: boolean;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -376,6 +377,9 @@ export interface PromptDefaults {
   custom_instructions: string;
   hitl_web_approval?: boolean;
   use_reranker?: boolean;
+  agent_workflow?: {
+    workflow_id: string;
+  };
 }
 
 export interface ThreadFile {

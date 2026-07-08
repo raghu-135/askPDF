@@ -86,7 +86,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onResetToolInstruction,
     onResetCustomInstructions,
 }) => {
-    const replansEnabled = agentWorkflowId === 'evaluator_replanner_rag_agent';
+    const replansEnabled = Boolean(agentWorkflows.find((workflow) => workflow.id === agentWorkflowId)?.supports_replans);
     const selectedWorkflowListed = agentWorkflows.some((pattern) => pattern.id === agentWorkflowId);
 
     return (

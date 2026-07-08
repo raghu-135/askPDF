@@ -132,6 +132,18 @@
       "use_web_search": false
     },
     "pattern_type": "plan_execute_rag_agent",
+    "runtime": {
+      "failure_code": "plan_execute_rag_execution_failed",
+      "failure_context": "Compiled Plan-and-Execute RAG Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Plan-and-Execute RAG execution",
+      "features": {
+        "supports_replans": false
+      },
+      "kind": "compiled_rag",
+      "label": "Plan-and-Execute RAG",
+      "prompt_preview": "planner",
+      "success_context": "Context retrieved by compiled Plan-and-Execute RAG Agent pattern."
+    },
     "schema_version": 2
   },
   "visibility": "builtin"

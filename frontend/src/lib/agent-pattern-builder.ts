@@ -47,6 +47,7 @@ export interface AgentPatternBuilderState {
   context_policy?: Record<string, any>;
   loop_policy?: Record<string, any>;
   hitl_policy?: Record<string, any>;
+  runtime?: Record<string, any>;
   extraConfig?: Record<string, any>;
 }
 
@@ -71,6 +72,17 @@ const REPEATABLE_NODE_TYPES = new Set([
 ]);
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+
+const defaultRuntime = (supportsReplans = false, promptPreview = 'router') => ({
+  kind: 'compiled_rag',
+  label: 'Compiled RAG',
+  failure_code: 'compiled_rag_execution_failed',
+  failure_reason_prefix: 'Exception during compiled RAG execution',
+  success_context: 'Context retrieved by compiled RAG workflow.',
+  failure_context: 'Compiled RAG workflow execution failed gracefully.',
+  features: { supports_replans: supportsReplans },
+  prompt_preview: promptPreview,
+});
 
 const nodeTypeById = (nodes: BuilderNodeState[]) => (
   new Map(nodes.map((node) => [node.id, node.type]))
@@ -318,6 +330,7 @@ export function createInitialBuilderState(
       allowed_tool_ids: collectAllowedToolIds(nodes),
       context_policy: defaultContextPolicy(catalog),
       loop_policy: createLoopPolicy(nodes, 9),
+      runtime: defaultRuntime(false, 'planner'),
     };
   }
 
@@ -357,6 +370,7 @@ export function createInitialBuilderState(
       allowed_tool_ids: collectAllowedToolIds(nodes),
       context_policy: defaultContextPolicy(catalog),
       loop_policy: createLoopPolicy(nodes, 16),
+      runtime: defaultRuntime(true, 'evaluator_replanner'),
     };
   }
 
@@ -386,6 +400,7 @@ export function createInitialBuilderState(
     allowed_tool_ids: collectAllowedToolIds(nodes),
     context_policy: defaultContextPolicy(catalog),
     loop_policy: createLoopPolicy(nodes, 9),
+    runtime: defaultRuntime(false, 'router'),
   };
 }
 
@@ -412,6 +427,7 @@ export function assembleAgentPatternSpec(
   return {
     schema_version: 2,
     pattern_type: state.patternType || 'custom_rag_agent',
+    runtime: clone(state.runtime || defaultRuntime(false)),
     config,
   };
 }
@@ -433,6 +449,7 @@ export function loadBuilderStateFromSpec(spec: AgentPatternBuilderSpec | Record<
     context_policy: config.context_policy ? clone(config.context_policy) : undefined,
     loop_policy: config.loop_policy ? clone(config.loop_policy) : undefined,
     hitl_policy: config.hitl_policy ? clone(config.hitl_policy) : undefined,
+    runtime: spec.runtime && typeof spec.runtime === 'object' ? clone(spec.runtime) : defaultRuntime(false),
     extraConfig,
   };
 }

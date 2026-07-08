@@ -157,6 +157,18 @@
       "use_web_search": false
     },
     "pattern_type": "evaluator_replanner_rag_agent",
+    "runtime": {
+      "failure_code": "evaluator_replanner_rag_execution_failed",
+      "failure_context": "Compiled Evaluator/Replanner RAG Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Evaluator/Replanner RAG execution",
+      "features": {
+        "supports_replans": true
+      },
+      "kind": "compiled_rag",
+      "label": "Evaluator/Replanner RAG",
+      "prompt_preview": "evaluator_replanner",
+      "success_context": "Context retrieved by compiled Evaluator/Replanner RAG Agent pattern."
+    },
     "schema_version": 2
   },
   "visibility": "builtin"
