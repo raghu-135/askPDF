@@ -15,8 +15,8 @@ import {
   Typography,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
-import type { AgentWorkflow, AgentPatternValidationReport } from '../../lib/api';
-import type { AgentPatternStarter } from '../../lib/agent-pattern-builder';
+import type { AgentWorkflow, AgentWorkflowValidationReport } from '../../lib/api';
+import type { AgentWorkflowStarter } from '../../lib/agent-workflow-builder';
 
 export default function BuilderActionsBar({
   starter,
@@ -31,11 +31,11 @@ export default function BuilderActionsBar({
   starter: string;
   customWorkflows?: AgentWorkflow[];
   disabled?: boolean;
-  onStarterChange: (starter: AgentPatternStarter | string) => void;
+  onStarterChange: (starter: AgentWorkflowStarter | string) => void;
   onReset: () => void;
   onValidate: () => void;
   validating: boolean;
-  validation: AgentPatternValidationReport | null;
+  validation: AgentWorkflowValidationReport | null;
 }) {
   const validationChip = validation ? (
     <Chip

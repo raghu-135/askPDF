@@ -26,10 +26,10 @@ from app.agent.prompting import (
     get_tool_catalog,
     normalize_tool_instructions,
 )
-from app.agent_patterns.prompting import build_agent_pattern_prompt_preview
-from app.agent_patterns.repository import AgentPatternRepository
-from app.agent_patterns.builtin_workflows import builtin_workflow_keys
-from app.agent_patterns.workflow_runtime import default_agent_workflow_key, workflow_supports_replans
+from app.agent_workflows.prompting import build_agent_workflow_prompt_preview
+from app.agent_workflows.repository import AgentWorkflowRepository
+from app.agent_workflows.builtin_workflows import builtin_workflow_keys
+from app.agent_workflows.workflow_runtime import default_agent_workflow_key, workflow_supports_replans
 from app.time_utils import iso_utc_z
 from app.db import (
     ProcessStatus,
@@ -78,7 +78,7 @@ async def _settings_workflow_supports_replans(settings: dict) -> bool:
     workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
     if not isinstance(workflow_id, str) or not workflow_id:
         return False
-    workflow = await AgentPatternRepository().get_workflow(workflow_id, include_custom=True)
+    workflow = await AgentWorkflowRepository().get_workflow(workflow_id, include_custom=True)
     spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
     return workflow_supports_replans(spec)
 
@@ -162,7 +162,7 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
         requested_workflow = req.agent_workflow_id
         if not requested_workflow and isinstance(req.agent_workflow, dict):
             requested_workflow = req.agent_workflow.get("workflow_id")
-        repo = AgentPatternRepository()
+        repo = AgentWorkflowRepository()
         await repo.seed_builtin_workflows()
         supported_builtin_workflow_keys = builtin_workflow_keys()
         workflow_id = requested_workflow if requested_workflow else default_agent_workflow_key()
@@ -171,7 +171,7 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
             workflow = await repo.get_workflow(default_agent_workflow_key())
         spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
         runtime = spec.get("runtime") if isinstance(spec.get("runtime"), dict) else {}
-        prompt = build_agent_pattern_prompt_preview(
+        prompt = build_agent_workflow_prompt_preview(
             prompt_profile=str(runtime.get("prompt_preview") or "router"),
             context_window=req.context_window,
             system_role=req.system_role or "",

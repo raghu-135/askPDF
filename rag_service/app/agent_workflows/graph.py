@@ -22,21 +22,21 @@ from app.models.retry import invoke_with_retry
 from app.agent.external_research_tools import search_web
 from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
 from app.rag.chat_service import prefetch_context
-from app.agent_patterns.prompting import (
+from app.agent_workflows.prompting import (
     build_evaluator_prompt,
     build_final_answer_messages,
     build_planner_prompt,
     build_replanner_prompt,
     build_router_prompt,
 )
-from app.agent_patterns.node_catalog import (
+from app.agent_workflows.node_catalog import (
     get_node_type_metadata,
     node_type_capabilities,
     node_type_default_max_visits,
     node_type_max_visits,
 )
-from app.agent_patterns.route_registry import route_function_allowed_for_node_type
-from app.agent_patterns.trace import (
+from app.agent_workflows.route_registry import route_function_allowed_for_node_type
+from app.agent_workflows.trace import (
     available_document_refs,
     compact_preview,
     compact_refs,
@@ -57,7 +57,7 @@ RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarif
 logger = logging.getLogger(__name__)
 FINAL_REVIEW_GATE_ID = "human_review_gate"
 WEB_APPROVAL_GATE_ID = "web_approval_gate"
-NODE_RUNTIME_CONFIG_KEY = "agent_pattern_node_runtime"
+NODE_RUNTIME_CONFIG_KEY = "agent_workflow_node_runtime"
 WORKER_NODE_ORDER = [
     "retrieval_worker",
     "memory_worker",
@@ -2294,7 +2294,7 @@ class TemplateCompiler:
         *,
         checkpointer: Any = None,
     ):
-        from app.agent_patterns.validator import TemplateValidator
+        from app.agent_workflows.validator import TemplateValidator
 
         graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
         if not graph_spec.get("hitl_compiled"):

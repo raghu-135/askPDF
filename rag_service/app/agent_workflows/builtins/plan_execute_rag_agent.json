@@ -1,8 +1,8 @@
 {
-  "builtin_key": "router_rag_agent",
-  "description": "A compiled LangGraph pattern that loads context, routes to document retrieval, memory retrieval, direct answer, or clarification, then synthesizes a final response.",
+  "builtin_key": "plan_execute_rag_agent",
+  "description": "A scoped compiled RAG pattern that loads context, plans a bounded set of retrieval workers, executes them in a fixed safe order, then synthesizes a final response.",
   "is_builtin": true,
-  "name": "Router RAG Agent",
+  "name": "Plan-and-Execute RAG Agent",
   "spec_json": {
     "config": {
       "allowed_tool_ids": [
@@ -29,40 +29,37 @@
           },
           {
             "from": "context_loader",
-            "to": "router"
+            "to": "planner"
           },
           {
             "conditional": true,
-            "from": "router",
-            "route_fn": "router_route",
+            "from": "planner",
+            "route_fn": "planner_route",
             "routes": {
               "clarify": "finalizer",
               "direct": "direct_answer",
-              "document": "retrieval_worker",
-              "memory": "memory_worker",
-              "timeline": "timeline_worker",
-              "web": "web_worker"
+              "execute": "retrieval_worker"
             }
-          },
-          {
-            "from": "retrieval_worker",
-            "to": "synthesizer"
-          },
-          {
-            "from": "memory_worker",
-            "to": "synthesizer"
-          },
-          {
-            "from": "timeline_worker",
-            "to": "synthesizer"
-          },
-          {
-            "from": "web_worker",
-            "to": "synthesizer"
           },
           {
             "from": "direct_answer",
             "to": "finalizer"
+          },
+          {
+            "from": "retrieval_worker",
+            "to": "memory_worker"
+          },
+          {
+            "from": "memory_worker",
+            "to": "timeline_worker"
+          },
+          {
+            "from": "timeline_worker",
+            "to": "web_worker"
+          },
+          {
+            "from": "web_worker",
+            "to": "synthesizer"
           },
           {
             "from": "synthesizer",
@@ -79,8 +76,12 @@
             "type": "context_loader"
           },
           {
-            "id": "router",
-            "type": "router"
+            "id": "planner",
+            "type": "planner"
+          },
+          {
+            "id": "direct_answer",
+            "type": "direct_answer"
           },
           {
             "id": "retrieval_worker",
@@ -97,10 +98,6 @@
           {
             "id": "web_worker",
             "type": "web_worker"
-          },
-          {
-            "id": "direct_answer",
-            "type": "direct_answer"
           },
           {
             "id": "synthesizer",
@@ -134,18 +131,18 @@
       "use_reranker": true,
       "use_web_search": false
     },
-    "pattern_type": "router_rag_agent",
+    "pattern_type": "plan_execute_rag_agent",
     "runtime": {
-      "failure_code": "router_rag_execution_failed",
-      "failure_context": "Compiled Router RAG Agent execution failed gracefully.",
-      "failure_reason_prefix": "Exception during Router RAG execution",
+      "failure_code": "plan_execute_rag_execution_failed",
+      "failure_context": "Compiled Plan-and-Execute RAG Agent execution failed gracefully.",
+      "failure_reason_prefix": "Exception during Plan-and-Execute RAG execution",
       "features": {
         "supports_replans": false
       },
       "kind": "compiled_rag",
-      "label": "Router RAG",
-      "prompt_preview": "router",
-      "success_context": "Context retrieved by compiled Router RAG Agent pattern."
+      "label": "Plan-and-Execute RAG",
+      "prompt_preview": "planner",
+      "success_context": "Context retrieved by compiled Plan-and-Execute RAG Agent workflow."
     },
     "schema_version": 2
   },

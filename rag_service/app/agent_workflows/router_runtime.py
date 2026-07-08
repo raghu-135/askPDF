@@ -6,8 +6,8 @@ from typing import Any, Dict
 
 from langgraph.types import Command
 
-from app.agent_patterns.graph import TemplateCompiler
-from app.agent_patterns.workflow_runtime import runtime_execution_options
+from app.agent_workflows.graph import TemplateCompiler
+from app.agent_workflows.workflow_runtime import runtime_execution_options
 from app.db import (
     create_chat_turn,
     increment_qa_stats,
@@ -15,7 +15,7 @@ from app.db import (
 )
 from app.rag.indexer import index_chat_memory_for_thread
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
-from app.agent_patterns.trace import compact_preview
+from app.agent_workflows.trace import compact_preview
 
 
 logger = logging.getLogger(__name__)
@@ -610,7 +610,7 @@ async def resume_compiled_rag_chat(
         result=result,
         agent_run_context=agent_run_context,
         duration_ms=duration_ms,
-        success_context="Context retrieved by resumed compiled Agent pattern.",
+        success_context="Context retrieved by resumed compiled Agent workflow.",
     )
     logger.info(
         "Checkpointed agent run resumed | run_id=%s thread_id=%s route=%s status=%s elapsed_ms=%.1f",

@@ -15,10 +15,10 @@ import {
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
 import dynamic from 'next/dynamic';
-import type { AgentPatternCatalogResponse } from '../../lib/api';
+import type { AgentWorkflowCatalogResponse } from '../../lib/api';
 import type { AgentGraphSelection } from '../agent-graph/agent-graph-types';
-import type { AgentPatternBuilderState, BuilderEdgeState } from '../../lib/agent-pattern-builder';
-import { assembleAgentPatternSpec, canConnectNodes } from '../../lib/agent-pattern-builder';
+import type { AgentWorkflowBuilderState, BuilderEdgeState } from '../../lib/agent-workflow-builder';
+import { assembleAgentWorkflowSpec, canConnectNodes } from '../../lib/agent-workflow-builder';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
 
 const AgentGraphCanvas = dynamic(() => import('../agent-graph/AgentGraphCanvas'), { ssr: false });
@@ -50,8 +50,8 @@ export default function BuilderGraphEditor({
   onAddEdge,
   onNodePositionChange,
 }: {
-  catalog: AgentPatternCatalogResponse;
-  state: AgentPatternBuilderState;
+  catalog: AgentWorkflowCatalogResponse;
+  state: AgentWorkflowBuilderState;
   selection: BuilderSelection;
   validationIssues: BuilderValidationIssue[];
   disabled?: boolean;
@@ -61,7 +61,7 @@ export default function BuilderGraphEditor({
 }) {
   const [source, setSource] = useState('START');
   const [target, setTarget] = useState(state.nodes[0]?.id || 'END');
-  const spec = useMemo(() => assembleAgentPatternSpec(state), [state]);
+  const spec = useMemo(() => assembleAgentWorkflowSpec(state), [state]);
   const compatibility = canConnectNodes(catalog, state, source, target);
   const issueCountForSelection = useCallback((targetSelection: BuilderSelection) => (
     validationIssues.filter((issue) => {

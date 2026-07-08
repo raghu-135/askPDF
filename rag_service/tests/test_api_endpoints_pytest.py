@@ -486,7 +486,7 @@ class TestThreadEndpoints:
         assert "# Final Answer Prompt" in data["prompt"]
 
     def test_prompt_preview_supports_plan_execute_pattern(self, client):
-        """Prompt preview should use selected agent pattern runtime prompts."""
+        """Prompt preview should use selected agent workflow runtime prompts."""
         response = client.post(
             "/api/threads/prompt-preview",
             json={

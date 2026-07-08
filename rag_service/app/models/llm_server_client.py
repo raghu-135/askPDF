@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import BaseModel as OpenAIBaseModel
 
-from app.agent_patterns.workflow_runtime import default_agent_workflow_key
+from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
 
 try:

@@ -5,7 +5,7 @@ import type {
   AgentGraphRuntimeOverlay,
   AgentGraphToolSummary,
   AgentTraceRefs,
-  AgentPatternGraphSpec,
+  AgentWorkflowGraphSpec,
 } from './agent-graph-types';
 export { formatNodeLabel, formatNodeInstanceLabel } from './agent-node-labels.js';
 import { formatNodeLabel, formatNodeInstanceLabel } from './agent-node-labels.js';
@@ -96,14 +96,14 @@ const selectedConditionalRoute = (
   return false;
 };
 
-export const getAgentGraphSpec = (resolvedSpec?: Record<string, any>, templateId?: string): AgentPatternGraphSpec => {
+export const getAgentGraphSpec = (resolvedSpec?: Record<string, any>, templateId?: string): AgentWorkflowGraphSpec => {
   const graph = resolvedSpec?.config?.graph;
   if (graph && Array.isArray(graph.nodes) && Array.isArray(graph.edges)) return graph;
   return { nodes: [], edges: [] };
 };
 
 export const buildAgentGraph = (
-  graphSpec: AgentPatternGraphSpec,
+  graphSpec: AgentWorkflowGraphSpec,
   overlay: AgentGraphRuntimeOverlay = {},
 ) => {
   const nodeRows = asArray(overlay.nodeRows);

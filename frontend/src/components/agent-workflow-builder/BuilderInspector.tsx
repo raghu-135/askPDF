@@ -16,14 +16,14 @@ import {
   Typography,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
-import type { AgentPatternCatalogResponse } from '../../lib/api';
-import type { AgentPatternBuilderState, BuilderEdgeState, BuilderNodeState } from '../../lib/agent-pattern-builder';
+import type { AgentWorkflowCatalogResponse } from '../../lib/api';
+import type { AgentWorkflowBuilderState, BuilderEdgeState, BuilderNodeState } from '../../lib/agent-workflow-builder';
 import {
   canConnectNodes,
   getAllowedRouteFunctionsForNode,
   getAllowedToolContractsForNode,
   getRouteLabelsForFunction,
-} from '../../lib/agent-pattern-builder';
+} from '../../lib/agent-workflow-builder';
 import type { BuilderSelection } from './types';
 
 const asArrayValue = (value: unknown): string[] => (
@@ -35,8 +35,8 @@ const nodeLabel = (node?: BuilderNodeState) => (
 );
 
 const targetOptionsForSource = (
-  catalog: AgentPatternCatalogResponse,
-  state: AgentPatternBuilderState,
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
   sourceId: string,
 ) => [
   ...state.nodes.map((node) => node.id),
@@ -44,8 +44,8 @@ const targetOptionsForSource = (
 ].filter((targetId) => targetId !== sourceId && canConnectNodes(catalog, state, sourceId, targetId).ok);
 
 const sourceOptionsForTarget = (
-  catalog: AgentPatternCatalogResponse,
-  state: AgentPatternBuilderState,
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
   targetId: string,
 ) => [
   'START',
@@ -61,8 +61,8 @@ function NodeInspector({
   onRemoveNode,
   onAddHitlGate,
 }: {
-  catalog: AgentPatternCatalogResponse;
-  state: AgentPatternBuilderState;
+  catalog: AgentWorkflowCatalogResponse;
+  state: AgentWorkflowBuilderState;
   node: BuilderNodeState;
   disabled?: boolean;
   onUpdateNode: (nodeId: string, patch: Partial<BuilderNodeState>) => void;
@@ -268,8 +268,8 @@ function EdgeInspector({
   onUpdateEdge,
   onRemoveEdge,
 }: {
-  catalog: AgentPatternCatalogResponse;
-  state: AgentPatternBuilderState;
+  catalog: AgentWorkflowCatalogResponse;
+  state: AgentWorkflowBuilderState;
   edge: BuilderEdgeState;
   edgeIndex: number;
   disabled?: boolean;
@@ -493,8 +493,8 @@ export default function BuilderInspector({
   onRemoveEdge,
   onAddHitlGate,
 }: {
-  catalog: AgentPatternCatalogResponse;
-  state: AgentPatternBuilderState;
+  catalog: AgentWorkflowCatalogResponse;
+  state: AgentWorkflowBuilderState;
   selection: BuilderSelection;
   disabled?: boolean;
   onUpdateNode: (nodeId: string, patch: Partial<BuilderNodeState>) => void;

@@ -16,14 +16,14 @@ import {
   getInternalAgentWorkflowCatalog,
   listAgentWorkflows,
   previewThreadAgentConfig,
-  validateAgentPatternSpec,
+  validateAgentWorkflowSpec,
   type AgentWorkflow,
-  type AgentPatternCatalogResponse,
-  type AgentPatternValidationReport,
+  type AgentWorkflowCatalogResponse,
+  type AgentWorkflowValidationReport,
   type ThreadAgentConfigPreviewResponse,
 } from '../../lib/api';
 import {
-  assembleAgentPatternSpec,
+  assembleAgentWorkflowSpec,
   canAddNodeType,
   canConnectNodes,
   createHitlGateForTarget,
@@ -32,11 +32,11 @@ import {
   getCanonicalNodeId,
   loadBuilderStateFromSpec,
   normalizeBuilderState,
-  type AgentPatternBuilderState,
-  type AgentPatternStarter,
+  type AgentWorkflowBuilderState,
+  type AgentWorkflowStarter,
   type BuilderEdgeState,
   type BuilderNodeState,
-} from '../../lib/agent-pattern-builder';
+} from '../../lib/agent-workflow-builder';
 import BuilderActionsBar from './BuilderActionsBar';
 import BuilderGraphEditor from './BuilderGraphEditor';
 import BuilderInspector from './BuilderInspector';
@@ -60,10 +60,10 @@ const collectNodeToolIds = (nodes: BuilderNodeState[]) => (
   Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
 );
 
-const BUILTIN_STARTERS: AgentPatternStarter[] = ['router', 'plan_execute', 'evaluator_replanner'];
+const BUILTIN_STARTERS: AgentWorkflowStarter[] = ['router', 'plan_execute', 'evaluator_replanner'];
 
-const isBuiltinStarter = (value: string): value is AgentPatternStarter => (
-  BUILTIN_STARTERS.includes(value as AgentPatternStarter)
+const isBuiltinStarter = (value: string): value is AgentWorkflowStarter => (
+  BUILTIN_STARTERS.includes(value as AgentWorkflowStarter)
 );
 
 const customStarterValue = (workflowId: string) => `custom:${workflowId}`;
@@ -72,15 +72,15 @@ const workflowIdFromCustomStarter = (value: string) => (
   value.startsWith('custom:') ? value.slice('custom:'.length) : null
 );
 
-const edgeIndexFromSource = (state: AgentPatternBuilderState, sourceId: string) => (
+const edgeIndexFromSource = (state: AgentWorkflowBuilderState, sourceId: string) => (
   state.edges.findIndex((edge) => edge.from === sourceId)
 );
 
-const edgeIndexFromSourceTarget = (state: AgentPatternBuilderState, sourceId: string, targetId: string) => (
+const edgeIndexFromSourceTarget = (state: AgentWorkflowBuilderState, sourceId: string, targetId: string) => (
   state.edges.findIndex((edge) => edge.from === sourceId && (edge.to === targetId || Object.values(edge.routes || {}).includes(targetId)))
 );
 
-const inferIssueSelection = (state: AgentPatternBuilderState, message: string): BuilderSelection => {
+const inferIssueSelection = (state: AgentWorkflowBuilderState, message: string): BuilderSelection => {
   const explicitNode = message.match(/graph node ([^. ]+)/)?.[1]
     || message.match(/duplicate graph node id: ([^ ]+)/)?.[1]
     || message.match(/node_visit_limits\.([^ ]+)/)?.[1];
@@ -104,8 +104,8 @@ const inferIssueSelection = (state: AgentPatternBuilderState, message: string): 
 };
 
 const buildValidationIssues = (
-  state: AgentPatternBuilderState | null,
-  validation: AgentPatternValidationReport | null,
+  state: AgentWorkflowBuilderState | null,
+  validation: AgentWorkflowValidationReport | null,
 ): BuilderValidationIssue[] => {
   if (!state || !validation) return [];
   return [
@@ -128,18 +128,18 @@ const hasExplicitFalse = (boundary: Record<string, any>, keys: string[]) => (
   keys.some((key) => boundary[key] === false)
 );
 
-const deriveInternalBoundary = (catalog: AgentPatternCatalogResponse | null): BuilderInternalBoundary => {
+const deriveInternalBoundary = (catalog: AgentWorkflowCatalogResponse | null): BuilderInternalBoundary => {
   const rawBoundary = catalog?.auth_boundary || {};
   const boundary = rawBoundary as Record<string, any>;
   const hasMetadata = Object.keys(boundary).length > 0;
   const authoringEnabled = !hasExplicitFalse(boundary, [
     'authoring_enabled',
     'internal_authoring_enabled',
-    'internal_agent_pattern_authoring_enabled',
+    'internal_agent_workflow_authoring_enabled',
   ]);
   const runtimeEnabled = !hasExplicitFalse(boundary, [
     'custom_runtime_enabled',
-    'custom_patterns_enabled',
+    'custom_workflows_enabled',
     'runtime_custom_execution_enabled',
   ]);
   const messages: BuilderBoundaryMessage[] = [];
@@ -186,17 +186,17 @@ const usePrefersDarkMode = () => {
   return darkMode;
 };
 
-export default function AgentPatternBuilderPage() {
+export default function AgentWorkflowBuilderPage() {
   const darkMode = usePrefersDarkMode();
   const theme = useMemo(() => getTheme(darkMode), [darkMode]);
-  const [catalog, setCatalog] = useState<AgentPatternCatalogResponse | null>(null);
+  const [catalog, setCatalog] = useState<AgentWorkflowCatalogResponse | null>(null);
   const [customWorkflows, setCustomWorkflows] = useState<AgentWorkflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [starter, setStarter] = useState<string>('router');
-  const [builderState, setBuilderState] = useState<AgentPatternBuilderState | null>(null);
+  const [builderState, setBuilderState] = useState<AgentWorkflowBuilderState | null>(null);
   const [selection, setSelection] = useState<BuilderSelection>(null);
-  const [validation, setValidation] = useState<AgentPatternValidationReport | null>(null);
+  const [validation, setValidation] = useState<AgentWorkflowValidationReport | null>(null);
   const [validating, setValidating] = useState(false);
   const [threadPreviewId, setThreadPreviewId] = useState('');
   const [threadPreview, setThreadPreview] = useState<ThreadAgentConfigPreviewResponse | null>(null);
@@ -245,7 +245,7 @@ export default function AgentPatternBuilderPage() {
     setCustomWorkflows((response.agent_workflows || []).filter((pattern) => !pattern.is_builtin));
   }, []);
 
-  const updateState = useCallback((updater: (previous: AgentPatternBuilderState) => AgentPatternBuilderState) => {
+  const updateState = useCallback((updater: (previous: AgentWorkflowBuilderState) => AgentWorkflowBuilderState) => {
     if (!catalog || authoringDisabled) return;
     setBuilderState((previous) => {
       if (!previous) return previous;
@@ -261,7 +261,7 @@ export default function AgentPatternBuilderPage() {
     setPersistenceStatus(null);
   }, [authoringDisabled, catalog]);
 
-  const resetToStarter = useCallback((nextStarter: AgentPatternStarter = 'router') => {
+  const resetToStarter = useCallback((nextStarter: AgentWorkflowStarter = 'router') => {
     if (!catalog || authoringDisabled) return;
     setBuilderState(createInitialBuilderState(catalog, nextStarter));
     setStarter(nextStarter);
@@ -302,7 +302,7 @@ export default function AgentPatternBuilderPage() {
     }
   }, [authoringDisabled, catalog]);
 
-  const handleStarterChange = (nextStarter: AgentPatternStarter | string) => {
+  const handleStarterChange = (nextStarter: AgentWorkflowStarter | string) => {
     if (authoringDisabled) return;
     const customWorkflowId = workflowIdFromCustomStarter(nextStarter);
     if (customWorkflowId) {
@@ -393,7 +393,7 @@ export default function AgentPatternBuilderPage() {
     if (!builderState) return;
     try {
       setValidating(true);
-      const report = await validateAgentPatternSpec(assembleAgentPatternSpec(builderState));
+      const report = await validateAgentWorkflowSpec(assembleAgentWorkflowSpec(builderState));
       setValidation(report);
     } catch (err) {
       setValidation({
@@ -407,7 +407,7 @@ export default function AgentPatternBuilderPage() {
   };
 
   const spec = useMemo(() => (
-    builderState ? assembleAgentPatternSpec(builderState) : null
+    builderState ? assembleAgentWorkflowSpec(builderState) : null
   ), [builderState]);
   const validationIssues = useMemo(() => (
     buildValidationIssues(builderState, validation)
@@ -445,7 +445,7 @@ export default function AgentPatternBuilderPage() {
       setPersistenceStatus(null);
       const workflowId = persistedWorkflow?.workflow.id;
       const saveSpec = { ...spec };
-      const report = await validateAgentPatternSpec(saveSpec);
+      const report = await validateAgentWorkflowSpec(saveSpec);
       setValidation(report);
       if (!report.valid) {
         setPersistenceError('Validation failed. Fix the reported issues before saving.');

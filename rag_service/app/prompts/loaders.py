@@ -1,7 +1,7 @@
 """
 Prompt file loaders - Simple utilities to load prompt markdown files.
 
-Prompt composition lives in agent_patterns/prompting.py. This module just
+Prompt composition lives in agent_workflows/prompting.py. This module just
 handles file I/O and narrow shared prompt fragments.
 """
 
@@ -20,4 +20,4 @@ def load_prompt(filename: str) -> str:
 
 def get_web_search_mandate() -> str:
     """Load the web search mandate section."""
-    return load_prompt("agent_patterns/web_search_mandate.md")
+    return load_prompt("agent_workflows/web_search_mandate.md")

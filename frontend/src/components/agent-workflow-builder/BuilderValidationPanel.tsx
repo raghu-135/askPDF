@@ -16,11 +16,11 @@ import {
 } from '@mui/material';
 import dynamic from 'next/dynamic';
 import type {
-  AgentPatternCatalogResponse,
-  AgentPatternValidationReport,
+  AgentWorkflowCatalogResponse,
+  AgentWorkflowValidationReport,
   ThreadAgentConfigPreviewResponse,
 } from '../../lib/api';
-import type { AgentPatternBuilderSpec } from '../../lib/api';
+import type { AgentWorkflowBuilderSpec } from '../../lib/api';
 import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
 
@@ -39,9 +39,9 @@ export default function BuilderValidationPanel({
   previewError,
   onSelectIssue,
 }: {
-  catalog: AgentPatternCatalogResponse;
-  spec: AgentPatternBuilderSpec;
-  validation: AgentPatternValidationReport | null;
+  catalog: AgentWorkflowCatalogResponse;
+  spec: AgentWorkflowBuilderSpec;
+  validation: AgentWorkflowValidationReport | null;
   issues: BuilderValidationIssue[];
   threadPreviewId: string;
   onThreadPreviewIdChange: (threadId: string) => void;

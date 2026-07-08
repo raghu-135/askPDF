@@ -152,7 +152,7 @@ export interface ThreadSettings {
 
 // ============ Agent Workflow Builder API ============
 
-export interface AgentPatternGraphSpec {
+export interface AgentWorkflowGraphSpec {
   nodes?: {
     id: string;
     type: string;
@@ -167,11 +167,11 @@ export interface AgentPatternGraphSpec {
   }[];
 }
 
-export interface AgentPatternBuilderSpec {
+export interface AgentWorkflowBuilderSpec {
   schema_version: 2;
   pattern_type: 'custom_rag_agent' | string;
   config: {
-    graph?: AgentPatternGraphSpec;
+    graph?: AgentWorkflowGraphSpec;
     loop_policy?: Record<string, any>;
     hitl_policy?: Record<string, any>;
     allowed_tool_ids?: string[];
@@ -181,7 +181,7 @@ export interface AgentPatternBuilderSpec {
   [key: string]: any;
 }
 
-export interface AgentPatternContextPolicy {
+export interface AgentWorkflowContextPolicy {
   mode?: string;
   input_budget?: string;
   output_budget?: string;
@@ -191,7 +191,7 @@ export interface AgentPatternContextPolicy {
   [key: string]: any;
 }
 
-export interface AgentPatternObservability {
+export interface AgentWorkflowObservability {
   span_kind?: string;
   event_prefix?: string;
   summary_fields?: string[];
@@ -199,7 +199,7 @@ export interface AgentPatternObservability {
   [key: string]: any;
 }
 
-export interface AgentPatternNodeCatalogEntry {
+export interface AgentWorkflowNodeCatalogEntry {
   display_name: string;
   displayName?: string;
   category: string;
@@ -212,13 +212,13 @@ export interface AgentPatternNodeCatalogEntry {
   state_reads: string[];
   state_writes: string[];
   prompt_slots: string[];
-  context_policy: AgentPatternContextPolicy;
-  observability: AgentPatternObservability;
+  context_policy: AgentWorkflowContextPolicy;
+  observability: AgentWorkflowObservability;
   max_instances: number;
   [key: string]: any;
 }
 
-export interface AgentPatternRouteFunctionMetadata {
+export interface AgentWorkflowRouteFunctionMetadata {
   id?: string;
   name?: string;
   display_name?: string;
@@ -229,7 +229,7 @@ export interface AgentPatternRouteFunctionMetadata {
   [key: string]: any;
 }
 
-export interface AgentPatternToolContract {
+export interface AgentWorkflowToolContract {
   id: string;
   category?: string;
   display_name?: string;
@@ -242,7 +242,7 @@ export interface AgentPatternToolContract {
   [key: string]: any;
 }
 
-export interface AgentPatternCatalogResponse {
+export interface AgentWorkflowCatalogResponse {
   schema_version: number;
   spec_schema_version: 2 | number;
   graph_spec: {
@@ -253,11 +253,11 @@ export interface AgentPatternCatalogResponse {
     end_node: string;
     [key: string]: any;
   };
-  node_catalog: Record<string, AgentPatternNodeCatalogEntry>;
-  route_functions: Record<string, AgentPatternRouteFunctionMetadata>;
-  tool_contracts: Record<string, AgentPatternToolContract>;
+  node_catalog: Record<string, AgentWorkflowNodeCatalogEntry>;
+  route_functions: Record<string, AgentWorkflowRouteFunctionMetadata>;
+  tool_contracts: Record<string, AgentWorkflowToolContract>;
   defaults: {
-    context_policy?: AgentPatternContextPolicy;
+    context_policy?: AgentWorkflowContextPolicy;
     loop_policy?: Record<string, any>;
     [key: string]: any;
   };
@@ -281,7 +281,7 @@ export interface AgentWorkflow {
   updated_at?: string | null;
 }
 
-export interface AgentPatternValidationReport {
+export interface AgentWorkflowValidationReport {
   valid: boolean;
   errors: string[];
   warnings: string[];
@@ -293,8 +293,8 @@ export interface AgentPatternValidationReport {
 export interface AgentWorkflowSpecResponse {
   workflow_id: string;
   schema_version: number;
-  spec_json: AgentPatternBuilderSpec | Record<string, any>;
-  validation: AgentPatternValidationReport;
+  spec_json: AgentWorkflowBuilderSpec | Record<string, any>;
+  validation: AgentWorkflowValidationReport;
   validation_result_json?: Record<string, any>;
   created_at?: string | null;
   updated_at?: string | null;
@@ -319,17 +319,17 @@ export interface SaveInternalAgentWorkflowPayload {
   workflow_id?: string;
   name: string;
   description?: string;
-  spec_json: AgentPatternBuilderSpec | Record<string, any>;
+  spec_json: AgentWorkflowBuilderSpec | Record<string, any>;
 }
 
 export interface ThreadAgentConfigValidationResponse {
   valid: boolean;
   workflow_id: string;
-  validation: AgentPatternValidationReport;
-  resolved_spec_json: AgentPatternBuilderSpec | Record<string, any>;
+  validation: AgentWorkflowValidationReport;
+  resolved_spec_json: AgentWorkflowBuilderSpec | Record<string, any>;
 }
 
-export interface AgentPatternGraphPreview {
+export interface AgentWorkflowGraphPreview {
   nodes?: Record<string, any>[];
   edges?: Record<string, any>[];
   executionPlan?: string[];
@@ -340,9 +340,9 @@ export interface AgentPatternGraphPreview {
 export interface ThreadAgentConfigPreviewResponse {
   thread_id?: string;
   workflow_id?: string;
-  validation?: AgentPatternValidationReport;
-  resolved_spec_json?: AgentPatternBuilderSpec | Record<string, any>;
-  graph?: AgentPatternGraphPreview;
+  validation?: AgentWorkflowValidationReport;
+  resolved_spec_json?: AgentWorkflowBuilderSpec | Record<string, any>;
+  graph?: AgentWorkflowGraphPreview;
   prompt?: string;
   prompt_preview?: string;
   [key: string]: any;
@@ -677,7 +677,7 @@ export async function getPromptPreview(payload: {
   return res.json();
 }
 
-export async function getInternalAgentWorkflowCatalog(): Promise<AgentPatternCatalogResponse> {
+export async function getInternalAgentWorkflowCatalog(): Promise<AgentWorkflowCatalogResponse> {
   const res = await fetch(`${API_BASE}/api/internal/agent-workflows/catalog`);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
@@ -719,9 +719,9 @@ export async function deleteInternalAgentWorkflow(
   return res.json();
 }
 
-export async function validateAgentPatternSpec(
-  spec: AgentPatternBuilderSpec | Record<string, any>
-): Promise<AgentPatternValidationReport> {
+export async function validateAgentWorkflowSpec(
+  spec: AgentWorkflowBuilderSpec | Record<string, any>
+): Promise<AgentWorkflowValidationReport> {
   const res = await fetch(`${API_BASE}/api/agent-workflows/validate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

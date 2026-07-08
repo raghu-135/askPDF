@@ -364,7 +364,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 const [res, patterns] = await Promise.all([
                     getPromptTools(),
                     listAgentWorkflows().catch((error) => {
-                        console.error('Failed to load agent patterns:', error);
+                        console.error('Failed to load agent workflows:', error);
                         return { agent_workflows: [] };
                     }),
                 ]);

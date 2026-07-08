@@ -167,7 +167,7 @@
       "kind": "compiled_rag",
       "label": "Evaluator/Replanner RAG",
       "prompt_preview": "evaluator_replanner",
-      "success_context": "Context retrieved by compiled Evaluator/Replanner RAG Agent pattern."
+      "success_context": "Context retrieved by compiled Evaluator/Replanner RAG Agent workflow."
     },
     "schema_version": 2
   },

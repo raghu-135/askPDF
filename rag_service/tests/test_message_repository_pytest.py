@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlmodel import select
 
 
-from app.agent_workflows.repository import AgentPatternRepository
-from app.agent_patterns.workflow_runtime import default_agent_workflow_key
+from app.agent_workflows.repository import AgentWorkflowRepository
+from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.db.models_sqlmodel import ChatTurn, MessageRole
 from app.db.repositories.message_repo_sqlmodel import (
     MessageRepository,
@@ -30,7 +30,7 @@ async def _create_agent_run(engine, thread_id: str):
         autoflush=False,
     )
     async with session_factory() as repo_session:
-        agent_repo = AgentPatternRepository(repo_session)
+        agent_repo = AgentWorkflowRepository(repo_session)
         await agent_repo.seed_builtin_workflows()
         workflow_key = default_agent_workflow_key()
         workflow = await agent_repo.get_workflow(workflow_key)

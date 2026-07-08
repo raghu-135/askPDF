@@ -6,8 +6,8 @@ from app.agent.tool_registry import (
     list_tool_contract_metadata,
     validate_tool_call_allowed,
 )
-from app.agent_patterns.builtin_workflows import load_builtin_workflows
-from app.agent_patterns.validator import TemplateValidator
+from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.agent_workflows.validator import TemplateValidator
 
 
 def _builtin_spec(builtin_key: str):

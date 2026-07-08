@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 
 from app.agent.prompting import format_runtime_datetime_context
-from app.agent_patterns.prompting import build_agent_pattern_prompt_preview, build_planner_prompt, build_router_prompt
+from app.agent_workflows.prompting import build_agent_workflow_prompt_preview, build_planner_prompt, build_router_prompt
 
 
 def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
@@ -24,7 +24,7 @@ def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
 
 
 def test_router_agent_prompt_preview_uses_graph_runtime_prompts():
-    prompt = build_agent_pattern_prompt_preview(
+    prompt = build_agent_workflow_prompt_preview(
         pattern_id="router_rag_agent",
         context_window=8192,
         system_role="Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers.",
@@ -49,7 +49,7 @@ def test_router_agent_prompt_preview_uses_graph_runtime_prompts():
 
 
 def test_plan_execute_agent_prompt_preview_uses_planner_prompt():
-    prompt = build_agent_pattern_prompt_preview(
+    prompt = build_agent_workflow_prompt_preview(
         pattern_id="plan_execute_rag_agent",
         context_window=8192,
     )

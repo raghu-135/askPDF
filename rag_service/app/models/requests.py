@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.agent_patterns.workflow_runtime import default_agent_workflow_key
+from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
     LOCAL_EMBEDDING_MODEL,
     DEFAULT_TOKEN_BUDGET,

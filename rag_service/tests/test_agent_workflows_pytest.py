@@ -12,25 +12,25 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.tool_registry import collect_tool_contract_metadata_errors, tool_contracts_by_id
-from app.agent_patterns.checkpointing import open_agent_checkpointer
-from app.agent_patterns.router_runtime import handle_router_rag_chat
-from app.agent_patterns.graph import NodeRegistry, TemplateCompiler, _final_context_from_state, _llm_result_metadata, _route_function_for_edge
-from app.agent_patterns.graph import (
+from app.agent_workflows.checkpointing import open_agent_checkpointer
+from app.agent_workflows.router_runtime import handle_router_rag_chat
+from app.agent_workflows.graph import NodeRegistry, TemplateCompiler, _final_context_from_state, _llm_result_metadata, _route_function_for_edge
+from app.agent_workflows.graph import (
     build_planner_prompt,
     infer_required_plan_steps,
     normalize_execution_plan,
     normalize_evaluator_report,
 )
-from app.agent_patterns.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace, build_runtime_trace_event
-from app.agent_patterns.metrics import build_run_metrics
-from app.agent_patterns.node_catalog import collect_node_catalog_errors, get_node_catalog
-from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
-from app.agent_patterns.route_registry import collect_route_function_registry_errors, get_route_function_registry
-from app.agent_patterns.service import AgentRunService
-from app.agent_patterns.builtin_workflows import load_builtin_workflows
-from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
+from app.agent_workflows.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace, build_runtime_trace_event
+from app.agent_workflows.metrics import build_run_metrics
+from app.agent_workflows.node_catalog import collect_node_catalog_errors, get_node_catalog
+from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
+from app.agent_workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
+from app.agent_workflows.service import AgentRunService
+from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.agent_workflows.validator import TemplateResolver, TemplateValidationError, TemplateValidator
 from app.db import get_thread_settings
-from app.db.models_sqlmodel import AgentPatternTemplate, AgentRun, ChatTurn, Thread
+from app.db.models_sqlmodel import AgentWorkflowTemplate, AgentRun, ChatTurn, Thread
 from app.models.llm_server_client import REPLANS_LIMIT
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z, utc_now
@@ -114,7 +114,7 @@ async def create_agent_run_record(
     template_id: str = ROUTER_RAG_AGENT_ID,
 ) -> AgentRun:
     async with session_factory() as repo_session:
-        repo = AgentPatternRepository(repo_session)
+        repo = AgentWorkflowRepository(repo_session)
         await repo.seed_builtin_templates()
         template, version = await repo.get_template_with_current_version(template_id)
         run = AgentRun(
@@ -1068,7 +1068,7 @@ class TestRouterRagTemplateValidator:
 
 class TestRouterRagGraphToolConsumers:
     def test_tool_config_enforces_registry_contracts(self):
-        from app.agent_patterns.graph import _tool_config
+        from app.agent_workflows.graph import _tool_config
 
         state = {
             "agent_run_id": "run-1",
@@ -1140,7 +1140,7 @@ class TestRouterRagGraphToolConsumers:
     def test_v2_custom_graph_rejects_incompatible_node_catalog(self, monkeypatch):
         catalog = get_node_catalog()
         catalog["router"].pop("context_policy")
-        monkeypatch.setattr("app.agent_patterns.validator.get_node_catalog", lambda: catalog)
+        monkeypatch.setattr("app.agent_workflows.validator.get_node_catalog", lambda: catalog)
 
         spec = builtin_router_rag_v2_spec()
 
@@ -1150,7 +1150,7 @@ class TestRouterRagGraphToolConsumers:
     def test_v2_custom_graph_rejects_incompatible_route_function_registry(self, monkeypatch):
         registry = get_route_function_registry()
         registry["router_route"]["route_labels"] = ["document", ""]
-        monkeypatch.setattr("app.agent_patterns.validator.get_route_function_registry", lambda: registry)
+        monkeypatch.setattr("app.agent_workflows.validator.get_route_function_registry", lambda: registry)
 
         spec = builtin_router_rag_v2_spec()
 
@@ -1160,7 +1160,7 @@ class TestRouterRagGraphToolConsumers:
     def test_v2_custom_graph_rejects_catalog_route_registry_mismatch(self, monkeypatch):
         registry = get_route_function_registry()
         registry["router_route"]["allowed_source_types"] = ["planner"]
-        monkeypatch.setattr("app.agent_patterns.validator.get_route_function_registry", lambda: registry)
+        monkeypatch.setattr("app.agent_workflows.validator.get_route_function_registry", lambda: registry)
 
         spec = builtin_router_rag_v2_spec()
 
@@ -1171,7 +1171,7 @@ class TestRouterRagGraphToolConsumers:
         contracts = tool_contracts_by_id()
         contracts["document_evidence"] = [dict(contracts["document_evidence"][0])]
         contracts["document_evidence"][0]["artifact_keys"] = ["document_sources", ""]
-        monkeypatch.setattr("app.agent_patterns.validator.tool_contracts_by_id", lambda: contracts)
+        monkeypatch.setattr("app.agent_workflows.validator.tool_contracts_by_id", lambda: contracts)
 
         spec = builtin_router_rag_v2_spec()
 
@@ -1183,7 +1183,7 @@ class TestRouterRagGraphToolConsumers:
         contracts["document_evidence"] = [dict(contracts["document_evidence"][0])]
         contracts["document_evidence"][0]["allowed_node_types"] = ["memory_worker"]
         contracts["document_evidence"][0]["required_node_capabilities"] = ["retrieval.memory"]
-        monkeypatch.setattr("app.agent_patterns.validator.tool_contracts_by_id", lambda: contracts)
+        monkeypatch.setattr("app.agent_workflows.validator.tool_contracts_by_id", lambda: contracts)
 
         spec = builtin_router_rag_v2_spec()
 
@@ -1462,7 +1462,7 @@ class TestRouterRagGraphToolConsumers:
             async def ainvoke(self, _args, config=None):
                 return {"content": "Document evidence."}
 
-        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool())
+        monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeTool())
         bound = NodeRegistry().get_for_spec({"id": "retrieval_1", "type": "retrieval_worker"})
         with pytest.raises(ValueError, match="exceeded visit limit 1"):
             await bound(
@@ -1531,7 +1531,7 @@ class TestRouterRagGraphToolConsumers:
             interrupt_payloads.append(payload)
             return {"action": "approve"}
 
-        monkeypatch.setattr("app.agent_patterns.graph.interrupt", fake_interrupt)
+        monkeypatch.setattr("app.agent_workflows.graph.interrupt", fake_interrupt)
         bound = NodeRegistry().get_for_spec({"id": "approval_1", "type": "hitl_gate"})
         update = await bound(
             {
@@ -1586,7 +1586,7 @@ class TestRouterRagGraphToolConsumers:
                     "artifacts": {"document_sources": [{"file_hash": "file-1"}]},
                 }
 
-        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool())
+        monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeTool())
         bound = NodeRegistry().get_for_spec({"id": "retrieval_1", "type": "retrieval_worker"})
         update = await bound(
             {
@@ -1623,7 +1623,7 @@ class TestRouterRagGraphToolConsumers:
                     "artifacts": {"document_sources": [{"file_hash": "file-1"}]},
                 }
 
-        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool())
+        monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeTool())
         bound = NodeRegistry().get_for_spec({"id": "retrieval_1", "type": "retrieval_worker"})
         update = await bound(
             {
@@ -1665,7 +1665,7 @@ class TestRouterRagGraphToolConsumers:
                     "artifacts": {"document_sources": [{"file_hash": "file-1", "page": 1}]},
                 }
 
-        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool())
+        monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeTool())
         bound = NodeRegistry().get_for_spec({"id": "retrieval_1", "type": "retrieval_worker"})
         update = await bound(
             {
@@ -1739,7 +1739,7 @@ class TestRouterRagGraphToolConsumers:
                 captured_messages.extend(messages)
                 return SimpleNamespace(content="Packet-based answer.")
 
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
 
         update = await NodeRegistry().synthesizer(
             {
@@ -1808,7 +1808,7 @@ class TestRouterRagGraphToolConsumers:
         config = {"configurable": {"thread_id": "thread-1"}}
 
         monkeypatch.setattr(
-            "app.agent_patterns.graph.search_documents",
+            "app.agent_workflows.graph.search_documents",
             FakeTool(
                 {
                     "content": "Document evidence.",
@@ -1826,7 +1826,7 @@ class TestRouterRagGraphToolConsumers:
         assert document_update["tool_events"][0]["tool_name"] == "search_documents"
 
         monkeypatch.setattr(
-            "app.agent_patterns.graph.search_conversation_history",
+            "app.agent_workflows.graph.search_conversation_history",
             FakeTool(
                 {
                     "content": "Memory evidence.",
@@ -1839,7 +1839,7 @@ class TestRouterRagGraphToolConsumers:
         assert memory_update["tool_events"][0]["tool_name"] == "search_conversation_history"
 
         monkeypatch.setattr(
-            "app.agent_patterns.graph.search_thread_timeline",
+            "app.agent_workflows.graph.search_thread_timeline",
             FakeTool(
                 {
                     "content": "Timeline evidence.",
@@ -1859,7 +1859,7 @@ class TestRouterRagGraphToolConsumers:
         assert timeline_update["tool_events"][0]["tool_name"] == "search_thread_timeline"
 
         monkeypatch.setattr(
-            "app.agent_patterns.graph.search_web",
+            "app.agent_workflows.graph.search_web",
             FakeTool(
                 {
                     "content": "Web evidence.",
@@ -1878,7 +1878,7 @@ class TestRouterRagGraphToolConsumers:
             async def ainvoke(self, _args, config=None):
                 raise AssertionError("tool should not be called for unselected plan worker")
 
-        monkeypatch.setattr("app.agent_patterns.graph.search_conversation_history", ExplodingTool())
+        monkeypatch.setattr("app.agent_workflows.graph.search_conversation_history", ExplodingTool())
 
         registry = NodeRegistry()
         update = await registry.memory_worker(
@@ -1920,7 +1920,7 @@ class TestRouterRagGraphToolConsumers:
                     )
                 )
 
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
 
         update = await NodeRegistry().evidence_evaluator(
             {
@@ -1965,7 +1965,7 @@ class TestRouterRagGraphToolConsumers:
                     )
                 )
 
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
         base_state = {
             "agent_run_id": "run-1",
             "thread_id": "thread-1",
@@ -2011,7 +2011,7 @@ class TestRouterRagGraphToolConsumers:
                     )
                 )
 
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
 
         update = await NodeRegistry().replanner(
             {
@@ -2042,7 +2042,7 @@ class TestRouterRagGraphToolConsumers:
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
-class TestAgentPatternRepository:
+class TestAgentWorkflowRepository:
     @pytest_asyncio.fixture
     async def repo(self, engine):
         session_factory = async_sessionmaker(
@@ -2052,7 +2052,7 @@ class TestAgentPatternRepository:
             autoflush=False,
         )
         async with session_factory() as repo_session:
-            yield AgentPatternRepository(repo_session)
+            yield AgentWorkflowRepository(repo_session)
 
     @pytest.mark.asyncio
     async def test_seed_builtin_router_rag_template_is_idempotent(self, repo):
@@ -2119,7 +2119,7 @@ class TestAgentPatternRepository:
 
         async with repo._session.begin():
             repo._session.add(
-                AgentPatternTemplate(
+                AgentWorkflowTemplate(
                     id="internal_bad_agent",
                     name="Internal Bad Agent",
                     description="Invalid internal test agent.",
@@ -2901,17 +2901,17 @@ class TestAgentRunService:
             stats_calls.append((thread_id, qa_chars))
 
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-        monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_patterns.graph.search_web", fake_web)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+        monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_workflows.graph.search_web", fake_web)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             template_ref = SimpleNamespace(id=template.id)
@@ -2976,7 +2976,7 @@ class TestAgentRunService:
         captured_context = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
 
             async def fake_get_thread_settings(_thread_id):
@@ -2995,8 +2995,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3033,7 +3033,7 @@ class TestAgentRunService:
         )
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
 
             async def fake_get_thread_settings(_thread_id):
@@ -3051,8 +3051,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3083,7 +3083,7 @@ class TestAgentRunService:
         captured_spec = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
 
             async def fake_get_thread_settings(_thread_id):
@@ -3113,8 +3113,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3157,7 +3157,7 @@ class TestAgentRunService:
         captured_spec = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
 
             async def fake_get_thread_settings(_thread_id):
@@ -3180,8 +3180,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3224,7 +3224,7 @@ class TestAgentRunService:
         captured_spec = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             custom_spec = builtin_router_rag_v2_spec()
             custom_spec["pattern_type"] = "internal_custom_rag_agent"
@@ -3250,8 +3250,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3285,7 +3285,7 @@ class TestAgentRunService:
         captured_spec = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             custom_spec = builtin_router_rag_v2_spec()
             custom_spec["pattern_type"] = "internal_custom_rag_agent"
@@ -3311,8 +3311,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3326,7 +3326,7 @@ class TestAgentRunService:
             )
             result = await AgentRunService(
                 repository=repo,
-                allow_custom_agent_patterns=True,
+                allow_custom_agent_workflows=True,
             ).run_thread_chat(
                 sample_thread.id,
                 req,
@@ -3349,7 +3349,7 @@ class TestAgentRunService:
         captured_spec = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             custom_spec = builtin_router_rag_v2_spec()
             custom_spec["pattern_type"] = "internal_custom_rag_agent"
@@ -3375,8 +3375,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3390,7 +3390,7 @@ class TestAgentRunService:
             )
             result = await AgentRunService(
                 repository=repo,
-                allow_custom_agent_patterns=True,
+                allow_custom_agent_workflows=True,
             ).run_thread_chat(
                 sample_thread.id,
                 req,
@@ -3415,7 +3415,7 @@ class TestAgentRunService:
         captured_spec = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             custom_spec = builtin_router_rag_v2_spec()
             custom_spec["pattern_type"] = "internal_custom_rag_agent"
@@ -3441,8 +3441,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3476,7 +3476,7 @@ class TestAgentRunService:
         captured_spec = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             v1_spec = builtin_router_rag_v2_spec()
             v1_spec["pattern_type"] = "internal_custom_rag_agent_v1"
@@ -3515,8 +3515,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -3530,7 +3530,7 @@ class TestAgentRunService:
             )
             result = await AgentRunService(
                 repository=repo,
-                allow_custom_agent_patterns=True,
+                allow_custom_agent_workflows=True,
             ).run_thread_chat(
                 sample_thread.id,
                 req,
@@ -3637,12 +3637,12 @@ class TestAgentRunService:
             return None
 
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeDocumentTool())
-        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeDocumentTool())
+        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
 
         thread_response = await async_api_client.post(
             "/api/threads",
@@ -3653,7 +3653,7 @@ class TestAgentRunService:
             json={"name": "Default Pattern Thread", "embed_model": "BAAI/bge-m3"},
         )
         created = await async_api_client.post(
-            "/api/internal/agent-patterns",
+            "/api/internal/agent-workflows",
             json={
                 "template_id": "internal_e2e_custom_rag_agent",
                 "name": "Internal E2E Custom RAG Agent",
@@ -3667,7 +3667,7 @@ class TestAgentRunService:
 
         thread_id = thread_response.json()["id"]
         other_thread_id = other_thread_response.json()["id"]
-        listed = await async_api_client.get("/api/agent-patterns")
+        listed = await async_api_client.get("/api/agent-workflows")
         selected = await async_api_client.put(
             f"/api/threads/{thread_id}/settings",
             json={"agent_pattern": {"template_id": "internal_e2e_custom_rag_agent"}},
@@ -3680,7 +3680,7 @@ class TestAgentRunService:
         }
         assert selected.json()["agent_pattern"]["template_id"] == "internal_e2e_custom_rag_agent"
 
-        service = AgentRunService(allow_custom_agent_patterns=True)
+        service = AgentRunService(allow_custom_agent_workflows=True)
         result = await service.run_thread_chat(
             thread_id,
             self._agent_req("What does the custom document say?"),
@@ -3691,7 +3691,7 @@ class TestAgentRunService:
             self._agent_req("Should use the default pattern."),
             "BAAI/bge-m3",
         )
-        repo = AgentPatternRepository()
+        repo = AgentWorkflowRepository()
         run = await repo.get_run(result["agent_run_id"])
 
         assert result["agent_pattern_id"] == "internal_e2e_custom_rag_agent"
@@ -3757,7 +3757,7 @@ class TestAgentRunService:
         captured_spec = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
 
             async def fake_get_thread_settings(_thread_id):
@@ -3779,9 +3779,9 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
             monkeypatch.setattr(
-                "app.agent_patterns.router_runtime.handle_plan_execute_rag_chat",
+                "app.agent_workflows.router_runtime.handle_plan_execute_rag_chat",
                 fake_handle_plan_execute_rag_chat,
             )
 
@@ -3826,7 +3826,7 @@ class TestAgentRunService:
         captured_spec = {}
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
 
             async def fake_get_thread_settings(_thread_id):
@@ -3856,9 +3856,9 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
             monkeypatch.setattr(
-                "app.agent_patterns.router_runtime.handle_evaluator_replanner_rag_chat",
+                "app.agent_workflows.router_runtime.handle_evaluator_replanner_rag_chat",
                 fake_handle_evaluator_replanner_rag_chat,
             )
 
@@ -4018,17 +4018,17 @@ class TestAgentRunService:
             return None
 
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
-        monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_patterns.graph.search_web", fake_web)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+        monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_workflows.graph.search_web", fake_web)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             service = AgentRunService(repository=repo)
             req = SimpleNamespace(
@@ -4404,17 +4404,17 @@ class TestAgentRunService:
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "postgres")
         monkeypatch.setenv("AGENT_CHECKPOINT_DATABASE_URL", test_database_url)
         monkeypatch.delenv("ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK", raising=False)
-        monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_patterns.graph.search_web", fake_web)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+        monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_workflows.graph.search_web", fake_web)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
 
         async with session_factory() as first_session:
-            first_repo = AgentPatternRepository(first_session)
+            first_repo = AgentWorkflowRepository(first_session)
             await first_repo.seed_builtin_templates()
             req = SimpleNamespace(
                 question="Pause and survive restart?",
@@ -4440,7 +4440,7 @@ class TestAgentRunService:
             checkpoint_thread_id = paused_run.checkpoint_thread_id
 
         async with session_factory() as second_session:
-            second_repo = AgentPatternRepository(second_session)
+            second_repo = AgentWorkflowRepository(second_session)
             resumed = await AgentRunService(repository=second_repo).resume_agent_run(
                 paused_run.id,
                 interrupt_id=pending["interrupt_id"],
@@ -4490,7 +4490,7 @@ class TestAgentRunService:
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "memory")
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
@@ -4545,7 +4545,7 @@ class TestAgentRunService:
                     "tool_events": [],
                 }
 
-            monkeypatch.setattr("app.agent_patterns.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
 
             result = await AgentRunService(repository=repo).resume_agent_run(
                 run.id,
@@ -4592,7 +4592,7 @@ class TestAgentRunService:
         )
         calls = []
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
@@ -4642,7 +4642,7 @@ class TestAgentRunService:
                     "chat_turn_id": "turn-1",
                 }
 
-            monkeypatch.setattr("app.agent_patterns.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.resume_compiled_rag_chat", fake_resume_compiled_rag_chat)
 
             service = AgentRunService(repository=repo)
             first = await service.resume_agent_run(
@@ -4679,7 +4679,7 @@ class TestAgentRunService:
         )
 
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
 
             async def fake_get_thread_settings(_thread_id):
@@ -4702,8 +4702,8 @@ class TestAgentRunService:
                     **agent_run_context,
                 }
 
-            monkeypatch.setattr("app.agent_patterns.service.get_thread_settings", fake_get_thread_settings)
-            monkeypatch.setattr("app.agent_patterns.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.router_runtime.handle_router_rag_chat", fake_handle_router_rag_chat)
 
             req = SimpleNamespace(
                 question="What is this about?",
@@ -4895,11 +4895,11 @@ class TestRouterRagRuntime:
         monkeypatch.setattr("app.rag.chat_service.get_document_metadata_lookup", fake_get_document_metadata_lookup)
         monkeypatch.setattr("app.rag.chat_service.group_document_chunks", fake_group_document_chunks)
         monkeypatch.setattr("app.db.vector.get_vector_db", lambda: FakeVectorDb())
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
 
         req = SimpleNamespace(
             question="What is this document about?",
@@ -4922,7 +4922,7 @@ class TestRouterRagRuntime:
             thread_id=sample_thread.id,
             spec=spec,
         )
-        caplog.set_level(logging.INFO, logger="app.agent_patterns")
+        caplog.set_level(logging.INFO, logger="app.agent_workflows")
         result = await handle_router_rag_chat(
             sample_thread.id,
             req,
@@ -5132,16 +5132,16 @@ class TestRouterRagRuntime:
         }
         fake_llm = FakeLlm()
 
-        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: fake_llm)
-        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FakeTool(document_payload))
-        monkeypatch.setattr("app.agent_patterns.graph.search_conversation_history", FakeTool(memory_payload))
-        monkeypatch.setattr("app.agent_patterns.graph.search_thread_timeline", FakeTool(timeline_payload))
-        monkeypatch.setattr("app.agent_patterns.graph.search_web", FakeTool(web_payload))
-        monkeypatch.setattr("app.agent_patterns.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.update_message_context_compact", fake_update_message_context_compact)
-        monkeypatch.setattr("app.agent_patterns.router_runtime.increment_qa_stats", fake_increment_qa_stats)
+        monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
+        monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeTool(document_payload))
+        monkeypatch.setattr("app.agent_workflows.graph.search_conversation_history", FakeTool(memory_payload))
+        monkeypatch.setattr("app.agent_workflows.graph.search_thread_timeline", FakeTool(timeline_payload))
+        monkeypatch.setattr("app.agent_workflows.graph.search_web", FakeTool(web_payload))
+        monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.update_message_context_compact", fake_update_message_context_compact)
+        monkeypatch.setattr("app.agent_workflows.router_runtime.increment_qa_stats", fake_increment_qa_stats)
 
         req = SimpleNamespace(
             question="Route coverage?",
@@ -5165,7 +5165,7 @@ class TestRouterRagRuntime:
             thread_id=sample_thread.id,
             spec=spec,
         )
-        caplog.set_level(logging.INFO, logger="app.agent_patterns")
+        caplog.set_level(logging.INFO, logger="app.agent_workflows")
         result = await handle_router_rag_chat(
             sample_thread.id,
             req,
@@ -5316,10 +5316,10 @@ class TestRouterRagRuntime:
                 await write_session.refresh(turn)
             return turn
 
-        monkeypatch.setattr("app.agent_patterns.graph.prefetch_context", fake_prefetch_context)
-        monkeypatch.setattr("app.agent_patterns.graph.get_llm", lambda _name: FakeLlm())
-        monkeypatch.setattr("app.agent_patterns.graph.search_documents", FailingTool())
-        monkeypatch.setattr("app.agent_patterns.router_runtime.create_chat_turn", fake_create_chat_turn)
+        monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
+        monkeypatch.setattr("app.agent_workflows.graph.search_documents", FailingTool())
+        monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
 
         req = SimpleNamespace(
             question="What is in the document?",
@@ -5380,9 +5380,9 @@ class TestRouterRagRuntime:
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
-class TestAgentPatternApi:
+class TestAgentWorkflowApi:
     def test_list_and_get_builtin_agent_pattern(self, api_client):
-        listed = api_client.get("/api/agent-patterns")
+        listed = api_client.get("/api/agent-workflows")
         assert listed.status_code == 200
         assert {item["id"] for item in listed.json()["agent_patterns"]} == {
             ROUTER_RAG_AGENT_ID,
@@ -5390,7 +5390,7 @@ class TestAgentPatternApi:
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
         }
 
-        detail = api_client.get(f"/api/agent-patterns/{ROUTER_RAG_AGENT_ID}")
+        detail = api_client.get(f"/api/agent-workflows/{ROUTER_RAG_AGENT_ID}")
         assert detail.status_code == 200
         payload = detail.json()
         assert payload["agent_pattern"]["id"] == ROUTER_RAG_AGENT_ID
@@ -5399,7 +5399,7 @@ class TestAgentPatternApi:
         assert "document_evidence" in payload["capabilities"]["required_tool_ids"]
         assert payload["capabilities"]["node_tool_requirements"]["retrieval_worker"] == "document_evidence"
 
-        plan_detail = api_client.get(f"/api/agent-patterns/{PLAN_EXECUTE_RAG_AGENT_ID}")
+        plan_detail = api_client.get(f"/api/agent-workflows/{PLAN_EXECUTE_RAG_AGENT_ID}")
         assert plan_detail.status_code == 200
         plan_payload = plan_detail.json()
         assert plan_payload["agent_pattern"]["id"] == PLAN_EXECUTE_RAG_AGENT_ID
@@ -5407,7 +5407,7 @@ class TestAgentPatternApi:
         assert plan_payload["current_version"]["validation"]["valid"] is True
         assert plan_payload["capabilities"]["node_tool_requirements"]["planner"] == "clarify_intent"
 
-        evaluator_detail = api_client.get(f"/api/agent-patterns/{EVALUATOR_REPLANNER_RAG_AGENT_ID}")
+        evaluator_detail = api_client.get(f"/api/agent-workflows/{EVALUATOR_REPLANNER_RAG_AGENT_ID}")
         assert evaluator_detail.status_code == 200
         evaluator_payload = evaluator_detail.json()
         assert evaluator_payload["agent_pattern"]["id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
@@ -5416,14 +5416,14 @@ class TestAgentPatternApi:
         assert evaluator_payload["capabilities"]["node_tool_requirements"]["evidence_evaluator"] == "clarify_intent"
         assert evaluator_payload["capabilities"]["node_tool_requirements"]["replanner"] == "clarify_intent"
 
-        stale_detail = api_client.get("/api/agent-patterns/simple_rag_agent")
+        stale_detail = api_client.get("/api/agent-workflows/simple_rag_agent")
         assert stale_detail.status_code == 404
 
     def test_internal_custom_agent_pattern_is_globally_listed(self, api_client):
         async def seed_internal_pattern():
             spec = builtin_router_rag_v2_spec()
             spec["pattern_type"] = "internal_api_global_agent"
-            await AgentPatternRepository().create_internal_template_version(
+            await AgentWorkflowRepository().create_internal_template_version(
                 template_id="internal_api_global_agent",
                 name="Internal API Global Agent",
                 spec_json=spec,
@@ -5431,8 +5431,8 @@ class TestAgentPatternApi:
 
         asyncio.run(seed_internal_pattern())
 
-        listed = api_client.get("/api/agent-patterns")
-        detail = api_client.get("/api/agent-patterns/internal_api_global_agent")
+        listed = api_client.get("/api/agent-workflows")
+        detail = api_client.get("/api/agent-workflows/internal_api_global_agent")
 
         assert listed.status_code == 200
         assert "internal_api_global_agent" in {
@@ -5446,7 +5446,7 @@ class TestAgentPatternApi:
         spec["pattern_type"] = "internal_api_agent"
 
         created = api_client.post(
-            "/api/internal/agent-patterns",
+            "/api/internal/agent-workflows",
             json={
                 "template_id": "internal_api_agent",
                 "name": "Internal API Agent",
@@ -5455,8 +5455,8 @@ class TestAgentPatternApi:
                 "spec_json": spec,
             },
         )
-        fetched = api_client.get("/api/internal/agent-patterns/internal_api_agent")
-        public_detail = api_client.get("/api/agent-patterns/internal_api_agent")
+        fetched = api_client.get("/api/internal/agent-workflows/internal_api_agent")
+        public_detail = api_client.get("/api/agent-workflows/internal_api_agent")
 
         assert created.status_code == 200
         created_payload = created.json()
@@ -5476,7 +5476,7 @@ class TestAgentPatternApi:
         spec["pattern_type"] = "client_side_placeholder"
 
         created = api_client.post(
-            "/api/internal/agent-patterns",
+            "/api/internal/agent-workflows",
             json={
                 "name": "Generated ID Agent",
                 "description": "Created without a caller-owned ID.",
@@ -5495,7 +5495,7 @@ class TestAgentPatternApi:
         updated_spec["pattern_type"] = "another_placeholder"
         updated_spec["config"]["context_policy"]["evidence_packet_limit"] = 4
         updated = api_client.post(
-            "/api/internal/agent-patterns",
+            "/api/internal/agent-workflows",
             json={
                 "template_id": template_id,
                 "name": "Renamed Generated ID Agent",
@@ -5503,7 +5503,7 @@ class TestAgentPatternApi:
                 "spec_json": updated_spec,
             },
         )
-        fetched = api_client.get(f"/api/agent-patterns/{template_id}")
+        fetched = api_client.get(f"/api/agent-workflows/{template_id}")
 
         assert updated.status_code == 200
         assert updated.json()["version"]["id"] == f"{template_id}:v1"
@@ -5518,17 +5518,17 @@ class TestAgentPatternApi:
         spec["pattern_type"] = "internal_api_delete_agent"
 
         created = api_client.post(
-            "/api/internal/agent-patterns",
+            "/api/internal/agent-workflows",
             json={
                 "template_id": "internal_api_delete_agent",
                 "name": "Internal API Delete Agent",
                 "spec_json": spec,
             },
         )
-        deleted = api_client.delete("/api/internal/agent-patterns/internal_api_delete_agent")
-        listed = api_client.get("/api/agent-patterns")
-        public_detail = api_client.get("/api/agent-patterns/internal_api_delete_agent")
-        internal_detail = api_client.get("/api/internal/agent-patterns/internal_api_delete_agent")
+        deleted = api_client.delete("/api/internal/agent-workflows/internal_api_delete_agent")
+        listed = api_client.get("/api/agent-workflows")
+        public_detail = api_client.get("/api/agent-workflows/internal_api_delete_agent")
+        internal_detail = api_client.get("/api/internal/agent-workflows/internal_api_delete_agent")
 
         assert created.status_code == 200
         assert deleted.status_code == 200
@@ -5541,10 +5541,10 @@ class TestAgentPatternApi:
         assert internal_detail.status_code == 404
 
     def test_internal_agent_pattern_delete_rejects_builtin_ids(self, api_client):
-        deleted = api_client.delete(f"/api/internal/agent-patterns/{ROUTER_RAG_AGENT_ID}")
+        deleted = api_client.delete(f"/api/internal/agent-workflows/{ROUTER_RAG_AGENT_ID}")
 
         assert deleted.status_code == 400
-        assert "built-in agent pattern templates cannot be deleted" in deleted.json()["detail"]
+        assert "built-in agent workflow templates cannot be deleted" in deleted.json()["detail"]
 
     def test_internal_agent_pattern_endpoint_rejects_invalid_specs_without_storing(self, api_client):
         invalid_spec = builtin_router_rag_v2_spec()
@@ -5552,14 +5552,14 @@ class TestAgentPatternApi:
         invalid_spec["config"]["graph"]["edges"][2].pop("route_fn")
 
         invalid = api_client.post(
-            "/api/internal/agent-patterns",
+            "/api/internal/agent-workflows",
             json={
                 "template_id": "internal_api_invalid_agent",
                 "name": "Internal API Invalid Agent",
                 "spec_json": invalid_spec,
             },
         )
-        fetched = api_client.get("/api/internal/agent-patterns/internal_api_invalid_agent")
+        fetched = api_client.get("/api/internal/agent-workflows/internal_api_invalid_agent")
 
         assert invalid.status_code == 400
         assert "must declare route_fn" in invalid.json()["detail"]
@@ -5568,7 +5568,7 @@ class TestAgentPatternApi:
     def test_internal_agent_pattern_endpoint_rejects_builtin_ids(self, api_client):
         spec = builtin_router_rag_v2_spec()
         rejected = api_client.post(
-            "/api/internal/agent-patterns",
+            "/api/internal/agent-workflows",
             json={
                 "template_id": ROUTER_RAG_AGENT_ID,
                 "name": "Not Allowed",
@@ -5577,10 +5577,10 @@ class TestAgentPatternApi:
         )
 
         assert rejected.status_code == 400
-        assert "built-in agent pattern templates cannot be authored" in rejected.json()["detail"]
+        assert "built-in agent workflow templates cannot be authored" in rejected.json()["detail"]
 
     def test_internal_agent_pattern_catalog_endpoint_exposes_safe_authoring_metadata(self, api_client):
-        response = api_client.get("/api/internal/agent-patterns/catalog")
+        response = api_client.get("/api/internal/agent-workflows/catalog")
 
         assert response.status_code == 200
         payload = response.json()
@@ -5620,7 +5620,7 @@ class TestAgentPatternApi:
 
     def test_internal_thread_agent_pattern_selection_endpoint_is_removed(self, api_client, sample_thread):
         response = api_client.post(
-            f"/api/internal/threads/{sample_thread.id}/agent-pattern",
+            f"/api/internal/threads/{sample_thread.id}/agent-workflow",
             json={"template_id": "any_internal_agent"},
         )
 
@@ -5628,7 +5628,7 @@ class TestAgentPatternApi:
 
     def test_validate_agent_pattern_endpoint(self, api_client):
         valid = api_client.post(
-            "/api/agent-patterns/validate",
+            "/api/agent-workflows/validate",
             json={"spec": builtin_router_rag_v2_spec()},
         )
         invalid_spec = builtin_router_rag_v2_spec()
@@ -5636,11 +5636,11 @@ class TestAgentPatternApi:
         stale_spec = legacy_builtin_router_rag_v1_spec()
         stale_spec["pattern_type"] = "simple_rag_agent"
         invalid = api_client.post(
-            "/api/agent-patterns/validate",
+            "/api/agent-workflows/validate",
             json={"spec": invalid_spec},
         )
         stale = api_client.post(
-            "/api/agent-patterns/validate",
+            "/api/agent-workflows/validate",
             json={"spec": stale_spec},
         )
 
@@ -5665,7 +5665,7 @@ class TestAgentPatternApi:
                 "hitl_web_approval": True,
             }
 
-        monkeypatch.setattr("app.api.agent_patterns.get_thread_settings", fake_get_thread_settings)
+        monkeypatch.setattr("app.api.agent_workflows.get_thread_settings", fake_get_thread_settings)
 
         response = api_client.post(
             f"/api/threads/{sample_thread.id}/agent-config/validate",
@@ -5705,7 +5705,7 @@ class TestAgentPatternApi:
             autoflush=False,
         )
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             first = await repo.create_run(
@@ -5756,7 +5756,7 @@ class TestAgentPatternApi:
             autoflush=False,
         )
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             running = await repo.create_run(
@@ -5803,7 +5803,7 @@ class TestAgentPatternApi:
             autoflush=False,
         )
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
@@ -5869,7 +5869,7 @@ class TestAgentPatternApi:
             autoflush=False,
         )
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
@@ -5917,7 +5917,7 @@ class TestAgentPatternApi:
             autoflush=False,
         )
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
@@ -5975,7 +5975,7 @@ class TestAgentPatternApi:
             write_session.add(turn)
             await write_session.commit()
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             completed_run = await repo.complete_run(
                 run.id,
                 status="completed",
@@ -6065,7 +6065,7 @@ class TestAgentPatternApi:
             autoflush=False,
         )
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
@@ -6105,7 +6105,7 @@ class TestAgentPatternApi:
             autoflush=False,
         )
         async with session_factory() as repo_session:
-            repo = AgentPatternRepository(repo_session)
+            repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_templates()
             template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(

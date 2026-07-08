@@ -2,7 +2,7 @@
 chat_service.py - Business logic for chat endpoints in RAG Service
 
 This module provides:
-- Shared retrieval prefetching for agent-pattern chat runtimes.
+- Shared retrieval prefetching for agent-workflow chat runtimes.
 """
 
 import asyncio

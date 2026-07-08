@@ -112,11 +112,11 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_router_prompt(state: Dict[str, Any]) -> str:
-    return _render_prompt("agent_patterns/router_rag_router.md", _prompt_context(state))
+    return _render_prompt("agent_workflows/router_rag_router.md", _prompt_context(state))
 
 
 def build_planner_prompt(state: Dict[str, Any]) -> str:
-    return _render_prompt("agent_patterns/plan_execute_planner.md", _prompt_context(state))
+    return _render_prompt("agent_workflows/plan_execute_planner.md", _prompt_context(state))
 
 
 def _json_preview(value: Any, *, limit: int = 4000) -> str:
@@ -141,7 +141,7 @@ def _evaluator_prompt_context(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_evaluator_prompt(state: Dict[str, Any]) -> str:
-    return _render_prompt("agent_patterns/evaluator_replanner_evaluator.md", _evaluator_prompt_context(state))
+    return _render_prompt("agent_workflows/evaluator_replanner_evaluator.md", _evaluator_prompt_context(state))
 
 
 def build_replanner_prompt(state: Dict[str, Any]) -> str:
@@ -150,7 +150,7 @@ def build_replanner_prompt(state: Dict[str, Any]) -> str:
         "EVALUATOR_REPORT": _json_preview(state.get("evaluator_report") or {}, limit=5000)
         or EVALUATOR_REPORT_PLACEHOLDER,
     }
-    return _render_prompt("agent_patterns/evaluator_replanner_replanner.md", values)
+    return _render_prompt("agent_workflows/evaluator_replanner_replanner.md", values)
 
 
 def build_final_answer_messages(state: Dict[str, Any], context: str) -> Dict[str, str]:
@@ -162,7 +162,7 @@ def build_final_answer_messages(state: Dict[str, Any], context: str) -> Dict[str
         "SYSTEM_ROLE_SECTION": f"Assistant role:\n{system_role}" if system_role else "",
         "CUSTOM_INSTRUCTIONS_SECTION": f"Custom instructions:\n{custom_instructions}" if custom_instructions else "",
     }
-    rendered = _render_prompt("agent_patterns/final_answer.md", values)
+    rendered = _render_prompt("agent_workflows/final_answer.md", values)
     system_marker = "## System Message"
     human_marker = "## Human Message"
     if system_marker not in rendered or human_marker not in rendered:
@@ -179,7 +179,7 @@ def build_final_answer_messages(state: Dict[str, Any], context: str) -> Dict[str
     }
 
 
-def build_agent_pattern_prompt_preview(
+def build_agent_workflow_prompt_preview(
     *,
     pattern_id: Optional[str] = None,
     prompt_profile: Optional[str] = None,

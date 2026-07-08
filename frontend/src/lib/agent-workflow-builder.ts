@@ -1,13 +1,13 @@
 import type {
-  AgentPatternBuilderSpec,
-  AgentPatternCatalogResponse,
-  AgentPatternGraphSpec,
-  AgentPatternNodeCatalogEntry,
-  AgentPatternRouteFunctionMetadata,
-  AgentPatternToolContract,
+  AgentWorkflowBuilderSpec,
+  AgentWorkflowCatalogResponse,
+  AgentWorkflowGraphSpec,
+  AgentWorkflowNodeCatalogEntry,
+  AgentWorkflowRouteFunctionMetadata,
+  AgentWorkflowToolContract,
 } from './api';
 
-export type AgentPatternStarter = 'router' | 'plan_execute' | 'evaluator_replanner';
+export type AgentWorkflowStarter = 'router' | 'plan_execute' | 'evaluator_replanner';
 
 export interface BuilderNodeState {
   id: string;
@@ -37,7 +37,7 @@ export interface BuilderEdgeState {
   [key: string]: any;
 }
 
-export interface AgentPatternBuilderState {
+export interface AgentWorkflowBuilderState {
   name?: string;
   description?: string;
   patternType: string;
@@ -88,21 +88,21 @@ const nodeTypeById = (nodes: BuilderNodeState[]) => (
   new Map(nodes.map((node) => [node.id, node.type]))
 );
 
-const getNode = (state: AgentPatternBuilderState, nodeId: string) => (
+const getNode = (state: AgentWorkflowBuilderState, nodeId: string) => (
   state.nodes.find((node) => node.id === nodeId)
 );
 
 const catalogEntry = (
-  catalog: AgentPatternCatalogResponse,
+  catalog: AgentWorkflowCatalogResponse,
   nodeType?: string,
-): AgentPatternNodeCatalogEntry | undefined => (
+): AgentWorkflowNodeCatalogEntry | undefined => (
   nodeType ? catalog.node_catalog[nodeType] : undefined
 );
 
 const routeMetadata = (
-  catalog: AgentPatternCatalogResponse,
+  catalog: AgentWorkflowCatalogResponse,
   routeFn?: string,
-): AgentPatternRouteFunctionMetadata | undefined => (
+): AgentWorkflowRouteFunctionMetadata | undefined => (
   routeFn ? catalog.route_functions[routeFn] : undefined
 );
 
@@ -117,9 +117,9 @@ export function getCanonicalNodeId(nodeType: string, existingIds: Iterable<strin
 }
 
 export function getAllowedToolContractsForNode(
-  catalog: AgentPatternCatalogResponse,
+  catalog: AgentWorkflowCatalogResponse,
   nodeType: string,
-): AgentPatternToolContract[] {
+): AgentWorkflowToolContract[] {
   const allowedIds = new Set(catalogEntry(catalog, nodeType)?.allowed_tool_contract_ids || []);
   return Object.values(catalog.tool_contracts || {})
     .filter((contract) => allowedIds.has(contract.id))
@@ -127,7 +127,7 @@ export function getAllowedToolContractsForNode(
 }
 
 export function getAllowedRouteFunctionsForNode(
-  catalog: AgentPatternCatalogResponse,
+  catalog: AgentWorkflowCatalogResponse,
   nodeType: string,
 ): string[] {
   const entry = catalogEntry(catalog, nodeType);
@@ -140,7 +140,7 @@ export function getAllowedRouteFunctionsForNode(
 }
 
 export function getRouteLabelsForFunction(
-  catalog: AgentPatternCatalogResponse,
+  catalog: AgentWorkflowCatalogResponse,
   routeFn: string,
 ): string[] | null {
   const metadata = routeMetadata(catalog, routeFn);
@@ -149,7 +149,7 @@ export function getRouteLabelsForFunction(
 }
 
 export function getDefaultRouteFunctionForNode(
-  catalog: AgentPatternCatalogResponse,
+  catalog: AgentWorkflowCatalogResponse,
   nodeType: string,
 ): string | undefined {
   const preferred = ROUTE_FUNCTION_BY_NODE_TYPE[nodeType];
@@ -158,7 +158,7 @@ export function getDefaultRouteFunctionForNode(
 }
 
 export function canConnectNodeTypes(
-  catalog: AgentPatternCatalogResponse,
+  catalog: AgentWorkflowCatalogResponse,
   sourceType: string | undefined,
   targetType: string | undefined,
 ): CompatibilityResult {
@@ -173,8 +173,8 @@ export function canConnectNodeTypes(
 }
 
 export function canConnectNodes(
-  catalog: AgentPatternCatalogResponse,
-  state: AgentPatternBuilderState,
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
   sourceId: string,
   targetId: string,
 ): CompatibilityResult {
@@ -197,8 +197,8 @@ export function canConnectNodes(
 }
 
 export function canAddNodeType(
-  catalog: AgentPatternCatalogResponse,
-  state: AgentPatternBuilderState,
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
   nodeType: string,
 ): CompatibilityResult {
   const entry = catalogEntry(catalog, nodeType);
@@ -211,23 +211,23 @@ export function canAddNodeType(
 }
 
 export function getCompatibleTargetNodes(
-  catalog: AgentPatternCatalogResponse,
-  state: AgentPatternBuilderState,
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
   sourceId: string,
 ): BuilderNodeState[] {
   return state.nodes.filter((node) => canConnectNodes(catalog, state, sourceId, node.id).ok);
 }
 
 export function getCompatibleSourceNodes(
-  catalog: AgentPatternCatalogResponse,
-  state: AgentPatternBuilderState,
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
   targetId: string,
 ): BuilderNodeState[] {
   return state.nodes.filter((node) => canConnectNodes(catalog, state, node.id, targetId).ok);
 }
 
 const nodeWithDefaultTools = (
-  catalog: AgentPatternCatalogResponse,
+  catalog: AgentWorkflowCatalogResponse,
   id: string,
   type: string,
   preferredToolIds?: string[],
@@ -239,7 +239,7 @@ const nodeWithDefaultTools = (
   return selected.length > 0 ? { id, type, tool_contract_ids: selected } : { id, type };
 };
 
-const defaultContextPolicy = (catalog: AgentPatternCatalogResponse) => ({
+const defaultContextPolicy = (catalog: AgentWorkflowCatalogResponse) => ({
   ...(catalog.defaults?.context_policy || {}),
   evidence_dedupe: true,
   evidence_compression: 'compact',
@@ -271,7 +271,7 @@ const findPrimaryRouteTarget = (edge?: BuilderEdgeState): string | undefined => 
     || Object.values(edge.routes)[0];
 };
 
-const materializeHitlPolicy = (state: AgentPatternBuilderState) => {
+const materializeHitlPolicy = (state: AgentWorkflowBuilderState) => {
   const hitlNodes = state.nodes.filter((node) => node.type === 'hitl_gate' && node.hitl);
   if (hitlNodes.length === 0) return state.hitl_policy ? clone(state.hitl_policy) : undefined;
   const base = state.hitl_policy ? clone(state.hitl_policy) : {};
@@ -300,9 +300,9 @@ const materializeHitlPolicy = (state: AgentPatternBuilderState) => {
 };
 
 export function createInitialBuilderState(
-  catalog: AgentPatternCatalogResponse,
-  starter: AgentPatternStarter = 'router',
-): AgentPatternBuilderState {
+  catalog: AgentWorkflowCatalogResponse,
+  starter: AgentWorkflowStarter = 'router',
+): AgentWorkflowBuilderState {
   if (starter === 'plan_execute') {
     const nodes = [
       nodeWithDefaultTools(catalog, 'context_loader', 'context_loader'),
@@ -404,10 +404,10 @@ export function createInitialBuilderState(
   };
 }
 
-export function assembleAgentPatternSpec(
-  state: AgentPatternBuilderState,
+export function assembleAgentWorkflowSpec(
+  state: AgentWorkflowBuilderState,
   overrides: Record<string, any> = {},
-): AgentPatternBuilderSpec {
+): AgentWorkflowBuilderSpec {
   const hitlPolicy = materializeHitlPolicy(state);
   const config = {
     ...(state.extraConfig || {}),
@@ -432,9 +432,9 @@ export function assembleAgentPatternSpec(
   };
 }
 
-export function loadBuilderStateFromSpec(spec: AgentPatternBuilderSpec | Record<string, any>): AgentPatternBuilderState {
+export function loadBuilderStateFromSpec(spec: AgentWorkflowBuilderSpec | Record<string, any>): AgentWorkflowBuilderState {
   const config = spec?.config && typeof spec.config === 'object' ? spec.config : {};
-  const graph = config.graph && typeof config.graph === 'object' ? config.graph as AgentPatternGraphSpec : {};
+  const graph = config.graph && typeof config.graph === 'object' ? config.graph as AgentWorkflowGraphSpec : {};
   const nodes = Array.isArray(graph.nodes) ? graph.nodes.map((node) => clone(node) as BuilderNodeState) : [];
   const edges = Array.isArray(graph.edges) ? graph.edges.map((edge) => clone(edge) as BuilderEdgeState) : [];
   const knownConfigKeys = new Set(['graph', 'allowed_tool_ids', 'context_policy', 'loop_policy', 'hitl_policy']);
@@ -455,9 +455,9 @@ export function loadBuilderStateFromSpec(spec: AgentPatternBuilderSpec | Record<
 }
 
 export function normalizeBuilderState(
-  catalog: AgentPatternCatalogResponse,
-  state: AgentPatternBuilderState,
-): AgentPatternBuilderState {
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+): AgentWorkflowBuilderState {
   const seenTypeCounts = new Map<string, number>();
   const nodes = state.nodes.filter((node) => {
     const entry = catalogEntry(catalog, node.type);
@@ -472,7 +472,7 @@ export function normalizeBuilderState(
     const { tool_contract_ids, ...rest } = node;
     return tool_contract_ids?.length ? { ...rest, tool_contract_ids } : rest;
   });
-  const normalized: AgentPatternBuilderState = {
+  const normalized: AgentWorkflowBuilderState = {
     ...state,
     nodes,
     edges: state.edges.filter((edge) => {
@@ -487,8 +487,8 @@ export function normalizeBuilderState(
 }
 
 export function createHitlGateForTarget(
-  catalog: AgentPatternCatalogResponse,
-  state: AgentPatternBuilderState,
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
   targetNodeId: string,
   options: {
     id?: string;
@@ -499,7 +499,7 @@ export function createHitlGateForTarget(
     allowedActions?: string[];
     defaultAction?: string;
   } = {},
-): AgentPatternBuilderState {
+): AgentWorkflowBuilderState {
   const target = getNode(state, targetNodeId);
   if (!target) return state;
   const gateId = options.id || getCanonicalNodeId(`hitl_${targetNodeId}`, state.nodes.map((node) => node.id));

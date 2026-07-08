@@ -6,20 +6,20 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.agent.tool_registry import tool_contracts_by_id
-from app.agent_patterns.graph import normalize_hitl_policy_for_thread_settings
-from app.agent_patterns.node_catalog import get_node_catalog
-from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
-from app.agent_patterns.route_registry import get_route_function_registry
-from app.agent_patterns.service import AgentRunService
-from app.agent_patterns.builtin_workflows import builtin_workflow_keys
-from app.agent_patterns.validator import (
+from app.agent_workflows.graph import normalize_hitl_policy_for_thread_settings
+from app.agent_workflows.node_catalog import get_node_catalog
+from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
+from app.agent_workflows.route_registry import get_route_function_registry
+from app.agent_workflows.service import AgentRunService
+from app.agent_workflows.builtin_workflows import builtin_workflow_keys
+from app.agent_workflows.validator import (
     TemplateResolver,
     TemplateValidationError,
     TemplateValidator,
     workflow_node_tool_requirements,
     workflow_required_tool_ids,
 )
-from app.agent_patterns.workflow_runtime import (
+from app.agent_workflows.workflow_runtime import (
     ALLOWED_WORKFLOW_CONFIG_KEYS,
     default_agent_workflow_key,
     with_default_runtime,
@@ -246,7 +246,7 @@ def _agent_workflow_tool_contract_catalog() -> Dict[str, Any]:
 
 @router.get("/agent-workflows")
 async def list_agent_workflows():
-    repo = AgentPatternRepository()
+    repo = AgentWorkflowRepository()
     await repo.seed_builtin_workflows()
     workflows = await repo.list_workflows(include_custom=True)
     compatible_workflows = []
@@ -267,7 +267,7 @@ async def validate_agent_workflow(req: TemplateValidationRequest):
 
 @router.get("/agent-workflows/{workflow_id}")
 async def get_agent_workflow(workflow_id: str):
-    repo = AgentPatternRepository()
+    repo = AgentWorkflowRepository()
     await repo.seed_builtin_workflows()
     include_custom = workflow_id not in builtin_workflow_keys()
     workflow = await repo.get_workflow(workflow_id, include_custom=include_custom)
@@ -282,7 +282,7 @@ async def get_agent_workflow(workflow_id: str):
 
 @router.post("/internal/agent-workflows")
 async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
-    repo = AgentPatternRepository()
+    repo = AgentWorkflowRepository()
     try:
         workflow_id = (req.workflow_id or "").strip() or None
         spec_json = with_default_runtime(dict(req.spec_json))
@@ -303,7 +303,7 @@ async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
 
 @router.delete("/internal/agent-workflows/{workflow_id}")
 async def delete_internal_agent_workflow(workflow_id: str):
-    repo = AgentPatternRepository()
+    repo = AgentWorkflowRepository()
     try:
         workflow = await repo.mark_custom_workflow_deleted(workflow_id)
     except ValueError as exc:
@@ -343,7 +343,7 @@ async def get_internal_agent_workflow_catalog():
 
 @router.get("/internal/agent-workflows/{workflow_id}")
 async def get_internal_agent_workflow(workflow_id: str):
-    repo = AgentPatternRepository()
+    repo = AgentWorkflowRepository()
     workflow = await repo.get_workflow(workflow_id, include_custom=True)
     if not workflow or workflow.is_builtin:
         raise HTTPException(status_code=404, detail="Internal agent workflow not found")
@@ -359,7 +359,7 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    repo = AgentPatternRepository()
+    repo = AgentWorkflowRepository()
     await repo.seed_builtin_workflows()
     thread_settings = await get_thread_settings(thread_id)
     agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
@@ -425,7 +425,7 @@ async def list_thread_agent_runs(
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
-    repo = AgentPatternRepository()
+    repo = AgentWorkflowRepository()
     runs = await repo.list_runs_for_thread(thread_id, limit=limit, status=status)
     return {
         "thread_id": thread_id,
@@ -444,7 +444,7 @@ async def get_agent_run(
     if not thread:
         raise HTTPException(status_code=404, detail="Agent run not found")
 
-    repo = AgentPatternRepository()
+    repo = AgentWorkflowRepository()
     run = await repo.get_run(run_id)
     if not run or run.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Agent run not found")
@@ -478,7 +478,7 @@ async def resume_agent_run(run_id: str, req: AgentRunResumeRequest):
         ) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Agent run not found")
-    repo = AgentPatternRepository()
+    repo = AgentWorkflowRepository()
     turns = await repo.list_chat_turns_for_run(result.run.id)
     return {
         "agent_run": _run_payload(result.run, turns),

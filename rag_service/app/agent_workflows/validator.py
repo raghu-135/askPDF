@@ -4,22 +4,22 @@ from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from app.agent.tool_registry import collect_tool_contract_metadata_errors, known_tool_contract_ids, tool_contracts_by_id
-from app.agent_patterns.node_catalog import (
+from app.agent_workflows.node_catalog import (
     collect_node_catalog_errors,
     get_node_catalog,
     node_type_allowed_tool_contract_ids,
     node_type_max_visits,
     known_node_types,
 )
-from app.agent_patterns.route_registry import (
+from app.agent_workflows.route_registry import (
     collect_route_function_registry_errors,
     get_route_function_registry,
     known_route_function_ids,
     route_function_allowed_for_node_type,
     route_function_labels,
 )
-from app.agent_patterns.builtin_workflows import builtin_workflow_keys
-from app.agent_patterns.workflow_runtime import (
+from app.agent_workflows.builtin_workflows import builtin_workflow_keys
+from app.agent_workflows.workflow_runtime import (
     ALLOWED_WORKFLOW_CONFIG_KEYS,
     RUNTIME_TEXT_FIELDS,
     SUPPORTED_RUNTIME_KINDS,
@@ -35,7 +35,7 @@ from app.models.llm_server_client import (
 
 
 class TemplateValidationError(ValueError):
-    """Raised when an agent pattern template spec is invalid."""
+    """Raised when an agent workflow template spec is invalid."""
 
 
 def _known_tool_ids() -> set[str]:
@@ -102,7 +102,7 @@ def _workflow_node_tool_requirements_for_allowed_tools(spec: Dict[str, Any], all
 
 
 class TemplateValidator:
-    """Validator for schema v2 catalog-backed agent pattern specs."""
+    """Validator for schema v2 catalog-backed agent workflow specs."""
 
     def validate(self, spec: Dict[str, Any]) -> Dict[str, Any]:
         errors = self.collect_errors(spec)
@@ -851,7 +851,7 @@ class GenericGraphValidator:
 
 
 class TemplateResolver:
-    """Freeze the effective built-in agent pattern config for an agent run."""
+    """Freeze the effective built-in agent workflow config for an agent run."""
 
     def __init__(self, validator: Optional[TemplateValidator] = None):
         self.validator = validator or TemplateValidator()

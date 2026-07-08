@@ -220,7 +220,7 @@ def collect_tool_contract_metadata_errors(records: List[Dict[str, Any]] | None =
 
 
 def known_tool_contract_ids() -> set[str]:
-    """Public tool IDs allowed in versioned agent pattern specs."""
+    """Public tool IDs allowed in versioned agent workflow specs."""
 
     return {
         metadata["id"]

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  assembleAgentPatternSpec,
+  assembleAgentWorkflowSpec,
   canAddNodeType,
   canConnectNodes,
   createHitlGateForTarget,
@@ -13,7 +13,7 @@ import {
   getRouteLabelsForFunction,
   loadBuilderStateFromSpec,
   normalizeBuilderState,
-} from '../src/lib/agent-pattern-builder.ts';
+} from '../src/lib/agent-workflow-builder.ts';
 
 const node = (overrides) => ({
   display_name: overrides.display_name || overrides.type,
@@ -187,7 +187,7 @@ const catalog = {
 
 test('creates a router starter spec with canonical node ids and route function metadata', () => {
   const state = createInitialBuilderState(catalog, 'router');
-  const spec = assembleAgentPatternSpec(state);
+  const spec = assembleAgentWorkflowSpec(state);
 
   assert.deepEqual(state.nodes.map((item) => item.id), [
     'context_loader',
@@ -229,9 +229,9 @@ test('enforces catalog max instances and canonical fallback ids', () => {
 });
 
 test('loads a saved spec back into builder state and round-trips unchanged graph data', () => {
-  const original = assembleAgentPatternSpec(createInitialBuilderState(catalog, 'plan_execute'));
+  const original = assembleAgentWorkflowSpec(createInitialBuilderState(catalog, 'plan_execute'));
   const loaded = loadBuilderStateFromSpec(original);
-  const roundTrip = assembleAgentPatternSpec(loaded);
+  const roundTrip = assembleAgentWorkflowSpec(loaded);
 
   assert.deepEqual(roundTrip.config.graph, original.config.graph);
   assert.deepEqual(roundTrip.config.allowed_tool_ids, original.config.allowed_tool_ids);
@@ -246,7 +246,7 @@ test('generates HITL gate nodes with matching conditional route and policy entri
     title: 'Review retrieval',
     defaultAction: 'continue_without',
   });
-  const spec = assembleAgentPatternSpec(gated);
+  const spec = assembleAgentWorkflowSpec(gated);
 
   assert.equal(gated.nodes.find((item) => item.id === 'review_retrieval')?.type, 'hitl_gate');
   assert.equal(spec.config.hitl_policy.enabled, true);

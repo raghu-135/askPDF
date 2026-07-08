@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Protocol
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
-from app.agent_patterns.trace import artifact_summary, compact_preview, refs_from_artifacts
+from app.agent_workflows.trace import artifact_summary, compact_preview, refs_from_artifacts
 from app.time_utils import iso_utc_z, utc_now
 
 

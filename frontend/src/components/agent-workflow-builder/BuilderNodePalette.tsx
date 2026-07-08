@@ -8,9 +8,9 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import type { AgentPatternCatalogResponse } from '../../lib/api';
-import type { AgentPatternBuilderState } from '../../lib/agent-pattern-builder';
-import { canAddNodeType } from '../../lib/agent-pattern-builder';
+import type { AgentWorkflowCatalogResponse } from '../../lib/api';
+import type { AgentWorkflowBuilderState } from '../../lib/agent-workflow-builder';
+import { canAddNodeType } from '../../lib/agent-workflow-builder';
 
 export default function BuilderNodePalette({
   catalog,
@@ -18,13 +18,13 @@ export default function BuilderNodePalette({
   disabled,
   onAddNodeType,
 }: {
-  catalog: AgentPatternCatalogResponse;
-  state: AgentPatternBuilderState;
+  catalog: AgentWorkflowCatalogResponse;
+  state: AgentWorkflowBuilderState;
   disabled?: boolean;
   onAddNodeType: (nodeType: string) => void;
 }) {
   const groupedNodes = useMemo(() => {
-    const groups = new Map<string, [string, AgentPatternCatalogResponse['node_catalog'][string]][]>();
+    const groups = new Map<string, [string, AgentWorkflowCatalogResponse['node_catalog'][string]][]>();
     Object.entries(catalog.node_catalog || {}).forEach(([nodeType, entry]) => {
       const category = entry.category || 'other';
       groups.set(category, [...(groups.get(category) || []), [nodeType, entry]]);

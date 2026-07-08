@@ -12,8 +12,8 @@ from opentelemetry.trace import SpanKind, Status, StatusCode, set_span_in_contex
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.agent.tool_registry import get_tool_contract_metadata
-from app.agent_patterns.node_catalog import get_node_type_metadata
-from app.agent_patterns.trace import compact_preview
+from app.agent_workflows.node_catalog import get_node_type_metadata
+from app.agent_workflows.trace import compact_preview
 from app.time_utils import iso_utc_z
 
 
@@ -879,7 +879,7 @@ class AgentTraceRecorder:
         self._provider = TracerProvider()
         self._exporter = _BufferedSpanExporter()
         self._provider.add_span_processor(SimpleSpanProcessor(self._exporter))
-        self._tracer = self._provider.get_tracer("askpdf.agent_patterns")
+        self._tracer = self._provider.get_tracer("askpdf.agent_workflows")
         self._spans_by_id: Dict[str, Any] = {}
         self._sidecars: Dict[str, Dict[str, Any]] = {}
         self._node_span_by_node: Dict[str, str] = {}

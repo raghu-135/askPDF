@@ -13,14 +13,14 @@ export type AgentNodeCatalog = Record<string, AgentNodeCatalogEntry>;
 
 export type AgentGraphNodeStatus = 'active' | 'planned' | 'skipped' | 'inactive' | 'error';
 
-export interface AgentPatternGraphNodeSpec {
+export interface AgentWorkflowGraphNodeSpec {
   id: string;
   type: string;
   position?: { x: number; y: number };
   [key: string]: any;
 }
 
-export interface AgentPatternGraphEdgeSpec {
+export interface AgentWorkflowGraphEdgeSpec {
   from: string;
   to?: string;
   conditional?: boolean;
@@ -28,9 +28,9 @@ export interface AgentPatternGraphEdgeSpec {
   [key: string]: any;
 }
 
-export interface AgentPatternGraphSpec {
-  nodes?: AgentPatternGraphNodeSpec[];
-  edges?: AgentPatternGraphEdgeSpec[];
+export interface AgentWorkflowGraphSpec {
+  nodes?: AgentWorkflowGraphNodeSpec[];
+  edges?: AgentWorkflowGraphEdgeSpec[];
 }
 
 export interface AgentGraphToolSummary {

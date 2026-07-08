@@ -11,10 +11,10 @@ from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.agent_patterns.checkpointing import delete_agent_checkpoints
-from app.agent_patterns.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
-from app.agent_patterns.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.agent_patterns.validator import TemplateValidationError, TemplateValidator
+from app.agent_workflows.checkpointing import delete_agent_checkpoints
+from app.agent_workflows.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
+from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
+from app.agent_workflows.validator import TemplateValidationError, TemplateValidator
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
@@ -186,7 +186,7 @@ def _validate_interrupt_compatibility(interrupt: Dict[str, Any], run: AgentRun) 
     if compatibility.get("spec_schema_version") != SUPPORTED_SPEC_SCHEMA_VERSION:
         raise AgentRunInterruptError(
             "interrupt_spec_schema_unsupported",
-            "The pending interrupt was created for an unsupported agent pattern schema.",
+            "The pending interrupt was created for an unsupported agent workflow schema.",
         )
 
     fields = (
@@ -204,7 +204,7 @@ def _validate_interrupt_compatibility(interrupt: Dict[str, Any], run: AgentRun) 
         )
 
 
-class AgentPatternRepository:
+class AgentWorkflowRepository:
     """Persistence for agent workflows and runs."""
 
     def __init__(self, session: Optional[AsyncSession] = None):

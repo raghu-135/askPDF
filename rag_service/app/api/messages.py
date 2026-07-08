@@ -13,9 +13,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 
 from app.agent.prompting import normalize_tool_instructions
-from app.agent_patterns.repository import AgentPatternRepository
-from app.agent_patterns.service import AgentRunService
-from app.agent_patterns.workflow_runtime import workflow_supports_replans
+from app.agent_workflows.repository import AgentWorkflowRepository
+from app.agent_workflows.service import AgentRunService
+from app.agent_workflows.workflow_runtime import workflow_supports_replans
 from app.db import (
     MessageRole,
     delete_message_pair,
@@ -38,7 +38,7 @@ async def _settings_workflow_supports_replans(settings: dict) -> bool:
     workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
     if not isinstance(workflow_id, str) or not workflow_id:
         return False
-    workflow = await AgentPatternRepository().get_workflow(workflow_id, include_custom=True)
+    workflow = await AgentWorkflowRepository().get_workflow(workflow_id, include_custom=True)
     spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
     return workflow_supports_replans(spec)
 

@@ -5,12 +5,12 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-from app.agent_patterns.checkpointing import open_agent_checkpointer
-from app.agent_patterns.debug_trace import AgentTraceRecorder, merge_debug_payloads
-from app.agent_patterns.metrics import build_run_metrics
-from app.agent_patterns.repository import AgentPatternRepository, InterruptResolutionResult
-from app.agent_patterns.validator import TemplateResolver, TemplateValidationError
-from app.agent_patterns.workflow_runtime import default_agent_workflow_key
+from app.agent_workflows.checkpointing import open_agent_checkpointer
+from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
+from app.agent_workflows.metrics import build_run_metrics
+from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
+from app.agent_workflows.validator import TemplateResolver, TemplateValidationError
+from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.db import get_thread_settings
 
 
@@ -22,17 +22,17 @@ class AgentRunService:
 
     def __init__(
         self,
-        repository: Optional[AgentPatternRepository] = None,
+        repository: Optional[AgentWorkflowRepository] = None,
         resolver: Optional[TemplateResolver] = None,
         *,
-        allow_custom_agent_patterns: Optional[bool] = None,
+        allow_custom_agent_workflows: Optional[bool] = None,
     ):
-        self.repository = repository or AgentPatternRepository()
+        self.repository = repository or AgentWorkflowRepository()
         self.resolver = resolver or TemplateResolver()
-        self.allow_custom_agent_patterns = (
-            allow_custom_agent_patterns
-            if allow_custom_agent_patterns is not None
-            else os.getenv("ASKPDF_CUSTOM_AGENT_PATTERNS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+        self.allow_custom_agent_workflows = (
+            allow_custom_agent_workflows
+            if allow_custom_agent_workflows is not None
+            else os.getenv("ASKPDF_CUSTOM_AGENT_WORKFLOWS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
         )
 
     async def run_thread_chat(self, thread_id: str, req: Any, embed_model: str) -> Dict[str, Any]:
@@ -48,7 +48,7 @@ class AgentRunService:
         if workflow is None:
             await self.repository.seed_builtin_workflows()
             workflow = await self.repository.get_workflow(workflow_id, include_custom=include_custom_for_lookup)
-        if workflow is not None and not workflow.is_builtin and not self.allow_custom_agent_patterns:
+        if workflow is not None and not workflow.is_builtin and not self.allow_custom_agent_workflows:
             logger.warning(
                 "Unsupported custom agent workflow requested for thread %s | requested_workflow=%s fallback_workflow=%s",
                 thread_id,
@@ -121,7 +121,7 @@ class AgentRunService:
                     workflow.id,
                 )
                 raise RuntimeError("Default agent workflow is incompatible with this service version") from fallback_exc
-        from app.agent_patterns.graph import TemplateCompiler, normalize_hitl_policy_for_thread_settings
+        from app.agent_workflows.graph import TemplateCompiler, normalize_hitl_policy_for_thread_settings
 
         resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
         resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
@@ -149,7 +149,7 @@ class AgentRunService:
 
         try:
             logger.info("Invoking compiled agent workflow for thread %s | workflow=%s", thread_id, workflow.id)
-            from app.agent_patterns.router_runtime import execute_compiled_rag_chat
+            from app.agent_workflows.router_runtime import execute_compiled_rag_chat
             async with open_agent_checkpointer() as checkpointer:
                 result = await execute_compiled_rag_chat(
                     thread_id,
@@ -276,7 +276,7 @@ class AgentRunService:
             return resolution
 
         try:
-            from app.agent_patterns.router_runtime import resume_compiled_rag_chat
+            from app.agent_workflows.router_runtime import resume_compiled_rag_chat
 
             resume_trace_recorder = AgentTraceRecorder(resolution.run)
             async with open_agent_checkpointer() as checkpointer:
