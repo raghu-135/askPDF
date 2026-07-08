@@ -16,6 +16,37 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ix_agent_workflows_name")
+    op.execute(
+        """
+        WITH duplicate_names AS (
+            SELECT
+                id,
+                name,
+                row_number() OVER (
+                    PARTITION BY name
+                    ORDER BY
+                        is_builtin DESC,
+                        CASE visibility
+                            WHEN 'public' THEN 0
+                            WHEN 'internal' THEN 1
+                            WHEN 'deleted' THEN 3
+                            ELSE 2
+                        END,
+                        created_at ASC NULLS LAST,
+                        id ASC
+                ) AS duplicate_rank
+            FROM agent_workflows
+            WHERE name IS NOT NULL
+        )
+        UPDATE agent_workflows AS workflow
+        SET
+            name = duplicate_names.name || ' (' || workflow.id || ')',
+            updated_at = now()
+        FROM duplicate_names
+        WHERE workflow.id = duplicate_names.id
+          AND duplicate_names.duplicate_rank > 1
+        """
+    )
     op.create_index("ux_agent_workflows_name", "agent_workflows", ["name"], unique=True)
 
 
