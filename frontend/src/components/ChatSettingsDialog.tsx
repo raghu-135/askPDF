@@ -16,7 +16,6 @@ import {
     MenuItem,
 } from '@mui/material';
 import ReplayIcon from '@mui/icons-material/Replay';
-import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import { AgentWorkflow, PromptToolDefinition } from '../lib/api';
 
 interface ChatSettingsDialogProps {
@@ -45,6 +44,7 @@ interface ChatSettingsDialogProps {
     onHitlWebApprovalChange: (checked: boolean) => void;
     onRerankerChange: (checked: boolean) => void;
     onAgentWorkflowChange: (value: string) => void;
+    onAgentWorkflowMenuOpen?: () => void | Promise<void>;
     onSystemRoleChange: (value: string) => void;
     onToolInstructionChange: (toolId: string, value: string) => void;
     onCustomInstructionsChange: (value: string) => void;
@@ -78,6 +78,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onHitlWebApprovalChange,
     onRerankerChange,
     onAgentWorkflowChange,
+    onAgentWorkflowMenuOpen,
     onSystemRoleChange,
     onToolInstructionChange,
     onCustomInstructionsChange,
@@ -117,34 +118,25 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                         </IconButton>
                     </Tooltip>
                 </Box>
-                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) auto' }, gap: 1, alignItems: 'start' }}>
-                    <TextField
-                        select
-                        label="Agent workflow"
-                        value={agentWorkflowId}
-                        onChange={(e) => onAgentWorkflowChange(e.target.value)}
-                        helperText="Router RAG remains the default; advanced workflows are opt-in."
-                    >
-                        {agentWorkflows.map((pattern) => (
-                            <MenuItem key={pattern.id} value={pattern.id}>
-                                {pattern.is_builtin ? pattern.name : `Custom: ${pattern.name || pattern.id}`}
-                            </MenuItem>
-                        ))}
-                        {agentWorkflowIsCustom && !selectedWorkflowListed ? (
-                            <MenuItem value={agentWorkflowId}>
-                                Custom: {agentWorkflowId}
-                            </MenuItem>
-                        ) : null}
-                    </TextField>
-                    <Button
-                        variant="outlined"
-                        startIcon={<AccountTreeIcon />}
-                        onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}
-                        sx={{ borderRadius: 1, minHeight: 40, whiteSpace: 'nowrap' }}
-                    >
-                        Open Builder
-                    </Button>
-                </Box>
+                <TextField
+                    select
+                    label="Agent workflow"
+                    value={agentWorkflowId}
+                    onChange={(e) => onAgentWorkflowChange(e.target.value)}
+                    helperText="Router RAG remains the default; advanced workflows are opt-in."
+                    SelectProps={{ onOpen: onAgentWorkflowMenuOpen }}
+                >
+                    {agentWorkflows.map((pattern) => (
+                        <MenuItem key={pattern.id} value={pattern.id}>
+                            {pattern.is_builtin ? pattern.name : `Custom: ${pattern.name || pattern.id}`}
+                        </MenuItem>
+                    ))}
+                    {agentWorkflowIsCustom && !selectedWorkflowListed ? (
+                        <MenuItem value={agentWorkflowId}>
+                            Custom: {agentWorkflowId}
+                        </MenuItem>
+                    ) : null}
+                </TextField>
                 {replansEnabled ? (
                     replansLimit !== null ? (
                         <TextField

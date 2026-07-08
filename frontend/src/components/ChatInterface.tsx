@@ -1271,6 +1271,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setSettingsDialogOpen(true);
     };
 
+    const refreshAgentWorkflows = useCallback(async () => {
+        try {
+            const patterns = await listAgentWorkflows();
+            setAgentWorkflows(patterns.agent_workflows || []);
+        } catch (error) {
+            console.error('Failed to refresh agent workflows:', error);
+        }
+    }, []);
+
     const handleCloseThreadSettings = () => {
         setSettingsDialogOpen(false);
         loadThreadSettings();
@@ -2205,6 +2214,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onAgentWorkflowChange={(value) => {
                     setAgentWorkflowId(value);
                 }}
+                onAgentWorkflowMenuOpen={refreshAgentWorkflows}
                 onSystemRoleChange={(value) => setSystemRole(value)}
                 onToolInstructionChange={(toolId, value) =>
                     setToolInstructions((prev) => ({

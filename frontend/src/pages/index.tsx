@@ -12,6 +12,7 @@ import ForumIcon from '@mui/icons-material/Forum';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ClearIcon from '@mui/icons-material/Clear';
+import AutoAwesomeSharpIcon from '@mui/icons-material/AutoAwesomeSharp';
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -711,6 +712,16 @@ export default function Home() {
                 disabled={!activeThread}
                 tooltipText={!activeThread ? "Select or create a thread first" : undefined}
               />
+
+              <Tooltip title="Agent workflow builder">
+                <IconButton
+                  color="primary"
+                  size="small"
+                  onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}
+                >
+                  <AutoAwesomeSharpIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
 
               {/* Player Controls */}
               {activeThread && rightPanelTab === 1 && (
