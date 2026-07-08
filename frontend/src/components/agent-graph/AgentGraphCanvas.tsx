@@ -101,7 +101,6 @@ const layoutGraph = async (
   nodes: AgentGraphNodeModel[],
   edges: ReturnType<typeof buildAgentGraph>['edges'],
   direction: 'RIGHT' | 'DOWN',
-  preferStoredPositions = false,
 ) => {
   const graph = {
     id: 'agent-run-graph',
@@ -128,9 +127,8 @@ const layoutGraph = async (
   return nodes.map((node): Node<AgentGraphNodeModel> => ({
     id: node.id,
     type: 'agentGraphNode',
-    position: preferStoredPositions && node.position ? node.position : positions.get(node.id) || { x: 0, y: 0 },
+    position: node.position || positions.get(node.id) || { x: 0, y: 0 },
     data: { ...node, layoutDirection: direction },
-    draggable: preferStoredPositions,
     selectable: true,
   }));
 };
@@ -143,7 +141,6 @@ function AgentGraphCanvasInner({
   nodeCatalog,
   mode,
   showInspector,
-  nodesDraggable,
   onSelectionChange,
   onNodePositionChange,
 }: {
@@ -154,7 +151,6 @@ function AgentGraphCanvasInner({
   nodeCatalog?: AgentNodeCatalog;
   mode: AgentGraphMode;
   showInspector: boolean;
-  nodesDraggable: boolean;
   onSelectionChange?: (selection: AgentGraphSelection) => void;
   onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
 }) {
@@ -221,7 +217,7 @@ function AgentGraphCanvasInner({
 
   useEffect(() => {
     let cancelled = false;
-    layoutGraph(graph.nodes, graph.edges, layoutDirection, nodesDraggable)
+    layoutGraph(graph.nodes, graph.edges, layoutDirection)
       .then((layoutedNodes) => {
         if (cancelled) return;
         setFlowNodes(layoutedNodes);
@@ -234,14 +230,13 @@ function AgentGraphCanvasInner({
           type: 'agentGraphNode',
           position: layoutDirection === 'DOWN' ? { x: 0, y: index * 150 } : { x: index * 280, y: 0 },
           data: { ...node, layoutDirection },
-          draggable: nodesDraggable,
           selectable: true,
         })));
       });
     return () => {
       cancelled = true;
     };
-  }, [fitView, graph.edges, graph.nodes, layoutDirection, nodesDraggable]);
+  }, [fitView, graph.edges, graph.nodes, layoutDirection]);
 
   useEffect(() => {
     if (!selection) return;
@@ -281,14 +276,12 @@ function AgentGraphCanvasInner({
 
   const canvasBg = theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.65)';
   const handleNodeDragStop: OnNodeDrag<Node<AgentGraphNodeModel>> = (_, node) => {
-    if (!nodesDraggable) return;
     onNodePositionChange?.(node.id, {
       x: Math.round(node.position.x),
       y: Math.round(node.position.y),
     });
   };
   const handleNodesChange: OnNodesChange<Node<AgentGraphNodeModel>> = (changes) => {
-    if (!nodesDraggable) return;
     setFlowNodes((current) => applyNodeChanges(changes, current));
   };
 
@@ -336,7 +329,6 @@ function AgentGraphCanvasInner({
             nodes={flowNodes}
             edges={flowEdges}
             nodeTypes={nodeTypes}
-            nodesDraggable={nodesDraggable}
             nodesConnectable={false}
             elementsSelectable
             onNodesChange={handleNodesChange}
@@ -376,7 +368,6 @@ export default function AgentGraphCanvas(props: {
   nodeCatalog?: AgentNodeCatalog;
   mode?: AgentGraphMode;
   showInspector?: boolean;
-  nodesDraggable?: boolean;
   onSelectionChange?: (selection: AgentGraphSelection) => void;
   onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
 }) {
@@ -386,7 +377,6 @@ export default function AgentGraphCanvas(props: {
         {...props}
         mode={props.mode || 'run-debug'}
         showInspector={props.showInspector !== false}
-        nodesDraggable={Boolean(props.nodesDraggable && (props.mode || 'run-debug') === 'builder')}
       />
     </ReactFlowProvider>
   );

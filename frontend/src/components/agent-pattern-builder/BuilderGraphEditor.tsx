@@ -105,9 +105,8 @@ export default function BuilderGraphEditor({
           nodeCatalog={catalog.node_catalog}
           mode="builder"
           showInspector={false}
-          nodesDraggable={!disabled}
           onSelectionChange={handleGraphSelection}
-          onNodePositionChange={onNodePositionChange}
+          onNodePositionChange={disabled ? undefined : onNodePositionChange}
         />
       </Box>
       <Box
