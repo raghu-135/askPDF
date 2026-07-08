@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -12,29 +11,24 @@ from app.agent_patterns.node_catalog import get_node_catalog
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.route_registry import get_route_function_registry
 from app.agent_patterns.service import AgentRunService
-from app.agent_patterns.templates import (
+from app.agent_patterns.workflow_constants import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
     EVALUATOR_REPLANNER_RAG_AGENT_ID,
-    EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS,
-    EVALUATOR_REPLANNER_RAG_REQUIRED_TOOL_IDS,
-    PLAN_EXECUTE_RAG_AGENT_ID,
-    PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
-    PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS,
     ROUTER_RAG_AGENT_ID,
-    ROUTER_RAG_NODE_TOOL_REQUIREMENTS,
-    ROUTER_RAG_REQUIRED_TOOL_IDS,
-    SUPPORTED_BUILTIN_TEMPLATE_IDS,
 )
-from app.agent_patterns.validator import TemplateResolver, TemplateValidationError, TemplateValidator
+from app.agent_patterns.builtin_workflows import builtin_workflow_keys
+from app.agent_patterns.validator import (
+    TemplateResolver,
+    TemplateValidationError,
+    TemplateValidator,
+    workflow_node_tool_requirements,
+    workflow_required_tool_ids,
+)
 from app.db import get_thread, get_thread_settings
 from app.time_utils import iso_utc_z
 
 
 router = APIRouter(tags=["agent-workflows"])
-
-
-def _new_custom_workflow_id() -> str:
-    return f"custom_wf_{uuid.uuid4().hex}"
 
 
 class TemplateValidationRequest(BaseModel):
@@ -138,6 +132,12 @@ def _pending_interrupt_payload(run) -> Dict[str, Any] | None:
     return dict(pending) if pending else None
 
 
+def _workflow_pattern_type(workflow) -> str:
+    spec = workflow.spec_json if isinstance(workflow.spec_json, dict) else {}
+    pattern_type = spec.get("pattern_type")
+    return pattern_type if isinstance(pattern_type, str) and pattern_type else workflow.id
+
+
 def _run_payload(run, turns=None) -> Dict[str, Any]:
     turns = turns or []
     payload = {
@@ -189,20 +189,10 @@ def _run_summary_payload(run) -> Dict[str, Any]:
     }
 
 
-def _capabilities_for_workflow(workflow_id: str) -> Dict[str, Any]:
-    if workflow_id == EVALUATOR_REPLANNER_RAG_AGENT_ID:
-        return {
-            "required_tool_ids": sorted(EVALUATOR_REPLANNER_RAG_REQUIRED_TOOL_IDS),
-            "node_tool_requirements": dict(sorted(EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS.items())),
-        }
-    if workflow_id == PLAN_EXECUTE_RAG_AGENT_ID:
-        return {
-            "required_tool_ids": sorted(PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS),
-            "node_tool_requirements": dict(sorted(PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS.items())),
-        }
+def _capabilities_for_workflow(spec_json: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "required_tool_ids": sorted(ROUTER_RAG_REQUIRED_TOOL_IDS),
-        "node_tool_requirements": dict(sorted(ROUTER_RAG_NODE_TOOL_REQUIREMENTS.items())),
+        "required_tool_ids": sorted(workflow_required_tool_ids(spec_json)),
+        "node_tool_requirements": dict(sorted(workflow_node_tool_requirements(spec_json).items())),
     }
 
 
@@ -282,14 +272,14 @@ async def validate_agent_workflow(req: TemplateValidationRequest):
 async def get_agent_workflow(workflow_id: str):
     repo = AgentPatternRepository()
     await repo.seed_builtin_workflows()
-    include_custom = workflow_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS
+    include_custom = workflow_id not in builtin_workflow_keys()
     workflow = await repo.get_workflow(workflow_id, include_custom=include_custom)
     if not workflow or not _is_compatible_workflow(workflow):
         raise HTTPException(status_code=404, detail="Agent workflow not found")
     return {
         "agent_workflow": _workflow_payload(workflow),
         "spec": _workflow_spec_payload(workflow),
-        "capabilities": _capabilities_for_workflow(workflow.id),
+        "capabilities": _capabilities_for_workflow(workflow.spec_json if isinstance(workflow.spec_json, dict) else {}),
     }
 
 
@@ -297,9 +287,9 @@ async def get_agent_workflow(workflow_id: str):
 async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
     repo = AgentPatternRepository()
     try:
-        workflow_id = (req.workflow_id or "").strip() or _new_custom_workflow_id()
+        workflow_id = (req.workflow_id or "").strip() or None
         spec_json = dict(req.spec_json)
-        spec_json["pattern_type"] = workflow_id
+        spec_json["pattern_type"] = str(spec_json.get("pattern_type") or "custom_rag_agent")
         workflow = await repo.save_custom_workflow(
             workflow_id=workflow_id,
             name=req.name,
@@ -381,7 +371,7 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
 
     workflow = await repo.get_workflow(
         workflow_id,
-        include_custom=workflow_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS,
+        include_custom=workflow_id not in builtin_workflow_keys(),
     )
     if not workflow:
         raise HTTPException(status_code=404, detail="Agent workflow not found")

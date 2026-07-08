@@ -8,6 +8,7 @@ This module contains all SQLModel table classes with proper:
 """
 
 from datetime import datetime
+import uuid
 from typing import Dict, Any, List, Optional
 from enum import Enum
 
@@ -222,8 +223,8 @@ class AgentWorkflow(SQLModel, table=True):
     """Agent workflow and its current executable spec."""
     __tablename__ = "agent_workflows"
 
-    id: str = Field(primary_key=True)
-    name: str = Field(index=True)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    name: str = Field(index=True, unique=True)
     description: str = ""
     visibility: str = Field(default="builtin", index=True)
     is_builtin: bool = Field(

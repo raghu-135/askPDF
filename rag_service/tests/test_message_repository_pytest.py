@@ -12,7 +12,7 @@ from sqlmodel import select
 
 
 from app.agent_workflows.repository import AgentPatternRepository
-from app.agent_workflows.templates import ROUTER_RAG_AGENT_ID
+from app.agent_patterns.workflow_constants import ROUTER_RAG_AGENT_ID
 from app.db.models_sqlmodel import ChatTurn, MessageRole
 from app.db.repositories.message_repo_sqlmodel import (
     MessageRepository,

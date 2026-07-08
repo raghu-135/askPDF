@@ -6,8 +6,15 @@ from app.agent.tool_registry import (
     list_tool_contract_metadata,
     validate_tool_call_allowed,
 )
-from app.agent_patterns.templates import builtin_router_rag_spec
+from app.agent_patterns.builtin_workflows import load_builtin_workflows
 from app.agent_patterns.validator import TemplateValidator
+
+
+def _builtin_spec(builtin_key: str):
+    for workflow in load_builtin_workflows():
+        if workflow.get("builtin_key") == builtin_key:
+            return workflow["spec_json"]
+    raise AssertionError(f"Missing builtin workflow fixture: {builtin_key}")
 
 
 def test_tool_contract_metadata_covers_user_facing_tool_ids():
@@ -21,7 +28,7 @@ def test_tool_contract_metadata_covers_user_facing_tool_ids():
 
 
 def test_router_rag_allowed_tool_ids_are_contract_ids():
-    allowed_tool_ids = set(builtin_router_rag_spec()["config"]["allowed_tool_ids"])
+    allowed_tool_ids = set(_builtin_spec("router_rag_agent")["config"]["allowed_tool_ids"])
 
     assert allowed_tool_ids <= known_tool_contract_ids()
 
@@ -46,7 +53,7 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
 
 
 def test_template_validator_accepts_external_contract_ids():
-    spec = builtin_router_rag_spec()
+    spec = _builtin_spec("router_rag_agent")
     spec["config"]["allowed_tool_ids"] = [
         *spec["config"]["allowed_tool_ids"],
         "wikipedia_reference",

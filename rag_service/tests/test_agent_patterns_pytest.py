@@ -27,7 +27,7 @@ from app.agent_patterns.node_catalog import collect_node_catalog_errors, get_nod
 from app.agent_patterns.repository import AgentPatternRepository, AgentRunInterruptError
 from app.agent_patterns.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_patterns.service import AgentRunService
-from app.agent_patterns.templates import (
+from app.agent_patterns.builtin_workflows import (
     EVALUATOR_REPLANNER_RAG_AGENT_ID,
     EVALUATOR_REPLANNER_RAG_AGENT_VERSION,
     EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION,

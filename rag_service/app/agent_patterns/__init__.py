@@ -1,13 +1,11 @@
 """Agent Pattern Runtime."""
 
 from app.agent_patterns.service import AgentRunService
-from app.agent_patterns.templates import (
+from app.agent_patterns.workflow_constants import (
     ROUTER_RAG_AGENT_ID,
-    ROUTER_RAG_AGENT_VERSION,
 )
 
 __all__ = [
     "AgentRunService",
     "ROUTER_RAG_AGENT_ID",
-    "ROUTER_RAG_AGENT_VERSION",
 ]

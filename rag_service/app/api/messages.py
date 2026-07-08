@@ -13,8 +13,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 
 from app.agent.prompting import normalize_tool_instructions
+from app.agent_patterns.repository import AgentPatternRepository
 from app.agent_patterns.service import AgentRunService
-from app.agent_patterns.templates import EVALUATOR_REPLANNER_RAG_AGENT_ID
+from app.agent_patterns.workflow_constants import EVALUATOR_REPLANNER_RAG_AGENT_ID
 from app.db import (
     MessageRole,
     delete_message_pair,
@@ -37,6 +38,18 @@ def _is_evaluator_replanner_settings(settings: dict) -> bool:
     if not isinstance(agent_workflow, dict):
         return False
     return agent_workflow.get("workflow_id") == EVALUATOR_REPLANNER_RAG_AGENT_ID
+
+
+async def _is_evaluator_replanner_settings_resolved(settings: dict) -> bool:
+    if _is_evaluator_replanner_settings(settings):
+        return True
+    agent_workflow = settings.get("agent_workflow")
+    workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
+    if not isinstance(workflow_id, str) or not workflow_id:
+        return False
+    workflow = await AgentPatternRepository().get_workflow(workflow_id, include_custom=True)
+    spec = workflow.spec_json if workflow and isinstance(workflow.spec_json, dict) else {}
+    return spec.get("pattern_type") == EVALUATOR_REPLANNER_RAG_AGENT_ID
 
 
 def _agent_message_metadata(message) -> dict:
@@ -198,7 +211,7 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
         # Override thread_id from path
         req.thread_id = thread_id
         thread_settings = merge_thread_settings(await get_thread_settings(thread_id))
-        if req.replans is None and _is_evaluator_replanner_settings(thread_settings):
+        if req.replans is None and await _is_evaluator_replanner_settings_resolved(thread_settings):
             req.replans = thread_settings["replans"]
         if req.system_role_override is None:
             req.system_role_override = thread_settings["system_role"]

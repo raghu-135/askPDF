@@ -13,7 +13,7 @@ from sqlalchemy.future import select
 
 from app.agent_patterns.checkpointing import delete_agent_checkpoints
 from app.agent_patterns.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
-from app.agent_patterns.templates import SUPPORTED_BUILTIN_TEMPLATE_IDS, builtin_templates
+from app.agent_patterns.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.agent_patterns.validator import TemplateValidationError, TemplateValidator
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
@@ -219,46 +219,67 @@ class AgentPatternRepository:
         validator = TemplateValidator()
         session = await self._get_session()
         async with session.begin():
-            for workflow_def in builtin_templates():
-                current_spec_def = workflow_def["version"]
-                validation_result = validator.validate(current_spec_def["spec_json"])
+            for workflow_def in load_builtin_workflows():
+                spec_json = workflow_def["spec_json"]
+                validation_result = validator.validate(spec_json)
+                builtin_key = workflow_def["builtin_key"]
                 metadata = {
                     "source": "builtin",
+                    "builtin_key": builtin_key,
                 }
 
-                workflow = await session.get(AgentWorkflow, workflow_def["id"])
+                workflow = await self._get_workflow_by_builtin_key(session, builtin_key)
+                if workflow is None:
+                    workflow = await self._get_workflow_by_name(session, workflow_def["name"])
                 if workflow is None:
                     workflow = AgentWorkflow(
-                        id=workflow_def["id"],
                         name=workflow_def["name"],
                         description=workflow_def["description"],
                         visibility=workflow_def["visibility"],
                         is_builtin=workflow_def["is_builtin"],
-                        schema_version=current_spec_def["schema_version"],
-                        spec_json=current_spec_def["spec_json"],
+                        schema_version=spec_json["schema_version"],
+                        spec_json=spec_json,
                         validation_result_json=validation_result,
                         metadata_json=metadata,
                     )
                     session.add(workflow)
                 else:
+                    if not workflow.is_builtin and workflow.visibility != "deleted":
+                        raise ValueError(f"agent workflow name already exists: {workflow_def['name']}")
                     workflow.name = workflow_def["name"]
                     workflow.description = workflow_def["description"]
                     workflow.visibility = workflow_def["visibility"]
                     workflow.is_builtin = workflow_def["is_builtin"]
-                    workflow.schema_version = current_spec_def["schema_version"]
-                    replace_jsonb_field(workflow, "spec_json", current_spec_def["spec_json"])
+                    workflow.schema_version = spec_json["schema_version"]
+                    replace_jsonb_field(workflow, "spec_json", spec_json)
                     replace_jsonb_field(workflow, "validation_result_json", validation_result)
                     replace_jsonb_field(workflow, "metadata_json", metadata)
                     workflow.updated_at = utc_now()
+
+    async def _get_workflow_by_name(self, session: AsyncSession, name: str) -> Optional[AgentWorkflow]:
+        result = await session.execute(select(AgentWorkflow).where(AgentWorkflow.name == name))
+        return result.scalars().first()
+
+    async def _get_workflow_by_builtin_key(self, session: AsyncSession, builtin_key: str) -> Optional[AgentWorkflow]:
+        result = await session.execute(
+            select(AgentWorkflow).where(AgentWorkflow.metadata_json["builtin_key"].astext == builtin_key)
+        )
+        workflow = result.scalars().first()
+        if workflow is not None:
+            return workflow
+        result = await session.execute(
+            select(AgentWorkflow).where(AgentWorkflow.spec_json["pattern_type"].astext == builtin_key)
+        )
+        return result.scalars().first()
 
     async def list_workflows(self, *, include_custom: bool = False) -> list[AgentWorkflow]:
         session = await self._get_session()
         async with session.begin():
             visibility_filter = (
-                AgentWorkflow.id.in_(SUPPORTED_BUILTIN_TEMPLATE_IDS)
+                AgentWorkflow.is_builtin.is_(True)
                 if not include_custom
                 else or_(
-                    AgentWorkflow.id.in_(SUPPORTED_BUILTIN_TEMPLATE_IDS),
+                    AgentWorkflow.is_builtin.is_(True),
                     AgentWorkflow.visibility.in_(["public", "internal"]),
                 )
             )
@@ -270,12 +291,12 @@ class AgentPatternRepository:
             return list(result.scalars().all())
 
     async def mark_custom_workflow_deleted(self, workflow_id: str) -> Optional[AgentWorkflow]:
-        if workflow_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
-            raise ValueError("built-in agent workflows cannot be deleted")
         session = await self._get_session()
         async with session.begin():
             workflow = await session.get(AgentWorkflow, workflow_id)
             if workflow is None or workflow.is_builtin:
+                if workflow is not None and workflow.is_builtin:
+                    raise ValueError("built-in agent workflows cannot be deleted")
                 return None
             workflow.visibility = "deleted"
             workflow.updated_at = utc_now()
@@ -285,10 +306,12 @@ class AgentPatternRepository:
     async def get_workflow(self, workflow_id: str, *, include_custom: bool = False) -> Optional[AgentWorkflow]:
         session = await self._get_session()
         async with session.begin():
-            if not include_custom and workflow_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS:
-                return None
             workflow = await session.get(AgentWorkflow, workflow_id)
+            if workflow is None and workflow_id in builtin_workflow_keys():
+                workflow = await self._get_workflow_by_builtin_key(session, workflow_id)
             if not workflow:
+                return None
+            if not include_custom and not workflow.is_builtin:
                 return None
             if include_custom and not workflow.is_builtin and workflow.visibility not in {"public", "internal"}:
                 return None
@@ -297,16 +320,14 @@ class AgentPatternRepository:
     async def save_custom_workflow(
         self,
         *,
-        workflow_id: str,
+        workflow_id: Optional[str],
         name: str,
         spec_json: Dict[str, Any],
         description: str = "",
         visibility: str = "internal",
     ) -> AgentWorkflow:
         """Create or update a mutable internal/custom workflow spec."""
-        if not isinstance(workflow_id, str) or not workflow_id:
-            raise ValueError("workflow_id must be a non-empty string")
-        if workflow_id in SUPPORTED_BUILTIN_TEMPLATE_IDS:
+        if workflow_id in builtin_workflow_keys():
             raise ValueError("built-in agent workflows cannot be authored through the internal path")
         if not isinstance(name, str) or not name:
             raise ValueError("name must be a non-empty string")
@@ -318,7 +339,10 @@ class AgentPatternRepository:
         validation_result = TemplateValidator().validate(spec_json)
         session = await self._get_session()
         async with session.begin():
-            workflow = await session.get(AgentWorkflow, workflow_id)
+            workflow = await session.get(AgentWorkflow, workflow_id) if workflow_id else None
+            existing_named_workflow = await self._get_workflow_by_name(session, name)
+            if existing_named_workflow is not None and (workflow is None or existing_named_workflow.id != workflow.id):
+                raise ValueError(f"agent workflow name already exists: {name}")
             previous_metadata = workflow.metadata_json if workflow and isinstance(workflow.metadata_json, dict) else {}
             metadata = {
                 **previous_metadata,
@@ -326,7 +350,6 @@ class AgentPatternRepository:
             }
             if workflow is None:
                 workflow = AgentWorkflow(
-                    id=workflow_id,
                     name=name,
                     description=description,
                     visibility=visibility,

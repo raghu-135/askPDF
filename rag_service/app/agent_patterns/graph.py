@@ -36,7 +36,7 @@ from app.agent_patterns.node_catalog import (
     node_type_max_visits,
 )
 from app.agent_patterns.route_registry import route_function_allowed_for_node_type
-from app.agent_patterns.templates import PLAN_EXECUTE_WORKER_NODES, WEB_APPROVAL_GATE_ID
+from app.agent_patterns.workflow_constants import PLAN_EXECUTE_WORKER_NODES, WEB_APPROVAL_GATE_ID
 from app.agent_patterns.trace import (
     available_document_refs,
     compact_preview,

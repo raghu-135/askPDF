@@ -9,11 +9,10 @@ from app.agent_patterns.checkpointing import open_agent_checkpointer
 from app.agent_patterns.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_patterns.metrics import build_run_metrics
 from app.agent_patterns.repository import AgentPatternRepository, InterruptResolutionResult
-from app.agent_patterns.templates import (
+from app.agent_patterns.workflow_constants import (
     EVALUATOR_REPLANNER_RAG_AGENT_ID,
     PLAN_EXECUTE_RAG_AGENT_ID,
     ROUTER_RAG_AGENT_ID,
-    SUPPORTED_BUILTIN_TEMPLATE_IDS,
 )
 from app.agent_patterns.validator import TemplateResolver, TemplateValidationError
 from app.db import get_thread_settings
@@ -45,21 +44,21 @@ class AgentRunService:
         agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
         workflow_id = agent_settings.get("workflow_id") or ROUTER_RAG_AGENT_ID
-        allow_custom_for_run = self.allow_custom_agent_patterns
-        if workflow_id not in SUPPORTED_BUILTIN_TEMPLATE_IDS and not allow_custom_for_run:
+        include_custom_for_lookup = True
+        logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
+
+        workflow = await self.repository.get_workflow(workflow_id, include_custom=include_custom_for_lookup)
+        if workflow is None:
+            await self.repository.seed_builtin_workflows()
+            workflow = await self.repository.get_workflow(workflow_id, include_custom=include_custom_for_lookup)
+        if workflow is not None and not workflow.is_builtin and not self.allow_custom_agent_patterns:
             logger.warning(
-                "Unsupported agent workflow requested for thread %s | requested_workflow=%s fallback_workflow=%s",
+                "Unsupported custom agent workflow requested for thread %s | requested_workflow=%s fallback_workflow=%s",
                 thread_id,
                 workflow_id,
                 ROUTER_RAG_AGENT_ID,
             )
-            workflow_id = ROUTER_RAG_AGENT_ID
-        logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
-
-        workflow = await self.repository.get_workflow(workflow_id, include_custom=allow_custom_for_run)
-        if workflow is None:
-            await self.repository.seed_builtin_workflows()
-            workflow = await self.repository.get_workflow(workflow_id, include_custom=allow_custom_for_run)
+            workflow = None
         if workflow is None:
             if workflow_id != ROUTER_RAG_AGENT_ID:
                 logger.warning(
@@ -92,7 +91,8 @@ class AgentRunService:
                 request_overrides=request_overrides,
             )
         except TemplateValidationError as exc:
-            if workflow.id == ROUTER_RAG_AGENT_ID:
+            workflow_pattern_type = workflow.spec_json.get("pattern_type") if isinstance(workflow.spec_json, dict) else None
+            if workflow_pattern_type == ROUTER_RAG_AGENT_ID:
                 logger.exception(
                     "Default agent workflow failed compatibility validation | thread_id=%s workflow_id=%s",
                     thread_id,
@@ -136,6 +136,7 @@ class AgentRunService:
         stored_resolved_spec = TemplateCompiler().materialize_spec(
             resolved_spec,
         )
+        pattern_type = stored_resolved_spec.get("pattern_type")
 
         run = await self.repository.create_run(
             thread_id=thread_id,
@@ -159,9 +160,9 @@ class AgentRunService:
                 handle_router_rag_chat,
             )
 
-            if workflow.id == EVALUATOR_REPLANNER_RAG_AGENT_ID:
+            if pattern_type == EVALUATOR_REPLANNER_RAG_AGENT_ID:
                 handler = handle_evaluator_replanner_rag_chat
-            elif workflow.id == PLAN_EXECUTE_RAG_AGENT_ID:
+            elif pattern_type == PLAN_EXECUTE_RAG_AGENT_ID:
                 handler = handle_plan_execute_rag_chat
             else:
                 handler = handle_router_rag_chat

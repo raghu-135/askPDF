@@ -1,0 +1,138 @@
+{
+  "builtin_key": "plan_execute_rag_agent",
+  "description": "A scoped compiled RAG pattern that loads context, plans a bounded set of retrieval workers, executes them in a fixed safe order, then synthesizes a final response.",
+  "is_builtin": true,
+  "name": "Plan-and-Execute RAG Agent",
+  "spec_json": {
+    "config": {
+      "allowed_tool_ids": [
+        "document_evidence",
+        "deep_memory",
+        "thread_timeline",
+        "live_web_recon",
+        "clarify_intent"
+      ],
+      "context_policy": {
+        "evidence_compression": "compact",
+        "evidence_dedupe": true,
+        "evidence_packet_content_limit": 2000,
+        "evidence_packet_limit": 12,
+        "final_context_char_limit": 25536,
+        "final_prompt_assembly": "legacy_evidence"
+      },
+      "custom_instructions": "",
+      "graph": {
+        "edges": [
+          {
+            "from": "START",
+            "to": "context_loader"
+          },
+          {
+            "from": "context_loader",
+            "to": "planner"
+          },
+          {
+            "conditional": true,
+            "from": "planner",
+            "route_fn": "planner_route",
+            "routes": {
+              "clarify": "finalizer",
+              "direct": "direct_answer",
+              "execute": "retrieval_worker"
+            }
+          },
+          {
+            "from": "direct_answer",
+            "to": "finalizer"
+          },
+          {
+            "from": "retrieval_worker",
+            "to": "memory_worker"
+          },
+          {
+            "from": "memory_worker",
+            "to": "timeline_worker"
+          },
+          {
+            "from": "timeline_worker",
+            "to": "web_worker"
+          },
+          {
+            "from": "web_worker",
+            "to": "synthesizer"
+          },
+          {
+            "from": "synthesizer",
+            "to": "finalizer"
+          },
+          {
+            "from": "finalizer",
+            "to": "END"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "context_loader",
+            "type": "context_loader"
+          },
+          {
+            "id": "planner",
+            "type": "planner"
+          },
+          {
+            "id": "direct_answer",
+            "type": "direct_answer"
+          },
+          {
+            "id": "retrieval_worker",
+            "type": "retrieval_worker"
+          },
+          {
+            "id": "memory_worker",
+            "type": "memory_worker"
+          },
+          {
+            "id": "timeline_worker",
+            "type": "timeline_worker"
+          },
+          {
+            "id": "web_worker",
+            "type": "web_worker"
+          },
+          {
+            "id": "synthesizer",
+            "type": "synthesizer"
+          },
+          {
+            "id": "finalizer",
+            "type": "finalizer"
+          }
+        ]
+      },
+      "hitl_policy": {
+        "enabled": false,
+        "gates": {}
+      },
+      "loop_policy": {
+        "default_max_node_visits": 1,
+        "max_total_visits": 9,
+        "node_visit_limits": {
+          "memory_worker": 2,
+          "retrieval_worker": 2,
+          "timeline_worker": 2,
+          "web_worker": 2
+        }
+      },
+      "prefetch_policy": {
+        "enabled": true
+      },
+      "system_role": "",
+      "tool_instructions": {},
+      "use_reranker": true,
+      "use_web_search": false
+    },
+    "pattern_type": "plan_execute_rag_agent",
+    "schema_version": 2
+  },
+  "visibility": "builtin"
+}

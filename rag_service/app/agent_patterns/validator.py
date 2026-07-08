@@ -18,21 +18,15 @@ from app.agent_patterns.route_registry import (
     route_function_allowed_for_node_type,
     route_function_labels,
 )
-from app.agent_patterns.templates import (
+from app.agent_patterns.workflow_constants import (
     ALLOWED_ROUTER_RAG_CONFIG_KEYS,
     EVALUATOR_REPLANNER_RAG_AGENT_ID,
-    EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS,
-    EVALUATOR_REPLANNER_RAG_REQUIRED_TOOL_IDS,
+    EVALUATOR_REPLANNER_REPEATABLE_NODE_TYPES,
     PLAN_EXECUTE_RAG_AGENT_ID,
-    PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
-    PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS,
-    ROUTER_RAG_NODE_TOOL_REQUIREMENTS,
     ROUTER_RAG_AGENT_ID,
-    ROUTER_RAG_REQUIRED_TOOL_IDS,
-    SUPPORTED_BUILTIN_TEMPLATE_IDS,
     WEB_APPROVAL_GATE_ID,
-    evaluator_replanner_loop_policy,
 )
+from app.agent_patterns.builtin_workflows import builtin_workflow_keys
 from app.models.llm_server_client import (
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
     REPLANS_LIMIT,
@@ -44,21 +38,36 @@ class TemplateValidationError(ValueError):
     """Raised when an agent pattern template spec is invalid."""
 
 
+def evaluator_replanner_loop_policy(config: Dict[str, Any]) -> Dict[str, Any]:
+    graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
+    node_types = {
+        str(node.get("id")): str(node.get("type"))
+        for node in graph.get("nodes", [])
+        if isinstance(node, dict) and node.get("id") and node.get("type")
+    }
+    try:
+        replans = max(1, int(config.get("replans", 1)))
+    except (TypeError, ValueError):
+        replans = 1
+    node_visit_limits = {
+        node_id: replans + 1
+        for node_id, node_type in node_types.items()
+        if node_type in EVALUATOR_REPLANNER_REPEATABLE_NODE_TYPES
+    }
+    for node_id, node_type in node_types.items():
+        if node_type == "replanner":
+            node_visit_limits[node_id] = replans
+    max_total_visits = sum(node_visit_limits.get(node_id, 1) for node_id in node_types)
+    return {
+        "max_total_visits": max_total_visits,
+        "default_max_node_visits": 1,
+        "node_visit_limits": {node_id: node_visit_limits[node_id] for node_id in sorted(node_visit_limits)},
+    }
+
+
 def _known_tool_ids() -> set[str]:
     return known_tool_contract_ids()
 
-
-PATTERN_REQUIRED_TOOL_IDS = {
-    ROUTER_RAG_AGENT_ID: ROUTER_RAG_REQUIRED_TOOL_IDS,
-    PLAN_EXECUTE_RAG_AGENT_ID: PLAN_EXECUTE_RAG_REQUIRED_TOOL_IDS,
-    EVALUATOR_REPLANNER_RAG_AGENT_ID: EVALUATOR_REPLANNER_RAG_REQUIRED_TOOL_IDS,
-}
-
-PATTERN_NODE_TOOL_REQUIREMENTS = {
-    ROUTER_RAG_AGENT_ID: ROUTER_RAG_NODE_TOOL_REQUIREMENTS,
-    PLAN_EXECUTE_RAG_AGENT_ID: PLAN_EXECUTE_RAG_NODE_TOOL_REQUIREMENTS,
-    EVALUATOR_REPLANNER_RAG_AGENT_ID: EVALUATOR_REPLANNER_RAG_NODE_TOOL_REQUIREMENTS,
-}
 
 HITL_ACTIONS = {"approve", "approve_selected", "continue_without", "reject", "edit"}
 HITL_PHASES = {"before", "after", "inside_tool"}
@@ -88,6 +97,35 @@ HITL_GATE_KEYS = {
     "reject_behavior",
     "max_interrupts_per_run",
 }
+
+
+def workflow_required_tool_ids(spec: Dict[str, Any]) -> set[str]:
+    config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+    allowed_tool_ids = config.get("allowed_tool_ids") if isinstance(config.get("allowed_tool_ids"), list) else []
+    return {str(tool_id) for tool_id in allowed_tool_ids if isinstance(tool_id, str) and tool_id}
+
+
+def workflow_node_tool_requirements(spec: Dict[str, Any]) -> Dict[str, str]:
+    required_tool_ids = workflow_required_tool_ids(spec)
+    return _workflow_node_tool_requirements_for_allowed_tools(spec, required_tool_ids)
+
+
+def _workflow_node_tool_requirements_for_allowed_tools(spec: Dict[str, Any], allowed_tool_ids: set[str]) -> Dict[str, str]:
+    config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+    graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    requirements: Dict[str, str] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("id")
+        node_type = node.get("type")
+        if not isinstance(node_id, str) or not isinstance(node_type, str):
+            continue
+        compatible_tool_ids = sorted(node_type_allowed_tool_contract_ids(node_type) & allowed_tool_ids)
+        if len(compatible_tool_ids) == 1:
+            requirements[node_id] = compatible_tool_ids[0]
+    return requirements
 
 
 class TemplateValidator:
@@ -122,19 +160,36 @@ class TemplateValidator:
             "warnings": [],
             "schema_version": spec_obj.get("schema_version"),
             "pattern_type": spec_obj.get("pattern_type"),
-            "supported_pattern_types": sorted([*SUPPORTED_BUILTIN_TEMPLATE_IDS, "custom_rag_agent"]),
+            "supported_pattern_types": sorted([*builtin_workflow_keys(), "custom_rag_agent"]),
             "allowed_tool_ids": allowed_tool_ids,
-            "required_tool_ids": sorted(PATTERN_REQUIRED_TOOL_IDS.get(spec_obj.get("pattern_type"), set())),
-            "missing_required_tool_ids": sorted(
-                PATTERN_REQUIRED_TOOL_IDS.get(spec_obj.get("pattern_type"), set()) - set(allowed_tool_ids)
-            ),
+            "required_tool_ids": sorted(workflow_required_tool_ids(spec_obj)),
+            "missing_required_tool_ids": [],
             "unknown_allowed_tool_ids": sorted(set(allowed_tool_ids) - known_tool_ids),
         }
 
-    def _collect_tool_permission_errors(self, pattern_type: Any, allowed_tool_ids: set[str]) -> list[str]:
+    def _collect_tool_permission_errors(self, spec: Dict[str, Any], allowed_tool_ids: set[str]) -> list[str]:
         errors: list[str] = []
         contracts_by_id = tool_contracts_by_id()
-        node_tool_requirements = PATTERN_NODE_TOOL_REQUIREMENTS.get(pattern_type, {})
+        pattern_type = spec.get("pattern_type")
+        node_tool_requirements = _workflow_node_tool_requirements_for_allowed_tools(spec, allowed_tool_ids)
+        config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+        graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
+        nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = node.get("id")
+            node_type = node.get("type")
+            if not isinstance(node_id, str) or not isinstance(node_type, str):
+                continue
+            candidate_tool_ids = node_type_allowed_tool_contract_ids(node_type)
+            if node_type in {"context_loader", "hitl_gate"} or not candidate_tool_ids:
+                continue
+            compatible_tool_ids = sorted(candidate_tool_ids & allowed_tool_ids)
+            if not compatible_tool_ids:
+                errors.append(
+                    f"{pattern_type} node {node_id} has no compatible allowed_tool_ids for node type {node_type}"
+                )
         for caller_node, contract_id in sorted(node_tool_requirements.items()):
             if contract_id not in allowed_tool_ids:
                 continue
@@ -608,10 +663,7 @@ class GenericGraphValidator:
             unknown_tool_ids = sorted(set(allowed_tool_ids) - known_tool_ids)
             if unknown_tool_ids:
                 errors.append(f"unknown allowed_tool_ids: {', '.join(unknown_tool_ids)}")
-            required_tool_ids = PATTERN_REQUIRED_TOOL_IDS.get(pattern_type, set())
-            missing_tool_ids = sorted(required_tool_ids - set(allowed_tool_ids))
-            if missing_tool_ids:
-                errors.append(f"{pattern_type} missing required allowed_tool_ids: {', '.join(missing_tool_ids)}")
+            errors.extend(TemplateValidator()._collect_tool_permission_errors(spec, set(allowed_tool_ids)))
 
         graph = config.get("graph")
         if not isinstance(graph, dict):

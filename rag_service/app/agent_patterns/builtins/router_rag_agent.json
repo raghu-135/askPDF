@@ -1,0 +1,141 @@
+{
+  "builtin_key": "router_rag_agent",
+  "description": "A compiled LangGraph pattern that loads context, routes to document retrieval, memory retrieval, direct answer, or clarification, then synthesizes a final response.",
+  "is_builtin": true,
+  "name": "Router RAG Agent",
+  "spec_json": {
+    "config": {
+      "allowed_tool_ids": [
+        "document_evidence",
+        "deep_memory",
+        "thread_timeline",
+        "live_web_recon",
+        "clarify_intent"
+      ],
+      "context_policy": {
+        "evidence_compression": "compact",
+        "evidence_dedupe": true,
+        "evidence_packet_content_limit": 2000,
+        "evidence_packet_limit": 12,
+        "final_context_char_limit": 25536,
+        "final_prompt_assembly": "legacy_evidence"
+      },
+      "custom_instructions": "",
+      "graph": {
+        "edges": [
+          {
+            "from": "START",
+            "to": "context_loader"
+          },
+          {
+            "from": "context_loader",
+            "to": "router"
+          },
+          {
+            "conditional": true,
+            "from": "router",
+            "route_fn": "router_route",
+            "routes": {
+              "clarify": "finalizer",
+              "direct": "direct_answer",
+              "document": "retrieval_worker",
+              "memory": "memory_worker",
+              "timeline": "timeline_worker",
+              "web": "web_worker"
+            }
+          },
+          {
+            "from": "retrieval_worker",
+            "to": "synthesizer"
+          },
+          {
+            "from": "memory_worker",
+            "to": "synthesizer"
+          },
+          {
+            "from": "timeline_worker",
+            "to": "synthesizer"
+          },
+          {
+            "from": "web_worker",
+            "to": "synthesizer"
+          },
+          {
+            "from": "direct_answer",
+            "to": "finalizer"
+          },
+          {
+            "from": "synthesizer",
+            "to": "finalizer"
+          },
+          {
+            "from": "finalizer",
+            "to": "END"
+          }
+        ],
+        "nodes": [
+          {
+            "id": "context_loader",
+            "type": "context_loader"
+          },
+          {
+            "id": "router",
+            "type": "router"
+          },
+          {
+            "id": "retrieval_worker",
+            "type": "retrieval_worker"
+          },
+          {
+            "id": "memory_worker",
+            "type": "memory_worker"
+          },
+          {
+            "id": "timeline_worker",
+            "type": "timeline_worker"
+          },
+          {
+            "id": "web_worker",
+            "type": "web_worker"
+          },
+          {
+            "id": "direct_answer",
+            "type": "direct_answer"
+          },
+          {
+            "id": "synthesizer",
+            "type": "synthesizer"
+          },
+          {
+            "id": "finalizer",
+            "type": "finalizer"
+          }
+        ]
+      },
+      "hitl_policy": {
+        "enabled": false,
+        "gates": {}
+      },
+      "loop_policy": {
+        "default_max_node_visits": 1,
+        "max_total_visits": 9,
+        "node_visit_limits": {
+          "memory_worker": 2,
+          "retrieval_worker": 2,
+          "timeline_worker": 2,
+          "web_worker": 2
+        }
+      },
+      "prefetch_policy": {
+        "enabled": true
+      },
+      "system_role": "",
+      "tool_instructions": {},
+      "use_reranker": true,
+      "use_web_search": false
+    },
+    "pattern_type": "router_rag_agent",
+    "schema_version": 2
+  },
+  "visibility": "builtin"
+}
