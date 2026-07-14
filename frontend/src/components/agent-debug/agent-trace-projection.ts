@@ -10,6 +10,7 @@ export interface TraceNodeView {
   type?: string;
   label: string;
   instanceLabel: string;
+  visitIndex?: number;
   status?: string;
   skipped: boolean;
   durationMs?: number;
@@ -29,6 +30,7 @@ export interface TraceToolView {
   displayName?: string;
   callerNode?: string;
   callerNodeType?: string;
+  callerVisitIndex?: number;
   ok: boolean;
   durationMs?: number;
   sourceCount?: number;
@@ -130,6 +132,7 @@ const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCa
       || asNonEmptyString(raw.label)
       || asNonEmptyString(raw.node_name),
     instanceLabel: formatNodeInstanceLabel(id, type),
+    visitIndex: asNumber(row.visitIndex ?? row.visit_index ?? raw.visit_index ?? raw.visitIndex),
     status: typeof row.status === 'string' ? row.status : undefined,
     skipped: row.skipped === true || row.status === 'skipped',
     durationMs: asNumber(row.durationMs ?? row.duration_ms),
@@ -158,6 +161,7 @@ const toolViewFromSummary = (row: Record<string, any>): TraceToolView => {
         : typeof raw.caller_node_type === 'string'
           ? raw.caller_node_type
           : undefined,
+    callerVisitIndex: asNumber(row.callerVisitIndex ?? row.caller_visit_index ?? raw.caller_visit_index ?? raw.callerVisitIndex),
     ok: row.ok !== false,
     durationMs: asNumber(row.durationMs ?? row.elapsed_ms),
     sourceCount: asNumber(row.sourceCount ?? row.source_count),

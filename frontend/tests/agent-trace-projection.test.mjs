@@ -46,6 +46,7 @@ const backendDebug = {
         id: 'planner',
         status: 'completed',
         skipped: false,
+        visitIndex: 1,
         durationMs: 5,
         route: 'execute',
         routeReason: 'Document evidence requested.',
@@ -54,6 +55,7 @@ const backendDebug = {
         span: { span_id: 'node:planner:0' },
         raw: {
           node: 'planner',
+          visit_index: 1,
           route: 'execute',
           route_reason: 'Document evidence requested.',
           execution_plan: ['retrieval_worker'],
@@ -92,6 +94,7 @@ const backendDebug = {
         category: 'document',
         displayName: 'Document Evidence',
         callerNode: 'retrieval_worker',
+        callerVisitIndex: 1,
         ok: true,
         durationMs: 7,
         sourceCount: 1,
@@ -99,6 +102,7 @@ const backendDebug = {
         span: { span_id: 'tool:search_documents:0' },
         raw: {
           tool_name: 'search_documents',
+          caller_visit_index: 1,
           artifact_keys: ['document_sources'],
           result_preview: 'Found document evidence.',
         },
@@ -178,6 +182,8 @@ test('trace projection reads backend-provided summary and graph', () => {
   assert.equal(view.routeReason, 'Document evidence requested.');
   assert.deepEqual(view.nodes.map((node) => node.id), ['planner', 'retrieval_worker', 'memory_worker']);
   assert.deepEqual(view.tools.map((tool) => tool.name), ['search_documents']);
+  assert.equal(view.nodes[0].visitIndex, 1);
+  assert.equal(view.tools[0].callerVisitIndex, 1);
   assert.equal(view.nodes[0].span?.span_id, 'node:planner:0');
   assert.equal(view.tools[0].span?.span_id, 'tool:search_documents:0');
   assert.equal(view.graph?.selectedRoute, 'execute');
@@ -286,6 +292,71 @@ test('trace projection uses backend counts without inferring from spans', () => 
   assert.equal(view.errorCount, 0);
   assert.equal(view.metrics.llm_token_count_total, 125);
   assert.equal(view.metrics.llm_retry_count, 1);
+});
+
+test('trace projection reads visit metadata from raw fallback fields', () => {
+  const rawVisitDebug = {
+    ...backendDebug,
+    summary: {
+      ...backendDebug.summary,
+      nodes: [
+        {
+          id: 'evidence_evaluator',
+          status: 'completed',
+          skipped: false,
+          durationMs: 5,
+          warningCodes: [],
+          raw: { node: 'evidence_evaluator', visit_index: 2 },
+        },
+      ],
+      tools: [
+        {
+          name: 'search_documents',
+          callerNode: 'evidence_evaluator',
+          ok: true,
+          warningCodes: [],
+          raw: { tool_name: 'search_documents', caller_node: 'evidence_evaluator', caller_visit_index: 2 },
+        },
+      ],
+    },
+  };
+
+  const view = buildRunTraceView({ ...traceBackedRun, debug: rawVisitDebug });
+
+  assert.equal(view.nodes[0].visitIndex, 2);
+  assert.equal(view.tools[0].callerVisitIndex, 2);
+});
+
+test('trace projection keeps visit metadata optional for older traces', () => {
+  const olderDebug = {
+    ...backendDebug,
+    summary: {
+      ...backendDebug.summary,
+      nodes: [
+        {
+          id: 'retrieval_worker',
+          status: 'completed',
+          skipped: false,
+          durationMs: 8,
+          warningCodes: [],
+          raw: { node: 'retrieval_worker' },
+        },
+      ],
+      tools: [
+        {
+          name: 'search_documents',
+          callerNode: 'retrieval_worker',
+          ok: true,
+          warningCodes: [],
+          raw: { tool_name: 'search_documents', caller_node: 'retrieval_worker' },
+        },
+      ],
+    },
+  };
+  const view = buildRunTraceView({ ...traceBackedRun, debug: olderDebug });
+
+  assert.equal(view.nodes[0].visitIndex, undefined);
+  assert.equal(view.tools[0].callerVisitIndex, undefined);
 });
 
 test('trace projection handles null debug payload', () => {

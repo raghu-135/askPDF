@@ -160,23 +160,26 @@ function AgentGraphCanvasInner({
   const [selection, setSelection] = useState<AgentGraphSelection>(null);
 
   const graph = useMemo(() => {
+    const graphSpec = getAgentGraphSpec(resolvedSpec, templateId);
     let baseGraph;
-    if (mode === 'run-debug' && traceView?.graph) {
-      baseGraph = traceView.graph;
-    } else {
-      const graphSpec = getAgentGraphSpec(resolvedSpec, templateId);
-      baseGraph = buildAgentGraph(graphSpec, mode === 'run-debug' && traceView ? {
+    if (mode === 'run-debug' && traceView && graphSpec.nodes?.length) {
+      baseGraph = buildAgentGraph(graphSpec, {
         route: traceView.route,
         metrics: traceView.metrics,
         nodeCatalog,
-        nodeRows: traceView.nodes.map((node) => ({ ...node.raw, node: node.id, node_type: node.type })),
+        nodeRows: traceView.nodes.map((node) => ({ ...node.raw, node: node.id, node_type: node.type, visit_index: node.visitIndex })),
         toolRows: traceView.tools.map((tool) => ({
           ...tool.raw,
           tool_name: tool.name,
           caller_node: tool.callerNode,
           caller_node_type: tool.callerNodeType,
+          caller_visit_index: tool.callerVisitIndex,
         })),
-      } : { nodeCatalog });
+      });
+    } else if (mode === 'run-debug' && traceView?.graph) {
+      baseGraph = traceView.graph;
+    } else {
+      baseGraph = buildAgentGraph(graphSpec, { nodeCatalog });
     }
     return applyTraceFocusToGraph(baseGraph, focusedTraceRefs);
   }, [focusedTraceRefs, mode, nodeCatalog, resolvedSpec, templateId, traceView]);

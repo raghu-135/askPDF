@@ -6,6 +6,10 @@ import { formatNodeInstanceLabel } from '../agent-graph/agent-graph-mapper';
 import { formatTraceError } from './agent-debug-utils';
 import type { TraceNodeView, TraceToolView } from './agent-trace-projection';
 
+const visitSuffix = (visitIndex?: number) => (
+  Number.isFinite(Number(visitIndex)) ? ` · visit ${Number(visitIndex)}` : ''
+);
+
 const TraceTooltipList = ({
   title,
   emptyText,
@@ -54,7 +58,7 @@ export const TraceNodesTooltip = ({
         return (
           <Box key={`${node.id}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
             <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-              {index + 1}. {node.label}
+              {index + 1}. {node.label}{visitSuffix(node.visitIndex)}
             </Typography>
             {instanceLabel !== node.label && (
               <Typography variant="caption" sx={{ display: 'block', opacity: 0.78 }}>
@@ -96,6 +100,7 @@ export const TraceToolsTooltip = ({ tools }: { tools: TraceToolView[] }) => (
       const callerLabel = tool.callerNode
         ? formatNodeInstanceLabel(tool.callerNode, tool.callerNodeType)
         : undefined;
+      const callerVisitLabel = callerLabel ? `${callerLabel}${visitSuffix(tool.callerVisitIndex)}` : undefined;
       return (
         <Box key={`${tool.name}-${index}`} sx={{ py: 0.5, borderTop: index ? '1px solid rgba(255,255,255,0.18)' : 0 }}>
           <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
@@ -103,7 +108,7 @@ export const TraceToolsTooltip = ({ tools }: { tools: TraceToolView[] }) => (
           </Typography>
           <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
             {[
-              callerLabel ? `from ${callerLabel}` : null,
+              callerVisitLabel ? `from ${callerVisitLabel}` : null,
               tool.ok ? 'ok' : 'failed',
               elapsed,
               Number.isFinite(Number(tool.sourceCount)) ? `${Number(tool.sourceCount)} sources` : null,

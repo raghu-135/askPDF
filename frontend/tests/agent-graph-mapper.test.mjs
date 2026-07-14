@@ -344,6 +344,107 @@ test('graph mapper applies node and span focus refs', () => {
   assert.equal(memory?.focused, undefined);
 });
 
+test('graph mapper collapses repeated loop visits into one node with visit details', () => {
+  const graph = buildAgentGraph(
+    graphSpecs.evaluatorReplanner,
+    {
+      route: 'execute',
+      nodeRows: [
+        {
+          node: 'evidence_evaluator',
+          node_type: 'evidence_evaluator',
+          visit_index: 1,
+          elapsed_ms: 6,
+          evaluator_route: 'replan',
+          replan_count: 0,
+          __trace_span: { span_id: 'node:evidence_evaluator:4' },
+        },
+        {
+          node: 'replanner',
+          node_type: 'replanner',
+          visit_index: 1,
+          elapsed_ms: 9,
+          replan_count: 1,
+          __trace_span: { span_id: 'node:replanner:5' },
+        },
+        {
+          node: 'evidence_evaluator',
+          node_type: 'evidence_evaluator',
+          visit_index: 2,
+          elapsed_ms: 7,
+          evaluator_route: 'answer',
+          replan_count: 1,
+          warnings: ['low_confidence'],
+          __trace_span: { span_id: 'node:evidence_evaluator:8' },
+        },
+      ],
+      toolRows: [
+        {
+          tool_name: 'search_documents',
+          caller_node: 'evidence_evaluator',
+          caller_node_type: 'evidence_evaluator',
+          caller_visit_index: 1,
+          ok: true,
+          elapsed_ms: 3,
+        },
+        {
+          tool_name: 'search_thread_timeline',
+          caller_node: 'evidence_evaluator',
+          caller_node_type: 'evidence_evaluator',
+          caller_visit_index: 2,
+          ok: true,
+          elapsed_ms: 4,
+        },
+      ],
+    },
+  );
+
+  const evaluator = graph.nodes.find((node) => node.id === 'evidence_evaluator');
+
+  assert.equal(evaluator?.visitCount, 2);
+  assert.equal(evaluator?.latestVisitIndex, 2);
+  assert.deepEqual(evaluator?.visits?.map((visit) => visit.visitIndex), [1, 2]);
+  assert.deepEqual(evaluator?.visits?.map((visit) => visit.evaluatorRoute), ['replan', 'answer']);
+  assert.deepEqual(evaluator?.visits?.map((visit) => visit.elapsedMs), [6, 7]);
+  assert.deepEqual(evaluator?.visits?.map((visit) => visit.replanCount), [0, 1]);
+  assert.deepEqual(evaluator?.visits?.map((visit) => visit.toolSummaries.map((tool) => tool.toolName)), [
+    ['search_documents'],
+    ['search_thread_timeline'],
+  ]);
+  assert.equal(evaluator?.visits?.[1]?.warningCount, 1);
+
+  const focused = applyTraceFocusToGraph(graph, {
+    span_ids: ['node:evidence_evaluator:8'],
+  });
+  const focusedEvaluator = focused.nodes.find((node) => node.id === 'evidence_evaluator');
+
+  assert.equal(focusedEvaluator?.focused, true);
+  assert.deepEqual(focusedEvaluator?.focusedSpanIds, ['node:evidence_evaluator:8']);
+});
+
+test('graph mapper keeps visit-indexed tools visible when node visit rows are missing', () => {
+  const graph = buildAgentGraph(
+    graphSpecs.evaluatorReplanner,
+    {
+      toolRows: [
+        {
+          tool_name: 'search_documents',
+          caller_node: 'evidence_evaluator',
+          caller_node_type: 'evidence_evaluator',
+          caller_visit_index: 2,
+          ok: true,
+        },
+      ],
+    },
+  );
+
+  const evaluator = graph.nodes.find((node) => node.id === 'evidence_evaluator');
+
+  assert.equal(evaluator?.visitCount, 1);
+  assert.equal(evaluator?.visits?.[0]?.visitIndex, 2);
+  assert.deepEqual(evaluator?.visits?.[0]?.toolSummaries.map((tool) => tool.toolName), ['search_documents']);
+});
+
 test('graph spec mapper does not synthesize legacy builtins without stored topology', () => {
   assert.deepEqual(getAgentGraphSpec({ pattern_type: 'router_rag_agent' }), { nodes: [], edges: [] });
   assert.deepEqual(

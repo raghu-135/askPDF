@@ -31,10 +31,12 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
   const statusLabel = data.status === 'skipped' ? skipReason || 'Skipped' : data.status;
   const isFocused = data.focused === true;
   const instanceLabel = data.instanceLabel || data.id;
+  const visitCount = Number(data.visitCount || 0);
   const tooltip = [
     data.label,
     instanceLabel !== data.label ? instanceLabel : null,
     isFocused ? 'focused by message' : null,
+    visitCount > 1 ? `visits: ${visitCount}` : null,
     data.route ? `route: ${data.route}` : null,
     elapsed ? `elapsed: ${elapsed}` : null,
     data.skipped ? skipReason || 'Skipped' : null,
@@ -70,6 +72,7 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, mt: 0.8 }}>
           <Chip size="small" label={statusLabel} sx={{ height: 22, fontSize: '0.72rem' }} />
           {isFocused ? <Chip size="small" color="primary" label="focused" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
+          {visitCount > 1 ? <Chip size="small" label={`visits ${visitCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
           {elapsed && <Chip size="small" label={elapsed} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />}
           {data.executionPlan?.length ? <Chip size="small" label={`plan ${data.executionPlan.length}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
           {toolCount ? <Chip size="small" label={`tools ${toolCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}

@@ -1,6 +1,7 @@
 import type {
   AgentGraphEdge,
   AgentGraphNode,
+  AgentGraphNodeVisit,
   AgentGraphNodeStatus,
   AgentGraphRuntimeOverlay,
   AgentGraphToolSummary,
@@ -33,6 +34,11 @@ const asPosition = (value: any): { x: number; y: number } | undefined => {
 
 const unique = (items: string[]) => Array.from(new Set(items.filter(Boolean)));
 
+const asNumber = (value: any): number | undefined => {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+};
+
 const getNodeIdFromEvent = (event: Record<string, any>) => (
   typeof event.node === 'string' ? event.node : typeof event.name === 'string' ? event.name : ''
 );
@@ -51,6 +57,7 @@ const summarizeTool = (event: Record<string, any>): AgentGraphToolSummary => ({
   displayName: typeof event.tool_display_name === 'string' ? event.tool_display_name : undefined,
   callerNode: typeof event.caller_node === 'string' ? event.caller_node : undefined,
   callerNodeType: typeof event.caller_node_type === 'string' ? event.caller_node_type : undefined,
+  callerVisitIndex: asNumber(event.caller_visit_index ?? event.callerVisitIndex),
   ok: event.ok !== false,
   elapsedMs: Number.isFinite(Number(event.elapsed_ms)) ? Number(event.elapsed_ms) : undefined,
   sourceCount: Number.isFinite(Number(event.source_count)) ? Number(event.source_count) : undefined,
@@ -63,6 +70,84 @@ const summarizeTool = (event: Record<string, any>): AgentGraphToolSummary => ({
   traceSpan: event.__trace_span && typeof event.__trace_span === 'object' ? event.__trace_span : undefined,
   raw: event,
 });
+
+const visitIndexFromEvent = (event: Record<string, any>) => asNumber(event.visit_index ?? event.visitIndex);
+
+const visitKey = (visitIndex?: number) => (
+  typeof visitIndex === 'number' ? `visit:${visitIndex}` : 'visit:default'
+);
+
+const visitLabel = (visitIndex?: number) => (
+  typeof visitIndex === 'number' ? `visit ${visitIndex}` : 'visit'
+);
+
+const buildNodeVisits = (
+  nodeId: string,
+  rawEvents: Record<string, any>[],
+  toolSummaries: AgentGraphToolSummary[],
+  executionPlan: string[],
+): AgentGraphNodeVisit[] => {
+  const grouped = new Map<string, { visitIndex?: number; events: Record<string, any>[]; tools: AgentGraphToolSummary[]; order: number }>();
+  rawEvents.forEach((event, index) => {
+    const visitIndex = visitIndexFromEvent(event);
+    const key = visitKey(visitIndex);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.events.push(event);
+      return;
+    }
+    grouped.set(key, { visitIndex, events: [event], tools: [], order: index });
+  });
+
+  toolSummaries.forEach((tool) => {
+    const indexedKey = visitKey(tool.callerVisitIndex);
+    if (tool.callerVisitIndex !== undefined) {
+      if (!grouped.has(indexedKey)) {
+        grouped.set(indexedKey, { visitIndex: tool.callerVisitIndex, events: [], tools: [], order: grouped.size });
+      }
+      grouped.get(indexedKey)?.tools.push(tool);
+      return;
+    }
+    if (grouped.size === 0) {
+      grouped.set(visitKey(undefined), { visitIndex: undefined, events: [], tools: [], order: 0 });
+    }
+    if (tool.callerVisitIndex === undefined && grouped.size === 1) {
+      Array.from(grouped.values())[0]?.tools.push(tool);
+    }
+  });
+
+  return Array.from(grouped.values())
+    .sort((left, right) => {
+      if (left.visitIndex !== undefined && right.visitIndex !== undefined) return left.visitIndex - right.visitIndex;
+      if (left.visitIndex !== undefined) return -1;
+      if (right.visitIndex !== undefined) return 1;
+      return left.order - right.order;
+    })
+    .map(({ visitIndex, events, tools }) => {
+      const latestEvent = events[events.length - 1] || {};
+      const status = deriveStatus(nodeId, events, tools, executionPlan);
+      const elapsedMs = events.reduce((total, event) => total + (Number(event.elapsed_ms) || 0), 0);
+      const warningCount = tools.reduce((count, tool) => count + tool.warnings.length, 0)
+        + events.reduce((count, event) => count + (Array.isArray(event.warnings) ? event.warnings.length : 0), 0);
+      const errorCount = tools.filter((tool) => !tool.ok).length
+        + events.filter((event) => event.error || event.ok === false).length;
+      return {
+        visitIndex,
+        label: visitLabel(visitIndex),
+        status,
+        elapsedMs: elapsedMs > 0 ? elapsedMs : undefined,
+        route: typeof latestEvent.route === 'string' ? latestEvent.route : undefined,
+        routeReason: typeof latestEvent.route_reason === 'string' ? latestEvent.route_reason : undefined,
+        evaluatorRoute: typeof latestEvent.evaluator_route === 'string' ? latestEvent.evaluator_route : undefined,
+        replanCount: asNumber(latestEvent.replan_count),
+        warningCount,
+        errorCount,
+        toolCount: tools.length,
+        rawEvents: events,
+        toolSummaries: tools,
+      };
+    });
+};
 
 const deriveStatus = (
   nodeId: string,
@@ -131,6 +216,7 @@ export const buildAgentGraph = (
     .map((node) => {
       const rawEvents = eventsByNode.get(node.id) || [];
       const toolSummaries = toolsByNode.get(node.id) || [];
+      const visits = buildNodeVisits(node.id, rawEvents, toolSummaries, executionPlan);
       const elapsedMs = rawEvents.reduce((total, event) => total + (Number(event.elapsed_ms) || 0), 0);
       const latestEvent = rawEvents[rawEvents.length - 1] || {};
       const status = deriveStatus(node.id, rawEvents, toolSummaries, executionPlan);
@@ -162,6 +248,9 @@ export const buildAgentGraph = (
         skipReason: typeof latestEvent.skip_reason === 'string' ? latestEvent.skip_reason : undefined,
         executionPlan: node.id === 'planner' || node.id === 'replanner' ? executionPlan : undefined,
         warnings: rawEvents.flatMap((event) => (Array.isArray(event.warnings) ? event.warnings.map(String) : [])),
+        visitCount: visits.length || undefined,
+        visits: visits.length > 0 ? visits : undefined,
+        latestVisitIndex: visitIndexFromEvent(latestEvent),
         inputRefs: latestEvent.input_refs && typeof latestEvent.input_refs === 'object' ? latestEvent.input_refs : undefined,
         outputRefs: latestEvent.output_refs && typeof latestEvent.output_refs === 'object' ? latestEvent.output_refs : undefined,
         inputPreview: latestEvent.input_preview,

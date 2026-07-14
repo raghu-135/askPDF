@@ -26,6 +26,10 @@ const booleanLabel = (value: unknown) => (
   typeof value === 'boolean' ? (value ? 'yes' : 'no') : undefined
 );
 
+const visitDisplayLabel = (visitIndex?: number) => (
+  Number.isFinite(Number(visitIndex)) ? `Visit ${Number(visitIndex)}` : 'Visit'
+);
+
 export default function AgentGraphInspector({ selection }: { selection: AgentGraphSelection }) {
   const [tab, setTab] = useState<'details' | 'raw'>('details');
 
@@ -86,6 +90,7 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
     focused_trace_spans: node.focusedTraceSpans || [],
     trace_spans: node.traceSpans || [],
     tool_trace_spans: toolTraceSpans,
+    visits: node.visits || [],
     node_rows: node.rawEvents.map(withoutInternalTraceFields),
     tool_rows: node.toolSummaries.map((tool) => withoutInternalTraceFields(tool.raw)),
   };
@@ -102,6 +107,7 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
         <Chip size="small" label={statusLabel} variant="outlined" />
         {nodeElapsed && <Chip size="small" label={nodeElapsed} variant="outlined" />}
+        {Number(node.visitCount || 0) > 1 && <Chip size="small" label={`visits ${node.visitCount}`} variant="outlined" />}
         {node.route && <Chip size="small" label={`route ${node.route}`} variant="outlined" />}
         {node.category && <Chip size="small" label={node.category} variant="outlined" />}
         {node.sourceCount > 0 && <Chip size="small" label={`${node.sourceCount} sources`} variant="outlined" />}
@@ -139,6 +145,37 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
               <DetailLine label="Reason" value={node.routeReason} />
               <DetailLine label="Execution plan" value={node.executionPlan?.length ? node.executionPlan.join(' -> ') : undefined} />
               <TraceObject value={node.llmResultSummary} />
+            </InspectorSection>
+          )}
+          {Array.isArray(node.visits) && node.visits.length > 1 && (
+            <InspectorSection title="Visits">
+              {node.visits.map((visit, index) => {
+                const visitElapsed = formatDurationMs(visit.elapsedMs);
+                const visitRoute = visit.evaluatorRoute || visit.route;
+                return (
+                  <Box key={`${visit.visitIndex ?? 'default'}-${index}`} sx={{ mt: index ? 0.75 : 0 }}>
+                    <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+                      {visitDisplayLabel(visit.visitIndex)}
+                    </Typography>
+                    <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                      {[
+                        visit.status,
+                        visitElapsed,
+                        visitRoute ? `route ${visitRoute}` : null,
+                        Number.isFinite(Number(visit.replanCount)) ? `replans ${visit.replanCount}` : null,
+                        visit.toolCount ? `tools ${visit.toolCount}` : null,
+                        visit.warningCount ? `warnings ${visit.warningCount}` : null,
+                        visit.errorCount ? `errors ${visit.errorCount}` : null,
+                      ].filter(Boolean).join(' · ')}
+                    </Typography>
+                    {visit.routeReason && (
+                      <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
+                        {visit.routeReason}
+                      </Typography>
+                    )}
+                  </Box>
+                );
+              })}
             </InspectorSection>
           )}
           {hasValue(node.focusedTraceSpans) && (

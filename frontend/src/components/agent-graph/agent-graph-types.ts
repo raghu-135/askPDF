@@ -38,6 +38,7 @@ export interface AgentGraphToolSummary {
   displayName?: string;
   callerNode?: string;
   callerNodeType?: string;
+  callerVisitIndex?: number;
   ok: boolean;
   elapsedMs?: number;
   sourceCount?: number;
@@ -49,6 +50,22 @@ export interface AgentGraphToolSummary {
   artifactSummary?: Record<string, any>;
   traceSpan?: Record<string, any>;
   raw: Record<string, any>;
+}
+
+export interface AgentGraphNodeVisit {
+  visitIndex?: number;
+  label: string;
+  status: AgentGraphNodeStatus;
+  elapsedMs?: number;
+  route?: string;
+  routeReason?: string;
+  evaluatorRoute?: string;
+  replanCount?: number;
+  warningCount: number;
+  errorCount: number;
+  toolCount: number;
+  rawEvents: Record<string, any>[];
+  toolSummaries: AgentGraphToolSummary[];
 }
 
 export interface AgentTraceRefs {
@@ -81,6 +98,9 @@ export interface AgentGraphNode {
   skipReason?: string;
   executionPlan?: string[];
   warnings?: string[];
+  visitCount?: number;
+  visits?: AgentGraphNodeVisit[];
+  latestVisitIndex?: number;
   inputRefs?: Record<string, any>;
   outputRefs?: Record<string, any>;
   inputPreview?: unknown;
