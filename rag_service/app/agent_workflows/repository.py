@@ -14,7 +14,7 @@ from sqlalchemy.future import select
 from app.agent_workflows.checkpointing import delete_agent_checkpoints
 from app.agent_workflows.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
-from app.agent_workflows.validator import TemplateValidationError, TemplateValidator
+from app.agent_workflows.validator import WorkflowValidationError, WorkflowValidator
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
@@ -57,7 +57,7 @@ PENDING_INTERRUPT_STRING_LIMIT = 2_000
 PENDING_INTERRUPT_LIST_LIMIT = 20
 PENDING_INTERRUPT_DICT_LIMIT = 50
 SUPPORTED_SPEC_SCHEMA_VERSION = 2
-INTERRUPT_COMPATIBILITY_SCHEMA_VERSION = 1
+INTERRUPT_RESUME_GUARD_SCHEMA_VERSION = 1
 
 
 class AgentRunInterruptError(ValueError):
@@ -80,7 +80,7 @@ class InterruptResolutionResult:
 @dataclass
 class AgentWorkflowVersion:
     id: str
-    template_id: str
+    workflow_id: str
     version: int
     schema_version: int
     spec_json: Dict[str, Any]
@@ -94,7 +94,7 @@ def _workflow_version(workflow: AgentWorkflow) -> AgentWorkflowVersion:
     version_id = str(metadata.get("version_id") or f"{workflow.id}:v{version}")
     return AgentWorkflowVersion(
         id=version_id,
-        template_id=workflow.id,
+        workflow_id=workflow.id,
         version=version,
         schema_version=workflow.schema_version,
         spec_json=workflow.spec_json,
@@ -189,30 +189,29 @@ def _canonical_json_hash(value: Any) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _run_interrupt_compatibility(run: AgentRun) -> Dict[str, Any]:
+def _run_interrupt_resume_guard(run: AgentRun) -> Dict[str, Any]:
     spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
     return {
-        "schema_version": INTERRUPT_COMPATIBILITY_SCHEMA_VERSION,
+        "schema_version": INTERRUPT_RESUME_GUARD_SCHEMA_VERSION,
         "spec_schema_version": spec.get("schema_version"),
         "workflow_id": run.workflow_id,
-        "template_id": run.template_id,
-        "template_version_id": run.template_version_id,
-        "template_version": run.template_version,
+        "workflow_version_id": run.workflow_version_id,
+        "workflow_version": run.workflow_version,
         "checkpoint_thread_id": run.checkpoint_thread_id,
         "resolved_spec_hash": _canonical_json_hash(spec),
     }
 
 
-def _validate_interrupt_compatibility(interrupt: Dict[str, Any], run: AgentRun) -> None:
-    compatibility = interrupt.get("compatibility") if isinstance(interrupt.get("compatibility"), dict) else {}
-    if not compatibility:
+def _validate_interrupt_resume_guard(interrupt: Dict[str, Any], run: AgentRun) -> None:
+    resume_guard = interrupt.get("resume_guard") if isinstance(interrupt.get("resume_guard"), dict) else {}
+    if not resume_guard:
         raise AgentRunInterruptError(
-            "interrupt_compatibility_missing",
-            "The pending interrupt is missing run compatibility metadata.",
+            "interrupt_resume_guard_missing",
+            "The pending interrupt is missing run resume guard metadata.",
         )
 
-    expected = _run_interrupt_compatibility(run)
-    if compatibility.get("spec_schema_version") != SUPPORTED_SPEC_SCHEMA_VERSION:
+    expected = _run_interrupt_resume_guard(run)
+    if resume_guard.get("spec_schema_version") != SUPPORTED_SPEC_SCHEMA_VERSION:
         raise AgentRunInterruptError(
             "interrupt_spec_schema_unsupported",
             "The pending interrupt was created for an unsupported agent workflow schema.",
@@ -225,11 +224,11 @@ def _validate_interrupt_compatibility(interrupt: Dict[str, Any], run: AgentRun) 
         "checkpoint_thread_id",
         "resolved_spec_hash",
     )
-    mismatched = [field for field in fields if compatibility.get(field) != expected.get(field)]
+    mismatched = [field for field in fields if resume_guard.get(field) != expected.get(field)]
     if mismatched:
         raise AgentRunInterruptError(
-            "interrupt_compatibility_mismatch",
-            "The pending interrupt no longer matches the stored agent run.",
+            "interrupt_resume_guard_mismatch",
+            "The pending interrupt resume guard no longer matches the stored agent run.",
         )
 
 
@@ -245,7 +244,7 @@ class AgentWorkflowRepository:
         return async_session_maker()
 
     async def seed_builtin_workflows(self) -> None:
-        validator = TemplateValidator()
+        validator = WorkflowValidator()
         session = await self._get_session()
         async with session.begin():
             for workflow_def in load_builtin_workflows():
@@ -288,16 +287,6 @@ class AgentWorkflowRepository:
                     replace_jsonb_field(workflow, "metadata_json", metadata)
                     workflow.updated_at = utc_now()
 
-    async def seed_builtin_templates(self) -> None:
-        """Compatibility alias for callers still using the legacy template name."""
-
-        await self.seed_builtin_workflows()
-
-    async def list_templates(self, *, include_custom: bool = False) -> list[AgentWorkflow]:
-        """Compatibility alias for legacy template callers."""
-
-        return await self.list_workflows(include_custom=include_custom)
-
     async def _get_workflow_by_name(self, session: AsyncSession, name: str) -> Optional[AgentWorkflow]:
         result = await session.execute(select(AgentWorkflow).where(AgentWorkflow.name == name))
         return result.scalars().first()
@@ -310,7 +299,7 @@ class AgentWorkflowRepository:
         if workflow is not None:
             return workflow
         result = await session.execute(
-            select(AgentWorkflow).where(AgentWorkflow.spec_json["pattern_type"].astext == builtin_key)
+            select(AgentWorkflow).where(AgentWorkflow.spec_json["workflow_id"].astext == builtin_key)
         )
         return result.scalars().first()
 
@@ -359,31 +348,26 @@ class AgentWorkflowRepository:
                 return None
             return workflow
 
-    async def get_template(self, template_id: str, *, include_custom: bool = False) -> Optional[AgentWorkflow]:
-        """Compatibility alias for legacy template callers."""
-
-        return await self.get_workflow(template_id, include_custom=include_custom)
-
-    async def get_template_with_current_version(
+    async def get_workflow_with_current_version(
         self,
-        template_id: str,
+        workflow_id: str,
         *,
         include_custom: bool = False,
     ) -> tuple[Optional[AgentWorkflow], Optional[AgentWorkflowVersion]]:
-        workflow = await self.get_workflow(template_id, include_custom=include_custom)
+        workflow = await self.get_workflow(workflow_id, include_custom=include_custom)
         if workflow is None:
             return None, None
         return workflow, _workflow_version(workflow)
 
-    async def get_template_version(
+    async def get_workflow_version(
         self,
-        template_id: str,
+        workflow_id: str,
         version: int,
         *,
         include_custom: bool = False,
     ) -> tuple[Optional[AgentWorkflow], Optional[AgentWorkflowVersion]]:
-        workflow, current_version = await self.get_template_with_current_version(
-            template_id,
+        workflow, current_version = await self.get_workflow_with_current_version(
+            workflow_id,
             include_custom=include_custom,
         )
         if current_version is None or current_version.version != int(version):
@@ -406,11 +390,11 @@ class AgentWorkflowRepository:
         if not isinstance(name, str) or not name:
             raise ValueError("name must be a non-empty string")
         if not isinstance(spec_json, dict):
-            raise TemplateValidationError("spec must be an object")
+            raise WorkflowValidationError("spec must be an object")
         if spec_json.get("schema_version") != 2:
-            raise TemplateValidationError("internal custom agent workflow specs must use schema_version 2")
+            raise WorkflowValidationError("internal custom agent workflow specs must use schema_version 2")
 
-        validation_result = TemplateValidator().validate(spec_json)
+        validation_result = WorkflowValidator().validate(spec_json)
         session = await self._get_session()
         async with session.begin():
             workflow = await session.get(AgentWorkflow, workflow_id) if workflow_id else None
@@ -423,7 +407,7 @@ class AgentWorkflowRepository:
                 next_version = int(previous_version) + 1 if workflow is not None and increment_version else int(previous_version or 1)
             except (TypeError, ValueError):
                 next_version = 1
-            workflow_key = workflow_id or spec_json.get("pattern_type") or name
+            workflow_key = workflow_id or spec_json.get("workflow_id") or name
             metadata = {
                 **previous_metadata,
                 "source": "custom",
@@ -459,10 +443,10 @@ class AgentWorkflowRepository:
             await session.flush()
             return workflow
 
-    async def create_internal_template_version(
+    async def save_internal_workflow_version(
         self,
         *,
-        template_id: str,
+        workflow_id: str,
         name: str,
         spec_json: Dict[str, Any],
         description: str = "",
@@ -471,7 +455,7 @@ class AgentWorkflowRepository:
         increment_version: bool = True,
     ) -> tuple[AgentWorkflow, AgentWorkflowVersion]:
         workflow = await self.save_custom_workflow(
-            workflow_id=template_id,
+            workflow_id=workflow_id,
             name=name,
             description=description,
             visibility=visibility,
@@ -624,28 +608,24 @@ class AgentWorkflowRepository:
         self,
         *,
         thread_id: str,
-        workflow_id: Optional[str] = None,
-        template_id: Optional[str] = None,
-        template_version_id: Optional[str] = None,
-        template_version: Optional[int] = None,
+        workflow_id: str,
+        workflow_version_id: Optional[str] = None,
+        workflow_version: Optional[int] = None,
         resolved_spec_json: Dict[str, Any],
         user_id: Optional[str] = None,
         checkpoint_thread_id: Optional[str] = None,
     ) -> AgentRun:
-        resolved_workflow_id = workflow_id or template_id
-        if not resolved_workflow_id:
-            raise ValueError("workflow_id or template_id is required")
         run_metadata: Dict[str, Any] = {}
-        if template_version_id is not None:
-            run_metadata["template_version_id"] = template_version_id
-        if template_version is not None:
-            run_metadata["template_version"] = template_version
+        if workflow_version_id is not None:
+            run_metadata["workflow_version_id"] = workflow_version_id
+        if workflow_version is not None:
+            run_metadata["workflow_version"] = workflow_version
         run_id = str(uuid.uuid4())
         run = AgentRun(
             id=run_id,
             thread_id=thread_id,
             user_id=user_id,
-            workflow_id=resolved_workflow_id,
+            workflow_id=workflow_id,
             run_metadata_json=run_metadata,
             resolved_spec_json=resolved_spec_json,
             status=RUN_STATUS_RUNNING,
@@ -678,7 +658,7 @@ class AgentWorkflowRepository:
             pending_interrupt = normalize_pending_interrupt_payload(
                 {
                     **pending_interrupt_json,
-                    "compatibility": _run_interrupt_compatibility(run),
+                    "resume_guard": _run_interrupt_resume_guard(run),
                 },
                 requested_at=requested_at,
             )
@@ -858,7 +838,7 @@ class AgentWorkflowRepository:
                     "This agent run is not awaiting a human decision.",
                 )
 
-            _validate_interrupt_compatibility(interrupt, run)
+            _validate_interrupt_resume_guard(interrupt, run)
             self._validate_pending_interrupt_request(
                 interrupt,
                 interrupt_id=interrupt_id,

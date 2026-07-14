@@ -24,7 +24,7 @@ CANONICAL_NODE_TYPE_ORDER = {
 }
 
 
-class TemplateMaterializer:
+class WorkflowMaterializer:
     """Materialize validated workflow specs before LangGraph compilation."""
 
     def materialize_spec(

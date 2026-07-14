@@ -63,7 +63,6 @@ class TestMessageEndpoints:
         metadata = message["metadata"]
         assert metadata == {
             "agent_workflow_id": "router_rag_agent",
-            "agent_workflow_version": 1,
             "agent_route": "document",
             "agent_route_reason": "Question needs document evidence.",
         }
@@ -105,7 +104,7 @@ class TestMessageEndpoints:
 
     @pytest.mark.asyncio
     async def test_delete_user_message_removes_turn_memory_and_recomputes_stats(self):
-        """Deleting a user-side compatibility id should delete the whole turn."""
+        """Deleting a user-side turn message id should delete the whole turn."""
         user = SimpleNamespace(
             id="turn-1:user",
             turn_id="turn-1",

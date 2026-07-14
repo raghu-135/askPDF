@@ -1,6 +1,6 @@
 {
   "builtin_key": "evaluator_replanner_rag_agent",
-  "description": "A bounded compiled RAG pattern that plans retrieval, evaluates evidence sufficiency, optionally replans once, then synthesizes a final response.",
+  "description": "A bounded compiled RAG workflow that plans retrieval, evaluates evidence sufficiency, optionally replans once, then synthesizes a final response.",
   "is_builtin": true,
   "name": "Evaluator/Replanner RAG Agent",
   "spec_json": {
@@ -18,7 +18,7 @@
         "evidence_packet_content_limit": 2000,
         "evidence_packet_limit": 12,
         "final_context_char_limit": 25536,
-        "final_prompt_assembly": "legacy_evidence"
+        "final_prompt_assembly": "evidence_packets"
       },
       "custom_instructions": "",
       "graph": {
@@ -156,7 +156,7 @@
       "use_reranker": true,
       "use_web_search": false
     },
-    "pattern_type": "evaluator_replanner_rag_agent",
+    "workflow_id": "evaluator_replanner_rag_agent",
     "runtime": {
       "failure_code": "evaluator_replanner_rag_execution_failed",
       "failure_context": "Compiled Evaluator/Replanner RAG Agent execution failed gracefully.",

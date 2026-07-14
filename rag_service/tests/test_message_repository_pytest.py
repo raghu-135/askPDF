@@ -1,5 +1,5 @@
 """
-test_message_repository_pytest.py - ChatTurn-backed message compatibility tests.
+test_message_repository_pytest.py - ChatTurn-backed message repository tests.
 """
 
 import os
@@ -37,7 +37,7 @@ async def _create_agent_run(engine, thread_id: str):
         return await agent_repo.create_run(
             thread_id=thread_id,
             workflow_id=workflow.id,
-            resolved_spec_json={"pattern_type": workflow_key},
+            resolved_spec_json={"workflow_id": workflow_key},
         )
 
 

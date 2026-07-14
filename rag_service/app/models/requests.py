@@ -118,7 +118,6 @@ class ThreadSettingsResponse(BaseModel):
     hitl_web_approval: bool = False
     use_reranker: bool = True
     agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
-    agent_pattern: Dict[str, str] = Field(default_factory=lambda: {"template_id": default_agent_workflow_key()})
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -131,7 +130,6 @@ class ThreadSettingsUpdateRequest(BaseModel):
     hitl_web_approval: Optional[bool] = None
     use_reranker: Optional[bool] = None
     agent_workflow: Optional[Dict[str, str]] = None
-    agent_pattern: Optional[Dict[str, str]] = None
 
 
 class ToolCatalogEntry(BaseModel):

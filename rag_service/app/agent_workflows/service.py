@@ -10,7 +10,7 @@ from app.agent_workflows.checkpointing import open_agent_checkpointer
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
-from app.agent_workflows.validator import TemplateResolver, TemplateValidationError
+from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.db import get_thread_settings
 
@@ -36,12 +36,12 @@ class AgentRunService:
     def __init__(
         self,
         repository: Optional[AgentWorkflowRepository] = None,
-        resolver: Optional[TemplateResolver] = None,
+        resolver: Optional[WorkflowResolver] = None,
         *,
         allow_custom_agent_workflows: Optional[bool] = None,
     ):
         self.repository = repository or AgentWorkflowRepository()
-        self.resolver = resolver or TemplateResolver()
+        self.resolver = resolver or WorkflowResolver()
         self.allow_custom_agent_workflows = (
             allow_custom_agent_workflows
             if allow_custom_agent_workflows is not None
@@ -52,16 +52,8 @@ class AgentRunService:
         thread_settings = await get_thread_settings(thread_id)
         agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
-        legacy_agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
-        legacy_agent_settings = legacy_agent_settings if isinstance(legacy_agent_settings, dict) else {}
         default_workflow_key = default_agent_workflow_key()
-        workflow_id = (
-            agent_settings.get("workflow_id")
-            or agent_settings.get("template_id")
-            or legacy_agent_settings.get("workflow_id")
-            or legacy_agent_settings.get("template_id")
-            or default_workflow_key
-        )
+        workflow_id = agent_settings.get("workflow_id") or default_workflow_key
         include_custom_for_lookup = True
         logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
 
@@ -109,16 +101,16 @@ class AgentRunService:
                 thread_settings=thread_settings,
                 request_overrides=request_overrides,
             )
-        except TemplateValidationError as exc:
+        except WorkflowValidationError as exc:
             if workflow_id == default_workflow_key:
                 logger.exception(
-                    "Default agent workflow failed compatibility validation | thread_id=%s workflow_id=%s",
+                    "Default agent workflow failed validation | thread_id=%s workflow_id=%s",
                     thread_id,
                     workflow.id,
                 )
                 raise RuntimeError("Default agent workflow is incompatible with this service version") from exc
             logger.warning(
-                "Selected agent workflow failed compatibility validation; falling back to default | thread_id=%s requested_workflow=%s error=%s",
+                "Selected agent workflow failed validation; falling back to default | thread_id=%s requested_workflow=%s error=%s",
                 thread_id,
                 workflow.id,
                 exc,
@@ -136,14 +128,14 @@ class AgentRunService:
                     thread_settings=thread_settings,
                     request_overrides=request_overrides,
                 )
-            except TemplateValidationError as fallback_exc:
+            except WorkflowValidationError as fallback_exc:
                 logger.exception(
-                    "Default agent workflow failed compatibility validation | thread_id=%s workflow_id=%s",
+                    "Default agent workflow failed validation | thread_id=%s workflow_id=%s",
                     thread_id,
                     workflow.id,
                 )
                 raise RuntimeError("Default agent workflow is incompatible with this service version") from fallback_exc
-        from app.agent_workflows.graph import TemplateCompiler, normalize_hitl_policy_for_thread_settings
+        from app.agent_workflows.graph import WorkflowCompiler, normalize_hitl_policy_for_thread_settings
 
         resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
         resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
@@ -151,15 +143,15 @@ class AgentRunService:
             thread_settings,
         )
         resolved_spec["config"] = resolved_config
-        stored_resolved_spec = TemplateCompiler().materialize_spec(
+        stored_resolved_spec = WorkflowCompiler().materialize_spec(
             resolved_spec,
         )
 
         run = await self.repository.create_run(
             thread_id=thread_id,
-            template_id=workflow.id,
-            template_version_id=workflow_version.id if workflow_version is not None else None,
-            template_version=workflow_version.version if workflow_version is not None else None,
+            workflow_id=workflow.id,
+            workflow_version_id=workflow_version.id if workflow_version is not None else None,
+            workflow_version=workflow_version.version if workflow_version is not None else None,
             resolved_spec_json=stored_resolved_spec,
         )
 
@@ -168,8 +160,7 @@ class AgentRunService:
         context = {
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
-            "agent_pattern_id": workflow.id,
-            "agent_pattern_version": workflow_version.version if workflow_version is not None else None,
+            "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
             "checkpoint_thread_id": run.checkpoint_thread_id,
         }
 

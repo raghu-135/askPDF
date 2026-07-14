@@ -34,8 +34,8 @@ from app.models.llm_server_client import (
 )
 
 
-class TemplateValidationError(ValueError):
-    """Raised when an agent workflow template spec is invalid."""
+class WorkflowValidationError(ValueError):
+    """Raised when an agent workflow spec is invalid."""
 
 
 def _known_tool_ids() -> set[str]:
@@ -46,7 +46,7 @@ HITL_ACTIONS = {"approve", "approve_selected", "continue_without", "reject", "ed
 HITL_PHASES = {"before", "after", "inside_tool"}
 HITL_MODES = {"approval", "choice", "review"}
 HITL_SELECTION_MODES = {"single", "multi", "single_or_multi"}
-CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"legacy_evidence", "evidence_packets"}
+CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"evidence_packets"}
 CONTEXT_EVIDENCE_COMPRESSION_MODES = {"none", "compact"}
 HITL_GATE_KEYS = {
     "enabled",
@@ -116,14 +116,14 @@ def _workflow_node_tool_requirements_for_allowed_tools(spec: Dict[str, Any], all
     return requirements
 
 
-class TemplateValidator:
+class WorkflowValidator:
     """Validator for schema v2 catalog-backed agent workflow specs."""
 
     def validate(self, spec: Dict[str, Any]) -> Dict[str, Any]:
         errors = self.collect_errors(spec)
         result = {"valid": not errors, "errors": errors}
         if errors:
-            raise TemplateValidationError("; ".join(errors))
+            raise WorkflowValidationError("; ".join(errors))
         return result
 
     def collect_errors(self, spec: Dict[str, Any]) -> list[str]:
@@ -180,9 +180,9 @@ class TemplateValidator:
             "errors": errors,
             "warnings": [],
             "schema_version": spec_obj.get("schema_version"),
-            "pattern_type": spec_obj.get("pattern_type"),
+            "workflow_id": spec_obj.get("workflow_id"),
             "runtime": normalize_runtime_for_validation(spec_obj.get("runtime")),
-            "supported_pattern_types": sorted([*builtin_workflow_keys(), "custom_rag_agent"]),
+            "supported_workflow_ids": sorted([*builtin_workflow_keys(), "custom_rag_agent"]),
             "allowed_tool_ids": allowed_tool_ids,
             "required_tool_ids": sorted(required_tool_ids),
             "missing_required_tool_ids": sorted(missing_required_tool_ids),
@@ -192,7 +192,7 @@ class TemplateValidator:
     def _collect_tool_permission_errors(self, spec: Dict[str, Any], allowed_tool_ids: set[str]) -> list[str]:
         errors: list[str] = []
         contracts_by_id = tool_contracts_by_id()
-        pattern_type = spec.get("pattern_type")
+        workflow_id = spec.get("workflow_id")
         node_tool_requirements = _workflow_node_tool_requirements_for_allowed_tools(spec, allowed_tool_ids)
         config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
         graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
@@ -217,7 +217,7 @@ class TemplateValidator:
                 continue
             contracts = contracts_by_id.get(contract_id) or []
             if not contracts:
-                errors.append(f"{pattern_type} required tool contract is not registered: {contract_id}")
+                errors.append(f"{workflow_id} required tool contract is not registered: {contract_id}")
                 continue
             caller_node_type = node_types_by_id.get(caller_node)
             if not any(
@@ -226,11 +226,11 @@ class TemplateValidator:
                 for contract in contracts
             ):
                 errors.append(
-                    f"{pattern_type} tool contract {contract_id} is not allowed from node {caller_node}"
+                    f"{workflow_id} tool contract {contract_id} is not allowed from node {caller_node}"
                 )
         return errors
 
-    def _collect_hitl_policy_errors(self, hitl_policy: Any, pattern_type: Any, graph: Any) -> list[str]:
+    def _collect_hitl_policy_errors(self, hitl_policy: Any, workflow_id: Any, graph: Any) -> list[str]:
         errors: list[str] = []
         if not isinstance(hitl_policy, dict):
             return ["hitl_policy must be an object"]
@@ -368,15 +368,15 @@ class GenericGraphValidator:
         if spec.get("schema_version") != 2:
             errors.append("schema_version must be 2")
 
-        pattern_type = spec.get("pattern_type")
-        if not isinstance(pattern_type, str) or not pattern_type:
-            errors.append("pattern_type must be a non-empty string")
+        workflow_id = spec.get("workflow_id")
+        if not isinstance(workflow_id, str) or not workflow_id:
+            errors.append("workflow_id must be a non-empty string")
 
         config = spec.get("config")
         if not isinstance(config, dict):
             errors.append("config must be an object")
             return errors
-        errors.extend(self._collect_config_errors(config, pattern_type))
+        errors.extend(self._collect_config_errors(config, workflow_id))
 
         allowed_tool_ids = config.get("allowed_tool_ids", [])
         known_tool_ids = _known_tool_ids()
@@ -387,7 +387,7 @@ class GenericGraphValidator:
             unknown_tool_ids = sorted(set(allowed_tool_ids) - known_tool_ids)
             if unknown_tool_ids:
                 errors.append(f"unknown allowed_tool_ids: {', '.join(unknown_tool_ids)}")
-            errors.extend(TemplateValidator()._collect_tool_permission_errors(spec, set(allowed_tool_ids)))
+            errors.extend(WorkflowValidator()._collect_tool_permission_errors(spec, set(allowed_tool_ids)))
 
         graph = config.get("graph")
         if not isinstance(graph, dict):
@@ -398,7 +398,7 @@ class GenericGraphValidator:
         if not isinstance(nodes, list) or not isinstance(edges, list):
             errors.append("graph.nodes and graph.edges must be lists")
             return errors
-        errors.extend(TemplateValidator()._collect_hitl_policy_errors(config.get("hitl_policy", {}), pattern_type, graph))
+        errors.extend(WorkflowValidator()._collect_hitl_policy_errors(config.get("hitl_policy", {}), workflow_id, graph))
 
         node_catalog = get_node_catalog()
         catalog_errors = collect_node_catalog_errors(node_catalog)
@@ -511,7 +511,7 @@ class GenericGraphValidator:
                         errors.append(f"graph conditional edge from {source} route {route_name} target is unknown: {route_target}")
                         continue
                     adjacency.setdefault(source, set()).add(route_target)
-                    errors.extend(self._collect_edge_compatibility_errors(source, route_target, node_types_by_id, node_catalog))
+                    errors.extend(self._collect_edge_contract_errors(source, route_target, node_types_by_id, node_catalog))
                 continue
 
             target = edge.get("to")
@@ -519,13 +519,13 @@ class GenericGraphValidator:
                 errors.append(f"graph edge target is unknown: {target}")
                 continue
             adjacency.setdefault(source, set()).add(target)
-            errors.extend(self._collect_edge_compatibility_errors(source, target, node_types_by_id, node_catalog))
+            errors.extend(self._collect_edge_contract_errors(source, target, node_types_by_id, node_catalog))
 
         errors.extend(self._collect_loop_policy_errors(config.get("loop_policy"), adjacency, node_ids, node_types_by_id, node_catalog))
         errors.extend(self._collect_reachability_errors(adjacency, node_ids))
         return errors
 
-    def _collect_config_errors(self, config: Dict[str, Any], pattern_type: Any) -> list[str]:
+    def _collect_config_errors(self, config: Dict[str, Any], workflow_id: Any) -> list[str]:
         errors: list[str] = []
         unknown_keys = sorted(set(config) - ALLOWED_WORKFLOW_CONFIG_KEYS)
         if unknown_keys:
@@ -746,7 +746,7 @@ class GenericGraphValidator:
                             )
         return errors
 
-    def _collect_edge_compatibility_errors(
+    def _collect_edge_contract_errors(
         self,
         source: str,
         target: str,
@@ -880,11 +880,11 @@ class GenericGraphValidator:
         return errors
 
 
-class TemplateResolver:
+class WorkflowResolver:
     """Freeze the effective built-in agent workflow config for an agent run."""
 
-    def __init__(self, validator: Optional[TemplateValidator] = None):
-        self.validator = validator or TemplateValidator()
+    def __init__(self, validator: Optional[WorkflowValidator] = None):
+        self.validator = validator or WorkflowValidator()
 
     def resolve(
         self,

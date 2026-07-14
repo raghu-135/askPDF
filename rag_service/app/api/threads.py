@@ -75,10 +75,7 @@ router = APIRouter(tags=["threads"])
 
 async def _settings_workflow_supports_replans(settings: dict) -> bool:
     agent_workflow = settings.get("agent_workflow")
-    agent_pattern = settings.get("agent_pattern")
     workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
-    if not workflow_id and isinstance(agent_pattern, dict):
-        workflow_id = agent_pattern.get("template_id")
     if not isinstance(workflow_id, str) or not workflow_id:
         return False
     workflow = await AgentWorkflowRepository().get_workflow(workflow_id, include_custom=True)
@@ -415,16 +412,6 @@ async def update_thread_settings_endpoint(
 
         current = merge_thread_settings(await get_thread_settings(thread_id))
         updates = req.dict(exclude_none=True)
-        if "agent_pattern" in updates and "agent_workflow" not in updates:
-            agent_pattern = updates.get("agent_pattern")
-            template_id = agent_pattern.get("template_id") if isinstance(agent_pattern, dict) else None
-            if template_id:
-                updates["agent_workflow"] = {"workflow_id": str(template_id)}
-        if "agent_workflow" in updates and "agent_pattern" not in updates:
-            agent_workflow = updates.get("agent_workflow")
-            workflow_id = agent_workflow.get("workflow_id") if isinstance(agent_workflow, dict) else None
-            if workflow_id:
-                updates["agent_pattern"] = {"template_id": str(workflow_id)}
         next_settings = {**current, **updates}
         if not await _settings_workflow_supports_replans(next_settings):
             next_settings.pop("replans", None)

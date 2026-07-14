@@ -25,7 +25,7 @@ def test_runtime_datetime_context_uses_browser_timezone_with_server_clock():
 
 def test_router_agent_prompt_preview_uses_graph_runtime_prompts():
     prompt = build_agent_workflow_prompt_preview(
-        pattern_id="router_rag_agent",
+        workflow_id="router_rag_agent",
         context_window=8192,
         system_role="Expert AI Research Assistant specializing in analyzing uploaded documents and synthesizing accurate answers.",
         use_web_search=True,
@@ -50,7 +50,7 @@ def test_router_agent_prompt_preview_uses_graph_runtime_prompts():
 
 def test_plan_execute_agent_prompt_preview_uses_planner_prompt():
     prompt = build_agent_workflow_prompt_preview(
-        pattern_id="plan_execute_rag_agent",
+        workflow_id="plan_execute_rag_agent",
         context_window=8192,
     )
 

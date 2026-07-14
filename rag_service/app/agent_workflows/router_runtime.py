@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from langgraph.types import Command
 
-from app.agent_workflows.graph import TemplateCompiler
+from app.agent_workflows.graph import WorkflowCompiler
 from app.agent_workflows.workflow_runtime import runtime_execution_options
 from app.db import (
     create_chat_turn,
@@ -361,20 +361,20 @@ async def _handle_compiled_rag_chat(
     system_role = getattr(req, "system_role_override", "") or ""
     tool_instructions = getattr(req, "tool_instructions_override", None) or {}
     custom_instructions = getattr(req, "custom_instructions_override", "") or ""
-    pattern_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
-    allowed_tool_ids = pattern_config.get("allowed_tool_ids")
+    workflow_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
+    allowed_tool_ids = workflow_config.get("allowed_tool_ids")
     allowed_tool_ids = allowed_tool_ids if isinstance(allowed_tool_ids, list) else []
-    hitl_policy = pattern_config.get("hitl_policy") if isinstance(pattern_config.get("hitl_policy"), dict) else {}
-    loop_policy = pattern_config.get("loop_policy") if isinstance(pattern_config.get("loop_policy"), dict) else {}
-    context_policy = pattern_config.get("context_policy") if isinstance(pattern_config.get("context_policy"), dict) else {}
+    hitl_policy = workflow_config.get("hitl_policy") if isinstance(workflow_config.get("hitl_policy"), dict) else {}
+    loop_policy = workflow_config.get("loop_policy") if isinstance(workflow_config.get("loop_policy"), dict) else {}
+    context_policy = workflow_config.get("context_policy") if isinstance(workflow_config.get("context_policy"), dict) else {}
     try:
-        replans = max(1, int(pattern_config.get("replans", 1)))
+        replans = max(1, int(workflow_config.get("replans", 1)))
     except (TypeError, ValueError):
         replans = 1
     checkpoint_thread_id = str(agent_run_context.get("checkpoint_thread_id") or agent_run_id or thread_id)
 
     started = time.perf_counter()
-    app = TemplateCompiler().compile(
+    app = WorkflowCompiler().compile(
         resolved_spec,
         checkpointer=checkpointer,
     )
@@ -391,7 +391,7 @@ async def _handle_compiled_rag_chat(
     )
     state = {
         "agent_run_id": agent_run_id,
-        "pattern_type": resolved_spec.get("pattern_type"),
+        "workflow_id": resolved_spec.get("workflow_id"),
         "thread_id": thread_id,
         "question": question,
         "llm_model": llm_model,
@@ -610,7 +610,7 @@ async def resume_compiled_rag_chat(
     resolved_spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
     checkpoint_thread_id = str(run.checkpoint_thread_id or run.id)
     telemetry_sink: Dict[str, Any] = {"node_events": [], "tool_events": []}
-    app = TemplateCompiler().compile(
+    app = WorkflowCompiler().compile(
         resolved_spec,
         checkpointer=checkpointer,
     )

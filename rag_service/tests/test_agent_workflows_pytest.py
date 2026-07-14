@@ -16,7 +16,7 @@ from app.agent_workflows.checkpointing import open_agent_checkpointer
 from app.agent_workflows.router_runtime import handle_router_rag_chat
 from app.agent_workflows.graph import (
     NodeRegistry,
-    TemplateCompiler,
+    WorkflowCompiler,
     _final_context_from_state,
     _llm_result_metadata,
     _route_function_for_edge,
@@ -39,9 +39,9 @@ from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInte
 from app.agent_workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_workflows.service import AgentRunService
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.agent_workflows.validator import TemplateResolver, TemplateValidationError, TemplateValidator
+from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError, WorkflowValidator
 from app.db import get_thread_settings
-from app.db.models_sqlmodel import AgentWorkflowTemplate, AgentRun, ChatTurn, Thread
+from app.db.models_sqlmodel import AgentWorkflow, AgentRun, ChatTurn, Thread
 from app.models.llm_server_client import REPLANS_LIMIT
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z, utc_now
@@ -102,14 +102,14 @@ def builtin_evaluator_replanner_rag_v2_spec() -> dict:
     return _builtin_spec(EVALUATOR_REPLANNER_RAG_AGENT_ID)
 
 
-def make_trace_recorder(run_id: str, thread_id: str, spec: dict, template_id: str = ROUTER_RAG_AGENT_ID) -> AgentTraceRecorder:
+def make_trace_recorder(run_id: str, thread_id: str, spec: dict, workflow_id: str = ROUTER_RAG_AGENT_ID) -> AgentTraceRecorder:
     return AgentTraceRecorder(
         SimpleNamespace(
             id=run_id,
             thread_id=thread_id,
             user_id=None,
-            template_id=template_id,
-            template_version_id=f"{template_id}:v1",
+            workflow_id=workflow_id,
+            workflow_version_id=f"{workflow_id}:v1",
             resolved_spec_json=spec,
             status="running",
             started_at=utc_now(),
@@ -124,17 +124,17 @@ async def create_agent_run_record(
     run_id: str,
     thread_id: str,
     spec: dict,
-    template_id: str = ROUTER_RAG_AGENT_ID,
+    workflow_id: str = ROUTER_RAG_AGENT_ID,
 ) -> AgentRun:
     async with session_factory() as repo_session:
         repo = AgentWorkflowRepository(repo_session)
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(template_id)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(workflow_id)
         run = AgentRun(
             id=run_id,
             thread_id=thread_id,
-            template_id=template.id,
-            run_metadata_json={"template_version_id": version.id, "template_version": version.version},
+            workflow_id=workflow.id,
+            run_metadata_json={"workflow_version_id": version.id, "workflow_version": version.version},
             resolved_spec_json=spec,
             status="running",
             started_at=utc_now(),
@@ -228,8 +228,8 @@ class TestAgentRunMetrics:
             id="run-1",
             thread_id="thread-1",
             user_id="user-1",
-            template_id=PLAN_EXECUTE_RAG_AGENT_ID,
-            template_version_id=f"{PLAN_EXECUTE_RAG_AGENT_ID}:v1",
+            workflow_id=PLAN_EXECUTE_RAG_AGENT_ID,
+            workflow_version_id=f"{PLAN_EXECUTE_RAG_AGENT_ID}:v1",
             resolved_spec_json=builtin_plan_execute_rag_spec(),
             status="completed",
             started_at=utc_now(),
@@ -353,8 +353,8 @@ class TestAgentRunMetrics:
             id="run-size",
             thread_id="thread-1",
             user_id="user-1",
-            template_id=ROUTER_RAG_AGENT_ID,
-            template_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
+            workflow_id=ROUTER_RAG_AGENT_ID,
+            workflow_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
             resolved_spec_json=builtin_router_rag_spec(),
             status="completed",
             started_at=utc_now(),
@@ -401,8 +401,8 @@ class TestAgentRunMetrics:
             id="run-redact",
             thread_id="thread-1",
             user_id="user-1",
-            template_id=ROUTER_RAG_AGENT_ID,
-            template_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
+            workflow_id=ROUTER_RAG_AGENT_ID,
+            workflow_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
             resolved_spec_json=builtin_router_rag_spec(),
             status="completed",
             started_at=utc_now(),
@@ -467,8 +467,8 @@ class TestAgentRunMetrics:
             id="run-shape",
             thread_id="thread-1",
             user_id="user-1",
-            template_id=PLAN_EXECUTE_RAG_AGENT_ID,
-            template_version_id=f"{PLAN_EXECUTE_RAG_AGENT_ID}:v1",
+            workflow_id=PLAN_EXECUTE_RAG_AGENT_ID,
+            workflow_version_id=f"{PLAN_EXECUTE_RAG_AGENT_ID}:v1",
             resolved_spec_json=builtin_plan_execute_rag_spec(),
             status="failed",
             started_at=utc_now(),
@@ -518,8 +518,8 @@ class TestAgentRunMetrics:
             id="run-contract",
             thread_id="thread-1",
             user_id="user-1",
-            template_id=ROUTER_RAG_AGENT_ID,
-            template_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
+            workflow_id=ROUTER_RAG_AGENT_ID,
+            workflow_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
             resolved_spec_json=builtin_router_rag_spec(),
             status="completed",
             started_at=utc_now(),
@@ -553,8 +553,8 @@ class TestAgentRunMetrics:
             id="run-hitl",
             thread_id="thread-1",
             user_id="user-1",
-            template_id=ROUTER_RAG_AGENT_ID,
-            template_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
+            workflow_id=ROUTER_RAG_AGENT_ID,
+            workflow_version_id=f"{ROUTER_RAG_AGENT_ID}:v1",
             resolved_spec_json=builtin_router_rag_spec(),
             status="awaiting_human",
             started_at=utc_now(),
@@ -598,7 +598,7 @@ class TestAgentRunMetrics:
         assert payload["summary"]["lastInterruptStatus"] == "pending"
 
 
-class TestRouterRagTemplateValidator:
+class TestRouterRagWorkflowValidator:
     @pytest.mark.parametrize(
         "mutate, expected",
         [
@@ -611,13 +611,13 @@ class TestRouterRagTemplateValidator:
         spec = builtin_router_rag_v2_spec()
         mutate(spec)
 
-        with pytest.raises(TemplateValidationError) as exc:
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
 
         assert expected in str(exc.value)
 
     def test_resolver_freezes_thread_and_request_overrides(self):
-        resolved = TemplateResolver().resolve(
+        resolved = WorkflowResolver().resolve(
             builtin_router_rag_v2_spec(),
             thread_settings={"replans": 3, "use_reranker": False},
             request_overrides={"use_web_search": True},
@@ -627,7 +627,7 @@ class TestRouterRagTemplateValidator:
         assert resolved["config"]["use_reranker"] is False
         assert resolved["config"]["use_web_search"] is True
 
-        evaluator_resolved = TemplateResolver().resolve(
+        evaluator_resolved = WorkflowResolver().resolve(
             builtin_evaluator_replanner_rag_v2_spec(),
             thread_settings={"replans": 3, "use_reranker": False},
             request_overrides={"use_web_search": True},
@@ -641,8 +641,8 @@ class TestRouterRagTemplateValidator:
         spec = builtin_evaluator_replanner_rag_v2_spec()
         spec["config"]["replans"] = 0
 
-        with pytest.raises(TemplateValidationError) as exc:
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
 
         assert "replans must be between" in str(exc.value)
 
@@ -657,34 +657,34 @@ class TestRouterRagTemplateValidator:
         spec = builtin_router_rag_v2_spec()
         spec["config"]["context_policy"].update(policy_update)
 
-        with pytest.raises(TemplateValidationError) as exc:
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
 
         assert expected in str(exc.value)
 
     def test_rejects_legacy_v1_builtin_specs(self):
-        with pytest.raises(TemplateValidationError, match="schema_version must be 2"):
-            TemplateValidator().validate(legacy_builtin_router_rag_v1_spec())
+        with pytest.raises(WorkflowValidationError, match="schema_version must be 2"):
+            WorkflowValidator().validate(legacy_builtin_router_rag_v1_spec())
 
     def test_accepts_builtin_router_rag_spec(self):
-        result = TemplateValidator().validate(builtin_router_rag_v2_spec())
+        result = WorkflowValidator().validate(builtin_router_rag_v2_spec())
 
         assert result == {"valid": True, "errors": []}
 
     def test_accepts_builtin_router_rag_hitl_web_spec(self):
         spec = builtin_router_rag_v2_spec()
         spec["config"]["hitl_policy"] = builtin_router_rag_hitl_web_spec()["config"]["hitl_policy"]
-        result = TemplateValidator().validate(spec)
+        result = WorkflowValidator().validate(spec)
 
         assert result == {"valid": True, "errors": []}
 
     def test_accepts_builtin_plan_execute_rag_spec(self):
-        result = TemplateValidator().validate(builtin_plan_execute_rag_v2_spec())
+        result = WorkflowValidator().validate(builtin_plan_execute_rag_v2_spec())
 
         assert result == {"valid": True, "errors": []}
 
     def test_accepts_builtin_evaluator_replanner_rag_spec(self):
-        result = TemplateValidator().validate(builtin_evaluator_replanner_rag_v2_spec())
+        result = WorkflowValidator().validate(builtin_evaluator_replanner_rag_v2_spec())
 
         assert result == {"valid": True, "errors": []}
 
@@ -704,7 +704,7 @@ class TestRouterRagTemplateValidator:
             },
         }
 
-        result = TemplateValidator().validate(spec)
+        result = WorkflowValidator().validate(spec)
 
         assert result == {"valid": True, "errors": []}
 
@@ -901,8 +901,8 @@ class TestRouterRagTemplateValidator:
         ],
     )
     def test_materialized_builtin_graph_signatures_are_stable(self, spec_factory, expected):
-        materialized = TemplateCompiler().materialize_spec(spec_factory())
-        TemplateValidator().validate(materialized)
+        materialized = WorkflowCompiler().materialize_spec(spec_factory())
+        WorkflowValidator().validate(materialized)
         graph_spec = materialized["config"]["graph"]
 
         assert [node["id"] for node in graph_spec["nodes"]] == expected["node_ids"]
@@ -921,7 +921,7 @@ class TestRouterRagTemplateValidator:
             assert node["category"] == get_node_catalog()[node["type"]]["category"]
             assert "observability" in node
 
-        assert TemplateCompiler().compile(materialized) is not None
+        assert WorkflowCompiler().compile(materialized) is not None
 
     def test_route_helpers_are_stable_for_current_state_keys(self):
         assert router_route({"route": "document"}) == "document"
@@ -939,8 +939,8 @@ class TestRouterRagTemplateValidator:
         spec = builtin_router_rag_v2_spec()
         spec["config"]["graph"]["nodes"].append({"id": "surprise", "type": "retrieval_worker"})
 
-        with pytest.raises(TemplateValidationError) as exc:
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
 
         assert "graph contains unreachable nodes: surprise" in str(exc.value)
 
@@ -948,18 +948,18 @@ class TestRouterRagTemplateValidator:
         spec = builtin_router_rag_v2_spec()
         spec["config"]["allowed_tool_ids"].remove("document_evidence")
 
-        with pytest.raises(TemplateValidationError) as exc:
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
 
         assert "missing required allowed_tool_ids: document_evidence" in str(exc.value)
 
     def test_compiles_builtin_router_rag_spec(self):
-        graph = TemplateCompiler().compile(builtin_router_rag_v2_spec())
+        graph = WorkflowCompiler().compile(builtin_router_rag_v2_spec())
 
         assert graph is not None
 
     def test_compiler_requires_explicit_route_function_after_materialization(self):
-        compiler = TemplateCompiler()
+        compiler = WorkflowCompiler()
         materialized = compiler.materialize_spec(builtin_router_rag_v2_spec())
         router_edge = next(
             edge
@@ -978,7 +978,7 @@ class TestRouterRagTemplateValidator:
     def test_compiles_builtin_router_rag_hitl_web_spec(self):
         spec = builtin_router_rag_v2_spec()
         spec["config"]["hitl_policy"] = builtin_router_rag_hitl_web_spec()["config"]["hitl_policy"]
-        graph = TemplateCompiler().compile(spec)
+        graph = WorkflowCompiler().compile(spec)
 
         assert graph is not None
 
@@ -999,9 +999,9 @@ class TestRouterRagTemplateValidator:
             },
         }
 
-        TemplateValidator().validate(spec)
-        materialized = TemplateCompiler().materialize_spec(spec)
-        TemplateValidator().validate(materialized)
+        WorkflowValidator().validate(spec)
+        materialized = WorkflowCompiler().materialize_spec(spec)
+        WorkflowValidator().validate(materialized)
         graph_spec = materialized["config"]["graph"]
 
         review_gate = next(node for node in graph_spec["nodes"] if node.get("id") == "review_before_documents")
@@ -1038,9 +1038,9 @@ class TestRouterRagTemplateValidator:
             },
         }
 
-        TemplateValidator().validate(spec)
-        materialized = TemplateCompiler().materialize_spec(spec)
-        TemplateValidator().validate(materialized)
+        WorkflowValidator().validate(spec)
+        materialized = WorkflowCompiler().materialize_spec(spec)
+        WorkflowValidator().validate(materialized)
         graph_spec = materialized["config"]["graph"]
 
         choice_gate = next(node for node in graph_spec["nodes"] if node.get("id") == "research_source_choice")
@@ -1074,8 +1074,8 @@ class TestRouterRagTemplateValidator:
                 },
             },
         }
-        materialized = TemplateCompiler().materialize_spec(spec)
-        TemplateValidator().validate(materialized)
+        materialized = WorkflowCompiler().materialize_spec(spec)
+        WorkflowValidator().validate(materialized)
         config = materialized["config"]
         graph_spec = config["graph"]
 
@@ -1098,12 +1098,12 @@ class TestRouterRagTemplateValidator:
         }
 
     def test_compiles_builtin_plan_execute_rag_spec(self):
-        graph = TemplateCompiler().compile(builtin_plan_execute_rag_v2_spec())
+        graph = WorkflowCompiler().compile(builtin_plan_execute_rag_v2_spec())
 
         assert graph is not None
 
     def test_compiles_builtin_evaluator_replanner_rag_spec(self):
-        graph = TemplateCompiler().compile(builtin_evaluator_replanner_rag_v2_spec())
+        graph = WorkflowCompiler().compile(builtin_evaluator_replanner_rag_v2_spec())
 
         assert graph is not None
 
@@ -1111,8 +1111,8 @@ class TestRouterRagTemplateValidator:
         spec = builtin_plan_execute_rag_v2_spec()
         spec["config"]["graph"]["edges"].append({"from": "planner", "to": "synthesizer"})
 
-        with pytest.raises(TemplateValidationError) as exc:
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
 
         assert "node planner type planner cannot connect to synthesizer type synthesizer" in str(exc.value)
 
@@ -1120,8 +1120,8 @@ class TestRouterRagTemplateValidator:
         spec = builtin_evaluator_replanner_rag_v2_spec()
         spec["config"]["graph"]["edges"].append({"from": "evidence_evaluator", "to": "finalizer"})
 
-        with pytest.raises(TemplateValidationError) as exc:
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
 
         assert "node evidence_evaluator type evidence_evaluator cannot connect to finalizer type finalizer" in str(exc.value)
 
@@ -1129,8 +1129,8 @@ class TestRouterRagTemplateValidator:
         spec = builtin_evaluator_replanner_rag_v2_spec()
         spec["config"]["replans"] = REPLANS_LIMIT + 1
 
-        with pytest.raises(TemplateValidationError) as exc:
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
 
         assert "replans must be between" in str(exc.value)
 
@@ -1298,7 +1298,7 @@ class TestRouterRagGraphToolConsumers:
     def test_v2_custom_graph_validates_and_compiles_with_instance_ids(self):
         spec = {
             "schema_version": 2,
-            "pattern_type": "custom_rag_agent",
+            "workflow_id": "custom_rag_agent",
             "runtime": builtin_router_rag_v2_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
@@ -1328,8 +1328,8 @@ class TestRouterRagGraphToolConsumers:
             },
         }
 
-        assert TemplateValidator().validate(spec)["valid"] is True
-        assert TemplateCompiler().compile(spec) is not None
+        assert WorkflowValidator().validate(spec)["valid"] is True
+        assert WorkflowCompiler().compile(spec) is not None
 
     def test_v2_custom_graph_rejects_incompatible_node_catalog(self, monkeypatch):
         catalog = get_node_catalog()
@@ -1338,8 +1338,8 @@ class TestRouterRagGraphToolConsumers:
 
         spec = builtin_router_rag_v2_spec()
 
-        with pytest.raises(TemplateValidationError, match="node catalog incompatible"):
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError, match="node catalog incompatible"):
+            WorkflowValidator().validate(spec)
 
     def test_v2_custom_graph_rejects_incompatible_route_function_registry(self, monkeypatch):
         registry = get_route_function_registry()
@@ -1348,8 +1348,8 @@ class TestRouterRagGraphToolConsumers:
 
         spec = builtin_router_rag_v2_spec()
 
-        with pytest.raises(TemplateValidationError, match="route function registry incompatible"):
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError, match="route function registry incompatible"):
+            WorkflowValidator().validate(spec)
 
     def test_v2_custom_graph_rejects_catalog_route_registry_mismatch(self, monkeypatch):
         registry = get_route_function_registry()
@@ -1358,8 +1358,8 @@ class TestRouterRagGraphToolConsumers:
 
         spec = builtin_router_rag_v2_spec()
 
-        with pytest.raises(TemplateValidationError, match="node catalog type router allows route_fn router_route"):
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError, match="node catalog type router allows route_fn router_route"):
+            WorkflowValidator().validate(spec)
 
     def test_v2_custom_graph_rejects_incompatible_tool_contract_registry(self, monkeypatch):
         contracts = tool_contracts_by_id()
@@ -1369,8 +1369,8 @@ class TestRouterRagGraphToolConsumers:
 
         spec = builtin_router_rag_v2_spec()
 
-        with pytest.raises(TemplateValidationError, match="tool contract registry incompatible"):
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError, match="tool contract registry incompatible"):
+            WorkflowValidator().validate(spec)
 
     def test_v2_custom_graph_rejects_catalog_tool_contract_mismatch(self, monkeypatch):
         contracts = tool_contracts_by_id()
@@ -1382,15 +1382,15 @@ class TestRouterRagGraphToolConsumers:
         spec = builtin_router_rag_v2_spec()
 
         with pytest.raises(
-            TemplateValidationError,
+            WorkflowValidationError,
             match="node catalog type retrieval_worker allows tool contract document_evidence",
         ):
-            TemplateValidator().validate(spec)
+            WorkflowValidator().validate(spec)
 
     def test_v2_custom_graph_rejects_node_type_instance_limit_overflow(self):
         spec = {
             "schema_version": 2,
-            "pattern_type": "custom_rag_agent",
+            "workflow_id": "custom_rag_agent",
             "runtime": builtin_evaluator_replanner_rag_v2_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["thread_shape", "document_evidence", "clarify_intent"],
@@ -1418,14 +1418,14 @@ class TestRouterRagGraphToolConsumers:
             },
         }
 
-        errors = TemplateValidator().collect_errors(spec)
+        errors = WorkflowValidator().collect_errors(spec)
 
         assert "graph has 2 nodes of type context_loader; maximum allowed is 1" in errors
 
     def test_v2_custom_graph_rejects_node_contract_metadata_not_allowed_by_catalog(self):
         spec = {
             "schema_version": 2,
-            "pattern_type": "custom_rag_agent",
+            "workflow_id": "custom_rag_agent",
             "runtime": builtin_evaluator_replanner_rag_v2_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
@@ -1459,7 +1459,7 @@ class TestRouterRagGraphToolConsumers:
             },
         }
 
-        errors = TemplateValidator().collect_errors(spec)
+        errors = WorkflowValidator().collect_errors(spec)
 
         assert (
             "graph node retrieval_1.state_writes includes unsupported values for type retrieval_worker: final_answer"
@@ -1502,7 +1502,7 @@ class TestRouterRagGraphToolConsumers:
             edge["routes"] = edge_update["routes"]
         spec = {
             "schema_version": 2,
-            "pattern_type": "custom_rag_agent",
+            "workflow_id": "custom_rag_agent",
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                 "graph": {
@@ -1523,13 +1523,13 @@ class TestRouterRagGraphToolConsumers:
             },
         }
 
-        with pytest.raises(TemplateValidationError, match=match):
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError, match=match):
+            WorkflowValidator().validate(spec)
 
     def test_v2_custom_graph_rejects_tool_ids_not_supported_by_graph_nodes(self):
         spec = {
             "schema_version": 2,
-            "pattern_type": "custom_rag_agent",
+            "workflow_id": "custom_rag_agent",
             "config": {
                 "allowed_tool_ids": ["document_evidence"],
                 "graph": {
@@ -1555,13 +1555,13 @@ class TestRouterRagGraphToolConsumers:
             },
         }
 
-        with pytest.raises(TemplateValidationError, match="not supported by any node"):
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError, match="not supported by any node"):
+            WorkflowValidator().validate(spec)
 
     def test_v2_custom_graph_rejects_unbounded_cycles(self):
         spec = {
             "schema_version": 2,
-            "pattern_type": "custom_rag_agent",
+            "workflow_id": "custom_rag_agent",
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                 "graph": {
@@ -1598,13 +1598,13 @@ class TestRouterRagGraphToolConsumers:
             },
         }
 
-        with pytest.raises(TemplateValidationError, match="requires loop_policy"):
-            TemplateValidator().validate(spec)
+        with pytest.raises(WorkflowValidationError, match="requires loop_policy"):
+            WorkflowValidator().validate(spec)
 
     def test_v2_custom_graph_accepts_bounded_cycles(self):
         spec = {
             "schema_version": 2,
-            "pattern_type": "custom_rag_agent",
+            "workflow_id": "custom_rag_agent",
             "runtime": builtin_evaluator_replanner_rag_v2_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
@@ -1650,8 +1650,8 @@ class TestRouterRagGraphToolConsumers:
             },
         }
 
-        assert TemplateValidator().validate(spec)["valid"] is True
-        assert TemplateCompiler().compile(spec) is not None
+        assert WorkflowValidator().validate(spec)["valid"] is True
+        assert WorkflowCompiler().compile(spec) is not None
 
     @pytest.mark.asyncio
     async def test_bound_node_spec_enforces_visit_limits(self, monkeypatch):
@@ -1836,7 +1836,7 @@ class TestRouterRagGraphToolConsumers:
                 "context_policy": {
                     "evidence_packet_limit": 2,
                     "evidence_packet_content_limit": 24,
-                    "final_prompt_assembly": "legacy_evidence",
+                    "final_prompt_assembly": "evidence_packets",
                 },
                 "document_sources": [],
                 "web_sources": [],
@@ -2252,31 +2252,31 @@ class TestAgentWorkflowRepository:
             yield AgentWorkflowRepository(repo_session)
 
     @pytest.mark.asyncio
-    async def test_seed_builtin_router_rag_template_is_idempotent(self, repo):
-        await repo.seed_builtin_templates()
-        await repo.seed_builtin_templates()
+    async def test_seed_builtin_router_rag_workflow_is_idempotent(self, repo):
+        await repo.seed_builtin_workflows()
+        await repo.seed_builtin_workflows()
 
-        templates = await repo.list_templates()
-        router_template, router_version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
-        plan_template, plan_version = await repo.get_template_with_current_version(PLAN_EXECUTE_RAG_AGENT_ID)
-        evaluator_template, evaluator_version = await repo.get_template_with_current_version(EVALUATOR_REPLANNER_RAG_AGENT_ID)
+        workflows = await repo.list_workflows()
+        router_workflow, router_version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
+        plan_workflow, plan_version = await repo.get_workflow_with_current_version(PLAN_EXECUTE_RAG_AGENT_ID)
+        evaluator_workflow, evaluator_version = await repo.get_workflow_with_current_version(EVALUATOR_REPLANNER_RAG_AGENT_ID)
 
-        assert {template.id for template in templates} == {
+        assert {workflow.id for workflow in workflows} == {
             ROUTER_RAG_AGENT_ID,
             PLAN_EXECUTE_RAG_AGENT_ID,
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
         }
-        assert router_template.metadata_json["version_id"] == router_version.id
+        assert router_workflow.metadata_json["version_id"] == router_version.id
         assert router_version.version == ROUTER_RAG_AGENT_VERSION
         assert router_version.schema_version == 2
         assert router_version.spec_json["schema_version"] == 2
         assert router_version.validation_result_json == {"valid": True, "errors": []}
-        assert plan_template.metadata_json["version_id"] == plan_version.id
+        assert plan_workflow.metadata_json["version_id"] == plan_version.id
         assert plan_version.version == PLAN_EXECUTE_RAG_AGENT_VERSION
         assert plan_version.schema_version == 2
         assert plan_version.spec_json["schema_version"] == 2
         assert plan_version.validation_result_json == {"valid": True, "errors": []}
-        assert evaluator_template.metadata_json["version_id"] == evaluator_version.id
+        assert evaluator_workflow.metadata_json["version_id"] == evaluator_version.id
         assert evaluator_version.version == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
         assert evaluator_version.schema_version == 2
         assert evaluator_version.spec_json["schema_version"] == 2
@@ -2284,7 +2284,7 @@ class TestAgentWorkflowRepository:
 
     @pytest.mark.asyncio
     async def test_seed_builtin_current_v2_versions_validate_and_compile(self, repo):
-        await repo.seed_builtin_templates()
+        await repo.seed_builtin_workflows()
 
         current_specs = [
             (ROUTER_RAG_AGENT_ID, ROUTER_RAG_AGENT_V2_VERSION, builtin_router_rag_v2_spec),
@@ -2295,18 +2295,18 @@ class TestAgentWorkflowRepository:
                 builtin_evaluator_replanner_rag_v2_spec,
             ),
         ]
-        for template_id, version_number, spec_factory in current_specs:
-            template, current_version = await repo.get_template_version(
-                template_id,
+        for workflow_id, version_number, spec_factory in current_specs:
+            workflow, current_version = await repo.get_workflow_version(
+                workflow_id,
                 version_number,
             )
 
-            assert template.id == template_id
+            assert workflow.id == workflow_id
             assert current_version.version == version_number
             assert current_version.schema_version == 2
             assert current_version.spec_json == spec_factory()
             assert current_version.validation_result_json == {"valid": True, "errors": []}
-            TemplateCompiler().compile(current_version.spec_json)
+            WorkflowCompiler().compile(current_version.spec_json)
 
     @pytest.mark.asyncio
     async def test_db_loaded_invalid_v2_spec_fails_validation(self, repo):
@@ -2316,7 +2316,7 @@ class TestAgentWorkflowRepository:
 
         async with repo._session.begin():
             repo._session.add(
-                AgentWorkflowTemplate(
+                AgentWorkflow(
                     id="internal_bad_agent",
                     name="Internal Bad Agent",
                     description="Invalid internal test agent.",
@@ -2333,76 +2333,76 @@ class TestAgentWorkflowRepository:
                 )
             )
 
-        template, version = await repo.get_template_with_current_version("internal_bad_agent", include_custom=True)
+        workflow, version = await repo.get_workflow_with_current_version("internal_bad_agent", include_custom=True)
 
-        assert template.id == "internal_bad_agent"
-        with pytest.raises(TemplateValidationError, match="unknown type"):
-            TemplateValidator().validate(version.spec_json)
+        assert workflow.id == "internal_bad_agent"
+        with pytest.raises(WorkflowValidationError, match="unknown type"):
+            WorkflowValidator().validate(version.spec_json)
 
     @pytest.mark.asyncio
-    async def test_create_internal_custom_v2_template_version_validates_and_stores_current_version(self, repo):
+    async def test_create_internal_custom_v2_workflow_version_validates_and_stores_current_version(self, repo):
         spec = builtin_router_rag_v2_spec()
-        spec["pattern_type"] = "internal_custom_rag_agent"
+        spec["workflow_id"] = "internal_custom_rag_agent"
 
-        template, version = await repo.create_internal_template_version(
-            template_id="internal_custom_rag_agent",
+        workflow, version = await repo.save_internal_workflow_version(
+            workflow_id="internal_custom_rag_agent",
             name="Internal Custom RAG Agent",
-            description="Internal JSON-authored custom pattern.",
+            description="Internal JSON-authored custom workflow.",
             spec_json=spec,
-            changelog="Initial internal custom pattern.",
+            changelog="Initial internal custom workflow.",
         )
-        public_template = await repo.get_template("internal_custom_rag_agent")
-        loaded_template, loaded_version = await repo.get_template_with_current_version(
+        public_workflow = await repo.get_workflow("internal_custom_rag_agent")
+        loaded_workflow, loaded_version = await repo.get_workflow_with_current_version(
             "internal_custom_rag_agent",
             include_custom=True,
         )
 
-        assert template.id == "internal_custom_rag_agent"
-        assert template.visibility == "internal"
-        assert template.is_builtin is False
-        assert template.metadata_json["version_id"] == "internal_custom_rag_agent:v1"
+        assert workflow.id == "internal_custom_rag_agent"
+        assert workflow.visibility == "internal"
+        assert workflow.is_builtin is False
+        assert workflow.metadata_json["version_id"] == "internal_custom_rag_agent:v1"
         assert version.schema_version == 2
         assert version.validation_result_json == {"valid": True, "errors": []}
-        assert public_template is None
-        assert loaded_template.id == template.id
+        assert public_workflow is None
+        assert loaded_workflow.id == workflow.id
         assert loaded_version.id == version.id
-        assert TemplateCompiler().compile(loaded_version.spec_json) is not None
+        assert WorkflowCompiler().compile(loaded_version.spec_json) is not None
 
     @pytest.mark.asyncio
-    async def test_create_internal_custom_template_rejects_invalid_or_non_v2_specs(self, repo):
+    async def test_create_internal_custom_workflow_rejects_invalid_or_non_v2_specs(self, repo):
         invalid_spec = builtin_router_rag_v2_spec()
         invalid_spec["config"]["graph"]["edges"][2].pop("route_fn")
-        with pytest.raises(TemplateValidationError, match="must declare route_fn"):
-            await repo.create_internal_template_version(
-                template_id="internal_invalid_agent",
+        with pytest.raises(WorkflowValidationError, match="must declare route_fn"):
+            await repo.save_internal_workflow_version(
+                workflow_id="internal_invalid_agent",
                 name="Internal Invalid Agent",
                 spec_json=invalid_spec,
             )
 
-        with pytest.raises(TemplateValidationError, match="schema_version 2"):
-            await repo.create_internal_template_version(
-                template_id="internal_v1_agent",
+        with pytest.raises(WorkflowValidationError, match="schema_version 2"):
+            await repo.save_internal_workflow_version(
+                workflow_id="internal_v1_agent",
                 name="Internal v1 Agent",
                 spec_json=legacy_builtin_router_rag_v1_spec(),
             )
 
-        missing_template, missing_version = await repo.get_template_with_current_version(
+        missing_workflow, missing_version = await repo.get_workflow_with_current_version(
             "internal_invalid_agent",
             include_custom=True,
         )
-        assert missing_template is None
+        assert missing_workflow is None
         assert missing_version is None
 
     @pytest.mark.asyncio
     async def test_run_lifecycle_persists_resolved_spec(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
 
         run = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID},
         )
         completed = await repo.complete_run(
             run.id,
@@ -2412,19 +2412,19 @@ class TestAgentWorkflowRepository:
 
         assert completed.status == "completed"
         assert completed.metrics_json == {"duration_ms": 12.5}
-        assert completed.resolved_spec_json == {"pattern_type": ROUTER_RAG_AGENT_ID}
-        assert completed.run_metadata_json == {"template_version_id": version.id}
-        assert completed.template_version_id == version.id
+        assert completed.resolved_spec_json == {"workflow_id": ROUTER_RAG_AGENT_ID}
+        assert completed.run_metadata_json == {"workflow_version_id": version.id}
+        assert completed.workflow_version_id == version.id
 
     @pytest.mark.asyncio
     async def test_mark_run_awaiting_human_persists_bounded_pending_interrupt(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         run = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            template_version=version.version,
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            workflow_version=version.version,
             resolved_spec_json=builtin_router_rag_v2_spec(),
         )
 
@@ -2447,27 +2447,27 @@ class TestAgentWorkflowRepository:
         assert paused.pending_interrupt_json["status"] == "pending"
         assert len(paused.pending_interrupt_json["prompt"]) <= 2003
         assert len(paused.pending_interrupt_json["input_summary"]["source_text"]) <= 2003
-        compatibility = paused.pending_interrupt_json["compatibility"]
-        assert compatibility["spec_schema_version"] == 2
-        assert compatibility["template_id"] == ROUTER_RAG_AGENT_ID
-        assert compatibility["template_version_id"] == version.id
-        assert compatibility["template_version"] == version.version
-        assert compatibility["checkpoint_thread_id"] == run.checkpoint_thread_id
-        assert isinstance(compatibility["resolved_spec_hash"], str)
-        assert len(compatibility["resolved_spec_hash"]) == 64
+        resume_guard = paused.pending_interrupt_json["resume_guard"]
+        assert resume_guard["spec_schema_version"] == 2
+        assert resume_guard["workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert resume_guard["workflow_version_id"] == version.id
+        assert resume_guard["workflow_version"] == version.version
+        assert resume_guard["checkpoint_thread_id"] == run.checkpoint_thread_id
+        assert isinstance(resume_guard["resolved_spec_hash"], str)
+        assert len(resume_guard["resolved_spec_hash"]) == 64
 
         awaiting_runs = await repo.list_runs_for_thread(sample_thread.id, status="awaiting_human")
         assert [item.id for item in awaiting_runs] == [run.id]
 
     @pytest.mark.asyncio
     async def test_resolve_pending_interrupt_resumes_atomically_and_idempotently(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         run = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            template_version=version.version,
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            workflow_version=version.version,
             resolved_spec_json=builtin_router_rag_v2_spec(),
         )
         debug_payload = build_debug_payload(
@@ -2532,14 +2532,14 @@ class TestAgentWorkflowRepository:
             )
 
     @pytest.mark.asyncio
-    async def test_resolve_pending_interrupt_rejects_stale_compatibility_stamp(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+    async def test_resolve_pending_interrupt_rejects_stale_resume_guard(self, repo, sample_thread):
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         run = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            template_version=version.version,
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            workflow_version=version.version,
             resolved_spec_json=builtin_router_rag_v2_spec(),
         )
         await repo.mark_run_awaiting_human(
@@ -2555,9 +2555,9 @@ class TestAgentWorkflowRepository:
         async with session.begin():
             stored_run = await session.get(AgentRun, run.id)
             pending = dict(stored_run.pending_interrupt_json or {})
-            compatibility = dict(pending.get("compatibility") or {})
-            compatibility["resolved_spec_hash"] = "0" * 64
-            pending["compatibility"] = compatibility
+            resume_guard = dict(pending.get("resume_guard") or {})
+            resume_guard["resolved_spec_hash"] = "0" * 64
+            pending["resume_guard"] = resume_guard
             stored_run.pending_interrupt_json = pending
 
         with pytest.raises(AgentRunInterruptError) as exc:
@@ -2568,17 +2568,17 @@ class TestAgentWorkflowRepository:
                 resume_version=1,
             )
 
-        assert exc.value.code == "interrupt_compatibility_mismatch"
+        assert exc.value.code == "interrupt_resume_guard_mismatch"
 
     @pytest.mark.asyncio
     async def test_resolve_pending_interrupt_validates_selected_options(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         run = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            template_version=version.version,
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            workflow_version=version.version,
             resolved_spec_json=builtin_router_rag_v2_spec(),
         )
         run_id = run.id
@@ -2621,13 +2621,13 @@ class TestAgentWorkflowRepository:
 
     @pytest.mark.asyncio
     async def test_reject_pending_interrupt_marks_run_terminal(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         run = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            template_version=version.version,
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            workflow_version=version.version,
             resolved_spec_json=builtin_router_rag_v2_spec(),
         )
         await repo.mark_run_awaiting_human(
@@ -2649,13 +2649,13 @@ class TestAgentWorkflowRepository:
 
     @pytest.mark.asyncio
     async def test_chat_turns_can_share_one_agent_run_and_null_on_delete(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         run = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID},
         )
 
         session = await repo._get_session()
@@ -2703,19 +2703,19 @@ class TestAgentWorkflowRepository:
 
     @pytest.mark.asyncio
     async def test_list_runs_for_thread_orders_recent_first_and_limits(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         first = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "n": 1},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "n": 1},
         )
         second = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "n": 2},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "n": 2},
         )
 
         runs = await repo.list_runs_for_thread(sample_thread.id, limit=1)
@@ -2725,25 +2725,25 @@ class TestAgentWorkflowRepository:
 
     @pytest.mark.asyncio
     async def test_prune_runs_before_deletes_only_matching_old_statuses(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         old_completed = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_completed"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "old_completed"},
         )
         old_running = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_running"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "old_running"},
         )
         recent_completed = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "recent_completed"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "recent_completed"},
         )
         old_at = utc_now() - timedelta(days=45)
         recent_at = utc_now() - timedelta(days=1)
@@ -2785,31 +2785,31 @@ class TestAgentWorkflowRepository:
             async def adelete_thread(self, thread_id):
                 self.deleted_thread_ids.append(thread_id)
 
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         old_completed = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_completed"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "old_completed"},
         )
         old_failed = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_failed"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "old_failed"},
         )
         old_awaiting = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "old_awaiting"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "old_awaiting"},
         )
         recent_completed = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "recent_completed"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "recent_completed"},
         )
         old_at = utc_now() - timedelta(days=45)
         recent_at = utc_now() - timedelta(days=1)
@@ -2849,25 +2849,25 @@ class TestAgentWorkflowRepository:
 
     @pytest.mark.asyncio
     async def test_fail_stale_running_runs_marks_only_old_running_rows_failed(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         stale_running = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "stale_running"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "stale_running"},
         )
         recent_running = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "recent_running"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "recent_running"},
         )
         stale_completed = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "stale_completed"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "stale_completed"},
         )
         old_at = utc_now() - timedelta(hours=6)
         recent_at = utc_now() - timedelta(minutes=5)
@@ -2897,19 +2897,19 @@ class TestAgentWorkflowRepository:
 
     @pytest.mark.asyncio
     async def test_expire_pending_interrupts_is_separate_from_stale_running_cleanup(self, repo, sample_thread):
-        await repo.seed_builtin_templates()
-        template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+        await repo.seed_builtin_workflows()
+        workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
         awaiting = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "awaiting"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "awaiting"},
         )
         running = await repo.create_run(
             thread_id=sample_thread.id,
-            template_id=template.id,
-            template_version_id=version.id,
-            resolved_spec_json={"pattern_type": ROUTER_RAG_AGENT_ID, "case": "running"},
+            workflow_id=workflow.id,
+            workflow_version_id=version.id,
+            resolved_spec_json={"workflow_id": ROUTER_RAG_AGENT_ID, "case": "running"},
         )
         now = utc_now()
         await repo.mark_run_awaiting_human(
@@ -2936,12 +2936,12 @@ class TestAgentWorkflowRepository:
         assert (await repo.get_run(awaiting.id)).status == "expired"
 
     @pytest.mark.asyncio
-    async def test_unsupported_simple_rag_template_is_not_exposed(self, repo):
-        await repo.seed_builtin_templates()
+    async def test_unsupported_simple_rag_workflow_is_not_exposed(self, repo):
+        await repo.seed_builtin_workflows()
 
-        template, version = await repo.get_template_with_current_version("simple_rag_agent")
+        workflow, version = await repo.get_workflow_with_current_version("simple_rag_agent")
 
-        assert template is None
+        assert workflow is None
         assert version is None
 
 
@@ -3019,7 +3019,7 @@ class TestAgentRunService:
 
         async def fake_get_thread_settings(_thread_id):
             return {
-                "agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID},
+                "agent_workflow": {"workflow_id": ROUTER_RAG_AGENT_ID},
                 "hitl_web_approval": enable_web_approval,
             }
 
@@ -3109,19 +3109,19 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
-            template_ref = SimpleNamespace(id=template.id)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
+            workflow_ref = SimpleNamespace(id=workflow.id)
             version_ref = SimpleNamespace(
                 id=version.id,
                 version=version.version,
                 spec_json=builtin_router_rag_hitl_web_spec(),
             )
 
-            async def fake_get_template_with_current_version(_template_id):
-                return template_ref, version_ref
+            async def fake_get_workflow_with_current_version(_workflow_id):
+                return workflow_ref, version_ref
 
-            repo.get_template_with_current_version = fake_get_template_with_current_version
+            repo.get_workflow_with_current_version = fake_get_workflow_with_current_version
             service = AgentRunService(repository=repo)
             paused = await service.run_thread_chat(sample_thread.id, self._agent_req(), sample_thread.embed_model)
             paused_run = await repo.get_run(paused["agent_run_id"])
@@ -3174,10 +3174,10 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_pattern": {"template_id": "simple_rag_agent"}}
+                return {"agent_workflow": {"workflow_id": "simple_rag_agent"}}
 
             async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_context.update(agent_run_context or {})
@@ -3213,12 +3213,12 @@ class TestAgentRunService:
 
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
-        assert result["agent_pattern_version"] == ROUTER_RAG_AGENT_VERSION
+        assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert result["agent_workflow_version"] == ROUTER_RAG_AGENT_VERSION
         assert captured_context["agent_run_id"] == result["agent_run_id"]
         assert run.status == "completed"
         assert run.metrics_json["document_source_count"] == 1
-        assert run.resolved_spec_json["pattern_type"] == ROUTER_RAG_AGENT_ID
+        assert run.resolved_spec_json["workflow_id"] == ROUTER_RAG_AGENT_ID
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_defaults_to_router_rag(self, engine, sample_thread, monkeypatch):
@@ -3231,7 +3231,7 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
 
             async def fake_get_thread_settings(_thread_id):
                 return {}
@@ -3267,7 +3267,7 @@ class TestAgentRunService:
                 sample_thread.embed_model,
             )
 
-        assert result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
+        assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_router_rag_when_selected(self, engine, sample_thread, monkeypatch):
@@ -3281,10 +3281,10 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
+                return {"agent_workflow": {"workflow_id": ROUTER_RAG_AGENT_ID}}
 
             async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
@@ -3331,8 +3331,8 @@ class TestAgentRunService:
 
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
-        assert captured_spec["pattern_type"] == ROUTER_RAG_AGENT_ID
+        assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert captured_spec["workflow_id"] == ROUTER_RAG_AGENT_ID
         assert run.status == "completed"
         assert run.metrics_json["route"] == "direct"
         assert run.metrics_json["node_event_count"] == 1
@@ -3355,12 +3355,12 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
 
             async def fake_get_thread_settings(_thread_id):
                 return {
-                    "agent_pattern": {
-                        "template_id": ROUTER_RAG_AGENT_ID,
+                    "agent_workflow": {
+                        "workflow_id": ROUTER_RAG_AGENT_ID,
                     }
                 }
 
@@ -3403,15 +3403,15 @@ class TestAgentRunService:
             for edge in captured_spec["config"]["graph"]["edges"]
             if edge.get("from") == "router" and edge.get("conditional")
         )
-        assert result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
-        assert result["agent_pattern_version"] == ROUTER_RAG_AGENT_V2_VERSION
-        assert run.template_version_id == f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_V2_VERSION}"
+        assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert result["agent_workflow_version"] == ROUTER_RAG_AGENT_V2_VERSION
+        assert run.workflow_version_id == f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_V2_VERSION}"
         assert run.resolved_spec_json["schema_version"] == 2
         assert router_edge["route_fn"] == "router_route"
         assert captured_spec["config"]["loop_policy"]["max_total_visits"] == 9
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_falls_back_for_custom_db_pattern_without_opt_in(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_falls_back_for_custom_db_workflow_without_opt_in(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -3422,17 +3422,17 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
             custom_spec = builtin_router_rag_v2_spec()
-            custom_spec["pattern_type"] = "internal_custom_rag_agent"
-            await repo.create_internal_template_version(
-                template_id="internal_custom_rag_agent",
+            custom_spec["workflow_id"] = "internal_custom_rag_agent"
+            await repo.save_internal_workflow_version(
+                workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=custom_spec,
             )
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_pattern": {"template_id": "internal_custom_rag_agent"}}
+                return {"agent_workflow": {"workflow_id": "internal_custom_rag_agent"}}
 
             async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
@@ -3467,12 +3467,12 @@ class TestAgentRunService:
             )
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
-        assert captured_spec["pattern_type"] == ROUTER_RAG_AGENT_ID
-        assert run.template_id == ROUTER_RAG_AGENT_ID
+        assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert captured_spec["workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert run.workflow_id == ROUTER_RAG_AGENT_ID
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_can_load_custom_db_pattern_when_service_opted_in(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_can_load_custom_db_workflow_when_service_opted_in(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -3483,17 +3483,17 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
             custom_spec = builtin_router_rag_v2_spec()
-            custom_spec["pattern_type"] = "internal_custom_rag_agent"
-            await repo.create_internal_template_version(
-                template_id="internal_custom_rag_agent",
+            custom_spec["workflow_id"] = "internal_custom_rag_agent"
+            await repo.save_internal_workflow_version(
+                workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=custom_spec,
             )
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_pattern": {"template_id": "internal_custom_rag_agent"}}
+                return {"agent_workflow": {"workflow_id": "internal_custom_rag_agent"}}
 
             async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
@@ -3531,12 +3531,12 @@ class TestAgentRunService:
             )
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == "internal_custom_rag_agent"
-        assert captured_spec["pattern_type"] == "internal_custom_rag_agent"
-        assert run.template_id == "internal_custom_rag_agent"
+        assert result["agent_workflow_id"] == "internal_custom_rag_agent"
+        assert captured_spec["workflow_id"] == "internal_custom_rag_agent"
+        assert run.workflow_id == "internal_custom_rag_agent"
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_can_load_custom_db_pattern_when_opted_in(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_can_load_custom_db_workflow_when_opted_in(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -3547,17 +3547,17 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
             custom_spec = builtin_router_rag_v2_spec()
-            custom_spec["pattern_type"] = "internal_custom_rag_agent"
-            await repo.create_internal_template_version(
-                template_id="internal_custom_rag_agent",
+            custom_spec["workflow_id"] = "internal_custom_rag_agent"
+            await repo.save_internal_workflow_version(
+                workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=custom_spec,
             )
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_pattern": {"template_id": "internal_custom_rag_agent"}}
+                return {"agent_workflow": {"workflow_id": "internal_custom_rag_agent"}}
 
             async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
@@ -3595,11 +3595,11 @@ class TestAgentRunService:
             )
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == "internal_custom_rag_agent"
-        assert result["agent_pattern_version"] == 1
-        assert run.template_version_id == "internal_custom_rag_agent:v1"
+        assert result["agent_workflow_id"] == "internal_custom_rag_agent"
+        assert result["agent_workflow_version"] == 1
+        assert run.workflow_version_id == "internal_custom_rag_agent:v1"
         assert run.resolved_spec_json["schema_version"] == 2
-        assert captured_spec["pattern_type"] == "internal_custom_rag_agent"
+        assert captured_spec["workflow_id"] == "internal_custom_rag_agent"
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_falls_back_when_custom_runtime_lacks_service_opt_in(self, engine, sample_thread, monkeypatch):
@@ -3613,17 +3613,17 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
             custom_spec = builtin_router_rag_v2_spec()
-            custom_spec["pattern_type"] = "internal_custom_rag_agent"
-            await repo.create_internal_template_version(
-                template_id="internal_custom_rag_agent",
+            custom_spec["workflow_id"] = "internal_custom_rag_agent"
+            await repo.save_internal_workflow_version(
+                workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=custom_spec,
             )
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_pattern": {"template_id": "internal_custom_rag_agent"}}
+                return {"agent_workflow": {"workflow_id": "internal_custom_rag_agent"}}
 
             async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
@@ -3658,12 +3658,12 @@ class TestAgentRunService:
             )
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
-        assert run.template_id == ROUTER_RAG_AGENT_ID
-        assert captured_spec["pattern_type"] == ROUTER_RAG_AGENT_ID
+        assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert run.workflow_id == ROUTER_RAG_AGENT_ID
+        assert captured_spec["workflow_id"] == ROUTER_RAG_AGENT_ID
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_uses_current_custom_db_pattern_version(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_uses_current_custom_db_workflow_version(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -3674,28 +3674,28 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
             v1_spec = builtin_router_rag_v2_spec()
-            v1_spec["pattern_type"] = "internal_custom_rag_agent_v1"
+            v1_spec["workflow_id"] = "internal_custom_rag_agent_v1"
             v2_spec = builtin_router_rag_v2_spec()
-            v2_spec["pattern_type"] = "internal_custom_rag_agent_v2"
-            await repo.create_internal_template_version(
-                template_id="internal_custom_rag_agent",
+            v2_spec["workflow_id"] = "internal_custom_rag_agent_v2"
+            await repo.save_internal_workflow_version(
+                workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=v1_spec,
             )
-            await repo.create_internal_template_version(
-                template_id="internal_custom_rag_agent",
+            await repo.save_internal_workflow_version(
+                workflow_id="internal_custom_rag_agent",
                 name="Internal Custom RAG Agent",
                 spec_json=v2_spec,
             )
 
             async def fake_get_thread_settings(_thread_id):
                 return {
-                    "agent_pattern": {
-                        "template_id": "internal_custom_rag_agent",
-                        # Legacy pins are ignored; chat always runs the current pattern version.
-                        "template_version": 1,
+                    "agent_workflow": {
+                        "workflow_id": "internal_custom_rag_agent",
+                        # Legacy pins are ignored; chat always runs the current workflow version.
+                        "workflow_version": 1,
                     }
                 }
 
@@ -3735,20 +3735,20 @@ class TestAgentRunService:
             )
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == "internal_custom_rag_agent"
-        assert result["agent_pattern_version"] == 2
-        assert run.template_version_id == "internal_custom_rag_agent:v2"
-        assert captured_spec["pattern_type"] == "internal_custom_rag_agent_v2"
+        assert result["agent_workflow_id"] == "internal_custom_rag_agent"
+        assert result["agent_workflow_version"] == 2
+        assert run.workflow_version_id == "internal_custom_rag_agent:v2"
+        assert captured_spec["workflow_id"] == "internal_custom_rag_agent_v2"
 
     @pytest.mark.asyncio
-    async def test_internal_custom_pattern_create_select_and_run_keeps_instance_node_identity(
+    async def test_internal_custom_workflow_create_select_and_run_keeps_instance_node_identity(
         self,
         async_api_client,
         monkeypatch,
     ):
         custom_spec = {
             "schema_version": 2,
-            "pattern_type": "internal_e2e_custom_rag_agent",
+            "workflow_id": "internal_e2e_custom_rag_agent",
             "config": {
                 "allowed_tool_ids": ["document_evidence"],
                 "graph": {
@@ -3843,16 +3843,16 @@ class TestAgentRunService:
 
         thread_response = await async_api_client.post(
             "/api/threads",
-            json={"name": "Custom Pattern Thread", "embed_model": "BAAI/bge-m3"},
+            json={"name": "Custom Workflow Thread", "embed_model": "BAAI/bge-m3"},
         )
         other_thread_response = await async_api_client.post(
             "/api/threads",
-            json={"name": "Default Pattern Thread", "embed_model": "BAAI/bge-m3"},
+            json={"name": "Default Workflow Thread", "embed_model": "BAAI/bge-m3"},
         )
         created = await async_api_client.post(
             "/api/internal/agent-workflows",
             json={
-                "template_id": "internal_e2e_custom_rag_agent",
+                "workflow_id": "internal_e2e_custom_rag_agent",
                 "name": "Internal E2E Custom RAG Agent",
                 "spec_json": custom_spec,
             },
@@ -3867,15 +3867,15 @@ class TestAgentRunService:
         listed = await async_api_client.get("/api/agent-workflows")
         selected = await async_api_client.put(
             f"/api/threads/{thread_id}/settings",
-            json={"agent_pattern": {"template_id": "internal_e2e_custom_rag_agent"}},
+            json={"agent_workflow": {"workflow_id": "internal_e2e_custom_rag_agent"}},
         )
 
         assert selected.status_code == 200
         assert listed.status_code == 200
         assert "internal_e2e_custom_rag_agent" in {
-            item["id"] for item in listed.json()["agent_patterns"]
+            item["id"] for item in listed.json()["agent_workflows"]
         }
-        assert selected.json()["agent_pattern"]["template_id"] == "internal_e2e_custom_rag_agent"
+        assert selected.json()["agent_workflow"]["workflow_id"] == "internal_e2e_custom_rag_agent"
 
         service = AgentRunService(allow_custom_agent_workflows=True)
         result = await service.run_thread_chat(
@@ -3885,14 +3885,14 @@ class TestAgentRunService:
         )
         fallback_result = await service.run_thread_chat(
             other_thread_id,
-            self._agent_req("Should use the default pattern."),
+            self._agent_req("Should use the default workflow."),
             "BAAI/bge-m3",
         )
         repo = AgentWorkflowRepository()
         run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == "internal_e2e_custom_rag_agent"
-        assert fallback_result["agent_pattern_id"] == ROUTER_RAG_AGENT_ID
+        assert result["agent_workflow_id"] == "internal_e2e_custom_rag_agent"
+        assert fallback_result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
         retrieval_node = next(
             node
             for node in run.resolved_spec_json["config"]["graph"]["nodes"]
@@ -3955,10 +3955,10 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_pattern": {"template_id": PLAN_EXECUTE_RAG_AGENT_ID}}
+                return {"agent_workflow": {"workflow_id": PLAN_EXECUTE_RAG_AGENT_ID}}
 
             async def fake_handle_plan_execute_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
@@ -4000,11 +4000,11 @@ class TestAgentRunService:
 
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == PLAN_EXECUTE_RAG_AGENT_ID
-        assert result["agent_pattern_version"] == PLAN_EXECUTE_RAG_AGENT_VERSION
-        assert captured_spec["pattern_type"] == PLAN_EXECUTE_RAG_AGENT_ID
+        assert result["agent_workflow_id"] == PLAN_EXECUTE_RAG_AGENT_ID
+        assert result["agent_workflow_version"] == PLAN_EXECUTE_RAG_AGENT_VERSION
+        assert captured_spec["workflow_id"] == PLAN_EXECUTE_RAG_AGENT_ID
         assert run.status == "completed"
-        assert run.resolved_spec_json["pattern_type"] == PLAN_EXECUTE_RAG_AGENT_ID
+        assert run.resolved_spec_json["workflow_id"] == PLAN_EXECUTE_RAG_AGENT_ID
         assert run.metrics_json["route"] == "execute"
         assert run.metrics_json["node_elapsed_ms"] == {"planner": 2.0}
         assert run.metrics_json["document_source_count"] == 1
@@ -4024,10 +4024,10 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_pattern": {"template_id": EVALUATOR_REPLANNER_RAG_AGENT_ID}}
+                return {"agent_workflow": {"workflow_id": EVALUATOR_REPLANNER_RAG_AGENT_ID}}
 
             async def fake_handle_evaluator_replanner_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
@@ -4077,11 +4077,11 @@ class TestAgentRunService:
 
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_pattern_id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
-        assert result["agent_pattern_version"] == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
-        assert captured_spec["pattern_type"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert result["agent_workflow_id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert result["agent_workflow_version"] == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
+        assert captured_spec["workflow_id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
         assert run.status == "completed"
-        assert run.resolved_spec_json["pattern_type"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert run.resolved_spec_json["workflow_id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
         assert run.metrics_json["route"] == "execute"
         assert run.metrics_json["replan_count"] == 0
         assert run.metrics_json["evaluation_confidence"] == 0.8
@@ -4137,7 +4137,7 @@ class TestAgentRunService:
 
         async def fake_get_thread_settings(_thread_id):
             return {
-                "agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID},
+                "agent_workflow": {"workflow_id": ROUTER_RAG_AGENT_ID},
                 "hitl_web_approval": True,
             }
 
@@ -4226,7 +4226,7 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
             service = AgentRunService(repository=repo)
             req = SimpleNamespace(
                 question="Pause before web?",
@@ -4508,7 +4508,7 @@ class TestAgentRunService:
 
         async def fake_get_thread_settings(_thread_id):
             return {
-                "agent_pattern": {"template_id": EVALUATOR_REPLANNER_RAG_AGENT_ID},
+                "agent_workflow": {"workflow_id": EVALUATOR_REPLANNER_RAG_AGENT_ID},
                 "hitl_web_approval": True,
             }
 
@@ -4612,7 +4612,7 @@ class TestAgentRunService:
 
         async with session_factory() as first_session:
             first_repo = AgentWorkflowRepository(first_session)
-            await first_repo.seed_builtin_templates()
+            await first_repo.seed_builtin_workflows()
             req = SimpleNamespace(
                 question="Pause and survive restart?",
                 llm_model="test-llm",
@@ -4688,13 +4688,13 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
-                template_version=version.version,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
+                workflow_version=version.version,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             debug_payload = build_debug_payload(
@@ -4790,13 +4790,13 @@ class TestAgentRunService:
         calls = []
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
-                template_version=version.version,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
+                workflow_version=version.version,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             debug_payload = build_debug_payload(
@@ -4877,10 +4877,10 @@ class TestAgentRunService:
 
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
+            await repo.seed_builtin_workflows()
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_pattern": {"template_id": ROUTER_RAG_AGENT_ID}}
+                return {"agent_workflow": {"workflow_id": ROUTER_RAG_AGENT_ID}}
 
             async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 node_event = {"node": "router", "elapsed_ms": 4.0, "route": "document"}
@@ -5127,8 +5127,8 @@ class TestRouterRagRuntime:
             resolved_spec=spec,
             agent_run_context={
                 "agent_run_id": "run-1",
-                "agent_pattern_id": ROUTER_RAG_AGENT_ID,
-                "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
+                "agent_workflow_id": ROUTER_RAG_AGENT_ID,
+                "agent_workflow_version": ROUTER_RAG_AGENT_VERSION,
             },
             trace_recorder=make_trace_recorder("run-1", sample_thread.id, spec),
         )
@@ -5370,8 +5370,8 @@ class TestRouterRagRuntime:
             resolved_spec=spec,
             agent_run_context={
                 "agent_run_id": run_id,
-                "agent_pattern_id": ROUTER_RAG_AGENT_ID,
-                "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
+                "agent_workflow_id": ROUTER_RAG_AGENT_ID,
+                "agent_workflow_version": ROUTER_RAG_AGENT_VERSION,
             },
             trace_recorder=make_trace_recorder(run_id, sample_thread.id, spec),
         )
@@ -5546,8 +5546,8 @@ class TestRouterRagRuntime:
             resolved_spec=spec,
             agent_run_context={
                 "agent_run_id": "run-failed",
-                "agent_pattern_id": ROUTER_RAG_AGENT_ID,
-                "agent_pattern_version": ROUTER_RAG_AGENT_VERSION,
+                "agent_workflow_id": ROUTER_RAG_AGENT_ID,
+                "agent_workflow_version": ROUTER_RAG_AGENT_VERSION,
             },
             trace_recorder=make_trace_recorder("run-failed", sample_thread.id, spec),
         )
@@ -5578,10 +5578,10 @@ class TestRouterRagRuntime:
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestAgentWorkflowApi:
-    def test_list_and_get_builtin_agent_pattern(self, api_client):
+    def test_list_and_get_builtin_agent_workflow(self, api_client):
         listed = api_client.get("/api/agent-workflows")
         assert listed.status_code == 200
-        assert {item["id"] for item in listed.json()["agent_patterns"]} == {
+        assert {item["id"] for item in listed.json()["agent_workflows"]} == {
             ROUTER_RAG_AGENT_ID,
             PLAN_EXECUTE_RAG_AGENT_ID,
             EVALUATOR_REPLANNER_RAG_AGENT_ID,
@@ -5590,7 +5590,7 @@ class TestAgentWorkflowApi:
         detail = api_client.get(f"/api/agent-workflows/{ROUTER_RAG_AGENT_ID}")
         assert detail.status_code == 200
         payload = detail.json()
-        assert payload["agent_pattern"]["id"] == ROUTER_RAG_AGENT_ID
+        assert payload["agent_workflow"]["id"] == ROUTER_RAG_AGENT_ID
         assert payload["current_version"]["version"] == ROUTER_RAG_AGENT_VERSION
         assert payload["current_version"]["validation"]["valid"] is True
         assert "document_evidence" in payload["capabilities"]["required_tool_ids"]
@@ -5599,7 +5599,7 @@ class TestAgentWorkflowApi:
         plan_detail = api_client.get(f"/api/agent-workflows/{PLAN_EXECUTE_RAG_AGENT_ID}")
         assert plan_detail.status_code == 200
         plan_payload = plan_detail.json()
-        assert plan_payload["agent_pattern"]["id"] == PLAN_EXECUTE_RAG_AGENT_ID
+        assert plan_payload["agent_workflow"]["id"] == PLAN_EXECUTE_RAG_AGENT_ID
         assert plan_payload["current_version"]["version"] == PLAN_EXECUTE_RAG_AGENT_VERSION
         assert plan_payload["current_version"]["validation"]["valid"] is True
         assert plan_payload["capabilities"]["node_tool_requirements"]["planner"] == "clarify_intent"
@@ -5607,7 +5607,7 @@ class TestAgentWorkflowApi:
         evaluator_detail = api_client.get(f"/api/agent-workflows/{EVALUATOR_REPLANNER_RAG_AGENT_ID}")
         assert evaluator_detail.status_code == 200
         evaluator_payload = evaluator_detail.json()
-        assert evaluator_payload["agent_pattern"]["id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert evaluator_payload["agent_workflow"]["id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
         assert evaluator_payload["current_version"]["version"] == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
         assert evaluator_payload["current_version"]["validation"]["valid"] is True
         assert evaluator_payload["capabilities"]["node_tool_requirements"]["evidence_evaluator"] == "clarify_intent"
@@ -5616,38 +5616,38 @@ class TestAgentWorkflowApi:
         stale_detail = api_client.get("/api/agent-workflows/simple_rag_agent")
         assert stale_detail.status_code == 404
 
-    def test_internal_custom_agent_pattern_is_globally_listed(self, api_client):
-        async def seed_internal_pattern():
+    def test_internal_custom_agent_workflow_is_globally_listed(self, api_client):
+        async def seed_internal_workflow():
             spec = builtin_router_rag_v2_spec()
-            spec["pattern_type"] = "internal_api_global_agent"
-            await AgentWorkflowRepository().create_internal_template_version(
-                template_id="internal_api_global_agent",
+            spec["workflow_id"] = "internal_api_global_agent"
+            await AgentWorkflowRepository().save_internal_workflow_version(
+                workflow_id="internal_api_global_agent",
                 name="Internal API Global Agent",
                 spec_json=spec,
             )
 
-        asyncio.run(seed_internal_pattern())
+        asyncio.run(seed_internal_workflow())
 
         listed = api_client.get("/api/agent-workflows")
         detail = api_client.get("/api/agent-workflows/internal_api_global_agent")
 
         assert listed.status_code == 200
         assert "internal_api_global_agent" in {
-            item["id"] for item in listed.json()["agent_patterns"]
+            item["id"] for item in listed.json()["agent_workflows"]
         }
         assert detail.status_code == 200
-        assert detail.json()["agent_pattern"]["id"] == "internal_api_global_agent"
+        assert detail.json()["agent_workflow"]["id"] == "internal_api_global_agent"
 
-    def test_internal_agent_pattern_endpoint_creates_and_fetches_custom_v2_spec(self, api_client):
+    def test_internal_agent_workflow_endpoint_creates_and_fetches_custom_v2_spec(self, api_client):
         spec = builtin_router_rag_v2_spec()
-        spec["pattern_type"] = "internal_api_agent"
+        spec["workflow_id"] = "internal_api_agent"
 
         created = api_client.post(
             "/api/internal/agent-workflows",
             json={
-                "template_id": "internal_api_agent",
+                "workflow_id": "internal_api_agent",
                 "name": "Internal API Agent",
-                "description": "JSON-authored internal pattern.",
+                "description": "JSON-authored internal workflow.",
                 "changelog": "Initial internal API version.",
                 "spec_json": spec,
             },
@@ -5657,8 +5657,8 @@ class TestAgentWorkflowApi:
 
         assert created.status_code == 200
         created_payload = created.json()
-        assert created_payload["agent_pattern"]["id"] == "internal_api_agent"
-        assert created_payload["agent_pattern"]["visibility"] == "internal"
+        assert created_payload["agent_workflow"]["id"] == "internal_api_agent"
+        assert created_payload["agent_workflow"]["visibility"] == "internal"
         assert created_payload["version"]["id"] == "internal_api_agent:v1"
         assert created_payload["version"]["schema_version"] == 2
         assert created_payload["version"]["validation"]["valid"] is True
@@ -5668,9 +5668,9 @@ class TestAgentWorkflowApi:
         assert public_detail.status_code == 200
         assert public_detail.json()["current_version"]["id"] == "internal_api_agent:v1"
 
-    def test_internal_agent_pattern_endpoint_generates_ids_and_updates_latest_spec(self, api_client):
+    def test_internal_agent_workflow_endpoint_generates_ids_and_updates_latest_spec(self, api_client):
         spec = builtin_router_rag_v2_spec()
-        spec["pattern_type"] = "client_side_placeholder"
+        spec["workflow_id"] = "client_side_placeholder"
 
         created = api_client.post(
             "/api/internal/agent-workflows",
@@ -5682,42 +5682,42 @@ class TestAgentWorkflowApi:
         )
         assert created.status_code == 200
         created_payload = created.json()
-        template_id = created_payload["agent_pattern"]["id"]
-        assert template_id.startswith("custom_pat_")
-        assert created_payload["version"]["id"] == f"{template_id}:v1"
+        workflow_id = created_payload["agent_workflow"]["id"]
+        assert workflow_id.startswith("custom_workflow_")
+        assert created_payload["version"]["id"] == f"{workflow_id}:v1"
         assert created_payload["version"]["version"] == 1
-        assert created_payload["version"]["spec_json"]["pattern_type"] == template_id
+        assert created_payload["version"]["spec_json"]["workflow_id"] == workflow_id
 
         updated_spec = builtin_router_rag_v2_spec()
-        updated_spec["pattern_type"] = "another_placeholder"
+        updated_spec["workflow_id"] = "another_placeholder"
         updated_spec["config"]["context_policy"]["evidence_packet_limit"] = 4
         updated = api_client.post(
             "/api/internal/agent-workflows",
             json={
-                "template_id": template_id,
+                "workflow_id": workflow_id,
                 "name": "Renamed Generated ID Agent",
                 "description": "Updated in place.",
                 "spec_json": updated_spec,
             },
         )
-        fetched = api_client.get(f"/api/agent-workflows/{template_id}")
+        fetched = api_client.get(f"/api/agent-workflows/{workflow_id}")
 
         assert updated.status_code == 200
-        assert updated.json()["version"]["id"] == f"{template_id}:v1"
+        assert updated.json()["version"]["id"] == f"{workflow_id}:v1"
         assert updated.json()["version"]["version"] == 1
         assert fetched.status_code == 200
-        assert fetched.json()["agent_pattern"]["name"] == "Renamed Generated ID Agent"
-        assert fetched.json()["current_version"]["spec_json"]["pattern_type"] == template_id
+        assert fetched.json()["agent_workflow"]["name"] == "Renamed Generated ID Agent"
+        assert fetched.json()["current_version"]["spec_json"]["workflow_id"] == workflow_id
         assert fetched.json()["current_version"]["spec_json"]["config"]["context_policy"]["evidence_packet_limit"] == 4
 
-    def test_internal_agent_pattern_delete_hides_custom_pattern(self, api_client):
+    def test_internal_agent_workflow_delete_hides_custom_workflow(self, api_client):
         spec = builtin_router_rag_v2_spec()
-        spec["pattern_type"] = "internal_api_delete_agent"
+        spec["workflow_id"] = "internal_api_delete_agent"
 
         created = api_client.post(
             "/api/internal/agent-workflows",
             json={
-                "template_id": "internal_api_delete_agent",
+                "workflow_id": "internal_api_delete_agent",
                 "name": "Internal API Delete Agent",
                 "spec_json": spec,
             },
@@ -5730,28 +5730,28 @@ class TestAgentWorkflowApi:
         assert created.status_code == 200
         assert deleted.status_code == 200
         assert deleted.json()["status"] == "deleted"
-        assert deleted.json()["agent_pattern"]["visibility"] == "deleted"
+        assert deleted.json()["agent_workflow"]["visibility"] == "deleted"
         assert "internal_api_delete_agent" not in {
-            item["id"] for item in listed.json()["agent_patterns"]
+            item["id"] for item in listed.json()["agent_workflows"]
         }
         assert public_detail.status_code == 404
         assert internal_detail.status_code == 404
 
-    def test_internal_agent_pattern_delete_rejects_builtin_ids(self, api_client):
+    def test_internal_agent_workflow_delete_rejects_builtin_ids(self, api_client):
         deleted = api_client.delete(f"/api/internal/agent-workflows/{ROUTER_RAG_AGENT_ID}")
 
         assert deleted.status_code == 400
-        assert "built-in agent workflow templates cannot be deleted" in deleted.json()["detail"]
+        assert "built-in agent workflows cannot be deleted" in deleted.json()["detail"]
 
-    def test_internal_agent_pattern_endpoint_rejects_invalid_specs_without_storing(self, api_client):
+    def test_internal_agent_workflow_endpoint_rejects_invalid_specs_without_storing(self, api_client):
         invalid_spec = builtin_router_rag_v2_spec()
-        invalid_spec["pattern_type"] = "internal_api_invalid_agent"
+        invalid_spec["workflow_id"] = "internal_api_invalid_agent"
         invalid_spec["config"]["graph"]["edges"][2].pop("route_fn")
 
         invalid = api_client.post(
             "/api/internal/agent-workflows",
             json={
-                "template_id": "internal_api_invalid_agent",
+                "workflow_id": "internal_api_invalid_agent",
                 "name": "Internal API Invalid Agent",
                 "spec_json": invalid_spec,
             },
@@ -5762,21 +5762,21 @@ class TestAgentWorkflowApi:
         assert "must declare route_fn" in invalid.json()["detail"]
         assert fetched.status_code == 404
 
-    def test_internal_agent_pattern_endpoint_rejects_builtin_ids(self, api_client):
+    def test_internal_agent_workflow_endpoint_rejects_builtin_ids(self, api_client):
         spec = builtin_router_rag_v2_spec()
         rejected = api_client.post(
             "/api/internal/agent-workflows",
             json={
-                "template_id": ROUTER_RAG_AGENT_ID,
+                "workflow_id": ROUTER_RAG_AGENT_ID,
                 "name": "Not Allowed",
                 "spec_json": spec,
             },
         )
 
         assert rejected.status_code == 400
-        assert "built-in agent workflow templates cannot be authored" in rejected.json()["detail"]
+        assert "built-in agent workflows cannot be authored" in rejected.json()["detail"]
 
-    def test_internal_agent_pattern_catalog_endpoint_exposes_safe_authoring_metadata(self, api_client):
+    def test_internal_agent_workflow_catalog_endpoint_exposes_safe_authoring_metadata(self, api_client):
         response = api_client.get("/api/internal/agent-workflows/catalog")
 
         assert response.status_code == 200
@@ -5815,15 +5815,15 @@ class TestAgentWorkflowApi:
         assert "default_prompt" not in document_contract
         assert "tool_name" not in document_contract
 
-    def test_internal_thread_agent_pattern_selection_endpoint_is_removed(self, api_client, sample_thread):
+    def test_internal_thread_agent_workflow_selection_endpoint_is_removed(self, api_client, sample_thread):
         response = api_client.post(
             f"/api/internal/threads/{sample_thread.id}/agent-workflow",
-            json={"template_id": "any_internal_agent"},
+            json={"workflow_id": "any_internal_agent"},
         )
 
         assert response.status_code == 404
 
-    def test_validate_agent_pattern_endpoint(self, api_client):
+    def test_validate_agent_workflow_endpoint(self, api_client):
         valid = api_client.post(
             "/api/agent-workflows/validate",
             json={"spec": builtin_router_rag_v2_spec()},
@@ -5831,7 +5831,7 @@ class TestAgentWorkflowApi:
         invalid_spec = builtin_router_rag_v2_spec()
         invalid_spec["config"]["allowed_tool_ids"] = ["mystery_tool"]
         stale_spec = legacy_builtin_router_rag_v1_spec()
-        stale_spec["pattern_type"] = "simple_rag_agent"
+        stale_spec["workflow_id"] = "simple_rag_agent"
         invalid = api_client.post(
             "/api/agent-workflows/validate",
             json={"spec": invalid_spec},
@@ -5845,7 +5845,7 @@ class TestAgentWorkflowApi:
         valid_payload = valid.json()
         assert valid_payload["valid"] is True
         assert valid_payload["errors"] == []
-        assert valid_payload["pattern_type"] == ROUTER_RAG_AGENT_ID
+        assert valid_payload["workflow_id"] == ROUTER_RAG_AGENT_ID
         assert "document_evidence" in valid_payload["required_tool_ids"]
         assert invalid.status_code == 200
         invalid_payload = invalid.json()
@@ -5858,7 +5858,7 @@ class TestAgentWorkflowApi:
     def test_validate_thread_agent_config_endpoint_resolves_without_running_chat(self, api_client, sample_thread, monkeypatch):
         async def fake_get_thread_settings(_thread_id):
             return {
-                "agent_pattern": {"template_id": EVALUATOR_REPLANNER_RAG_AGENT_ID},
+                "agent_workflow": {"workflow_id": EVALUATOR_REPLANNER_RAG_AGENT_ID},
                 "hitl_web_approval": True,
             }
 
@@ -5872,8 +5872,8 @@ class TestAgentWorkflowApi:
         assert response.status_code == 200
         payload = response.json()
         assert payload["valid"] is True
-        assert payload["template_id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
-        assert payload["template_version"] == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
+        assert payload["workflow_id"] == EVALUATOR_REPLANNER_RAG_AGENT_ID
+        assert payload["workflow_version"] == EVALUATOR_REPLANNER_RAG_AGENT_VERSION
         assert payload["validation"]["valid"] is True
         assert payload["resolved_spec_json"]["config"]["use_web_search"] is True
         assert payload["resolved_spec_json"]["config"]["replans"] == 2
@@ -5889,7 +5889,7 @@ class TestAgentWorkflowApi:
         assert response.status_code == 200
         payload = response.json()
         assert payload["valid"] is False
-        assert payload["template_id"] == ROUTER_RAG_AGENT_ID
+        assert payload["workflow_id"] == ROUTER_RAG_AGENT_ID
         assert payload["validation"]["valid"] is False
         assert payload["validation"]["unknown_allowed_tool_ids"] == ["mystery_tool"]
 
@@ -5903,12 +5903,12 @@ class TestAgentWorkflowApi:
         )
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
             first = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             await repo.complete_run(
@@ -5918,8 +5918,8 @@ class TestAgentWorkflowApi:
             )
             second = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             await repo.complete_run(
@@ -5954,18 +5954,18 @@ class TestAgentWorkflowApi:
         )
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
             running = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             awaiting = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             await repo.mark_run_awaiting_human(
@@ -6001,12 +6001,12 @@ class TestAgentWorkflowApi:
         )
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             await repo.mark_run_awaiting_human(
@@ -6067,12 +6067,12 @@ class TestAgentWorkflowApi:
         )
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             await repo.mark_run_awaiting_human(
@@ -6115,12 +6115,12 @@ class TestAgentWorkflowApi:
         )
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
 
@@ -6231,8 +6231,8 @@ class TestAgentWorkflowApi:
         assert trace["run_id"] == run.id
         assert trace["thread_id"] == sample_thread.id
         assert trace["chat_turn_id"] == turn.id
-        assert trace["template_id"] == ROUTER_RAG_AGENT_ID
-        assert trace["pattern_type"] == ROUTER_RAG_AGENT_ID
+        assert trace["workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert trace["workflow_id"] == ROUTER_RAG_AGENT_ID
         assert trace["attributes"]["session.id"] == sample_thread.id
         assert trace["attributes"]["askpdf.route"] == "web"
         assert trace["attributes"]["askpdf.route_reason"] == "Needs live evidence."
@@ -6263,12 +6263,12 @@ class TestAgentWorkflowApi:
         )
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             await repo.complete_run(
@@ -6303,12 +6303,12 @@ class TestAgentWorkflowApi:
         )
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
-            await repo.seed_builtin_templates()
-            template, version = await repo.get_template_with_current_version(ROUTER_RAG_AGENT_ID)
+            await repo.seed_builtin_workflows()
+            workflow, version = await repo.get_workflow_with_current_version(ROUTER_RAG_AGENT_ID)
             run = await repo.create_run(
                 thread_id=sample_thread.id,
-                template_id=template.id,
-                template_version_id=version.id,
+                workflow_id=workflow.id,
+                workflow_version_id=version.id,
                 resolved_spec_json=builtin_router_rag_spec(),
             )
             await repo.complete_run(

@@ -181,7 +181,7 @@ def build_final_answer_messages(state: Dict[str, Any], context: str) -> Dict[str
 
 def build_agent_workflow_prompt_preview(
     *,
-    pattern_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
     prompt_profile: Optional[str] = None,
     context_window: int,
     system_role: str = "",
@@ -196,7 +196,7 @@ def build_agent_workflow_prompt_preview(
         prompt_profile = {
             "plan_execute_rag_agent": "planner",
             "evaluator_replanner_rag_agent": "evaluator_replanner",
-        }.get(str(pattern_id or ""), "router")
+        }.get(str(workflow_id or ""), "router")
     state = {
         "question": QUESTION_PLACEHOLDER,
         "pre_fetch_bundle": {},

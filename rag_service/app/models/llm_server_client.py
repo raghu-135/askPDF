@@ -190,7 +190,6 @@ def default_thread_settings():
         "hitl_web_approval": False,
         "use_reranker": True,
         "agent_workflow": {"workflow_id": default_agent_workflow_key()},
-        "agent_pattern": {"template_id": default_agent_workflow_key()},
     }
 
 
@@ -209,14 +208,11 @@ def merge_thread_settings(overrides=None):
     except (TypeError, ValueError):
         merged["replans"] = 1
     agent_workflow = merged.get("agent_workflow")
-    agent_pattern = merged.get("agent_pattern")
-    legacy_template_id = agent_pattern.get("template_id") if isinstance(agent_pattern, dict) else None
     if isinstance(agent_workflow, dict):
-        workflow_id = agent_workflow.get("workflow_id") or agent_workflow.get("template_id") or legacy_template_id or default_agent_workflow_key()
+        workflow_id = agent_workflow.get("workflow_id") or default_agent_workflow_key()
         merged["agent_workflow"] = {"workflow_id": str(workflow_id)}
     else:
-        merged["agent_workflow"] = {"workflow_id": str(legacy_template_id or default_agent_workflow_key())}
-    merged["agent_pattern"] = {"template_id": merged["agent_workflow"]["workflow_id"]}
+        merged["agent_workflow"] = {"workflow_id": default_agent_workflow_key()}
     return merged
 
 

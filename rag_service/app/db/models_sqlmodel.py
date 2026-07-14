@@ -317,48 +317,25 @@ class AgentRun(SQLModel, table=True):
         Index("idx_agent_run_thread_started", "thread_id", "started_at"),
     )
 
-    def __init__(self, **data: Any):
-        template_id = data.pop("template_id", None)
-        template_version_id = data.pop("template_version_id", None)
-        template_version = data.pop("template_version", None)
-        if template_id is not None and "workflow_id" not in data:
-            data["workflow_id"] = template_id
-        if template_version_id is not None or template_version is not None:
-            metadata = dict(data.get("run_metadata_json") or {})
-            if template_version_id is not None:
-                metadata["template_version_id"] = template_version_id
-            if template_version is not None:
-                metadata["template_version"] = template_version
-            data["run_metadata_json"] = metadata
-        super().__init__(**data)
-
     @property
-    def template_id(self) -> str:
-        return self.workflow_id
-
-    @template_id.setter
-    def template_id(self, value: str) -> None:
-        self.workflow_id = value
-
-    @property
-    def template_version_id(self) -> Optional[str]:
+    def workflow_version_id(self) -> Optional[str]:
         metadata = self.run_metadata_json if isinstance(self.run_metadata_json, dict) else {}
-        value = metadata.get("template_version_id")
+        value = metadata.get("workflow_version_id")
         return str(value) if value is not None else None
 
-    @template_version_id.setter
-    def template_version_id(self, value: Optional[str]) -> None:
+    @workflow_version_id.setter
+    def workflow_version_id(self, value: Optional[str]) -> None:
         metadata = dict(self.run_metadata_json or {})
         if value is None:
-            metadata.pop("template_version_id", None)
+            metadata.pop("workflow_version_id", None)
         else:
-            metadata["template_version_id"] = value
+            metadata["workflow_version_id"] = value
         self.run_metadata_json = metadata
 
     @property
-    def template_version(self) -> Optional[int]:
+    def workflow_version(self) -> Optional[int]:
         metadata = self.run_metadata_json if isinstance(self.run_metadata_json, dict) else {}
-        value = metadata.get("template_version")
+        value = metadata.get("workflow_version")
         if value is None:
             return None
         try:
@@ -366,15 +343,11 @@ class AgentRun(SQLModel, table=True):
         except (TypeError, ValueError):
             return None
 
-    @template_version.setter
-    def template_version(self, value: Optional[int]) -> None:
+    @workflow_version.setter
+    def workflow_version(self, value: Optional[int]) -> None:
         metadata = dict(self.run_metadata_json or {})
         if value is None:
-            metadata.pop("template_version", None)
+            metadata.pop("workflow_version", None)
         else:
-            metadata["template_version"] = int(value)
+            metadata["workflow_version"] = int(value)
         self.run_metadata_json = metadata
-
-
-# Backward-compatible name for older agent-pattern/template call sites.
-AgentWorkflowTemplate = AgentWorkflow

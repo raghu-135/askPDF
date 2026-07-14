@@ -7,7 +7,7 @@ from app.agent.tool_registry import (
     validate_tool_call_allowed,
 )
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
-from app.agent_workflows.validator import TemplateValidator
+from app.agent_workflows.validator import WorkflowValidator
 
 
 def _builtin_spec(builtin_key: str):
@@ -52,7 +52,7 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
     assert records == sorted(records, key=lambda record: record["tool_name"])
 
 
-def test_template_validator_accepts_external_contract_ids():
+def test_workflow_validator_accepts_external_contract_ids():
     spec = _builtin_spec("router_rag_agent")
     spec["config"]["allowed_tool_ids"] = [
         *spec["config"]["allowed_tool_ids"],
@@ -60,7 +60,7 @@ def test_template_validator_accepts_external_contract_ids():
         "semantic_scholar_research",
     ]
 
-    assert TemplateValidator().validate(spec) == {"valid": True, "errors": []}
+    assert WorkflowValidator().validate(spec) == {"valid": True, "errors": []}
 
 
 def test_tool_contract_records_are_schema_like():

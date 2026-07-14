@@ -26,7 +26,7 @@ from app.agent_workflows.prompting import (
     build_replanner_prompt,
     build_router_prompt,
 )
-from app.agent_workflows.compiler import TemplateMaterializer
+from app.agent_workflows.compiler import WorkflowMaterializer
 from app.agent_workflows.decision_nodes import JsonDecisionNodeSpec, invoke_json_decision_node
 from app.agent_workflows.evidence import (
     append_evidence_packet as _append_evidence_packet,
@@ -306,7 +306,7 @@ class RouterRagState(TypedDict, total=False):
     tool_events: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
     allowed_tool_ids: List[str]
-    pattern_type: str
+    workflow_id: str
     loop_policy: Dict[str, Any]
     node_visit_counts: Dict[str, int]
     node_visit_sequence: List[Dict[str, Any]]
@@ -747,7 +747,7 @@ def with_web_approval_hitl_policy(policy: Any) -> Dict[str, Any]:
 
 
 def normalize_hitl_policy_for_thread_settings(policy: Any, thread_settings: Any = None) -> Dict[str, Any]:
-    """Normalize legacy thread-level HITL toggles into the reusable policy contract."""
+    """Normalize thread-level HITL toggles into the reusable policy contract."""
 
     normalized = deepcopy(policy) if isinstance(policy, dict) else {}
     if isinstance(thread_settings, dict) and bool(thread_settings.get("hitl_web_approval")):
@@ -756,7 +756,7 @@ def normalize_hitl_policy_for_thread_settings(policy: Any, thread_settings: Any 
 
 
 class NodeRegistry:
-    """Registry of safe backend node implementations for compiled v2 patterns."""
+    """Registry of safe backend node implementations for compiled v2 workflows."""
 
     def __init__(self):
         self._nodes: Dict[str, Callable[..., Any]] = {
@@ -1651,8 +1651,8 @@ class NodeRegistry:
             "node_events": _append_event(state, node_id, data, started=started, config=config),
         }
 
-class TemplateCompiler(TemplateMaterializer):
-    """Compile validated v2 template specs into LangGraph StateGraph instances."""
+class WorkflowCompiler(WorkflowMaterializer):
+    """Compile validated v2 workflow specs into LangGraph StateGraph instances."""
 
     def __init__(self, registry: Optional[NodeRegistry] = None):
         self.registry = registry or NodeRegistry()
@@ -1663,11 +1663,11 @@ class TemplateCompiler(TemplateMaterializer):
         *,
         checkpointer: Any = None,
     ):
-        from app.agent_workflows.validator import TemplateValidator
+        from app.agent_workflows.validator import WorkflowValidator
 
         graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
         if not graph_spec.get("hitl_compiled"):
-            TemplateValidator().validate(spec)
+            WorkflowValidator().validate(spec)
             spec = self.materialize_spec(spec)
             graph_spec = (spec.get("config") or {}).get("graph") or {}
         workflow = StateGraph(RouterRagState)
