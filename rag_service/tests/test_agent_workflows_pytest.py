@@ -14,7 +14,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.agent.tool_registry import collect_tool_contract_metadata_errors, tool_contracts_by_id
 from app.agent_workflows.checkpointing import open_agent_checkpointer
 from app.agent_workflows.router_runtime import handle_router_rag_chat
-from app.agent_workflows.graph import NodeRegistry, TemplateCompiler, _final_context_from_state, _llm_result_metadata, _route_function_for_edge
+from app.agent_workflows.graph import (
+    NodeRegistry,
+    TemplateCompiler,
+    _final_context_from_state,
+    _llm_result_metadata,
+    _route_function_for_edge,
+    evaluator_route,
+    hitl_gate_route,
+    hitl_gate_route_for,
+    planner_route,
+    router_route,
+)
 from app.agent_workflows.graph import (
     build_planner_prompt,
     infer_required_plan_steps,
@@ -66,7 +77,9 @@ def builtin_router_rag_v2_spec() -> dict:
 
 
 def legacy_builtin_router_rag_v1_spec() -> dict:
-    return _builtin_spec(ROUTER_RAG_AGENT_ID)
+    spec = _builtin_spec(ROUTER_RAG_AGENT_ID)
+    spec["schema_version"] = 1
+    return spec
 
 
 def builtin_router_rag_hitl_web_spec() -> dict:
@@ -742,6 +755,186 @@ class TestRouterRagTemplateValidator:
         assert any(error.endswith("must declare allowed_node_types or required_node_capabilities") for error in errors)
         assert any(error.endswith("artifact_keys must be a list of non-empty strings") for error in errors)
 
+    @pytest.mark.parametrize(
+        "spec_factory, expected",
+        [
+            (
+                builtin_router_rag_v2_spec,
+                {
+                    "node_ids": ["context_loader", "router", "retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
+                    "node_types": {
+                        "context_loader": "context_loader",
+                        "router": "router",
+                        "retrieval_worker": "retrieval_worker",
+                        "memory_worker": "memory_worker",
+                        "timeline_worker": "timeline_worker",
+                        "web_worker": "web_worker",
+                        "direct_answer": "direct_answer",
+                        "synthesizer": "synthesizer",
+                        "finalizer": "finalizer",
+                    },
+                    "edges": [
+                        ("START", "context_loader"),
+                        ("context_loader", "router"),
+                        ("retrieval_worker", "synthesizer"),
+                        ("memory_worker", "synthesizer"),
+                        ("timeline_worker", "synthesizer"),
+                        ("web_worker", "synthesizer"),
+                        ("direct_answer", "finalizer"),
+                        ("synthesizer", "finalizer"),
+                        ("finalizer", "END"),
+                    ],
+                    "conditional_edges": {
+                        "router": {
+                            "route_fn": "router_route",
+                            "routes": {
+                                "document": "retrieval_worker",
+                                "memory": "memory_worker",
+                                "timeline": "timeline_worker",
+                                "web": "web_worker",
+                                "direct": "direct_answer",
+                                "clarify": "finalizer",
+                            },
+                        }
+                    },
+                },
+            ),
+            (
+                builtin_plan_execute_rag_v2_spec,
+                {
+                    "node_ids": ["context_loader", "planner", "retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
+                    "node_types": {
+                        "context_loader": "context_loader",
+                        "planner": "planner",
+                        "retrieval_worker": "retrieval_worker",
+                        "memory_worker": "memory_worker",
+                        "timeline_worker": "timeline_worker",
+                        "web_worker": "web_worker",
+                        "direct_answer": "direct_answer",
+                        "synthesizer": "synthesizer",
+                        "finalizer": "finalizer",
+                    },
+                    "edges": [
+                        ("START", "context_loader"),
+                        ("context_loader", "planner"),
+                        ("retrieval_worker", "memory_worker"),
+                        ("memory_worker", "timeline_worker"),
+                        ("timeline_worker", "web_worker"),
+                        ("web_worker", "synthesizer"),
+                        ("direct_answer", "finalizer"),
+                        ("synthesizer", "finalizer"),
+                        ("finalizer", "END"),
+                    ],
+                    "conditional_edges": {
+                        "planner": {
+                            "route_fn": "planner_route",
+                            "routes": {
+                                "execute": "retrieval_worker",
+                                "direct": "direct_answer",
+                                "clarify": "finalizer",
+                            },
+                        }
+                    },
+                },
+            ),
+            (
+                builtin_evaluator_replanner_rag_v2_spec,
+                {
+                    "node_ids": [
+                        "context_loader",
+                        "planner",
+                        "retrieval_worker",
+                        "memory_worker",
+                        "timeline_worker",
+                        "web_worker",
+                        "evidence_evaluator",
+                        "replanner",
+                        "direct_answer",
+                        "synthesizer",
+                        "finalizer",
+                    ],
+                    "node_types": {
+                        "context_loader": "context_loader",
+                        "planner": "planner",
+                        "retrieval_worker": "retrieval_worker",
+                        "memory_worker": "memory_worker",
+                        "timeline_worker": "timeline_worker",
+                        "web_worker": "web_worker",
+                        "evidence_evaluator": "evidence_evaluator",
+                        "replanner": "replanner",
+                        "direct_answer": "direct_answer",
+                        "synthesizer": "synthesizer",
+                        "finalizer": "finalizer",
+                    },
+                    "edges": [
+                        ("START", "context_loader"),
+                        ("context_loader", "planner"),
+                        ("retrieval_worker", "memory_worker"),
+                        ("memory_worker", "timeline_worker"),
+                        ("timeline_worker", "web_worker"),
+                        ("web_worker", "evidence_evaluator"),
+                        ("replanner", "retrieval_worker"),
+                        ("direct_answer", "finalizer"),
+                        ("synthesizer", "finalizer"),
+                        ("finalizer", "END"),
+                    ],
+                    "conditional_edges": {
+                        "planner": {
+                            "route_fn": "planner_route",
+                            "routes": {
+                                "execute": "retrieval_worker",
+                                "direct": "direct_answer",
+                                "clarify": "finalizer",
+                            },
+                        },
+                        "evidence_evaluator": {
+                            "route_fn": "evaluator_route",
+                            "routes": {
+                                "answer": "synthesizer",
+                                "replan": "replanner",
+                                "answer_budget_exhausted": "synthesizer",
+                            },
+                        },
+                    },
+                },
+            ),
+        ],
+    )
+    def test_materialized_builtin_graph_signatures_are_stable(self, spec_factory, expected):
+        materialized = TemplateCompiler().materialize_spec(spec_factory())
+        TemplateValidator().validate(materialized)
+        graph_spec = materialized["config"]["graph"]
+
+        assert [node["id"] for node in graph_spec["nodes"]] == expected["node_ids"]
+        assert {node["id"]: node["type"] for node in graph_spec["nodes"]} == expected["node_types"]
+        assert [(edge.get("from"), edge.get("to")) for edge in graph_spec["edges"] if not edge.get("conditional")] == expected["edges"]
+        assert {
+            edge["from"]: {"route_fn": edge.get("route_fn"), "routes": edge.get("routes")}
+            for edge in graph_spec["edges"]
+            if edge.get("conditional")
+        } == expected["conditional_edges"]
+        assert graph_spec["hitl_compiled"] is True
+        assert materialized["config"]["loop_policy"]["max_total_visits"] >= len(graph_spec["nodes"])
+
+        for node in graph_spec["nodes"]:
+            assert node["label"] == get_node_catalog()[node["type"]]["display_name"]
+            assert node["category"] == get_node_catalog()[node["type"]]["category"]
+            assert "observability" in node
+
+        assert TemplateCompiler().compile(materialized) is not None
+
+    def test_route_helpers_are_stable_for_current_state_keys(self):
+        assert router_route({"route": "document"}) == "document"
+        assert router_route({"route": "surprise"}) == "document"
+        assert planner_route({"route": "direct"}) == "direct"
+        assert planner_route({"route": "surprise"}) == "execute"
+        assert evaluator_route({"evaluator_route": "answer"}) == "answer"
+        assert evaluator_route({"evaluator_route": "surprise"}) == "answer"
+        assert hitl_gate_route({"hitl_gate_route": "continue_without"}) == "continue_without"
+        assert hitl_gate_route({}) == "continue_without"
+        assert hitl_gate_route_for("approval_1")({"hitl_gate_routes": {"approval_1": "approve"}}) == "approve"
+        assert hitl_gate_route_for("approval_1")({"hitl_gate_routes": {}}) == "continue_without"
+
     def test_rejects_router_rag_graph_topology_changes(self):
         spec = builtin_router_rag_v2_spec()
         spec["config"]["graph"]["nodes"].append({"id": "surprise", "type": "retrieval_worker"})
@@ -1106,6 +1299,7 @@ class TestRouterRagGraphToolConsumers:
         spec = {
             "schema_version": 2,
             "pattern_type": "custom_rag_agent",
+            "runtime": builtin_router_rag_v2_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                 "graph": {
@@ -1197,6 +1391,7 @@ class TestRouterRagGraphToolConsumers:
         spec = {
             "schema_version": 2,
             "pattern_type": "custom_rag_agent",
+            "runtime": builtin_evaluator_replanner_rag_v2_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["thread_shape", "document_evidence", "clarify_intent"],
                 "graph": {
@@ -1231,6 +1426,7 @@ class TestRouterRagGraphToolConsumers:
         spec = {
             "schema_version": 2,
             "pattern_type": "custom_rag_agent",
+            "runtime": builtin_evaluator_replanner_rag_v2_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                 "graph": {
@@ -1409,6 +1605,7 @@ class TestRouterRagGraphToolConsumers:
         spec = {
             "schema_version": 2,
             "pattern_type": "custom_rag_agent",
+            "runtime": builtin_evaluator_replanner_rag_v2_spec()["runtime"],
             "config": {
                 "allowed_tool_ids": ["document_evidence", "clarify_intent"],
                 "loop_policy": {

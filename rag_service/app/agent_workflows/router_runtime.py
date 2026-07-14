@@ -261,6 +261,78 @@ async def execute_compiled_rag_chat(
     )
 
 
+async def handle_router_rag_chat(
+    thread_id: str,
+    req: Any,
+    embed_model: str,
+    *,
+    resolved_spec: Dict[str, Any],
+    agent_run_context: Dict[str, Any],
+    trace_recorder: Any,
+    checkpointer: Any = None,
+    **_kwargs: Any,
+) -> Dict[str, Any]:
+    """Backward-compatible entry point for the router RAG runtime."""
+
+    return await execute_compiled_rag_chat(
+        thread_id,
+        req,
+        embed_model,
+        resolved_spec=resolved_spec,
+        agent_run_context=agent_run_context,
+        trace_recorder=trace_recorder,
+        checkpointer=checkpointer,
+    )
+
+
+async def handle_plan_execute_rag_chat(
+    thread_id: str,
+    req: Any,
+    embed_model: str,
+    *,
+    resolved_spec: Dict[str, Any],
+    agent_run_context: Dict[str, Any],
+    trace_recorder: Any,
+    checkpointer: Any = None,
+    **_kwargs: Any,
+) -> Dict[str, Any]:
+    """Backward-compatible entry point for the plan/execute RAG runtime."""
+
+    return await execute_compiled_rag_chat(
+        thread_id,
+        req,
+        embed_model,
+        resolved_spec=resolved_spec,
+        agent_run_context=agent_run_context,
+        trace_recorder=trace_recorder,
+        checkpointer=checkpointer,
+    )
+
+
+async def handle_evaluator_replanner_rag_chat(
+    thread_id: str,
+    req: Any,
+    embed_model: str,
+    *,
+    resolved_spec: Dict[str, Any],
+    agent_run_context: Dict[str, Any],
+    trace_recorder: Any,
+    checkpointer: Any = None,
+    **_kwargs: Any,
+) -> Dict[str, Any]:
+    """Backward-compatible entry point for the evaluator/replanner RAG runtime."""
+
+    return await execute_compiled_rag_chat(
+        thread_id,
+        req,
+        embed_model,
+        resolved_spec=resolved_spec,
+        agent_run_context=agent_run_context,
+        trace_recorder=trace_recorder,
+        checkpointer=checkpointer,
+    )
+
+
 async def _handle_compiled_rag_chat(
     thread_id: str,
     req: Any,

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy import or_
+from sqlalchemy import delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -75,6 +75,32 @@ class InterruptResolutionResult:
     outcome: str
     interrupt: Dict[str, Any]
     duplicate: bool = False
+
+
+@dataclass
+class AgentWorkflowVersion:
+    id: str
+    template_id: str
+    version: int
+    schema_version: int
+    spec_json: Dict[str, Any]
+    validation_result_json: Dict[str, Any]
+    metadata_json: Dict[str, Any]
+
+
+def _workflow_version(workflow: AgentWorkflow) -> AgentWorkflowVersion:
+    metadata = workflow.metadata_json if isinstance(workflow.metadata_json, dict) else {}
+    version = workflow.version
+    version_id = str(metadata.get("version_id") or f"{workflow.id}:v{version}")
+    return AgentWorkflowVersion(
+        id=version_id,
+        template_id=workflow.id,
+        version=version,
+        schema_version=workflow.schema_version,
+        spec_json=workflow.spec_json,
+        validation_result_json=workflow.validation_result_json,
+        metadata_json=metadata,
+    )
 
 
 def _compact_interrupt_value(value: Any, *, depth: int = 0) -> Any:
@@ -169,6 +195,9 @@ def _run_interrupt_compatibility(run: AgentRun) -> Dict[str, Any]:
         "schema_version": INTERRUPT_COMPATIBILITY_SCHEMA_VERSION,
         "spec_schema_version": spec.get("schema_version"),
         "workflow_id": run.workflow_id,
+        "template_id": run.template_id,
+        "template_version_id": run.template_version_id,
+        "template_version": run.template_version,
         "checkpoint_thread_id": run.checkpoint_thread_id,
         "resolved_spec_hash": _canonical_json_hash(spec),
     }
@@ -226,6 +255,8 @@ class AgentWorkflowRepository:
                 metadata = {
                     "source": "builtin",
                     "builtin_key": builtin_key,
+                    "version": spec_json.get("version") or 2,
+                    "version_id": f"{builtin_key}:v{spec_json.get('version') or 2}",
                 }
 
                 workflow = await self._get_workflow_by_builtin_key(session, builtin_key)
@@ -233,6 +264,7 @@ class AgentWorkflowRepository:
                     workflow = await self._get_workflow_by_name(session, workflow_def["name"])
                 if workflow is None:
                     workflow = AgentWorkflow(
+                        id=builtin_key,
                         name=workflow_def["name"],
                         description=workflow_def["description"],
                         visibility=workflow_def["visibility"],
@@ -255,6 +287,16 @@ class AgentWorkflowRepository:
                     replace_jsonb_field(workflow, "validation_result_json", validation_result)
                     replace_jsonb_field(workflow, "metadata_json", metadata)
                     workflow.updated_at = utc_now()
+
+    async def seed_builtin_templates(self) -> None:
+        """Compatibility alias for callers still using the legacy template name."""
+
+        await self.seed_builtin_workflows()
+
+    async def list_templates(self, *, include_custom: bool = False) -> list[AgentWorkflow]:
+        """Compatibility alias for legacy template callers."""
+
+        return await self.list_workflows(include_custom=include_custom)
 
     async def _get_workflow_by_name(self, session: AsyncSession, name: str) -> Optional[AgentWorkflow]:
         result = await session.execute(select(AgentWorkflow).where(AgentWorkflow.name == name))
@@ -317,6 +359,37 @@ class AgentWorkflowRepository:
                 return None
             return workflow
 
+    async def get_template(self, template_id: str, *, include_custom: bool = False) -> Optional[AgentWorkflow]:
+        """Compatibility alias for legacy template callers."""
+
+        return await self.get_workflow(template_id, include_custom=include_custom)
+
+    async def get_template_with_current_version(
+        self,
+        template_id: str,
+        *,
+        include_custom: bool = False,
+    ) -> tuple[Optional[AgentWorkflow], Optional[AgentWorkflowVersion]]:
+        workflow = await self.get_workflow(template_id, include_custom=include_custom)
+        if workflow is None:
+            return None, None
+        return workflow, _workflow_version(workflow)
+
+    async def get_template_version(
+        self,
+        template_id: str,
+        version: int,
+        *,
+        include_custom: bool = False,
+    ) -> tuple[Optional[AgentWorkflow], Optional[AgentWorkflowVersion]]:
+        workflow, current_version = await self.get_template_with_current_version(
+            template_id,
+            include_custom=include_custom,
+        )
+        if current_version is None or current_version.version != int(version):
+            return None, None
+        return workflow, current_version
+
     async def save_custom_workflow(
         self,
         *,
@@ -325,6 +398,7 @@ class AgentWorkflowRepository:
         spec_json: Dict[str, Any],
         description: str = "",
         visibility: str = "internal",
+        increment_version: bool = True,
     ) -> AgentWorkflow:
         """Create or update a mutable internal/custom workflow spec."""
         if workflow_id in builtin_workflow_keys():
@@ -344,12 +418,21 @@ class AgentWorkflowRepository:
             if existing_named_workflow is not None and (workflow is None or existing_named_workflow.id != workflow.id):
                 raise ValueError(f"agent workflow name already exists: {name}")
             previous_metadata = workflow.metadata_json if workflow and isinstance(workflow.metadata_json, dict) else {}
+            previous_version = previous_metadata.get("version")
+            try:
+                next_version = int(previous_version) + 1 if workflow is not None and increment_version else int(previous_version or 1)
+            except (TypeError, ValueError):
+                next_version = 1
+            workflow_key = workflow_id or spec_json.get("pattern_type") or name
             metadata = {
                 **previous_metadata,
                 "source": "custom",
+                "version": next_version,
+                "version_id": f"{workflow_key}:v{next_version}",
             }
             if workflow is None:
                 workflow = AgentWorkflow(
+                    id=workflow_id or str(uuid.uuid4()),
                     name=name,
                     description=description,
                     visibility=visibility,
@@ -375,6 +458,27 @@ class AgentWorkflowRepository:
 
             await session.flush()
             return workflow
+
+    async def create_internal_template_version(
+        self,
+        *,
+        template_id: str,
+        name: str,
+        spec_json: Dict[str, Any],
+        description: str = "",
+        visibility: str = "internal",
+        changelog: str = "",
+        increment_version: bool = True,
+    ) -> tuple[AgentWorkflow, AgentWorkflowVersion]:
+        workflow = await self.save_custom_workflow(
+            workflow_id=template_id,
+            name=name,
+            description=description,
+            visibility=visibility,
+            spec_json=spec_json,
+            increment_version=increment_version,
+        )
+        return workflow, _workflow_version(workflow)
 
     async def get_run(self, run_id: str) -> Optional[AgentRun]:
         session = await self._get_session()
@@ -520,18 +624,29 @@ class AgentWorkflowRepository:
         self,
         *,
         thread_id: str,
-        workflow_id: str,
+        workflow_id: Optional[str] = None,
+        template_id: Optional[str] = None,
+        template_version_id: Optional[str] = None,
+        template_version: Optional[int] = None,
         resolved_spec_json: Dict[str, Any],
         user_id: Optional[str] = None,
         checkpoint_thread_id: Optional[str] = None,
     ) -> AgentRun:
+        resolved_workflow_id = workflow_id or template_id
+        if not resolved_workflow_id:
+            raise ValueError("workflow_id or template_id is required")
+        run_metadata: Dict[str, Any] = {}
+        if template_version_id is not None:
+            run_metadata["template_version_id"] = template_version_id
+        if template_version is not None:
+            run_metadata["template_version"] = template_version
         run_id = str(uuid.uuid4())
         run = AgentRun(
             id=run_id,
             thread_id=thread_id,
             user_id=user_id,
-            workflow_id=workflow_id,
-            run_metadata_json={},
+            workflow_id=resolved_workflow_id,
+            run_metadata_json=run_metadata,
             resolved_spec_json=resolved_spec_json,
             status=RUN_STATUS_RUNNING,
             checkpoint_thread_id=checkpoint_thread_id or run_id,

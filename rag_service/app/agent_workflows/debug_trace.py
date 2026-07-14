@@ -1382,6 +1382,7 @@ class AgentTraceRecorder:
             "chat_turn_id": chat_turn_id,
             "user_id": getattr(run, "user_id", None),
             "workflow_id": getattr(run, "workflow_id", None),
+            "template_id": getattr(run, "template_id", None) or getattr(run, "workflow_id", None),
             "pattern_type": self.resolved_spec.get("pattern_type"),
             "status": getattr(run, "status", None),
             "started_at": iso_utc_z(run.started_at) if getattr(run, "started_at", None) else None,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -42,6 +43,7 @@ class ThreadAgentConfigValidationRequest(BaseModel):
 
 class InternalAgentWorkflowSaveRequest(BaseModel):
     workflow_id: Optional[str] = Field(default=None, min_length=1)
+    template_id: Optional[str] = Field(default=None, min_length=1)
     name: str = Field(..., min_length=1)
     description: str = ""
     spec_json: Dict[str, Any] = Field(default_factory=dict)
@@ -63,6 +65,7 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
     return {
         "id": workflow.id,
         "workflow_id": workflow.id,
+        "template_id": workflow.id,
         "name": workflow.name,
         "description": workflow.description,
         "visibility": workflow.visibility,
@@ -71,6 +74,12 @@ def _workflow_payload(workflow) -> Dict[str, Any]:
         "created_at": iso_utc_z(workflow.created_at) if workflow.created_at else None,
         "updated_at": iso_utc_z(workflow.updated_at) if workflow.updated_at else None,
     }
+
+
+def _agent_pattern_payload(workflow) -> Dict[str, Any]:
+    payload = _workflow_payload(workflow)
+    payload["template_id"] = workflow.id
+    return payload
 
 
 def _workflow_spec_payload(workflow) -> Dict[str, Any]:
@@ -85,7 +94,10 @@ def _workflow_spec_payload(workflow) -> Dict[str, Any]:
             "pattern_type": None,
         }
     return {
+        "id": str((workflow.metadata_json or {}).get("version_id") or f"{workflow.id}:v{workflow.version}"),
         "workflow_id": workflow.id,
+        "template_id": workflow.id,
+        "version": workflow.version,
         "schema_version": workflow.schema_version,
         "spec_json": workflow.spec_json if isinstance(workflow.spec_json, dict) else {},
         "validation": validation,
@@ -256,7 +268,12 @@ async def list_agent_workflows():
                 compatible_workflows.append(workflow)
         except Exception:
             continue
-    return {"agent_workflows": [_workflow_payload(workflow) for workflow in compatible_workflows]}
+    workflow_payloads = [_workflow_payload(workflow) for workflow in compatible_workflows]
+    agent_pattern_payloads = [_agent_pattern_payload(workflow) for workflow in compatible_workflows]
+    return {
+        "agent_workflows": workflow_payloads,
+        "agent_patterns": agent_pattern_payloads,
+    }
 
 
 @router.post("/agent-workflows/validate")
@@ -273,9 +290,12 @@ async def get_agent_workflow(workflow_id: str):
     workflow = await repo.get_workflow(workflow_id, include_custom=include_custom)
     if not workflow or not _is_compatible_workflow(workflow):
         raise HTTPException(status_code=404, detail="Agent workflow not found")
+    spec_payload = _workflow_spec_payload(workflow)
     return {
         "agent_workflow": _workflow_payload(workflow),
-        "spec": _workflow_spec_payload(workflow),
+        "agent_pattern": _agent_pattern_payload(workflow),
+        "spec": spec_payload,
+        "current_version": spec_payload,
         "capabilities": _capabilities_for_workflow(workflow.spec_json if isinstance(workflow.spec_json, dict) else {}),
     }
 
@@ -284,20 +304,27 @@ async def get_agent_workflow(workflow_id: str):
 async def save_internal_agent_workflow(req: InternalAgentWorkflowSaveRequest):
     repo = AgentWorkflowRepository()
     try:
-        workflow_id = (req.workflow_id or "").strip() or None
+        workflow_id = (req.workflow_id or req.template_id or "").strip() or None
+        if workflow_id is None:
+            workflow_id = f"custom_pat_{uuid.uuid4().hex[:12]}"
         spec_json = with_default_runtime(dict(req.spec_json))
-        spec_json["pattern_type"] = str(spec_json.get("pattern_type") or "custom_rag_agent")
-        workflow = await repo.save_custom_workflow(
-            workflow_id=workflow_id,
+        spec_json["pattern_type"] = workflow_id
+        workflow, version = await repo.create_internal_template_version(
+            template_id=workflow_id,
             name=req.name,
             description=req.description,
             spec_json=spec_json,
+            increment_version=False,
         )
     except (TemplateValidationError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc).replace("agent workflows", "agent workflow templates")
+        raise HTTPException(status_code=400, detail=detail) from exc
+    version_payload = _workflow_spec_payload(workflow)
     return {
         "agent_workflow": _workflow_payload(workflow),
-        "spec": _workflow_spec_payload(workflow),
+        "agent_pattern": _agent_pattern_payload(workflow),
+        "spec": version_payload,
+        "version": version_payload,
     }
 
 
@@ -307,10 +334,15 @@ async def delete_internal_agent_workflow(workflow_id: str):
     try:
         workflow = await repo.mark_custom_workflow_deleted(workflow_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc).replace("agent workflows", "agent workflow templates")
+        raise HTTPException(status_code=400, detail=detail) from exc
     if workflow is None:
         raise HTTPException(status_code=404, detail="Internal agent workflow not found")
-    return {"status": "deleted", "agent_workflow": _workflow_payload(workflow)}
+    return {
+        "status": "deleted",
+        "agent_workflow": _workflow_payload(workflow),
+        "agent_pattern": _agent_pattern_payload(workflow),
+    }
 
 
 @router.get("/internal/agent-workflows/catalog")
@@ -347,9 +379,12 @@ async def get_internal_agent_workflow(workflow_id: str):
     workflow = await repo.get_workflow(workflow_id, include_custom=True)
     if not workflow or workflow.is_builtin:
         raise HTTPException(status_code=404, detail="Internal agent workflow not found")
+    spec_payload = _workflow_spec_payload(workflow)
     return {
         "agent_workflow": _workflow_payload(workflow),
-        "spec": _workflow_spec_payload(workflow),
+        "agent_pattern": _agent_pattern_payload(workflow),
+        "spec": spec_payload,
+        "current_version": spec_payload,
     }
 
 
@@ -364,7 +399,15 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     thread_settings = await get_thread_settings(thread_id)
     agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
     agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
-    workflow_id = agent_settings.get("workflow_id") or default_agent_workflow_key()
+    legacy_agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
+    legacy_agent_settings = legacy_agent_settings if isinstance(legacy_agent_settings, dict) else {}
+    workflow_id = (
+        agent_settings.get("workflow_id")
+        or agent_settings.get("template_id")
+        or legacy_agent_settings.get("workflow_id")
+        or legacy_agent_settings.get("template_id")
+        or default_agent_workflow_key()
+    )
 
     workflow = await repo.get_workflow(
         workflow_id,
@@ -397,6 +440,8 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
         return {
             "valid": False,
             "workflow_id": workflow.id,
+            "template_id": workflow.id,
+            "template_version": workflow.version,
             "validation": report,
             "resolved_spec_json": candidate,
         }
@@ -410,6 +455,8 @@ async def validate_thread_agent_config(thread_id: str, req: ThreadAgentConfigVal
     return {
         "valid": True,
         "workflow_id": workflow.id,
+        "template_id": workflow.id,
+        "template_version": workflow.version,
         "validation": TemplateValidator().report(resolved_spec),
         "resolved_spec_json": resolved_spec,
     }

@@ -70,6 +70,7 @@ HITL_GATE_KEYS = {
     "reject_behavior",
     "max_interrupts_per_run",
 }
+REQUIRED_TOOL_NODE_TYPES = {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker"}
 
 
 def workflow_required_tool_ids(spec: Dict[str, Any]) -> set[str]:
@@ -81,6 +82,20 @@ def workflow_required_tool_ids(spec: Dict[str, Any]) -> set[str]:
 def workflow_node_tool_requirements(spec: Dict[str, Any]) -> Dict[str, str]:
     required_tool_ids = workflow_required_tool_ids(spec)
     return _workflow_node_tool_requirements_for_allowed_tools(spec, required_tool_ids)
+
+
+def _workflow_required_tool_ids_from_nodes(spec: Dict[str, Any]) -> set[str]:
+    config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+    graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    required_tool_ids: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_type = node.get("type")
+        if isinstance(node_type, str) and node_type in REQUIRED_TOOL_NODE_TYPES:
+            required_tool_ids.update(node_type_allowed_tool_contract_ids(node_type))
+    return required_tool_ids
 
 
 def _workflow_node_tool_requirements_for_allowed_tools(spec: Dict[str, Any], allowed_tool_ids: set[str]) -> Dict[str, str]:
@@ -150,6 +165,16 @@ class TemplateValidator:
         config = config if isinstance(config, dict) else {}
         allowed_tool_ids = config.get("allowed_tool_ids") if isinstance(config.get("allowed_tool_ids"), list) else []
         known_tool_ids = _known_tool_ids()
+        required_tool_ids = _workflow_required_tool_ids_from_nodes(spec_obj) or workflow_required_tool_ids(spec_obj)
+        missing_required_tool_ids = set(required_tool_ids - set(allowed_tool_ids))
+        for error in errors:
+            prefix = "missing required allowed_tool_ids: "
+            if isinstance(error, str) and error.startswith(prefix):
+                missing_required_tool_ids.update(
+                    item.strip()
+                    for item in error[len(prefix):].split(",")
+                    if item.strip()
+                )
         return {
             "valid": not errors,
             "errors": errors,
@@ -159,8 +184,8 @@ class TemplateValidator:
             "runtime": normalize_runtime_for_validation(spec_obj.get("runtime")),
             "supported_pattern_types": sorted([*builtin_workflow_keys(), "custom_rag_agent"]),
             "allowed_tool_ids": allowed_tool_ids,
-            "required_tool_ids": sorted(workflow_required_tool_ids(spec_obj)),
-            "missing_required_tool_ids": [],
+            "required_tool_ids": sorted(required_tool_ids),
+            "missing_required_tool_ids": sorted(missing_required_tool_ids),
             "unknown_allowed_tool_ids": sorted(set(allowed_tool_ids) - known_tool_ids),
         }
 
@@ -172,6 +197,7 @@ class TemplateValidator:
         config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
         graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
         nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+        node_types_by_id: Dict[str, str] = {}
         for node in nodes:
             if not isinstance(node, dict):
                 continue
@@ -179,14 +205,13 @@ class TemplateValidator:
             node_type = node.get("type")
             if not isinstance(node_id, str) or not isinstance(node_type, str):
                 continue
+            node_types_by_id[node_id] = node_type
             candidate_tool_ids = node_type_allowed_tool_contract_ids(node_type)
-            if node_type in {"context_loader", "hitl_gate"} or not candidate_tool_ids:
+            if node_type not in REQUIRED_TOOL_NODE_TYPES or not candidate_tool_ids:
                 continue
             compatible_tool_ids = sorted(candidate_tool_ids & allowed_tool_ids)
             if not compatible_tool_ids:
-                errors.append(
-                    f"{pattern_type} node {node_id} has no compatible allowed_tool_ids for node type {node_type}"
-                )
+                errors.append(f"missing required allowed_tool_ids: {', '.join(sorted(candidate_tool_ids))}")
         for caller_node, contract_id in sorted(node_tool_requirements.items()):
             if contract_id not in allowed_tool_ids:
                 continue
@@ -194,7 +219,12 @@ class TemplateValidator:
             if not contracts:
                 errors.append(f"{pattern_type} required tool contract is not registered: {contract_id}")
                 continue
-            if not any(caller_node in (contract.get("allowed_caller_nodes") or []) for contract in contracts):
+            caller_node_type = node_types_by_id.get(caller_node)
+            if not any(
+                caller_node in (contract.get("allowed_caller_nodes") or [])
+                or caller_node_type in (contract.get("allowed_node_types") or [])
+                for contract in contracts
+            ):
                 errors.append(
                     f"{pattern_type} tool contract {contract_id} is not allowed from node {caller_node}"
                 )

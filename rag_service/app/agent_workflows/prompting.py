@@ -192,6 +192,11 @@ def build_agent_workflow_prompt_preview(
     client_locale: Optional[str] = None,
     client_now_iso: Optional[str] = None,
 ) -> str:
+    if prompt_profile is None:
+        prompt_profile = {
+            "plan_execute_rag_agent": "planner",
+            "evaluator_replanner_rag_agent": "evaluator_replanner",
+        }.get(str(pattern_id or ""), "router")
     state = {
         "question": QUESTION_PLACEHOLDER,
         "pre_fetch_bundle": {},

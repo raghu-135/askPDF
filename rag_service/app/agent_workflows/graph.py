@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-import hashlib
 import time
 from copy import deepcopy
-from datetime import timedelta
 from typing import Any, Callable, Dict, List, Literal, Optional, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -15,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from app.agent.reasoning import normalize_ai_response
-from app.agent.tool_contract import compact_tool_event, normalize_tool_result
+from app.agent.tool_contract import normalize_tool_result
 from app.agent.tool_registry import get_tool_contract_id, validate_tool_call_allowed
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.models.retry import invoke_with_retry
@@ -29,24 +26,50 @@ from app.agent_workflows.prompting import (
     build_replanner_prompt,
     build_router_prompt,
 )
+from app.agent_workflows.compiler import TemplateMaterializer
+from app.agent_workflows.decision_nodes import JsonDecisionNodeSpec, invoke_json_decision_node
+from app.agent_workflows.evidence import (
+    append_evidence_packet as _append_evidence_packet,
+    combine_evidence as _combine_evidence,
+    evidence_text_limit as _evidence_text_limit,
+    final_context_from_state as _final_context_from_state,
+    format_prefetch_summary as _format_prefetch_summary,
+    prefetch_refs as _prefetch_refs,
+    state_evidence_refs as _state_evidence_refs,
+)
+from app.agent_workflows.events import append_node_event, append_tool_event
+from app.agent_workflows.planning import (
+    WORKER_NODE_ORDER,
+    current_replan_count as _current_replan_count,
+    fallback_clarification_options as _fallback_clarification_options,
+    infer_required_plan_steps,
+    normalize_evaluator_report,
+    normalize_execution_plan,
+    normalize_replanner_execution_plan as _normalize_replanner_execution_plan,
+    replan_budget as _replan_budget,
+)
 from app.agent_workflows.node_catalog import (
     get_node_type_metadata,
     node_type_capabilities,
     node_type_default_max_visits,
     node_type_max_visits,
 )
-from app.agent_workflows.route_registry import route_function_allowed_for_node_type
+from app.agent_workflows.workers import ToolWorkerSpec, run_tool_worker
+from app.agent_workflows.routes import (
+    evaluator_route,
+    hitl_gate_route,
+    hitl_gate_route_for,
+    planner_route,
+    route_function_for_edge as _route_function_for_edge,
+    router_route,
+)
 from app.agent_workflows.trace import (
-    available_document_refs,
     compact_preview,
     compact_refs,
     normalize_warnings,
     prompt_summary,
     refs_from_artifacts,
-    refs_from_documents,
-    refs_from_messages,
     refs_from_timeline,
-    refs_from_web,
     selected_and_skipped_workers,
 )
 from app.time_utils import iso_utc_z, utc_now
@@ -58,38 +81,6 @@ logger = logging.getLogger(__name__)
 FINAL_REVIEW_GATE_ID = "human_review_gate"
 WEB_APPROVAL_GATE_ID = "web_approval_gate"
 NODE_RUNTIME_CONFIG_KEY = "agent_workflow_node_runtime"
-WORKER_NODE_ORDER = [
-    "retrieval_worker",
-    "memory_worker",
-    "timeline_worker",
-    "web_worker",
-]
-
-
-TEMPORAL_PLAN_RE = re.compile(
-    r"\b("
-    r"latest|most\s+recent|recent|newest|current|first|earliest|oldest|last|"
-    r"since|before|after|earlier|later|timeline|chronolog(?:y|ical)|sequence|order|"
-    r"when|date|time"
-    r")\b",
-    re.IGNORECASE,
-)
-
-MEMORY_PLAN_RE = re.compile(
-    r"\b("
-    r"previously|prior|earlier\s+(answer|conversation|chat|discussion)|"
-    r"remember|discussed|talked\s+about|said\s+before|you\s+said|we\s+(said|discussed|talked)"
-    r")\b",
-    re.IGNORECASE,
-)
-
-DOCUMENT_PLAN_RE = re.compile(
-    r"\b("
-    r"document|pdf|paper|uploaded|upload|file|source|page|section|chapter|"
-    r"quote|cite|citation|excerpt|summar(?:y|ize)|abstract"
-    r")\b",
-    re.IGNORECASE,
-)
 
 
 def _node_runtime(config: Optional[RunnableConfig]) -> Dict[str, Any]:
@@ -340,27 +331,18 @@ def _append_event(
     started: Optional[float] = None,
     config: Optional[RunnableConfig] = None,
 ) -> List[Dict[str, Any]]:
-    event = {
-        "node": _runtime_node_id(config, node),
-        "node_type": _runtime_node_type(config, node),
-        **(data or {}),
-    }
-    visit_index = _runtime_visit_index(config)
-    if visit_index is not None:
-        event["visit_index"] = visit_index
-    if started is not None:
-        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
-        completed_at = utc_now()
-        event["elapsed_ms"] = elapsed_ms
-        event.setdefault("start_time", iso_utc_z(completed_at - timedelta(milliseconds=elapsed_ms)))
-        event.setdefault("end_time", iso_utc_z(completed_at))
-    telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
-    if isinstance(telemetry_sink, dict):
-        telemetry_sink.setdefault("node_events", []).append(dict(event))
-    trace_recorder = ((config or {}).get("configurable") or {}).get("trace_recorder")
-    if trace_recorder is not None and hasattr(trace_recorder, "record_node_event"):
-        trace_recorder.record_node_event(dict(event))
-    return [*state.get("node_events", []), event]
+    return append_node_event(
+        state,
+        node,
+        data,
+        started=started,
+        config=config,
+        runtime_node_id=_runtime_node_id,
+        runtime_node_type=_runtime_node_type,
+        runtime_visit_index=_runtime_visit_index,
+        utc_now=utc_now,
+        iso_utc_z=iso_utc_z,
+    )
 
 
 def _append_tool_event(
@@ -370,20 +352,14 @@ def _append_tool_event(
     tool_input: Any = None,
     config: Optional[RunnableConfig] = None,
 ) -> List[Dict[str, Any]]:
-    event = compact_tool_event(payload, tool_input=tool_input)
-    caller_node_type = event.get("caller_node_type") or _runtime_node_type(config, str(event.get("caller_node") or ""))
-    if caller_node_type:
-        event["caller_node_type"] = caller_node_type
-    visit_index = _runtime_visit_index(config)
-    if visit_index is not None:
-        event["caller_visit_index"] = visit_index
-    telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
-    if isinstance(telemetry_sink, dict):
-        telemetry_sink.setdefault("tool_events", []).append(dict(event))
-    trace_recorder = ((config or {}).get("configurable") or {}).get("trace_recorder")
-    if trace_recorder is not None and hasattr(trace_recorder, "record_tool_event"):
-        trace_recorder.record_tool_event(dict(event))
-    return [*state.get("tool_events", []), event]
+    return append_tool_event(
+        state,
+        payload,
+        tool_input=tool_input,
+        config=config,
+        runtime_node_type=_runtime_node_type,
+        runtime_visit_index=_runtime_visit_index,
+    )
 
 
 def _error_summary(exc: Exception, *, code: str) -> Dict[str, Any]:
@@ -646,227 +622,6 @@ def _llm_retry_observer() -> tuple[List[Dict[str, Any]], Callable[[Dict[str, Any
     return attempts, observe
 
 
-def _format_prefetch_summary(bundle: Dict[str, Any]) -> str:
-    parts = []
-    if bundle.get("recent_history_text"):
-        parts.append("Recent conversation:\n" + bundle["recent_history_text"])
-    if bundle.get("semantic_history_text"):
-        parts.append("Semantic memory:\n" + bundle["semantic_history_text"])
-    if bundle.get("document_evidence_text"):
-        parts.append("Document evidence:\n" + bundle["document_evidence_text"])
-    documents = bundle.get("documents") or []
-    if documents:
-        names = [f"- {doc.get('file_name')} ({doc.get('file_hash')})" for doc in documents[:12]]
-        parts.append("Available documents:\n" + "\n".join(names))
-    return "\n\n".join(parts).strip() or "No pre-fetched context is available."
-
-
-def _combine_evidence(existing: Any, addition: Any, *, label: str, limit: Optional[int] = None) -> str:
-    existing_text = str(existing or "").strip()
-    addition_text = str(addition or "").strip()
-    if not addition_text:
-        return existing_text
-    labeled = f"[{label}]\n{addition_text}"
-    combined = "\n\n".join(part for part in (existing_text, labeled) if part).strip()
-    if isinstance(limit, int) and limit > 0 and len(combined) > limit:
-        return combined[-limit:].lstrip()
-    return combined
-
-
-EVIDENCE_PACKET_LIMIT = 12
-EVIDENCE_PACKET_CONTENT_LIMIT = 2_000
-EVIDENCE_TEXT_LIMIT = EVIDENCE_PACKET_LIMIT * (EVIDENCE_PACKET_CONTENT_LIMIT + 128)
-FINAL_CONTEXT_CHAR_LIMIT = EVIDENCE_TEXT_LIMIT
-
-
-def _context_policy(state: RouterRagState) -> Dict[str, Any]:
-    policy = state.get("context_policy")
-    return policy if isinstance(policy, dict) else {}
-
-
-def _context_policy_int(state: RouterRagState, key: str, default: int) -> int:
-    try:
-        value = int(_context_policy(state).get(key, default))
-    except (TypeError, ValueError):
-        value = default
-    return max(1, value)
-
-
-def _evidence_packet_limit(state: RouterRagState) -> int:
-    return _context_policy_int(state, "evidence_packet_limit", EVIDENCE_PACKET_LIMIT)
-
-
-def _evidence_packet_content_limit(state: RouterRagState) -> int:
-    return _context_policy_int(state, "evidence_packet_content_limit", EVIDENCE_PACKET_CONTENT_LIMIT)
-
-
-def _evidence_text_limit(state: RouterRagState) -> int:
-    packet_limit = _evidence_packet_limit(state)
-    content_limit = _evidence_packet_content_limit(state)
-    if "context_policy" not in state:
-        return EVIDENCE_TEXT_LIMIT
-    return max(1, packet_limit * (content_limit + 128))
-
-
-def _final_context_char_limit(state: RouterRagState) -> int:
-    return _context_policy_int(state, "final_context_char_limit", _evidence_text_limit(state) or FINAL_CONTEXT_CHAR_LIMIT)
-
-
-def _evidence_dedupe_enabled(state: RouterRagState) -> bool:
-    value = _context_policy(state).get("evidence_dedupe", True)
-    return value is not False
-
-
-def _evidence_compression_mode(state: RouterRagState) -> str:
-    mode = _context_policy(state).get("evidence_compression", "compact")
-    return str(mode or "compact")
-
-
-def _canonical_json(value: Any) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
-    except Exception:
-        return json.dumps(str(value), ensure_ascii=True)
-
-
-def _normalized_evidence_text(value: Any) -> str:
-    return " ".join(str(value or "").split())
-
-
-def _short_hash(value: Any) -> str:
-    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()[:16]
-
-
-def _packet_fingerprint(*, kind: str, content: str, refs: Dict[str, Any]) -> str:
-    return _short_hash(
-        {
-            "kind": kind,
-            "content": _normalized_evidence_text(content),
-            "refs": refs or {},
-        }
-    )
-
-
-def _dedupe_evidence_packets(packets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    seen: set[str] = set()
-    deduped_reversed: List[Dict[str, Any]] = []
-    for packet in reversed(packets):
-        fingerprint = str(packet.get("fingerprint") or "")
-        if not fingerprint:
-            fingerprint = _packet_fingerprint(
-                kind=str(packet.get("kind") or packet.get("producer_node_type") or "evidence"),
-                content=str(packet.get("content") or ""),
-                refs=packet.get("refs") if isinstance(packet.get("refs"), dict) else {},
-            )
-            packet = {**packet, "fingerprint": fingerprint}
-        if fingerprint in seen:
-            continue
-        seen.add(fingerprint)
-        deduped_reversed.append(packet)
-    return list(reversed(deduped_reversed))
-
-
-def _compact_context_text(text: str, *, limit: int, mode: str) -> str:
-    value = str(text or "").strip()
-    if not value:
-        return ""
-    if mode == "compact":
-        lines: List[str] = []
-        seen_lines: set[str] = set()
-        for raw_line in value.splitlines():
-            line = " ".join(raw_line.split())
-            if not line:
-                if lines and lines[-1]:
-                    lines.append("")
-                continue
-            key = line.lower()
-            if key in seen_lines:
-                continue
-            seen_lines.add(key)
-            lines.append(line)
-        value = "\n".join(lines).strip()
-    if isinstance(limit, int) and limit > 0 and len(value) > limit:
-        return value[-limit:].lstrip()
-    return value
-
-
-def _evidence_packets(state: RouterRagState) -> List[Dict[str, Any]]:
-    packets = state.get("evidence_packets")
-    normalized = [item for item in packets if isinstance(item, dict)] if isinstance(packets, list) else []
-    if _evidence_dedupe_enabled(state):
-        normalized = _dedupe_evidence_packets(normalized)
-    return normalized
-
-
-def _evidence_context_from_packets(state: RouterRagState) -> str:
-    parts = []
-    for packet in _evidence_packets(state)[-_evidence_packet_limit(state):]:
-        content = compact_preview(packet.get("content"), limit=_evidence_packet_content_limit(state))
-        if not content:
-            continue
-        kind = str(packet.get("kind") or packet.get("producer_node_type") or "evidence")
-        producer = str(packet.get("producer_node_id") or packet.get("producer_node_type") or "unknown")
-        parts.append(f"[{kind} evidence from {producer}]\n{content}")
-    return _compact_context_text(
-        "\n\n".join(parts).strip(),
-        limit=_final_context_char_limit(state),
-        mode=_evidence_compression_mode(state),
-    )
-
-
-def _final_context_from_state(state: RouterRagState) -> tuple[str, str]:
-    policy = _context_policy(state)
-    if policy.get("final_prompt_assembly") == "evidence_packets":
-        packet_context = _evidence_context_from_packets(state)
-        if packet_context:
-            return packet_context, "evidence_packets"
-    if state.get("evidence"):
-        return _compact_context_text(
-            str(state.get("evidence") or ""),
-            limit=_final_context_char_limit(state),
-            mode=_evidence_compression_mode(state),
-        ), "worker_evidence"
-    return _compact_context_text(
-        _format_prefetch_summary(state.get("pre_fetch_bundle") or {}),
-        limit=_final_context_char_limit(state),
-        mode=_evidence_compression_mode(state),
-    ), "prefetch"
-
-
-def _append_evidence_packet(
-    state: RouterRagState,
-    config: RunnableConfig,
-    *,
-    kind: str,
-    content: Any,
-    refs: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
-    text = compact_preview(content, limit=_evidence_packet_content_limit(state))
-    if not text:
-        return _evidence_packets(state)
-    node_id = _runtime_node_id(config, kind)
-    node_type = _runtime_node_type(config, kind)
-    visit_index = _runtime_visit_index(config) or 1
-    refs = refs or {}
-    fingerprint = _packet_fingerprint(kind=kind, content=text, refs=refs)
-    existing_packets = _evidence_packets(state)
-    if _evidence_dedupe_enabled(state):
-        existing_packets = [packet for packet in existing_packets if packet.get("fingerprint") != fingerprint]
-    packet = {
-        "id": f"{node_id}:visit:{visit_index}:{kind}:{len(existing_packets) + 1}",
-        "producer_node_id": node_id,
-        "producer_node_type": node_type,
-        "visit_index": visit_index,
-        "kind": kind,
-        "content": text,
-        "content_hash": _short_hash(_normalized_evidence_text(text)),
-        "fingerprint": fingerprint,
-        "refs": refs,
-        "created_at": iso_utc_z(utc_now()),
-    }
-    return [*existing_packets, packet][-_evidence_packet_limit(state):]
-
-
 def _should_skip_worker(state: RouterRagState, worker_node: str) -> bool:
     plan = state.get("execution_plan")
     if not isinstance(plan, list):
@@ -891,55 +646,6 @@ def _skipped_worker_update(
     }
     _log_node_end(state, worker_node, started, data)
     return {"node_events": _append_event(state, worker_node, data, started=started, config=config)}
-
-
-def infer_required_plan_steps(question: Optional[str]) -> List[str]:
-    """Return worker nodes that should be present for obvious query intent cues."""
-
-    text = str(question or "")
-    required: List[str] = []
-    if TEMPORAL_PLAN_RE.search(text):
-        required.append("timeline_worker")
-    if MEMORY_PLAN_RE.search(text) and "memory_worker" not in required and "timeline_worker" not in required:
-        required.append("memory_worker")
-    if DOCUMENT_PLAN_RE.search(text) and "retrieval_worker" not in required:
-        required.append("retrieval_worker")
-    return required
-
-
-def _ordered_plan_steps(steps: List[str]) -> List[str]:
-    return [node for node in WORKER_NODE_ORDER if node in steps]
-
-
-def _fallback_clarification_options() -> List[str]:
-    return [
-        "Do I want an answer based on the uploaded document evidence?",
-        "Do I want an answer based on what we discussed earlier in this thread?",
-        "Do I want an answer based on the timeline or order of events in this thread?",
-    ]
-
-
-def _prefetch_refs(bundle: Dict[str, Any]) -> Dict[str, Any]:
-    return compact_refs(
-        {
-            "recent_messages": refs_from_messages(bundle.get("recent_message_refs")),
-            "semantic_matches": refs_from_messages(bundle.get("semantic_memory_refs") or bundle.get("used_chat_ids")),
-            "document_matches": refs_from_documents(bundle.get("document_sources")),
-            "web_sources": refs_from_web(bundle.get("web_sources")),
-            "available_documents": available_document_refs(bundle.get("documents")),
-        }
-    )
-
-
-def _state_evidence_refs(state: RouterRagState) -> Dict[str, Any]:
-    return compact_refs(
-        {
-            "document_matches": refs_from_documents(state.get("document_sources")),
-            "web_sources": refs_from_web(state.get("web_sources")),
-            "messages": refs_from_messages(state.get("used_chat_ids")),
-        }
-    )
-
 
 def _hitl_gates_from_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
     return policy.get("gates") if isinstance(policy.get("gates"), dict) else {}
@@ -1049,145 +755,6 @@ def normalize_hitl_policy_for_thread_settings(policy: Any, thread_settings: Any 
     return normalized
 
 
-def normalize_execution_plan(
-    parsed: Dict[str, Any],
-    *,
-    use_web_search: bool,
-    question: Optional[str] = None,
-) -> Dict[str, Any]:
-    allowed_routes = {"execute", "direct", "clarify"}
-    route = parsed.get("route") if parsed.get("route") in allowed_routes else "execute"
-    required_steps = infer_required_plan_steps(question)
-    normalization_notes: List[str] = []
-    if route == "direct" and required_steps:
-        route = "execute"
-        normalization_notes.append("direct_route_clamped_to_execute")
-    raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
-    steps: List[str] = []
-    if isinstance(raw_steps, list):
-        for step in raw_steps:
-            if isinstance(step, str):
-                node = step
-            elif isinstance(step, dict):
-                node = step.get("node") or step.get("worker") or step.get("id")
-            else:
-                continue
-            if node in WORKER_NODE_ORDER and node not in steps:
-                steps.append(node)
-    if not use_web_search and "web_worker" in steps:
-        steps = [step for step in steps if step != "web_worker"]
-        normalization_notes.append("web_worker_removed_when_web_search_disabled")
-    if route == "execute":
-        for required_step in required_steps:
-            if required_step not in steps:
-                steps.append(required_step)
-    if route == "execute" and not steps:
-        steps = ["retrieval_worker"]
-        normalization_notes.append("empty_execute_plan_defaulted_to_retrieval_worker")
-    steps = _ordered_plan_steps(steps)
-    if route != "execute":
-        steps = []
-    clarification_options = parsed.get("clarification_options")
-    if route == "clarify" and not isinstance(clarification_options, list):
-        clarification_options = _fallback_clarification_options()
-    return {
-        "route": route,
-        "route_reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),
-        "execution_plan": steps,
-        "clarification_options": clarification_options if route == "clarify" else None,
-        "normalization_notes": normalization_notes,
-    }
-
-
-def _risk_level(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    return text if text in {"low", "medium", "high"} else "medium"
-
-
-def _bounded_string_list(value: Any, *, limit: int = 5, chars: int = 240) -> List[str]:
-    if not isinstance(value, list):
-        return []
-    result: List[str] = []
-    for item in value[:limit]:
-        text = compact_preview(str(item), limit=chars)
-        if text:
-            result.append(text)
-    return result
-
-
-def _bounded_confidence(value: Any) -> float:
-    try:
-        return max(0.0, min(1.0, float(value)))
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _replan_budget(state: RouterRagState) -> int:
-    try:
-        return max(1, int(state.get("replans", 1)))
-    except (TypeError, ValueError):
-        return 1
-
-
-def _current_replan_count(state: RouterRagState) -> int:
-    try:
-        return max(0, int(state.get("replan_count", 0)))
-    except (TypeError, ValueError):
-        return 0
-
-
-def normalize_evaluator_report(parsed: Dict[str, Any], state: RouterRagState) -> Dict[str, Any]:
-    sufficient = parsed.get("sufficient")
-    if not isinstance(sufficient, bool):
-        sufficient = bool(state.get("evidence")) and bool(state.get("document_sources") or state.get("web_sources") or state.get("used_chat_ids"))
-    confidence = _bounded_confidence(parsed.get("confidence"))
-    missing_evidence = _bounded_string_list(parsed.get("missing_evidence"))
-    recommended_next_steps = _bounded_string_list(parsed.get("recommended_next_steps"))
-    report = {
-        "sufficient": sufficient,
-        "confidence": confidence,
-        "missing_evidence": missing_evidence,
-        "citation_risk": _risk_level(parsed.get("citation_risk")),
-        "contradiction_risk": _risk_level(parsed.get("contradiction_risk")),
-        "recommended_next_steps": recommended_next_steps,
-        "reason": compact_preview(str(parsed.get("reason") or ""), limit=500),
-    }
-    return report
-
-
-def _normalize_replanner_execution_plan(
-    parsed: Dict[str, Any],
-    *,
-    use_web_search: bool,
-    allowed_tool_ids: Any,
-) -> Dict[str, Any]:
-    normalization_notes: List[str] = []
-    raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
-    steps: List[str] = []
-    if isinstance(raw_steps, list):
-        for step in raw_steps:
-            if isinstance(step, str):
-                node = step
-            elif isinstance(step, dict):
-                node = step.get("node") or step.get("worker") or step.get("id")
-            else:
-                continue
-            if node in WORKER_NODE_ORDER and node not in steps:
-                steps.append(node)
-    if not use_web_search and "web_worker" in steps:
-        steps = [step for step in steps if step != "web_worker"]
-        normalization_notes.append("web_worker_removed_when_web_search_disabled")
-    allowed_ids = set(allowed_tool_ids if isinstance(allowed_tool_ids, list) else [])
-    if "live_web_recon" not in allowed_ids and "web_worker" in steps:
-        steps = [step for step in steps if step != "web_worker"]
-        normalization_notes.append("web_worker_removed_when_tool_disallowed")
-    return {
-        "execution_plan": _ordered_plan_steps(steps),
-        "reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),
-        "normalization_notes": normalization_notes,
-    }
-
-
 class NodeRegistry:
     """Registry of safe backend node implementations for compiled v2 patterns."""
 
@@ -1291,35 +858,29 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_planner_prompt(state)
-        retry_attempts, retry_observer = _llm_retry_observer()
-        prompt_details = prompt_summary(
-            "Planner Node Prompt",
-            "You are a strict planner for a scoped RAG workflow.",
-            prompt,
-        )
-        response = await _invoke_llm_for_node(
-            llm.ainvoke,
-            [
-                SystemMessage(content="You are a strict planner for a scoped RAG workflow."),
-                HumanMessage(content=prompt),
-            ],
-            state=state,
-            config=config,
-            node="planner",
+        response, parsed, prompt_details, retry_attempts = await invoke_json_decision_node(
+            state,
+            config,
             started=started,
-            retry_observer=retry_observer,
-            retry_attempts=retry_attempts,
-            model_name=state.get("llm_model"),
-            failure_data={
-                "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
-                "input_preview": {
-                    "question": compact_preview(state.get("question")),
-                    "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
+            spec=JsonDecisionNodeSpec(
+                node_name="planner",
+                prompt_section="Planner Node Prompt",
+                system_message="You are a strict planner for a scoped RAG workflow.",
+                prompt=prompt,
+                failure_data={
+                    "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+                    "input_preview": {
+                        "question": compact_preview(state.get("question")),
+                        "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
+                    },
                 },
-                "prompt_summary": prompt_details,
-            },
+            ),
+            llm=llm,
+            llm_retry_observer=_llm_retry_observer,
+            prompt_summary=prompt_summary,
+            invoke_llm_for_node=_invoke_llm_for_node,
+            safe_json_object=_safe_json_object,
         )
-        parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
         normalized = normalize_execution_plan(
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
@@ -1367,35 +928,29 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_router_prompt(state)
-        retry_attempts, retry_observer = _llm_retry_observer()
-        prompt_details = prompt_summary(
-            "Router Node Prompt",
-            "You are a strict router for a RAG workflow.",
-            prompt,
-        )
-        response = await _invoke_llm_for_node(
-            llm.ainvoke,
-            [
-                SystemMessage(content="You are a strict router for a RAG workflow."),
-                HumanMessage(content=prompt),
-            ],
-            state=state,
-            config=config,
-            node="router",
+        response, parsed, prompt_details, retry_attempts = await invoke_json_decision_node(
+            state,
+            config,
             started=started,
-            retry_observer=retry_observer,
-            retry_attempts=retry_attempts,
-            model_name=state.get("llm_model"),
-            failure_data={
-                "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
-                "input_preview": {
-                    "question": compact_preview(state.get("question")),
-                    "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
+            spec=JsonDecisionNodeSpec(
+                node_name="router",
+                prompt_section="Router Node Prompt",
+                system_message="You are a strict router for a RAG workflow.",
+                prompt=prompt,
+                failure_data={
+                    "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
+                    "input_preview": {
+                        "question": compact_preview(state.get("question")),
+                        "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
+                    },
                 },
-                "prompt_summary": prompt_details,
-            },
+            ),
+            llm=llm,
+            llm_retry_observer=_llm_retry_observer,
+            prompt_summary=prompt_summary,
+            invoke_llm_for_node=_invoke_llm_for_node,
+            safe_json_object=_safe_json_object,
         )
-        parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
         allowed_routes = {"document", "memory", "timeline", "direct", "clarify"}
         if state.get("use_web_search", False):
             allowed_routes.add("web")
@@ -1437,307 +992,179 @@ class NodeRegistry:
 
     async def retrieval_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        if _should_skip_worker(state, "retrieval_worker"):
-            return _skipped_worker_update(state, config, "retrieval_worker", started, "not_selected_by_plan")
-        tool_name = "search_documents"
-        tool_input = {"query": state["question"], "max_results": 10}
-        tool_config = _tool_config_for_node(
+        return await run_tool_worker(
             state,
             config,
-            caller_node="retrieval_worker",
-            tool_name=tool_name,
             started=started,
-        )
-        raw = await _invoke_tool_for_node(
-            search_documents,
-            tool_input,
-            state=state,
-            config=tool_config,
-            node="retrieval_worker",
-            started=started,
-        )
-        payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
-        artifacts = payload.get("artifacts") or {}
-        document_sources = [*state.get("document_sources", []), *artifacts.get("document_sources", [])]
-        web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
-        evidence = _combine_evidence(
-            state.get("evidence"),
-            payload.get("content", ""),
-            label="Document evidence",
-            limit=_evidence_text_limit(state),
-        )
-        evidence_packets = _append_evidence_packet(
-            state,
-            config,
-            kind="document",
-            content=payload.get("content", ""),
-            refs=refs_from_artifacts(artifacts),
-        )
-        data = {
-            "status": "completed" if payload.get("ok", True) else "failed",
-            "warnings": normalize_warnings(payload.get("warnings")),
-            "input_refs": _state_evidence_refs(state),
-            "input_preview": {
-                "question": compact_preview(state.get("question")),
-                "previous_evidence": compact_preview(state.get("evidence")),
-            },
-            "evidence_chars": len(str(evidence or "")),
-            "evidence_packet_count": len(evidence_packets),
-            "document_source_count": len(document_sources),
-            "web_source_count": len(web_sources),
-            "output_refs": compact_refs(
-                {
-                    **_state_evidence_refs(
-                        {
-                            **state,
-                            "document_sources": document_sources,
-                            "web_sources": web_sources,
-                        }
-                    ),
-                    **refs_from_artifacts(artifacts),
-                }
+            spec=ToolWorkerSpec(
+                node_name="retrieval_worker",
+                tool_name="search_documents",
+                evidence_kind="document",
+                evidence_label="Document evidence",
+                tool=search_documents,
+                tool_input=lambda current: {"query": current["question"], "max_results": 10},
+                state_update=lambda current, _payload, artifacts, _evidence, _packets: {
+                    "document_sources": [*current.get("document_sources", []), *artifacts.get("document_sources", [])],
+                    "web_sources": [*current.get("web_sources", []), *artifacts.get("web_sources", [])],
+                },
             ),
-            "output_preview": {"evidence": compact_preview(evidence)},
-        }
-        _log_node_end(state, "retrieval_worker", started, data)
-        return {
-            "evidence": evidence,
-            "document_sources": document_sources,
-            "web_sources": web_sources,
-            "evidence_packets": evidence_packets,
-            "node_events": _append_event(state, "retrieval_worker", data, started=started, config=config),
-            "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
-        }
+            should_skip_worker=_should_skip_worker,
+            skipped_worker_update=_skipped_worker_update,
+            tool_config_for_node=_tool_config_for_node,
+            invoke_tool_for_node=_invoke_tool_for_node,
+            normalize_tool_result=normalize_tool_result,
+            combine_evidence=_combine_evidence,
+            evidence_text_limit=_evidence_text_limit,
+            append_evidence_packet=_append_evidence_packet,
+            refs_from_artifacts=refs_from_artifacts,
+            state_evidence_refs=_state_evidence_refs,
+            compact_refs=compact_refs,
+            compact_preview=compact_preview,
+            normalize_warnings=normalize_warnings,
+            log_node_end=_log_node_end,
+            append_event=_append_event,
+            append_tool_event=_append_tool_event,
+        )
 
     async def memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        if _should_skip_worker(state, "memory_worker"):
-            return _skipped_worker_update(state, config, "memory_worker", started, "not_selected_by_plan")
-        tool_name = "search_conversation_history"
-        tool_input = {"query": state["question"], "max_results": 10}
-        tool_config = _tool_config_for_node(
+        return await run_tool_worker(
             state,
             config,
-            caller_node="memory_worker",
-            tool_name=tool_name,
             started=started,
-        )
-        raw = await _invoke_tool_for_node(
-            search_conversation_history,
-            tool_input,
-            state=state,
-            config=tool_config,
-            node="memory_worker",
-            started=started,
-        )
-        payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
-        artifacts = payload.get("artifacts") or {}
-        evidence = _combine_evidence(
-            state.get("evidence"),
-            payload.get("content", ""),
-            label="Memory evidence",
-            limit=_evidence_text_limit(state),
-        )
-        evidence_packets = _append_evidence_packet(
-            state,
-            config,
-            kind="memory",
-            content=payload.get("content", ""),
-            refs=refs_from_artifacts(artifacts),
-        )
-        used_chat_ids = [*state.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])]
-        data = {
-            "status": "completed" if payload.get("ok", True) else "failed",
-            "warnings": normalize_warnings(payload.get("warnings")),
-            "input_refs": _state_evidence_refs(state),
-            "input_preview": {
-                "question": compact_preview(state.get("question")),
-                "previous_evidence": compact_preview(state.get("evidence")),
-            },
-            "evidence_chars": len(str(evidence or "")),
-            "evidence_packet_count": len(evidence_packets),
-            "used_chat_id_count": len(used_chat_ids),
-            "output_refs": compact_refs(
-                {
-                    **_state_evidence_refs({**state, "used_chat_ids": used_chat_ids}),
-                    **refs_from_artifacts(artifacts),
-                }
+            spec=ToolWorkerSpec(
+                node_name="memory_worker",
+                tool_name="search_conversation_history",
+                evidence_kind="memory",
+                evidence_label="Memory evidence",
+                tool=search_conversation_history,
+                tool_input=lambda current: {"query": current["question"], "max_results": 10},
+                state_update=lambda current, _payload, artifacts, _evidence, _packets: {
+                    "used_chat_ids": [*current.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])],
+                },
             ),
-            "output_preview": {"evidence": compact_preview(evidence)},
-        }
-        _log_node_end(state, "memory_worker", started, data)
-        return {
-            "evidence": evidence,
-            "evidence_packets": evidence_packets,
-            "used_chat_ids": used_chat_ids,
-            "node_events": _append_event(state, "memory_worker", data, started=started, config=config),
-            "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
-        }
+            should_skip_worker=_should_skip_worker,
+            skipped_worker_update=_skipped_worker_update,
+            tool_config_for_node=_tool_config_for_node,
+            invoke_tool_for_node=_invoke_tool_for_node,
+            normalize_tool_result=normalize_tool_result,
+            combine_evidence=_combine_evidence,
+            evidence_text_limit=_evidence_text_limit,
+            append_evidence_packet=_append_evidence_packet,
+            refs_from_artifacts=refs_from_artifacts,
+            state_evidence_refs=_state_evidence_refs,
+            compact_refs=compact_refs,
+            compact_preview=compact_preview,
+            normalize_warnings=normalize_warnings,
+            log_node_end=_log_node_end,
+            append_event=_append_event,
+            append_tool_event=_append_tool_event,
+        )
 
     async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        if _should_skip_worker(state, "timeline_worker"):
-            return _skipped_worker_update(state, config, "timeline_worker", started, "not_selected_by_plan")
-        tool_name = "search_thread_timeline"
-        tool_input = {"query": state["question"], "sources": "all", "order": "relevance", "max_results": 10}
-        tool_config = _tool_config_for_node(
+        return await run_tool_worker(
             state,
             config,
-            caller_node="timeline_worker",
-            tool_name=tool_name,
             started=started,
-        )
-        raw = await _invoke_tool_for_node(
-            search_thread_timeline,
-            tool_input,
-            state=state,
-            config=tool_config,
-            node="timeline_worker",
-            started=started,
-        )
-        payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
-        artifacts = payload.get("artifacts") or {}
-        evidence = _combine_evidence(
-            state.get("evidence"),
-            payload.get("content", ""),
-            label="Timeline evidence",
-            limit=_evidence_text_limit(state),
-        )
-        evidence_packets = _append_evidence_packet(
-            state,
-            config,
-            kind="timeline",
-            content=payload.get("content", ""),
-            refs=refs_from_artifacts(artifacts),
-        )
-        data = {
-            "status": "completed" if payload.get("ok", True) else "failed",
-            "warnings": normalize_warnings(payload.get("warnings")),
-            "input_refs": _state_evidence_refs(state),
-            "input_preview": {
-                "question": compact_preview(state.get("question")),
-                "previous_evidence": compact_preview(state.get("evidence")),
-            },
-            "evidence_chars": len(str(evidence or "")),
-            "evidence_packet_count": len(evidence_packets),
-            "timeline_event_count": len(artifacts.get("timeline_events", []) or []),
-            "output_refs": compact_refs(
-                {
-                    **_state_evidence_refs(state),
-                    "timeline_events": refs_from_timeline(artifacts.get("timeline_events")),
-                }
+            spec=ToolWorkerSpec(
+                node_name="timeline_worker",
+                tool_name="search_thread_timeline",
+                evidence_kind="timeline",
+                evidence_label="Timeline evidence",
+                tool=search_thread_timeline,
+                tool_input=lambda current: {"query": current["question"], "sources": "all", "order": "relevance", "max_results": 10},
+                state_update=lambda _current, _payload, artifacts, _evidence, _packets: {
+                    "timeline_event_count": len(artifacts.get("timeline_events", []) or []),
+                    "timeline_refs": {"timeline_events": refs_from_timeline(artifacts.get("timeline_events"))},
+                },
             ),
-            "output_preview": {"evidence": compact_preview(evidence)},
-        }
-        _log_node_end(state, "timeline_worker", started, data)
-        return {
-            "evidence": evidence,
-            "evidence_packets": evidence_packets,
-            "node_events": _append_event(state, "timeline_worker", data, started=started, config=config),
-            "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
-        }
+            should_skip_worker=_should_skip_worker,
+            skipped_worker_update=_skipped_worker_update,
+            tool_config_for_node=_tool_config_for_node,
+            invoke_tool_for_node=_invoke_tool_for_node,
+            normalize_tool_result=normalize_tool_result,
+            combine_evidence=_combine_evidence,
+            evidence_text_limit=_evidence_text_limit,
+            append_evidence_packet=_append_evidence_packet,
+            refs_from_artifacts=refs_from_artifacts,
+            state_evidence_refs=_state_evidence_refs,
+            compact_refs=compact_refs,
+            compact_preview=compact_preview,
+            normalize_warnings=normalize_warnings,
+            log_node_end=_log_node_end,
+            append_event=_append_event,
+            append_tool_event=_append_tool_event,
+        )
 
     async def web_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
-        if isinstance(state.get("execution_plan"), list) and not state.get("use_web_search", False):
-            return _skipped_worker_update(state, config, "web_worker", started, "web_search_disabled")
-        if _should_skip_worker(state, "web_worker"):
-            return _skipped_worker_update(state, config, "web_worker", started, "not_selected_by_plan")
-        tool_name = "search_web"
-        tool_config = _tool_config_for_node(
+        return await run_tool_worker(
             state,
             config,
-            caller_node="web_worker",
-            tool_name=tool_name,
             started=started,
-        )
-        tool_input = state["question"]
-        raw = await _invoke_tool_for_node(
-            search_web,
-            tool_input,
-            state=state,
-            config=tool_config,
-            node="web_worker",
-            started=started,
-        )
-        payload = normalize_tool_result(raw, tool_name=tool_name, config=tool_config)
-        artifacts = payload.get("artifacts") or {}
-        web_sources = [*state.get("web_sources", []), *artifacts.get("web_sources", [])]
-        evidence = _combine_evidence(
-            state.get("evidence"),
-            payload.get("content", ""),
-            label="Web evidence",
-            limit=_evidence_text_limit(state),
-        )
-        evidence_packets = _append_evidence_packet(
-            state,
-            config,
-            kind="web",
-            content=payload.get("content", ""),
-            refs=refs_from_artifacts(artifacts),
-        )
-        data = {
-            "status": "completed" if payload.get("ok", True) else "failed",
-            "warnings": normalize_warnings(payload.get("warnings")),
-            "input_refs": _state_evidence_refs(state),
-            "input_preview": {
-                "question": compact_preview(state.get("question")),
-                "previous_evidence": compact_preview(state.get("evidence")),
-            },
-            "evidence_chars": len(str(evidence or "")),
-            "evidence_packet_count": len(evidence_packets),
-            "web_source_count": len(web_sources),
-            "output_refs": compact_refs(
-                {
-                    **_state_evidence_refs({**state, "web_sources": web_sources}),
-                    **refs_from_artifacts(artifacts),
-                }
+            spec=ToolWorkerSpec(
+                node_name="web_worker",
+                tool_name="search_web",
+                evidence_kind="web",
+                evidence_label="Web evidence",
+                tool=search_web,
+                tool_input=lambda current: current["question"],
+                skip_reason=lambda current: (
+                    "web_search_disabled"
+                    if isinstance(current.get("execution_plan"), list) and not current.get("use_web_search", False)
+                    else None
+                ),
+                state_update=lambda current, _payload, artifacts, _evidence, _packets: {
+                    "web_sources": [*current.get("web_sources", []), *artifacts.get("web_sources", [])],
+                },
             ),
-            "output_preview": {"evidence": compact_preview(evidence)},
-        }
-        _log_node_end(state, "web_worker", started, data)
-        return {
-            "evidence": evidence,
-            "evidence_packets": evidence_packets,
-            "web_sources": web_sources,
-            "node_events": _append_event(state, "web_worker", data, started=started, config=config),
-            "tool_events": _append_tool_event(state, payload, tool_input=tool_input, config=config),
-        }
+            should_skip_worker=_should_skip_worker,
+            skipped_worker_update=_skipped_worker_update,
+            tool_config_for_node=_tool_config_for_node,
+            invoke_tool_for_node=_invoke_tool_for_node,
+            normalize_tool_result=normalize_tool_result,
+            combine_evidence=_combine_evidence,
+            evidence_text_limit=_evidence_text_limit,
+            append_evidence_packet=_append_evidence_packet,
+            refs_from_artifacts=refs_from_artifacts,
+            state_evidence_refs=_state_evidence_refs,
+            compact_refs=compact_refs,
+            compact_preview=compact_preview,
+            normalize_warnings=normalize_warnings,
+            log_node_end=_log_node_end,
+            append_event=_append_event,
+            append_tool_event=_append_tool_event,
+        )
 
     async def evidence_evaluator(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_evaluator_prompt(state)
-        retry_attempts, retry_observer = _llm_retry_observer()
-        prompt_details = prompt_summary(
-            "Evidence Evaluator Prompt",
-            "You are a strict evidence evaluator for a bounded RAG workflow.",
-            prompt,
-        )
-        response = await _invoke_llm_for_node(
-            llm.ainvoke,
-            [
-                SystemMessage(content="You are a strict evidence evaluator for a bounded RAG workflow."),
-                HumanMessage(content=prompt),
-            ],
-            state=state,
-            config=config,
-            node="evidence_evaluator",
+        response, parsed, prompt_details, retry_attempts = await invoke_json_decision_node(
+            state,
+            config,
             started=started,
-            retry_observer=retry_observer,
-            retry_attempts=retry_attempts,
-            model_name=state.get("llm_model"),
-            failure_data={
-                "input_refs": _state_evidence_refs(state),
-                "input_preview": {
-                    "question": compact_preview(state.get("question")),
-                    "execution_plan": state.get("execution_plan"),
-                    "evidence": compact_preview(state.get("evidence")),
+            spec=JsonDecisionNodeSpec(
+                node_name="evidence_evaluator",
+                prompt_section="Evidence Evaluator Prompt",
+                system_message="You are a strict evidence evaluator for a bounded RAG workflow.",
+                prompt=prompt,
+                failure_data={
+                    "input_refs": _state_evidence_refs(state),
+                    "input_preview": {
+                        "question": compact_preview(state.get("question")),
+                        "execution_plan": state.get("execution_plan"),
+                        "evidence": compact_preview(state.get("evidence")),
+                    },
                 },
-                "prompt_summary": prompt_details,
-            },
+            ),
+            llm=llm,
+            llm_retry_observer=_llm_retry_observer,
+            prompt_summary=prompt_summary,
+            invoke_llm_for_node=_invoke_llm_for_node,
+            safe_json_object=_safe_json_object,
         )
-        parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
         report = normalize_evaluator_report(parsed, state)
         replan_count = _current_replan_count(state)
         replans = _replan_budget(state)
@@ -1812,36 +1239,30 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_replanner_prompt(state)
-        retry_attempts, retry_observer = _llm_retry_observer()
-        prompt_details = prompt_summary(
-            "Replanner Prompt",
-            "You are a strict replanner for a bounded RAG workflow.",
-            prompt,
-        )
-        response = await _invoke_llm_for_node(
-            llm.ainvoke,
-            [
-                SystemMessage(content="You are a strict replanner for a bounded RAG workflow."),
-                HumanMessage(content=prompt),
-            ],
-            state=state,
-            config=config,
-            node="replanner",
+        response, parsed, prompt_details, retry_attempts = await invoke_json_decision_node(
+            state,
+            config,
             started=started,
-            retry_observer=retry_observer,
-            retry_attempts=retry_attempts,
-            model_name=state.get("llm_model"),
-            failure_data={
-                "input_refs": _state_evidence_refs(state),
-                "input_preview": {
-                    "question": compact_preview(state.get("question")),
-                    "current_execution_plan": state.get("execution_plan"),
-                    "evaluator_report": state.get("evaluator_report"),
+            spec=JsonDecisionNodeSpec(
+                node_name="replanner",
+                prompt_section="Replanner Prompt",
+                system_message="You are a strict replanner for a bounded RAG workflow.",
+                prompt=prompt,
+                failure_data={
+                    "input_refs": _state_evidence_refs(state),
+                    "input_preview": {
+                        "question": compact_preview(state.get("question")),
+                        "current_execution_plan": state.get("execution_plan"),
+                        "evaluator_report": state.get("evaluator_report"),
+                    },
                 },
-                "prompt_summary": prompt_details,
-            },
+            ),
+            llm=llm,
+            llm_retry_observer=_llm_retry_observer,
+            prompt_summary=prompt_summary,
+            invoke_llm_for_node=_invoke_llm_for_node,
+            safe_json_object=_safe_json_object,
         )
-        parsed = _safe_json_object(str(getattr(response, "content", "") or ""))
         normalized = _normalize_replanner_execution_plan(
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
@@ -2230,59 +1651,7 @@ class NodeRegistry:
             "node_events": _append_event(state, node_id, data, started=started, config=config),
         }
 
-def router_route(state: RouterRagState) -> str:
-    return state.get("route") or "document"
-
-
-def planner_route(state: RouterRagState) -> str:
-    route = state.get("route")
-    return route if route in {"execute", "direct", "clarify"} else "execute"
-
-
-def evaluator_route(state: RouterRagState) -> str:
-    route = state.get("evaluator_route")
-    return route if route in {"answer", "replan", "answer_budget_exhausted"} else "answer"
-
-
-def hitl_gate_route(state: RouterRagState) -> str:
-    route = state.get("hitl_gate_route")
-    return route if route in {"approve", "continue_without"} else "continue_without"
-
-
-def hitl_gate_route_for(gate_id: str) -> Callable[[RouterRagState], Any]:
-    def _route(state: RouterRagState) -> Any:
-        routes = state.get("hitl_gate_routes") if isinstance(state.get("hitl_gate_routes"), dict) else {}
-        route = routes.get(gate_id, state.get("hitl_gate_route"))
-        return route if isinstance(route, str) and route else "continue_without"
-
-    return _route
-
-
-def _route_function_for_edge(
-    edge: Dict[str, Any],
-    *,
-    source: str,
-    node_types: Dict[str, str],
-) -> Callable[[RouterRagState], Any]:
-    route_fn_id = edge.get("route_fn")
-    source_type = node_types.get(source)
-    if isinstance(route_fn_id, str) and route_fn_id:
-        if source_type and not route_function_allowed_for_node_type(route_fn_id, source_type):
-            raise ValueError(f"Route function {route_fn_id} is not allowed from node type {source_type}")
-        if route_fn_id == "hitl_gate_route":
-            return hitl_gate_route_for(str(source))
-        if route_fn_id == "planner_route":
-            return planner_route
-        if route_fn_id == "evaluator_route":
-            return evaluator_route
-        if route_fn_id == "router_route":
-            return router_route
-        raise ValueError(f"Unknown route function: {route_fn_id}")
-
-    raise ValueError(f"Conditional edge from {source} must declare route_fn")
-
-
-class TemplateCompiler:
+class TemplateCompiler(TemplateMaterializer):
     """Compile validated v2 template specs into LangGraph StateGraph instances."""
 
     def __init__(self, registry: Optional[NodeRegistry] = None):
@@ -2327,209 +1696,3 @@ class TemplateCompiler:
             workflow.add_edge(source_ref, target_ref)
 
         return workflow.compile(checkpointer=checkpointer)
-
-    def materialize_spec(
-        self,
-        spec: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        materialized = deepcopy(spec)
-        config = materialized.get("config") if isinstance(materialized.get("config"), dict) else {}
-        graph_spec = config.get("graph") if isinstance(config.get("graph"), dict) else {}
-        hitl_policy = config.get("hitl_policy") if isinstance(config.get("hitl_policy"), dict) else {}
-        explicit_graph = self._with_explicit_route_functions(graph_spec)
-        compiled_graph = self._with_hitl_policy_gates(
-            explicit_graph,
-            hitl_policy=hitl_policy,
-        )
-        config["graph"] = self._with_catalog_node_metadata(compiled_graph)
-        config["loop_policy"] = self._with_materialized_loop_policy(
-            config.get("loop_policy"),
-            graph_spec=config["graph"],
-        )
-        materialized["config"] = config
-        return materialized
-
-    def _with_materialized_loop_policy(self, loop_policy: Any, *, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
-        policy = dict(loop_policy) if isinstance(loop_policy, dict) else {}
-        nodes = [node for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
-        node_count = len(nodes)
-        try:
-            max_total_visits = int(policy.get("max_total_visits", 0))
-        except (TypeError, ValueError):
-            max_total_visits = 0
-        if node_count and max_total_visits < node_count:
-            policy["max_total_visits"] = node_count
-        node_visit_limits = policy.get("node_visit_limits")
-        if isinstance(node_visit_limits, dict):
-            policy["node_visit_limits"] = dict(node_visit_limits)
-        elif node_visit_limits is not None:
-            policy["node_visit_limits"] = {}
-        return policy
-
-    def _with_explicit_route_functions(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
-        nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
-        node_types = {
-            str(node.get("id")): str(node.get("type"))
-            for node in nodes
-            if isinstance(node.get("id"), str) and isinstance(node.get("type"), str)
-        }
-        route_by_type = {
-            "router": "router_route",
-            "planner": "planner_route",
-            "evidence_evaluator": "evaluator_route",
-            "hitl_gate": "hitl_gate_route",
-        }
-        edges = []
-        for raw_edge in graph_spec.get("edges", []):
-            if not isinstance(raw_edge, dict):
-                continue
-            edge = dict(raw_edge)
-            if edge.get("conditional") and not edge.get("route_fn"):
-                route_fn = route_by_type.get(node_types.get(str(edge.get("from")), ""))
-                if route_fn:
-                    edge["route_fn"] = route_fn
-            edges.append(edge)
-        return {**graph_spec, "nodes": nodes, "edges": edges}
-
-    def _with_catalog_node_metadata(self, graph_spec: Dict[str, Any]) -> Dict[str, Any]:
-        nodes = []
-        for raw_node in graph_spec.get("nodes", []):
-            if not isinstance(raw_node, dict):
-                continue
-            node = dict(raw_node)
-            node_type = node.get("type")
-            metadata = get_node_type_metadata(str(node_type)) if isinstance(node_type, str) else {}
-            display_name = metadata.get("display_name")
-            category = metadata.get("category")
-            if isinstance(display_name, str) and display_name:
-                node["label"] = display_name
-            if isinstance(category, str) and category:
-                node["category"] = category
-            for key in (
-                "capabilities",
-                "allowed_route_functions",
-                "allowed_tool_contract_ids",
-                "state_reads",
-                "state_writes",
-                "prompt_slots",
-                "context_policy",
-                "observability",
-                "max_instances",
-            ):
-                if key in metadata:
-                    node[key] = deepcopy(metadata[key])
-            nodes.append(node)
-        return {**graph_spec, "nodes": nodes}
-
-    def _with_hitl_policy_gates(self, graph_spec: Dict[str, Any], *, hitl_policy: Dict[str, Any]) -> Dict[str, Any]:
-        nodes = [dict(node) for node in graph_spec.get("nodes", []) if isinstance(node, dict)]
-        edges = [dict(edge) for edge in graph_spec.get("edges", []) if isinstance(edge, dict)]
-        if graph_spec.get("hitl_compiled") or not bool(hitl_policy.get("enabled")):
-            return {**graph_spec, "nodes": nodes, "edges": edges}
-
-        node_types = {
-            str(node.get("id")): str(node.get("type"))
-            for node in nodes
-            if isinstance(node.get("id"), str) and isinstance(node.get("type"), str)
-        }
-        existing_node_ids = set(node_types)
-        gates = _hitl_gates_from_policy(hitl_policy)
-        for gate_id, raw_gate in gates.items():
-            if not isinstance(gate_id, str) or gate_id in existing_node_ids:
-                continue
-            gate = _normalize_hitl_gate_policy(gate_id, raw_gate)
-            if gate.get("enabled", True) is False:
-                continue
-            phase = str(gate.get("phase") or "before")
-            if phase == "inside_tool":
-                continue
-            target_node_id = self._resolve_hitl_target_node_id(gate, node_types)
-            if not target_node_id:
-                continue
-
-            nodes.append({"id": gate_id, "type": "hitl_gate"})
-            existing_node_ids.add(gate_id)
-            routes = self._hitl_gate_routes(gate, target_node_id, edges, phase=phase)
-            if phase == "before":
-                edges = self._insert_before_gate(edges, gate_id, target_node_id)
-            elif phase == "after":
-                edges = self._insert_after_gate(edges, gate_id, target_node_id)
-            else:
-                continue
-            edges.append({"from": gate_id, "conditional": True, "route_fn": "hitl_gate_route", "routes": routes})
-
-        return {"nodes": nodes, "edges": edges, "hitl_compiled": True}
-
-    def _resolve_hitl_target_node_id(self, gate: Dict[str, Any], node_types: Dict[str, str]) -> Optional[str]:
-        target = gate.get("target") if isinstance(gate.get("target"), dict) else {}
-        node_id = target.get("node_id")
-        if isinstance(node_id, str) and node_id in node_types:
-            return node_id
-        node_type = target.get("node_type")
-        if isinstance(node_type, str):
-            matches = [candidate for candidate, candidate_type in node_types.items() if candidate_type == node_type]
-            if len(matches) == 1:
-                return matches[0]
-        return None
-
-    def _default_bypass_target(self, target_node_id: str, edges: List[Dict[str, Any]]) -> str:
-        for edge in edges:
-            if edge.get("from") == target_node_id and isinstance(edge.get("to"), str):
-                return str(edge["to"])
-        return "END"
-
-    def _hitl_gate_routes(self, gate: Dict[str, Any], target_node_id: str, edges: List[Dict[str, Any]], *, phase: str) -> Dict[str, str]:
-        configured = dict(gate.get("routes") or {})
-        mode = str(gate.get("mode") or "approval")
-        bypass = self._default_bypass_target(target_node_id, edges)
-        routes: Dict[str, str] = {}
-        if mode == "choice":
-            options = gate.get("options") if isinstance(gate.get("options"), list) else []
-            for option in options:
-                if not isinstance(option, dict):
-                    continue
-                option_id = option.get("id")
-                option_target = option.get("target_node_id")
-                if isinstance(option_id, str) and isinstance(option_target, str):
-                    routes[option_id] = option_target
-            routes["continue_without"] = configured.get("continue_without") or bypass
-            if "reject" in configured:
-                routes["reject"] = configured["reject"]
-            return routes
-        routes["approve"] = configured.get("approve") or (target_node_id if phase == "before" else bypass)
-        routes["continue_without"] = configured.get("continue_without") or bypass
-        if "reject" in configured:
-            routes["reject"] = configured["reject"]
-        if "edit" in configured:
-            routes["edit"] = configured["edit"]
-        return routes
-
-    def _insert_before_gate(self, edges: List[Dict[str, Any]], gate_id: str, target_node_id: str) -> List[Dict[str, Any]]:
-        updated: List[Dict[str, Any]] = []
-        for edge in edges:
-            edge = dict(edge)
-            if edge.get("conditional") and isinstance(edge.get("routes"), dict):
-                routes = dict(edge["routes"])
-                changed = False
-                for route, target in list(routes.items()):
-                    if target == target_node_id:
-                        routes[route] = gate_id
-                        changed = True
-                if changed:
-                    edge["routes"] = routes
-                updated.append(edge)
-                continue
-            if edge.get("to") == target_node_id:
-                edge["to"] = gate_id
-            updated.append(edge)
-        return updated
-
-    def _insert_after_gate(self, edges: List[Dict[str, Any]], gate_id: str, target_node_id: str) -> List[Dict[str, Any]]:
-        updated: List[Dict[str, Any]] = []
-        for edge in edges:
-            edge = dict(edge)
-            if edge.get("from") == target_node_id:
-                edge["from"] = gate_id
-            updated.append(edge)
-        updated.append({"from": target_node_id, "to": gate_id})
-        return updated

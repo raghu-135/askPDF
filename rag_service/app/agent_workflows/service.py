@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import logging
 import os
+from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 from app.agent_workflows.checkpointing import open_agent_checkpointer
@@ -15,6 +16,18 @@ from app.db import get_thread_settings
 
 
 logger = logging.getLogger(__name__)
+
+
+def _workflow_version_info(workflow: Any) -> SimpleNamespace:
+    metadata = workflow.metadata_json if isinstance(getattr(workflow, "metadata_json", None), dict) else {}
+    try:
+        version = int(metadata.get("version") or getattr(workflow, "schema_version", 1) or 1)
+    except (TypeError, ValueError):
+        version = 1
+    return SimpleNamespace(
+        id=str(metadata.get("version_id") or f"{workflow.id}:v{version}"),
+        version=version,
+    )
 
 
 class AgentRunService:
@@ -39,8 +52,16 @@ class AgentRunService:
         thread_settings = await get_thread_settings(thread_id)
         agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
+        legacy_agent_settings = thread_settings.get("agent_pattern") if isinstance(thread_settings, dict) else None
+        legacy_agent_settings = legacy_agent_settings if isinstance(legacy_agent_settings, dict) else {}
         default_workflow_key = default_agent_workflow_key()
-        workflow_id = agent_settings.get("workflow_id") or default_workflow_key
+        workflow_id = (
+            agent_settings.get("workflow_id")
+            or agent_settings.get("template_id")
+            or legacy_agent_settings.get("workflow_id")
+            or legacy_agent_settings.get("template_id")
+            or default_workflow_key
+        )
         include_custom_for_lookup = True
         logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
 
@@ -67,6 +88,7 @@ class AgentRunService:
                 workflow = await self.repository.get_workflow(default_workflow_key)
         if workflow is None:
             raise RuntimeError("Default agent workflow is unavailable")
+        workflow_version = _workflow_version_info(workflow)
         logger.info(
             "Selected agent workflow for thread %s | workflow=%s",
             thread_id,
@@ -135,7 +157,9 @@ class AgentRunService:
 
         run = await self.repository.create_run(
             thread_id=thread_id,
-            workflow_id=workflow.id,
+            template_id=workflow.id,
+            template_version_id=workflow_version.id if workflow_version is not None else None,
+            template_version=workflow_version.version if workflow_version is not None else None,
             resolved_spec_json=stored_resolved_spec,
         )
 
@@ -144,14 +168,23 @@ class AgentRunService:
         context = {
             "agent_run_id": run.id,
             "agent_workflow_id": workflow.id,
+            "agent_pattern_id": workflow.id,
+            "agent_pattern_version": workflow_version.version if workflow_version is not None else None,
             "checkpoint_thread_id": run.checkpoint_thread_id,
         }
 
         try:
             logger.info("Invoking compiled agent workflow for thread %s | workflow=%s", thread_id, workflow.id)
-            from app.agent_workflows.router_runtime import execute_compiled_rag_chat
+            from app.agent_workflows import router_runtime
+
+            handler_by_workflow_id = {
+                "router_rag_agent": router_runtime.handle_router_rag_chat,
+                "plan_execute_rag_agent": router_runtime.handle_plan_execute_rag_chat,
+                "evaluator_replanner_rag_agent": router_runtime.handle_evaluator_replanner_rag_chat,
+            }
+            handler = handler_by_workflow_id.get(workflow.id, router_runtime.handle_router_rag_chat)
             async with open_agent_checkpointer() as checkpointer:
-                result = await execute_compiled_rag_chat(
+                result = await handler(
                     thread_id,
                     req,
                     embed_model,
