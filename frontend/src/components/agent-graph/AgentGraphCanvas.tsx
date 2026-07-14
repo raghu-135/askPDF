@@ -135,7 +135,7 @@ const layoutGraph = async (
 
 function AgentGraphCanvasInner({
   resolvedSpec,
-  templateId,
+  workflowId,
   traceView,
   focusedTraceRefs,
   nodeCatalog,
@@ -145,7 +145,7 @@ function AgentGraphCanvasInner({
   onNodePositionChange,
 }: {
   resolvedSpec?: Record<string, any>;
-  templateId?: string;
+  workflowId?: string;
   traceView?: TraceRunView;
   focusedTraceRefs?: AgentTraceRefs | null;
   nodeCatalog?: AgentNodeCatalog;
@@ -160,7 +160,7 @@ function AgentGraphCanvasInner({
   const [selection, setSelection] = useState<AgentGraphSelection>(null);
 
   const graph = useMemo(() => {
-    const graphSpec = getAgentGraphSpec(resolvedSpec, templateId);
+    const graphSpec = getAgentGraphSpec(resolvedSpec, workflowId);
     let baseGraph;
     if (mode === 'run-debug' && traceView && graphSpec.nodes?.length) {
       baseGraph = buildAgentGraph(graphSpec, {
@@ -182,7 +182,7 @@ function AgentGraphCanvasInner({
       baseGraph = buildAgentGraph(graphSpec, { nodeCatalog });
     }
     return applyTraceFocusToGraph(baseGraph, focusedTraceRefs);
-  }, [focusedTraceRefs, mode, nodeCatalog, resolvedSpec, templateId, traceView]);
+  }, [focusedTraceRefs, mode, nodeCatalog, resolvedSpec, workflowId, traceView]);
   const focusSignature = useMemo(() => JSON.stringify({
     node_ids: focusedTraceRefs?.node_ids || [],
     span_ids: focusedTraceRefs?.span_ids || [],
@@ -365,7 +365,7 @@ function AgentGraphCanvasInner({
 
 export default function AgentGraphCanvas(props: {
   resolvedSpec?: Record<string, any>;
-  templateId?: string;
+  workflowId?: string;
   traceView?: TraceRunView;
   focusedTraceRefs?: AgentTraceRefs | null;
   nodeCatalog?: AgentNodeCatalog;

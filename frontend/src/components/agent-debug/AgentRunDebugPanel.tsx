@@ -277,7 +277,7 @@ export default function AgentRunDebugPanel({
           </Box>
           <AgentGraphCanvas
             resolvedSpec={runDetails.resolved_spec_json}
-            templateId={runDetails.workflow_id}
+            workflowId={runDetails.workflow_id}
             mode="run-debug"
             traceView={traceView}
             focusedTraceRefs={traceRefs}

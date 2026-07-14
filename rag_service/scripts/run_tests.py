@@ -59,7 +59,7 @@ API_TEST_FILES = [
 ]
 
 INTEGRATION_TEST_FILES = [
-    "test_agent_patterns_pytest.py",
+    "test_agent_workflows_pytest.py",
     "test_api_integration_pytest.py",
     "test_model_aware_integration.py",
 ]
@@ -67,7 +67,7 @@ INTEGRATION_TEST_FILES = [
 SCHEMA_TEST_FILES = ["test_schema_guardrails.py"]
 
 AGENT_CHECKPOINT_TEST_TARGETS = [
-    "/app/tests/test_agent_patterns_pytest.py::TestAgentRunService::test_run_thread_chat_resumes_after_postgres_checkpointer_reopen",
+    "/app/tests/test_agent_workflows_pytest.py::TestAgentRunService::test_run_thread_chat_resumes_after_postgres_checkpointer_reopen",
 ]
 
 

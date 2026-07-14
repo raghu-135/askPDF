@@ -40,7 +40,7 @@ Top-level fields:
 `GET /api/agent-runs/{id}` returns the stored debug payload plus:
 
 - `graph`: ready-to-render graph nodes/edges with runtime status overlays,
-  derived from `summary` and the run's resolved template spec.
+  derived from `summary` and the run's resolved workflow spec.
 
 ## Trace Document
 
@@ -49,7 +49,7 @@ Top-level fields:
 - `schema_version`: currently `1`.
 - `trace_id`: stable trace identifier. V1 uses the agent run ID.
 - `run_id`, `thread_id`, `chat_turn_id`, `user_id`: owning entities.
-- `workflow_id`, `pattern_type`: selected agent workflow.
+- `workflow_id`, `workflow_type`: selected agent workflow.
 - `status`: run status.
 - `started_at`, `completed_at`, `duration_ms`: run timing when available.
 - `attributes`: root run attributes duplicated from the root span for quick access.
@@ -101,7 +101,7 @@ Root span attributes:
 - `askpdf.thread.id`
 - `askpdf.chat_turn.id`
 - `askpdf.workflow.id`
-- `askpdf.pattern_type`
+- `askpdf.workflow_type`
 - `askpdf.route`
 - `askpdf.route_reason`
 - `askpdf.use_web_search`

@@ -197,7 +197,7 @@ test('creates a router starter spec with canonical node ids and route function m
     'finalizer',
   ]);
   assert.equal(spec.schema_version, 2);
-  assert.equal(spec.pattern_type, 'custom_rag_agent');
+  assert.equal(spec.workflow_type, 'custom_rag_agent');
   assert.deepEqual(spec.config.allowed_tool_ids, ['clarify_intent', 'document_evidence', 'thread_shape']);
   assert.equal(spec.config.graph.edges.find((edge) => edge.from === 'router')?.route_fn, 'router_route');
   assert.deepEqual(spec.config.graph.edges.find((edge) => edge.from === 'router')?.routes, {
@@ -277,4 +277,3 @@ test('normalizes unsupported node tools and over-limit node types from loaded st
   assert.equal(normalized.nodes.find((item) => item.id === 'retrieval_worker_2')?.tool_contract_ids, undefined);
   assert.deepEqual(normalized.allowed_tool_ids, ['clarify_intent', 'document_evidence', 'thread_shape']);
 });
-

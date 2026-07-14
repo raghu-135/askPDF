@@ -274,7 +274,7 @@ export default function AgentWorkflowBuilderPage() {
     setPersistenceError(null);
   }, [authoringDisabled, catalog]);
 
-  const loadCustomPattern = useCallback(async (workflowId: string) => {
+  const loadCustomWorkflow = useCallback(async (workflowId: string) => {
     if (!catalog || authoringDisabled) return;
     try {
       setError(null);
@@ -306,7 +306,7 @@ export default function AgentWorkflowBuilderPage() {
     if (authoringDisabled) return;
     const customWorkflowId = workflowIdFromCustomStarter(nextStarter);
     if (customWorkflowId) {
-      void loadCustomPattern(customWorkflowId);
+      void loadCustomWorkflow(customWorkflowId);
       return;
     }
     if (!isBuiltinStarter(nextStarter)) return;

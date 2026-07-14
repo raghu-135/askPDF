@@ -40,7 +40,7 @@ export interface BuilderEdgeState {
 export interface AgentWorkflowBuilderState {
   name?: string;
   description?: string;
-  patternType: string;
+  workflowType: string;
   nodes: BuilderNodeState[];
   edges: BuilderEdgeState[];
   allowed_tool_ids: string[];
@@ -312,7 +312,7 @@ export function createInitialBuilderState(
       nodeWithDefaultTools(catalog, 'finalizer', 'finalizer'),
     ];
     return {
-      patternType: 'custom_rag_agent',
+      workflowType: 'custom_rag_agent',
       nodes,
       edges: [
         { from: 'START', to: 'context_loader' },
@@ -345,7 +345,7 @@ export function createInitialBuilderState(
       nodeWithDefaultTools(catalog, 'finalizer', 'finalizer'),
     ];
     return {
-      patternType: 'custom_rag_agent',
+      workflowType: 'custom_rag_agent',
       nodes,
       edges: [
         { from: 'START', to: 'context_loader' },
@@ -382,7 +382,7 @@ export function createInitialBuilderState(
     nodeWithDefaultTools(catalog, 'finalizer', 'finalizer'),
   ];
   return {
-    patternType: 'custom_rag_agent',
+    workflowType: 'custom_rag_agent',
     nodes,
     edges: [
       { from: 'START', to: 'context_loader' },
@@ -426,7 +426,7 @@ export function assembleAgentWorkflowSpec(
   };
   return {
     schema_version: 2,
-    pattern_type: state.patternType || 'custom_rag_agent',
+    workflow_type: state.workflowType || 'custom_rag_agent',
     runtime: clone(state.runtime || defaultRuntime(false)),
     config,
   };
@@ -442,7 +442,7 @@ export function loadBuilderStateFromSpec(spec: AgentWorkflowBuilderSpec | Record
     Object.entries(config).filter(([key]) => !knownConfigKeys.has(key)),
   );
   return {
-    patternType: typeof spec.pattern_type === 'string' ? spec.pattern_type : 'custom_rag_agent',
+    workflowType: typeof spec.workflow_type === 'string' ? spec.workflow_type : 'custom_rag_agent',
     nodes,
     edges,
     allowed_tool_ids: Array.isArray(config.allowed_tool_ids) ? [...config.allowed_tool_ids] : collectAllowedToolIds(nodes),

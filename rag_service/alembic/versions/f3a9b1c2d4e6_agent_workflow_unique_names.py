@@ -1,7 +1,7 @@
 """Make agent workflow names unique
 
 Revision ID: f3a9b1c2d4e6
-Revises: e9a1b2c3d4f5
+Revises: c8f1a2d3e4b5
 Create Date: 2026-07-08 00:00:00.000000
 
 """
@@ -9,7 +9,7 @@ from alembic import op
 
 
 revision = "f3a9b1c2d4e6"
-down_revision = "e9a1b2c3d4f5"
+down_revision = "c8f1a2d3e4b5"
 branch_labels = None
 depends_on = None
 

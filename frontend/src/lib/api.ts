@@ -169,7 +169,7 @@ export interface AgentWorkflowGraphSpec {
 
 export interface AgentWorkflowBuilderSpec {
   schema_version: 2;
-  pattern_type: 'custom_rag_agent' | string;
+  workflow_type: 'custom_rag_agent' | string;
   config: {
     graph?: AgentWorkflowGraphSpec;
     loop_policy?: Record<string, any>;
@@ -286,7 +286,6 @@ export interface AgentWorkflowValidationReport {
   errors: string[];
   warnings: string[];
   schema_version?: number | null;
-  pattern_type?: string | null;
   [key: string]: any;
 }
 
@@ -465,7 +464,7 @@ export interface AgentDebugTrace {
   chat_turn_id?: string | null;
   user_id?: string | null;
   workflow_id?: string;
-  pattern_type?: string;
+  workflow_type?: string;
   status?: string;
   started_at?: string | null;
   completed_at?: string | null;

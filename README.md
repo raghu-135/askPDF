@@ -159,7 +159,7 @@ docker compose up --build
 <summary>🤖 Advanced AI Features</summary>
 
 ### Multi-Agent Architecture
-- **Agent Pattern Runtime**: LangGraph-powered Router RAG and Plan-and-Execute RAG templates with persisted run metadata
+- **Agent Workflow Runtime**: LangGraph-powered Router RAG and Plan-and-Execute RAG workflows with persisted run metadata
 - **Human-in-the-Loop Gates**: Optional web-search approval and resumable checkpoints for agent runs awaiting review
 - **Tool Contracts**: First-party tool contracts for document search, memory recall, timeline search, web search, and clarification
 - **Debug Traces**: Run-level trace payloads for inspecting routes, node execution, tool calls, warnings, and errors

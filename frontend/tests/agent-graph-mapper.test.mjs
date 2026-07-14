@@ -446,7 +446,7 @@ test('graph mapper keeps visit-indexed tools visible when node visit rows are mi
 });
 
 test('graph spec mapper does not synthesize legacy builtins without stored topology', () => {
-  assert.deepEqual(getAgentGraphSpec({ pattern_type: 'router_rag_agent' }), { nodes: [], edges: [] });
+  assert.deepEqual(getAgentGraphSpec({ workflow_type: 'router_rag_agent' }), { nodes: [], edges: [] });
   assert.deepEqual(
     getAgentGraphSpec({ config: { graph: graphSpecs.router } }),
     graphSpecs.router,

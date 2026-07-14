@@ -181,7 +181,7 @@ const selectedConditionalRoute = (
   return false;
 };
 
-export const getAgentGraphSpec = (resolvedSpec?: Record<string, any>, templateId?: string): AgentWorkflowGraphSpec => {
+export const getAgentGraphSpec = (resolvedSpec?: Record<string, any>, workflowId?: string): AgentWorkflowGraphSpec => {
   const graph = resolvedSpec?.config?.graph;
   if (graph && Array.isArray(graph.nodes) && Array.isArray(graph.edges)) return graph;
   return { nodes: [], edges: [] };
