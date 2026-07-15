@@ -98,7 +98,7 @@ def _workflow_spec_payload(workflow) -> Dict[str, Any]:
     }
 
 
-def _is_compatible_workflow(workflow) -> bool:
+def _is_valid_workflow_for_service(workflow) -> bool:
     if not workflow or workflow.schema_version != 2 or not isinstance(workflow.spec_json, dict):
         return False
     try:
@@ -252,14 +252,14 @@ async def list_agent_workflows():
     repo = AgentWorkflowRepository()
     await repo.seed_builtin_workflows()
     workflows = await repo.list_workflows(include_custom=True)
-    compatible_workflows = []
+    valid_workflows = []
     for workflow in workflows:
         try:
-            if _is_compatible_workflow(workflow):
-                compatible_workflows.append(workflow)
+            if _is_valid_workflow_for_service(workflow):
+                valid_workflows.append(workflow)
         except Exception:
             continue
-    return {"agent_workflows": [_workflow_payload(workflow) for workflow in compatible_workflows]}
+    return {"agent_workflows": [_workflow_payload(workflow) for workflow in valid_workflows]}
 
 
 @router.post("/agent-workflows/validate")
@@ -274,7 +274,7 @@ async def get_agent_workflow(workflow_id: str):
     await repo.seed_builtin_workflows()
     include_custom = workflow_id not in builtin_workflow_keys()
     workflow = await repo.get_workflow(workflow_id, include_custom=include_custom)
-    if not workflow or not _is_compatible_workflow(workflow):
+    if not workflow or not _is_valid_workflow_for_service(workflow):
         raise HTTPException(status_code=404, detail="Agent workflow not found")
     spec_payload = _workflow_spec_payload(workflow)
     return {

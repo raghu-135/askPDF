@@ -272,7 +272,7 @@ async def handle_router_rag_chat(
     checkpointer: Any = None,
     **_kwargs: Any,
 ) -> Dict[str, Any]:
-    """Backward-compatible entry point for the router RAG runtime."""
+    """Execute the router RAG workflow runtime."""
 
     return await execute_compiled_rag_chat(
         thread_id,
@@ -296,7 +296,7 @@ async def handle_plan_execute_rag_chat(
     checkpointer: Any = None,
     **_kwargs: Any,
 ) -> Dict[str, Any]:
-    """Backward-compatible entry point for the plan/execute RAG runtime."""
+    """Execute the plan/execute RAG workflow runtime."""
 
     return await execute_compiled_rag_chat(
         thread_id,
@@ -320,7 +320,7 @@ async def handle_evaluator_replanner_rag_chat(
     checkpointer: Any = None,
     **_kwargs: Any,
 ) -> Dict[str, Any]:
-    """Backward-compatible entry point for the evaluator/replanner RAG runtime."""
+    """Execute the evaluator/replanner RAG workflow runtime."""
 
     return await execute_compiled_rag_chat(
         thread_id,
