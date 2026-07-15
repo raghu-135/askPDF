@@ -105,8 +105,10 @@ def normalize_execution_plan(
     if route != "execute":
         steps = []
     clarification_options = parsed.get("clarification_options")
-    if route == "clarify" and not isinstance(clarification_options, list):
-        clarification_options = fallback_clarification_options()
+    if route == "clarify":
+        clarification_options = bounded_string_list(clarification_options)
+        if not clarification_options:
+            clarification_options = fallback_clarification_options()
     return {
         "route": route,
         "route_reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),
@@ -126,6 +128,10 @@ def bounded_string_list(value: Any, *, limit: int = 5, chars: int = 240) -> List
         return []
     result: List[str] = []
     for item in value[:limit]:
+        if isinstance(item, dict):
+            item = item.get("text") or item.get("label") or item.get("title") or item.get("question")
+        if item is None:
+            continue
         text = compact_preview(str(item), limit=chars)
         if text:
             result.append(text)

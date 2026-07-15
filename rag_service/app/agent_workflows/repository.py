@@ -1,19 +1,39 @@
 from __future__ import annotations
 
-import json
-import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from sqlalchemy import delete, or_
+from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.agent_workflows.checkpointing import delete_agent_checkpoints
 from app.agent_workflows.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
+from app.agent_workflows.interrupts import (
+    INTERRUPT_STATUS_EXPIRED,
+    INTERRUPT_STATUS_PENDING,
+    INTERRUPT_STATUS_REJECTED,
+    INTERRUPT_STATUS_RESUMED,
+    RESUME_ACTIONS,
+    TERMINAL_INTERRUPT_STATUSES,
+    AgentRunInterruptError,
+    InterruptResolutionResult,
+    build_interrupt_decision,
+    interrupt_expired,
+    normalize_pending_interrupt_payload,
+    pending_interrupt_from_run,
+    run_interrupt_resume_guard,
+    terminal_decision_matches,
+    validate_interrupt_resume_guard,
+    validate_pending_interrupt_request,
+)
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
+from app.agent_workflows.run_cleanup import (
+    fail_stale_running_runs as cleanup_fail_stale_running_runs,
+    prune_checkpoints_for_runs_before as cleanup_prune_checkpoints_for_runs_before,
+    prune_runs_before as cleanup_prune_runs_before,
+)
 from app.agent_workflows.validator import WorkflowValidationError, WorkflowValidator
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
@@ -22,7 +42,7 @@ from app.db.models_sqlmodel import (
     AgentRun,
     ChatTurn,
 )
-from app.time_utils import iso_utc_z, parse_datetime_utc, utc_now
+from app.time_utils import iso_utc_z, utc_now
 
 
 RUN_STATUS_RUNNING = "running"
@@ -32,49 +52,6 @@ RUN_STATUS_CLARIFICATION = "clarification"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_REJECTED = "rejected"
 RUN_STATUS_EXPIRED = "expired"
-CHECKPOINT_PRUNABLE_RUN_STATUSES = {
-    RUN_STATUS_COMPLETED,
-    RUN_STATUS_CLARIFICATION,
-    RUN_STATUS_FAILED,
-    RUN_STATUS_REJECTED,
-    RUN_STATUS_EXPIRED,
-}
-
-INTERRUPT_STATUS_PENDING = "pending"
-INTERRUPT_STATUS_RESUMED = "resumed"
-INTERRUPT_STATUS_REJECTED = "rejected"
-INTERRUPT_STATUS_EXPIRED = "expired"
-
-RESUME_ACTIONS = {"approve", "approve_selected", "edit", "continue_without"}
-TERMINAL_INTERRUPT_STATUSES = {
-    INTERRUPT_STATUS_RESUMED,
-    INTERRUPT_STATUS_REJECTED,
-    INTERRUPT_STATUS_EXPIRED,
-}
-
-PENDING_INTERRUPT_MAX_BYTES = 16_000
-PENDING_INTERRUPT_STRING_LIMIT = 2_000
-PENDING_INTERRUPT_LIST_LIMIT = 20
-PENDING_INTERRUPT_DICT_LIMIT = 50
-SUPPORTED_SPEC_SCHEMA_VERSION = 2
-INTERRUPT_RESUME_GUARD_SCHEMA_VERSION = 1
-
-
-class AgentRunInterruptError(ValueError):
-    """Raised when an interrupt transition request is invalid."""
-
-    def __init__(self, code: str, message: str, *, http_status: int = 409):
-        super().__init__(message)
-        self.code = code
-        self.http_status = http_status
-
-
-@dataclass
-class InterruptResolutionResult:
-    run: AgentRun
-    outcome: str
-    interrupt: Dict[str, Any]
-    duplicate: bool = False
 
 
 @dataclass
@@ -103,133 +80,6 @@ def _workflow_version(workflow: AgentWorkflow) -> AgentWorkflowVersion:
     )
 
 
-def _compact_interrupt_value(value: Any, *, depth: int = 0) -> Any:
-    if depth > 4:
-        return "[truncated]"
-    if isinstance(value, str):
-        text = " ".join(value.split())
-        if len(text) <= PENDING_INTERRUPT_STRING_LIMIT:
-            return text
-        return text[:PENDING_INTERRUPT_STRING_LIMIT].rstrip() + "..."
-    if isinstance(value, list):
-        return [_compact_interrupt_value(item, depth=depth + 1) for item in value[:PENDING_INTERRUPT_LIST_LIMIT]]
-    if isinstance(value, dict):
-        compacted: Dict[str, Any] = {}
-        for index, (key, item) in enumerate(value.items()):
-            if index >= PENDING_INTERRUPT_DICT_LIMIT:
-                compacted["_truncated"] = True
-                break
-            compacted[str(key)] = _compact_interrupt_value(item, depth=depth + 1)
-        return compacted
-    return value
-
-
-def normalize_pending_interrupt_payload(payload: Dict[str, Any], *, requested_at: Optional[datetime] = None) -> Dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise ValueError("pending interrupt payload must be an object")
-
-    now = requested_at or utc_now()
-    normalized = _compact_interrupt_value(dict(payload))
-    if not isinstance(normalized, dict):
-        normalized = {}
-
-    interrupt_id = str(normalized.get("interrupt_id") or uuid.uuid4())
-    normalized["interrupt_id"] = interrupt_id
-    normalized["status"] = str(normalized.get("status") or INTERRUPT_STATUS_PENDING)
-    normalized["requested_at"] = str(normalized.get("requested_at") or iso_utc_z(now))
-
-    allowed_actions = normalized.get("allowed_actions")
-    if not isinstance(allowed_actions, list) or not all(isinstance(action, str) for action in allowed_actions):
-        allowed_actions = ["approve", "reject"]
-    normalized["allowed_actions"] = allowed_actions
-
-    resume_version = normalized.get("resume_version")
-    try:
-        resume_version = int(resume_version)
-    except (TypeError, ValueError):
-        resume_version = 1
-    normalized["resume_version"] = max(1, resume_version)
-
-    encoded = json.dumps(normalized, ensure_ascii=True, sort_keys=True, default=str)
-    if len(encoded.encode("utf-8")) > PENDING_INTERRUPT_MAX_BYTES:
-        raise ValueError("pending interrupt payload is too large")
-    return normalized
-
-
-def _pending_interrupt_from_run(run: AgentRun) -> Dict[str, Any]:
-    pending = run.pending_interrupt_json if isinstance(run.pending_interrupt_json, dict) else {}
-    return dict(pending)
-
-
-def _interrupt_expired(interrupt: Dict[str, Any], now: datetime) -> bool:
-    expires_at = parse_datetime_utc(interrupt.get("expires_at"))
-    return bool(expires_at and expires_at <= now)
-
-
-def _terminal_decision_matches(interrupt: Dict[str, Any], *, action: str, interrupt_id: str) -> bool:
-    decision = interrupt.get("decision")
-    if not isinstance(decision, dict):
-        return False
-    if decision.get("interrupt_id") != interrupt_id:
-        return False
-    return decision.get("action") == action or decision.get("requested_action") == action
-
-
-def _option_ids(interrupt: Dict[str, Any]) -> set[str]:
-    options = interrupt.get("options") if isinstance(interrupt.get("options"), list) else []
-    return {
-        str(option.get("id"))
-        for option in options
-        if isinstance(option, dict) and isinstance(option.get("id"), str) and option.get("id")
-    }
-
-
-def _canonical_json_hash(value: Any) -> str:
-    encoded = json.dumps(value if isinstance(value, dict) else {}, ensure_ascii=True, sort_keys=True, default=str)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def _run_interrupt_resume_guard(run: AgentRun) -> Dict[str, Any]:
-    spec = run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {}
-    return {
-        "schema_version": INTERRUPT_RESUME_GUARD_SCHEMA_VERSION,
-        "spec_schema_version": spec.get("schema_version"),
-        "workflow_id": run.workflow_id,
-        "workflow_version_id": run.workflow_version_id,
-        "workflow_version": run.workflow_version,
-        "checkpoint_thread_id": run.checkpoint_thread_id,
-        "resolved_spec_hash": _canonical_json_hash(spec),
-    }
-
-
-def _validate_interrupt_resume_guard(interrupt: Dict[str, Any], run: AgentRun) -> None:
-    resume_guard = interrupt.get("resume_guard") if isinstance(interrupt.get("resume_guard"), dict) else {}
-    if not resume_guard:
-        raise AgentRunInterruptError(
-            "interrupt_resume_guard_missing",
-            "The pending interrupt is missing run resume guard metadata.",
-        )
-
-    expected = _run_interrupt_resume_guard(run)
-    if resume_guard.get("spec_schema_version") != SUPPORTED_SPEC_SCHEMA_VERSION:
-        raise AgentRunInterruptError(
-            "interrupt_spec_schema_unsupported",
-            "The pending interrupt was created for an unsupported agent workflow schema.",
-        )
-
-    fields = (
-        "schema_version",
-        "spec_schema_version",
-        "workflow_id",
-        "checkpoint_thread_id",
-        "resolved_spec_hash",
-    )
-    mismatched = [field for field in fields if resume_guard.get(field) != expected.get(field)]
-    if mismatched:
-        raise AgentRunInterruptError(
-            "interrupt_resume_guard_mismatch",
-            "The pending interrupt resume guard no longer matches the stored agent run.",
-        )
 
 
 class AgentWorkflowRepository:
@@ -497,25 +347,14 @@ class AgentWorkflowRepository:
     ) -> list[str]:
         """Delete old run records matching explicit terminal statuses."""
 
-        if not statuses:
-            raise ValueError("statuses must contain at least one status")
-        bounded_limit = max(1, min(int(limit), 1000))
         session = await self._get_session()
-        async with session.begin():
-            query = (
-                select(AgentRun.id)
-                .where(AgentRun.started_at < cutoff)
-                .where(AgentRun.status.in_(statuses))
-            )
-            if thread_id is not None:
-                query = query.where(AgentRun.thread_id == thread_id)
-            query = query.order_by(AgentRun.started_at.asc(), AgentRun.id.asc()).limit(bounded_limit)
-            result = await session.execute(query)
-            run_ids = list(result.scalars().all())
-            if not run_ids:
-                return []
-            await session.execute(delete(AgentRun).where(AgentRun.id.in_(run_ids)))
-            return run_ids
+        return await cleanup_prune_runs_before(
+            session,
+            cutoff,
+            statuses=statuses,
+            thread_id=thread_id,
+            limit=limit,
+        )
 
     async def prune_checkpoints_for_runs_before(
         self,
@@ -528,31 +367,15 @@ class AgentWorkflowRepository:
     ) -> list[str]:
         """Delete LangGraph checkpoints for old terminal runs only."""
 
-        requested_statuses = statuses or sorted(CHECKPOINT_PRUNABLE_RUN_STATUSES)
-        if not requested_statuses:
-            raise ValueError("statuses must contain at least one status")
-        invalid_statuses = sorted(set(requested_statuses) - CHECKPOINT_PRUNABLE_RUN_STATUSES)
-        if invalid_statuses:
-            raise ValueError(
-                "checkpoint cleanup is only allowed for terminal run statuses; "
-                f"invalid statuses: {', '.join(invalid_statuses)}"
-            )
-        bounded_limit = max(1, min(int(limit), 1000))
         session = await self._get_session()
-        async with session.begin():
-            query = (
-                select(AgentRun.checkpoint_thread_id)
-                .where(AgentRun.started_at < cutoff)
-                .where(AgentRun.status.in_(requested_statuses))
-                .where(AgentRun.checkpoint_thread_id.isnot(None))
-            )
-            if thread_id is not None:
-                query = query.where(AgentRun.thread_id == thread_id)
-            result = await session.execute(
-                query.order_by(AgentRun.started_at.asc(), AgentRun.id.asc()).limit(bounded_limit)
-            )
-            checkpoint_thread_ids = list(result.scalars().all())
-        return await delete_agent_checkpoints(checkpoint_thread_ids, checkpointer=checkpointer)
+        return await cleanup_prune_checkpoints_for_runs_before(
+            session,
+            cutoff,
+            statuses=statuses,
+            thread_id=thread_id,
+            limit=limit,
+            checkpointer=checkpointer,
+        )
 
     async def fail_stale_running_runs(
         self,
@@ -563,36 +386,13 @@ class AgentWorkflowRepository:
     ) -> list[str]:
         """Mark old running runs failed after a process crash or restart."""
 
-        bounded_limit = max(1, min(int(limit), 1000))
         session = await self._get_session()
-        async with session.begin():
-            query = (
-                select(AgentRun)
-                .where(AgentRun.started_at < cutoff)
-                .where(AgentRun.status == RUN_STATUS_RUNNING)
-            )
-            if thread_id is not None:
-                query = query.where(AgentRun.thread_id == thread_id)
-            query = query.order_by(AgentRun.started_at.asc(), AgentRun.id.asc()).limit(bounded_limit)
-            result = await session.execute(query)
-            runs = list(result.scalars().all())
-            completed_at = utc_now()
-            for run in runs:
-                run.status = "failed"
-                run.completed_at = completed_at
-                replace_jsonb_field(
-                    run,
-                    "error_json",
-                    {
-                        "code": "agent_run_stale",
-                        "raw_message": "Agent run was still running past the stale-run cutoff.",
-                        "retryable": True,
-                    },
-                )
-                metrics = dict(run.metrics_json or {})
-                metrics["error_count"] = max(int(metrics.get("error_count") or 0), 1)
-                replace_jsonb_field(run, "metrics_json", metrics)
-            return [run.id for run in runs]
+        return await cleanup_fail_stale_running_runs(
+            session,
+            cutoff,
+            thread_id=thread_id,
+            limit=limit,
+        )
 
     async def list_chat_turns_for_run(self, run_id: str) -> list[ChatTurn]:
         session = await self._get_session()
@@ -658,7 +458,7 @@ class AgentWorkflowRepository:
             pending_interrupt = normalize_pending_interrupt_payload(
                 {
                     **pending_interrupt_json,
-                    "resume_guard": _run_interrupt_resume_guard(run),
+                    "resume_guard": run_interrupt_resume_guard(run),
                 },
                 requested_at=requested_at,
             )
@@ -682,98 +482,6 @@ class AgentWorkflowRepository:
             await session.flush()
             await session.refresh(run)
             return run
-
-    def _build_interrupt_decision(
-        self,
-        *,
-        interrupt_id: str,
-        action: str,
-        decided_at: datetime,
-        edited_payload: Optional[Dict[str, Any]],
-        client_metadata: Optional[Dict[str, Any]],
-        resume_version: Optional[int],
-        selected_option_ids: Optional[list[str]],
-    ) -> Dict[str, Any]:
-        decision = {
-            "interrupt_id": interrupt_id,
-            "action": action,
-            "decided_at": iso_utc_z(decided_at),
-        }
-        if resume_version is not None:
-            decision["resume_version"] = resume_version
-        if edited_payload is not None:
-            decision["edited_payload"] = _compact_interrupt_value(edited_payload)
-        if selected_option_ids is not None:
-            decision["selected_option_ids"] = _compact_interrupt_value(selected_option_ids)
-        if client_metadata is not None:
-            decision["client_metadata"] = _compact_interrupt_value(client_metadata)
-        return decision
-
-    def _validate_pending_interrupt_request(
-        self,
-        interrupt: Dict[str, Any],
-        *,
-        interrupt_id: str,
-        action: str,
-        resume_token: Optional[str],
-        resume_version: Optional[int],
-        selected_option_ids: Optional[list[str]],
-    ) -> None:
-        if interrupt.get("interrupt_id") != interrupt_id:
-            raise AgentRunInterruptError(
-                "interrupt_mismatch",
-                "The requested interrupt does not match the run's current interrupt.",
-            )
-
-        allowed_actions = interrupt.get("allowed_actions") if isinstance(interrupt.get("allowed_actions"), list) else []
-        if action not in allowed_actions:
-            raise AgentRunInterruptError(
-                "interrupt_action_not_allowed",
-                f"Action {action!r} is not allowed for this interrupt.",
-                http_status=400,
-            )
-
-        expected_token = interrupt.get("resume_token")
-        if resume_token is not None and expected_token is not None and resume_token != expected_token:
-            raise AgentRunInterruptError(
-                "resume_token_mismatch",
-                "The resume token does not match the current interrupt.",
-            )
-
-        if resume_version is not None and int(interrupt.get("resume_version") or 1) != resume_version:
-            raise AgentRunInterruptError(
-                "resume_version_mismatch",
-                "The resume version does not match the current interrupt.",
-            )
-
-        if action == "approve_selected":
-            valid_option_ids = _option_ids(interrupt)
-            if not valid_option_ids:
-                raise AgentRunInterruptError(
-                    "interrupt_options_missing",
-                    "This interrupt does not expose selectable options.",
-                    http_status=400,
-                )
-            if not selected_option_ids:
-                raise AgentRunInterruptError(
-                    "interrupt_selection_required",
-                    "At least one option must be selected.",
-                    http_status=400,
-                )
-            invalid_option_ids = sorted(set(map(str, selected_option_ids)) - valid_option_ids)
-            if invalid_option_ids:
-                raise AgentRunInterruptError(
-                    "interrupt_selection_invalid",
-                    f"Selected option ids are invalid: {', '.join(invalid_option_ids)}",
-                    http_status=400,
-                )
-            selection_mode = str(interrupt.get("selection_mode") or "single")
-            if selection_mode == "single" and len(selected_option_ids) != 1:
-                raise AgentRunInterruptError(
-                    "interrupt_selection_count_invalid",
-                    "This interrupt requires exactly one selected option.",
-                    http_status=400,
-                )
 
     async def resolve_pending_interrupt(
         self,
@@ -812,7 +520,7 @@ class AgentWorkflowRepository:
                     http_status=404,
                 )
 
-            interrupt = _pending_interrupt_from_run(run)
+            interrupt = pending_interrupt_from_run(run)
             if not interrupt:
                 raise AgentRunInterruptError(
                     "no_pending_interrupt",
@@ -821,7 +529,7 @@ class AgentWorkflowRepository:
                 )
             current_status = str(interrupt.get("status") or INTERRUPT_STATUS_PENDING)
             if current_status in TERMINAL_INTERRUPT_STATUSES:
-                if _terminal_decision_matches(interrupt, action=action, interrupt_id=interrupt_id):
+                if terminal_decision_matches(interrupt, action=action, interrupt_id=interrupt_id):
                     return InterruptResolutionResult(
                         run=run,
                         outcome=current_status,
@@ -838,8 +546,8 @@ class AgentWorkflowRepository:
                     "This agent run is not awaiting a human decision.",
                 )
 
-            _validate_interrupt_resume_guard(interrupt, run)
-            self._validate_pending_interrupt_request(
+            validate_interrupt_resume_guard(interrupt, run)
+            validate_pending_interrupt_request(
                 interrupt,
                 interrupt_id=interrupt_id,
                 action=action,
@@ -848,7 +556,7 @@ class AgentWorkflowRepository:
                 selected_option_ids=selected_option_ids,
             )
 
-            decision = self._build_interrupt_decision(
+            decision = build_interrupt_decision(
                 interrupt_id=interrupt_id,
                 action=action,
                 decided_at=now,
@@ -873,7 +581,7 @@ class AgentWorkflowRepository:
                     ),
                 )
 
-            if _interrupt_expired(interrupt, now):
+            if interrupt_expired(interrupt, now):
                 interrupt["status"] = INTERRUPT_STATUS_EXPIRED
                 interrupt["decision"] = {
                     **decision,
@@ -886,7 +594,7 @@ class AgentWorkflowRepository:
                     run,
                     "error_json",
                     {
-                        "code": "agent_run_interrupt_expired",
+                        "code": "agent_runinterrupt_expired",
                         "raw_message": "Agent run interrupt expired before a human decision was accepted.",
                         "retryable": False,
                     },
@@ -972,10 +680,10 @@ class AgentWorkflowRepository:
             runs = list(result.scalars().all())
             expired_ids: list[str] = []
             for run in runs:
-                interrupt = _pending_interrupt_from_run(run)
+                interrupt = pending_interrupt_from_run(run)
                 if not interrupt or str(interrupt.get("status") or INTERRUPT_STATUS_PENDING) != INTERRUPT_STATUS_PENDING:
                     continue
-                if not _interrupt_expired(interrupt, cutoff):
+                if not interrupt_expired(interrupt, cutoff):
                     continue
                 interrupt["status"] = INTERRUPT_STATUS_EXPIRED
                 interrupt["decision"] = {
@@ -990,7 +698,7 @@ class AgentWorkflowRepository:
                     run,
                     "error_json",
                     {
-                        "code": "agent_run_interrupt_expired",
+                        "code": "agent_runinterrupt_expired",
                         "raw_message": "Agent run interrupt expired before a human decision was accepted.",
                         "retryable": False,
                     },

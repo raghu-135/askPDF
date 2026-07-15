@@ -90,6 +90,17 @@ type ClarificationChoice = {
     isOriginal: boolean;
 };
 
+const clarificationChoiceText = (choice: unknown): string => {
+    if (typeof choice === 'string') return choice;
+    if (choice && typeof choice === 'object') {
+        const candidate = choice as { text?: unknown; label?: unknown; title?: unknown; question?: unknown };
+        for (const value of [candidate.text, candidate.label, candidate.title, candidate.question]) {
+            if (typeof value === 'string') return value;
+        }
+    }
+    return '';
+};
+
 type PendingHumanReview = {
     runId: string;
     interrupt: AgentRunPendingInterrupt;
@@ -1053,7 +1064,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             // Handle ambiguous query / clarification options
             if (response.clarification_options) {
                 setClarificationOptions([
-                    ...response.clarification_options.map((text) => ({ text, isOriginal: false })),
+                    ...response.clarification_options
+                        .map((choice) => clarificationChoiceText(choice).trim())
+                        .filter(Boolean)
+                        .map((text) => ({ text, isOriginal: false })),
                     { text: textToSend, isOriginal: true }
                 ]);
                 const clarificationIds = {
@@ -1964,7 +1978,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             )}
                         </Box>
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 1, pb: 1, overflowY: 'auto', minHeight: 0 }}>
-                            {clarificationOptions && clarificationOptions.map((choice, i) => (
+                            {clarificationOptions && clarificationOptions.map((choice, i) => {
+                                const choiceText = clarificationChoiceText(choice.text);
+                                const trimmedChoiceText = choiceText.trim();
+                                return (
                                     <Box
                                         key={i}
                                         sx={{
@@ -1981,7 +1998,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             size="small"
                                             multiline
                                             label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
-                                            value={choice.text}
+                                            value={choiceText}
                                             sx={{
                                                 '& .MuiOutlinedInput-root': {
                                                     bgcolor: 'action.hover',
@@ -2007,8 +2024,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                 <IconButton
                                                     color="primary"
                                                     size="medium"
-                                                    disabled={!choice.text.trim() || loading}
-                                                    onClick={() => handleSend(choice.text.trim(), { isClarificationSelection: true })}
+                                                    disabled={!trimmedChoiceText || loading}
+                                                    onClick={() => handleSend(trimmedChoiceText, { isClarificationSelection: true })}
                                                     sx={{ mt: 0.25 }}
                                                 >
                                                     <SendIcon fontSize="medium" />
@@ -2016,7 +2033,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             </Box>
                                         </Tooltip>
                                     </Box>
-                                ))}
+                                );
+                            })}
                             {pendingReviewInterrupt && (
                                 <>
                                     {(pendingReviewInterrupt.prompt || pendingReviewInterrupt.body) && (

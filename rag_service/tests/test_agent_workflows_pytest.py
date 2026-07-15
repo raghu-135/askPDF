@@ -1218,6 +1218,29 @@ class TestRouterRagWorkflowValidator:
         ]
         assert all(option.startswith("Do I want") for option in normalized["clarification_options"])
 
+    def test_normalize_execution_plan_coerces_clarification_options_to_strings(self):
+        normalized = normalize_execution_plan(
+            {
+                "route": "clarify",
+                "execution_plan": [],
+                "reason": "ambiguous",
+                "clarification_options": [
+                    {"text": "Which uploaded document?"},
+                    "Which previous answer?",
+                    {"label": "not a supported option shape"},
+                ],
+            },
+            use_web_search=False,
+            question="Which one?",
+        )
+
+        assert normalized["route"] == "clarify"
+        assert normalized["clarification_options"] == [
+            "Which uploaded document?",
+            "Which previous answer?",
+            "not a supported option shape",
+        ]
+
     def test_normalize_evaluator_report_bounds_payload(self):
         report = normalize_evaluator_report(
             {
