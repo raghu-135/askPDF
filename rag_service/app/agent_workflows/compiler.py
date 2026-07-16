@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+from langgraph.graph import END, START, StateGraph
 
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.node_catalog import get_node_type_metadata
+from app.agent_workflows.routes import route_function_for_edge
+from app.agent_workflows.state import RouterRagState
+
+if TYPE_CHECKING:
+    from app.agent_workflows.graph import NodeRegistry
 
 
 CANONICAL_NODE_TYPE_ORDER = {
@@ -144,3 +151,54 @@ class WorkflowMaterializer:
         for node in nodes:
             node.pop("_materialized_order", None)
         return {**graph_spec, "nodes": nodes}
+
+
+class WorkflowCompiler(WorkflowMaterializer):
+    """Compile validated v2 workflow specs into LangGraph StateGraph instances."""
+
+    def __init__(self, registry: Optional["NodeRegistry"] = None):
+        if registry is None:
+            from app.agent_workflows.graph import NodeRegistry
+
+            registry = NodeRegistry()
+        self.registry = registry
+
+    def compile(
+        self,
+        spec: Dict[str, Any],
+        *,
+        checkpointer: Any = None,
+    ):
+        from app.agent_workflows.validator import WorkflowValidator
+
+        graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
+        if not graph_spec.get("hitl_compiled"):
+            WorkflowValidator().validate(spec)
+            spec = self.materialize_spec(spec)
+            graph_spec = (spec.get("config") or {}).get("graph") or {}
+        workflow = StateGraph(RouterRagState)
+        node_types: Dict[str, str] = {}
+        for node in graph_spec.get("nodes", []):
+            node_types[node["id"]] = node["type"]
+            workflow.add_node(node["id"], self.registry.get_for_spec(node))
+
+        for edge in graph_spec.get("edges", []):
+            source = edge.get("from")
+            target = edge.get("to")
+            if edge.get("conditional"):
+                route_fn = route_function_for_edge(
+                    edge,
+                    source=str(source),
+                    node_types=node_types,
+                )
+                routes = {
+                    key: END if value == "END" else value
+                    for key, value in dict(edge["routes"]).items()
+                }
+                workflow.add_conditional_edges(source, route_fn, routes)
+                continue
+            source_ref = START if source == "START" else source
+            target_ref = END if target == "END" else target
+            workflow.add_edge(source_ref, target_ref)
+
+        return workflow.compile(checkpointer=checkpointer)

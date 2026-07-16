@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -14,6 +14,30 @@ class JsonDecisionNodeSpec:
     system_message: str
     prompt: str
     failure_data: Dict[str, Any]
+
+
+def build_decision_node_event_data(
+    *,
+    leading_fields: Dict[str, Any],
+    input_refs: Dict[str, Any],
+    input_preview: Dict[str, Any],
+    prompt_summary: Dict[str, Any],
+    llm_result_summary: Dict[str, Any],
+    output_refs: Dict[str, Any],
+    output_preview: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    data = {
+        "status": "completed",
+        **leading_fields,
+        "input_refs": input_refs,
+        "input_preview": input_preview,
+        "prompt_summary": prompt_summary,
+        "llm_result_summary": llm_result_summary,
+        "output_refs": output_refs,
+    }
+    if output_preview is not None:
+        data["output_preview"] = output_preview
+    return data
 
 
 async def invoke_json_decision_node(

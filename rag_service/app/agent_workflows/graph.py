@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from typing import Any, Callable, Dict, List, Optional
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from app.agent.tool_contract import normalize_tool_result
@@ -25,8 +25,11 @@ from app.agent_workflows.answer_nodes import (
     finalizer_node,
     synthesizer_node,
 )
-from app.agent_workflows.compiler import WorkflowMaterializer
-from app.agent_workflows.decision_nodes import JsonDecisionNodeSpec, invoke_json_decision_node
+from app.agent_workflows.decision_nodes import (
+    JsonDecisionNodeSpec,
+    build_decision_node_event_data,
+    invoke_json_decision_node,
+)
 from app.agent_workflows.evidence import (
     append_evidence_packet as _append_evidence_packet,
     combine_evidence as _combine_evidence,
@@ -71,7 +74,7 @@ from app.agent_workflows.runtime_invocation import (
     tool_config as _tool_config,
     tool_config_for_node as _tool_config_for_node,
 )
-from app.agent_workflows.workers import ToolWorkerSpec, run_tool_worker
+from app.agent_workflows.workers import run_tool_worker, tool_worker_spec
 from app.agent_workflows.routes import (
     evaluator_route,
     hitl_gate_route,
@@ -86,7 +89,6 @@ from app.agent_workflows.trace import (
     normalize_warnings,
     prompt_summary,
     refs_from_artifacts,
-    refs_from_timeline,
     selected_and_skipped_workers,
 )
 from app.agent_workflows.state import (
@@ -235,18 +237,19 @@ class NodeRegistry:
             normalized["execution_plan"],
             WORKER_NODE_ORDER,
         )
-        data = {
-            "status": "completed",
-            "route": normalized["route"],
-            "route_reason": normalized["route_reason"],
-            "execution_plan": normalized["execution_plan"],
-            "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
-            "input_preview": {
+        data = build_decision_node_event_data(
+            leading_fields={
+                "route": normalized["route"],
+                "route_reason": normalized["route_reason"],
+                "execution_plan": normalized["execution_plan"],
+            },
+            input_refs=_prefetch_refs(state.get("pre_fetch_bundle") or {}),
+            input_preview={
                 "question": compact_preview(state.get("question")),
                 "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
             },
-            "prompt_summary": prompt_details,
-            "llm_result_summary": {
+            prompt_summary=prompt_details,
+            llm_result_summary={
                 "parsed": bool(parsed),
                 "route": normalized["route"],
                 "route_reason": normalized["route_reason"],
@@ -260,9 +263,9 @@ class NodeRegistry:
                 ),
                 **worker_summary,
             },
-            "output_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
-            "output_preview": worker_summary,
-        }
+            output_refs=_prefetch_refs(state.get("pre_fetch_bundle") or {}),
+            output_preview=worker_summary,
+        )
         _log_node_end(state, "planner", started, data)
         return {
             **normalized,
@@ -306,17 +309,18 @@ class NodeRegistry:
             if not clarification_options:
                 clarification_options = _fallback_clarification_options()
         route_reason = str(parsed.get("reason") or "")
-        data = {
-            "status": "completed",
-            "route": route,
-            "route_reason": route_reason,
-            "input_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
-            "input_preview": {
+        data = build_decision_node_event_data(
+            leading_fields={
+                "route": route,
+                "route_reason": route_reason,
+            },
+            input_refs=_prefetch_refs(state.get("pre_fetch_bundle") or {}),
+            input_preview={
                 "question": compact_preview(state.get("question")),
                 "prefetch": compact_preview(_format_prefetch_summary(state.get("pre_fetch_bundle") or {})),
             },
-            "prompt_summary": prompt_details,
-            "llm_result_summary": {
+            prompt_summary=prompt_details,
+            llm_result_summary={
                 "parsed": bool(parsed),
                 "route": route,
                 "route_reason": route_reason,
@@ -327,8 +331,8 @@ class NodeRegistry:
                     retry_attempts=retry_attempts,
                 ),
             },
-            "output_refs": _prefetch_refs(state.get("pre_fetch_bundle") or {}),
-        }
+            output_refs=_prefetch_refs(state.get("pre_fetch_bundle") or {}),
+        )
         _log_node_end(state, "router", started, data)
         return {
             "route": route,
@@ -338,134 +342,26 @@ class NodeRegistry:
         }
 
     async def retrieval_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        started = time.perf_counter()
-        return await run_tool_worker(
-            state,
-            config,
-            started=started,
-            spec=ToolWorkerSpec(
-                node_name="retrieval_worker",
-                tool_name="search_documents",
-                evidence_kind="document",
-                evidence_label="Document evidence",
-                tool=search_documents,
-                tool_input=lambda current: {"query": current["question"], "max_results": 10},
-                state_update=lambda current, _payload, artifacts, _evidence, _packets: {
-                    "document_sources": [*current.get("document_sources", []), *artifacts.get("document_sources", [])],
-                    "web_sources": [*current.get("web_sources", []), *artifacts.get("web_sources", [])],
-                },
-            ),
-            should_skip_worker=_should_skip_worker,
-            skipped_worker_update=_skipped_worker_update,
-            tool_config_for_node=_tool_config_for_node,
-            invoke_tool_for_node=_invoke_tool_for_node,
-            normalize_tool_result=normalize_tool_result,
-            combine_evidence=_combine_evidence,
-            evidence_text_limit=_evidence_text_limit,
-            append_evidence_packet=_append_evidence_packet,
-            refs_from_artifacts=refs_from_artifacts,
-            state_evidence_refs=_state_evidence_refs,
-            compact_refs=compact_refs,
-            compact_preview=compact_preview,
-            normalize_warnings=normalize_warnings,
-            log_node_end=_log_node_end,
-            append_event=_append_event,
-            append_tool_event=_append_tool_event,
-        )
+        return await self._tool_worker("retrieval_worker", state, config)
 
     async def memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        started = time.perf_counter()
-        return await run_tool_worker(
-            state,
-            config,
-            started=started,
-            spec=ToolWorkerSpec(
-                node_name="memory_worker",
-                tool_name="search_conversation_history",
-                evidence_kind="memory",
-                evidence_label="Memory evidence",
-                tool=search_conversation_history,
-                tool_input=lambda current: {"query": current["question"], "max_results": 10},
-                state_update=lambda current, _payload, artifacts, _evidence, _packets: {
-                    "used_chat_ids": [*current.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])],
-                },
-            ),
-            should_skip_worker=_should_skip_worker,
-            skipped_worker_update=_skipped_worker_update,
-            tool_config_for_node=_tool_config_for_node,
-            invoke_tool_for_node=_invoke_tool_for_node,
-            normalize_tool_result=normalize_tool_result,
-            combine_evidence=_combine_evidence,
-            evidence_text_limit=_evidence_text_limit,
-            append_evidence_packet=_append_evidence_packet,
-            refs_from_artifacts=refs_from_artifacts,
-            state_evidence_refs=_state_evidence_refs,
-            compact_refs=compact_refs,
-            compact_preview=compact_preview,
-            normalize_warnings=normalize_warnings,
-            log_node_end=_log_node_end,
-            append_event=_append_event,
-            append_tool_event=_append_tool_event,
-        )
+        return await self._tool_worker("memory_worker", state, config)
 
     async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        started = time.perf_counter()
-        return await run_tool_worker(
-            state,
-            config,
-            started=started,
-            spec=ToolWorkerSpec(
-                node_name="timeline_worker",
-                tool_name="search_thread_timeline",
-                evidence_kind="timeline",
-                evidence_label="Timeline evidence",
-                tool=search_thread_timeline,
-                tool_input=lambda current: {"query": current["question"], "sources": "all", "order": "relevance", "max_results": 10},
-                state_update=lambda _current, _payload, artifacts, _evidence, _packets: {
-                    "timeline_event_count": len(artifacts.get("timeline_events", []) or []),
-                    "timeline_refs": {"timeline_events": refs_from_timeline(artifacts.get("timeline_events"))},
-                },
-            ),
-            should_skip_worker=_should_skip_worker,
-            skipped_worker_update=_skipped_worker_update,
-            tool_config_for_node=_tool_config_for_node,
-            invoke_tool_for_node=_invoke_tool_for_node,
-            normalize_tool_result=normalize_tool_result,
-            combine_evidence=_combine_evidence,
-            evidence_text_limit=_evidence_text_limit,
-            append_evidence_packet=_append_evidence_packet,
-            refs_from_artifacts=refs_from_artifacts,
-            state_evidence_refs=_state_evidence_refs,
-            compact_refs=compact_refs,
-            compact_preview=compact_preview,
-            normalize_warnings=normalize_warnings,
-            log_node_end=_log_node_end,
-            append_event=_append_event,
-            append_tool_event=_append_tool_event,
-        )
+        return await self._tool_worker("timeline_worker", state, config)
 
     async def web_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        return await self._tool_worker("web_worker", state, config)
+
+    async def _tool_worker(self, node_name: str, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
+        spec = tool_worker_spec(node_name)
+        spec = replace(spec, tool=globals().get(spec.tool_name, spec.tool))
         return await run_tool_worker(
             state,
             config,
             started=started,
-            spec=ToolWorkerSpec(
-                node_name="web_worker",
-                tool_name="search_web",
-                evidence_kind="web",
-                evidence_label="Web evidence",
-                tool=search_web,
-                tool_input=lambda current: current["question"],
-                skip_reason=lambda current: (
-                    "web_search_disabled"
-                    if isinstance(current.get("execution_plan"), list) and not current.get("use_web_search", False)
-                    else None
-                ),
-                state_update=lambda current, _payload, artifacts, _evidence, _packets: {
-                    "web_sources": [*current.get("web_sources", []), *artifacts.get("web_sources", [])],
-                },
-            ),
+            spec=spec,
             should_skip_worker=_should_skip_worker,
             skipped_worker_update=_skipped_worker_update,
             tool_config_for_node=_tool_config_for_node,
@@ -538,25 +434,26 @@ class NodeRegistry:
                 limit=_evidence_text_limit(state),
             )
 
-        data = {
-            "status": "completed",
-            "route": state.get("route"),
-            "route_reason": state.get("route_reason"),
-            "evaluator_route": next_route,
-            "evaluator_report": report,
-            "evaluation_confidence": report["confidence"],
-            "evidence_gaps": report["missing_evidence"],
-            "replan_count": replan_count,
-            "replans": replans,
-            "event_name": event_name,
-            "input_refs": _state_evidence_refs(state),
-            "input_preview": {
+        data = build_decision_node_event_data(
+            leading_fields={
+                "route": state.get("route"),
+                "route_reason": state.get("route_reason"),
+                "evaluator_route": next_route,
+                "evaluator_report": report,
+                "evaluation_confidence": report["confidence"],
+                "evidence_gaps": report["missing_evidence"],
+                "replan_count": replan_count,
+                "replans": replans,
+                "event_name": event_name,
+            },
+            input_refs=_state_evidence_refs(state),
+            input_preview={
                 "question": compact_preview(state.get("question")),
                 "execution_plan": state.get("execution_plan"),
                 "evidence": compact_preview(state.get("evidence")),
             },
-            "prompt_summary": prompt_details,
-            "llm_result_summary": {
+            prompt_summary=prompt_details,
+            llm_result_summary={
                 "parsed": bool(parsed),
                 "evaluator_route": next_route,
                 "evaluator_report": report,
@@ -566,12 +463,12 @@ class NodeRegistry:
                     retry_attempts=retry_attempts,
                 ),
             },
-            "output_refs": _state_evidence_refs({**state, "evidence": evidence_update}),
-            "output_preview": {
+            output_refs=_state_evidence_refs({**state, "evidence": evidence_update}),
+            output_preview={
                 "evaluator_route": next_route,
                 "evaluator_report": report,
             },
-        }
+        )
         _log_node_end(state, "evidence_evaluator", started, data)
         return {
             "evaluator_route": next_route,
@@ -626,22 +523,23 @@ class NodeRegistry:
             *(state.get("replan_history") if isinstance(state.get("replan_history"), list) else []),
             history_item,
         ][-5:]
-        data = {
-            "status": "completed",
-            "route": state.get("route"),
-            "route_reason": state.get("route_reason"),
-            "execution_plan": normalized["execution_plan"],
-            "replan_count": replan_count,
-            "replan_reason": normalized["reason"],
-            "event_name": "replan.requested" if normalized["execution_plan"] else "replan.skipped",
-            "input_refs": _state_evidence_refs(state),
-            "input_preview": {
+        data = build_decision_node_event_data(
+            leading_fields={
+                "route": state.get("route"),
+                "route_reason": state.get("route_reason"),
+                "execution_plan": normalized["execution_plan"],
+                "replan_count": replan_count,
+                "replan_reason": normalized["reason"],
+                "event_name": "replan.requested" if normalized["execution_plan"] else "replan.skipped",
+            },
+            input_refs=_state_evidence_refs(state),
+            input_preview={
                 "question": compact_preview(state.get("question")),
                 "current_execution_plan": state.get("execution_plan"),
                 "evaluator_report": state.get("evaluator_report"),
             },
-            "prompt_summary": prompt_details,
-            "llm_result_summary": {
+            prompt_summary=prompt_details,
+            llm_result_summary={
                 "parsed": bool(parsed),
                 "execution_plan": normalized["execution_plan"],
                 "normalization_notes": normalized.get("normalization_notes") or [],
@@ -651,13 +549,13 @@ class NodeRegistry:
                     retry_attempts=retry_attempts,
                 ),
             },
-            "output_refs": _state_evidence_refs(state),
-            "output_preview": {
+            output_refs=_state_evidence_refs(state),
+            output_preview={
                 "execution_plan": normalized["execution_plan"],
                 "replan_count": replan_count,
                 "replan_reason": compact_preview(normalized["reason"]),
             },
-        }
+        )
         _log_node_end(state, "replanner", started, data)
         return {
             "execution_plan": normalized["execution_plan"],
@@ -685,48 +583,5 @@ class NodeRegistry:
     ) -> Dict[str, Any]:
         return await hitl_gate_node(state, config, node_id=node_id)
 
-class WorkflowCompiler(WorkflowMaterializer):
-    """Compile validated v2 workflow specs into LangGraph StateGraph instances."""
 
-    def __init__(self, registry: Optional[NodeRegistry] = None):
-        self.registry = registry or NodeRegistry()
-
-    def compile(
-        self,
-        spec: Dict[str, Any],
-        *,
-        checkpointer: Any = None,
-    ):
-        from app.agent_workflows.validator import WorkflowValidator
-
-        graph_spec = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
-        if not graph_spec.get("hitl_compiled"):
-            WorkflowValidator().validate(spec)
-            spec = self.materialize_spec(spec)
-            graph_spec = (spec.get("config") or {}).get("graph") or {}
-        workflow = StateGraph(RouterRagState)
-        node_types: Dict[str, str] = {}
-        for node in graph_spec.get("nodes", []):
-            node_types[node["id"]] = node["type"]
-            workflow.add_node(node["id"], self.registry.get_for_spec(node))
-
-        for edge in graph_spec.get("edges", []):
-            source = edge.get("from")
-            target = edge.get("to")
-            if edge.get("conditional"):
-                route_fn = _route_function_for_edge(
-                    edge,
-                    source=str(source),
-                    node_types=node_types,
-                )
-                routes = {
-                    key: END if value == "END" else value
-                    for key, value in dict(edge["routes"]).items()
-                }
-                workflow.add_conditional_edges(source, route_fn, routes)
-                continue
-            source_ref = START if source == "START" else source
-            target_ref = END if target == "END" else target
-            workflow.add_edge(source_ref, target_ref)
-
-        return workflow.compile(checkpointer=checkpointer)
+from app.agent_workflows.compiler import WorkflowCompiler

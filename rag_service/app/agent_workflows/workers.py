@@ -5,6 +5,10 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 from langchain_core.runnables import RunnableConfig
 
+from app.agent.external_research_tools import search_web
+from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
+from app.agent_workflows.trace import refs_from_timeline
+
 
 @dataclass(frozen=True)
 class ToolWorkerSpec:
@@ -18,6 +22,73 @@ class ToolWorkerSpec:
     state_update: Optional[
         Callable[[Dict[str, Any], Dict[str, Any], Dict[str, Any], str, list[Dict[str, Any]]], Dict[str, Any]]
     ] = None
+
+
+TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
+    "retrieval_worker": ToolWorkerSpec(
+        node_name="retrieval_worker",
+        tool_name="search_documents",
+        evidence_kind="document",
+        evidence_label="Document evidence",
+        tool=search_documents,
+        tool_input=lambda current: {"query": current["question"], "max_results": 10},
+        state_update=lambda current, _payload, artifacts, _evidence, _packets: {
+            "document_sources": [*current.get("document_sources", []), *artifacts.get("document_sources", [])],
+            "web_sources": [*current.get("web_sources", []), *artifacts.get("web_sources", [])],
+        },
+    ),
+    "memory_worker": ToolWorkerSpec(
+        node_name="memory_worker",
+        tool_name="search_conversation_history",
+        evidence_kind="memory",
+        evidence_label="Memory evidence",
+        tool=search_conversation_history,
+        tool_input=lambda current: {"query": current["question"], "max_results": 10},
+        state_update=lambda current, _payload, artifacts, _evidence, _packets: {
+            "used_chat_ids": [*current.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])],
+        },
+    ),
+    "timeline_worker": ToolWorkerSpec(
+        node_name="timeline_worker",
+        tool_name="search_thread_timeline",
+        evidence_kind="timeline",
+        evidence_label="Timeline evidence",
+        tool=search_thread_timeline,
+        tool_input=lambda current: {
+            "query": current["question"],
+            "sources": "all",
+            "order": "relevance",
+            "max_results": 10,
+        },
+        state_update=lambda _current, _payload, artifacts, _evidence, _packets: {
+            "timeline_event_count": len(artifacts.get("timeline_events", []) or []),
+            "timeline_refs": {"timeline_events": refs_from_timeline(artifacts.get("timeline_events"))},
+        },
+    ),
+    "web_worker": ToolWorkerSpec(
+        node_name="web_worker",
+        tool_name="search_web",
+        evidence_kind="web",
+        evidence_label="Web evidence",
+        tool=search_web,
+        tool_input=lambda current: current["question"],
+        skip_reason=lambda current: (
+            "web_search_disabled"
+            if isinstance(current.get("execution_plan"), list) and not current.get("use_web_search", False)
+            else None
+        ),
+        state_update=lambda current, _payload, artifacts, _evidence, _packets: {
+            "web_sources": [*current.get("web_sources", []), *artifacts.get("web_sources", [])],
+        },
+    ),
+}
+
+
+def tool_worker_spec(node_name: str) -> ToolWorkerSpec:
+    try:
+        return TOOL_WORKER_SPECS[node_name]
+    except KeyError as exc:
+        raise ValueError(f"Unknown tool worker: {node_name}") from exc
 
 
 async def run_tool_worker(

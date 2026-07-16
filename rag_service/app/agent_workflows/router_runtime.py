@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from langgraph.types import Command
 
-from app.agent_workflows.graph import WorkflowCompiler
+from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows.workflow_runtime import runtime_execution_options
 from app.db import (
     create_chat_turn,

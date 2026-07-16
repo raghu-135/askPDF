@@ -135,7 +135,8 @@ class AgentRunService:
                     workflow.id,
                 )
                 raise RuntimeError("Default agent workflow is incompatible with this service version") from fallback_exc
-        from app.agent_workflows.graph import WorkflowCompiler, normalize_hitl_policy_for_thread_settings
+        from app.agent_workflows.compiler import WorkflowCompiler
+        from app.agent_workflows.graph import normalize_hitl_policy_for_thread_settings
 
         resolved_config = resolved_spec.get("config") if isinstance(resolved_spec.get("config"), dict) else {}
         resolved_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
