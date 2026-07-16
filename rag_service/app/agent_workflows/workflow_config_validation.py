@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from app.agent_workflows.workflow_runtime import ALLOWED_WORKFLOW_CONFIG_KEYS
+from app.models.llm_server_client import (
+    MAX_CUSTOM_INSTRUCTIONS_CHARS,
+    MAX_SYSTEM_ROLE_CHARS,
+    REPLANS_LIMIT,
+)
+
+
+CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"evidence_packets"}
+CONTEXT_EVIDENCE_COMPRESSION_MODES = {"none", "compact"}
+
+
+def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]:
+    errors: list[str] = []
+    unknown_keys = sorted(set(config) - ALLOWED_WORKFLOW_CONFIG_KEYS)
+    if unknown_keys:
+        errors.append(f"unknown config keys: {', '.join(unknown_keys)}")
+
+    for key in ("use_web_search", "use_reranker"):
+        if key in config and not isinstance(config[key], bool):
+            errors.append(f"{key} must be a boolean")
+
+    if "replans" in config:
+        replans = config.get("replans")
+        if not isinstance(replans, int):
+            errors.append("replans must be an integer")
+        elif replans < 1 or replans > REPLANS_LIMIT:
+            errors.append(f"replans must be between 1 and {REPLANS_LIMIT}")
+
+    system_role = config.get("system_role", "")
+    if not isinstance(system_role, str) or len(system_role) > MAX_SYSTEM_ROLE_CHARS:
+        errors.append(f"system_role must be a string up to {MAX_SYSTEM_ROLE_CHARS} characters")
+
+    custom_instructions = config.get("custom_instructions", "")
+    if not isinstance(custom_instructions, str) or len(custom_instructions) > MAX_CUSTOM_INSTRUCTIONS_CHARS:
+        errors.append(f"custom_instructions must be a string up to {MAX_CUSTOM_INSTRUCTIONS_CHARS} characters")
+
+    tool_instructions = config.get("tool_instructions", {})
+    if not isinstance(tool_instructions, dict):
+        errors.append("tool_instructions must be an object")
+    elif not all(isinstance(k, str) and isinstance(v, str) for k, v in tool_instructions.items()):
+        errors.append("tool_instructions keys and values must be strings")
+
+    prefetch_policy = config.get("prefetch_policy", {})
+    if not isinstance(prefetch_policy, dict):
+        errors.append("prefetch_policy must be an object")
+    elif set(prefetch_policy) - {"enabled"}:
+        errors.append("prefetch_policy only supports the enabled key")
+    elif "enabled" in prefetch_policy and not isinstance(prefetch_policy["enabled"], bool):
+        errors.append("prefetch_policy.enabled must be a boolean")
+
+    context_policy = config.get("context_policy", {})
+    if not isinstance(context_policy, dict):
+        errors.append("context_policy must be an object")
+    else:
+        unknown_context_keys = sorted(
+            set(context_policy)
+            - {
+                "evidence_packet_limit",
+                "evidence_packet_content_limit",
+                "final_prompt_assembly",
+                "evidence_dedupe",
+                "evidence_compression",
+                "final_context_char_limit",
+            }
+        )
+        if unknown_context_keys:
+            errors.append(f"context_policy has unknown keys: {', '.join(unknown_context_keys)}")
+        for key in ("evidence_packet_limit", "evidence_packet_content_limit", "final_context_char_limit"):
+            if key in context_policy:
+                try:
+                    value = int(context_policy[key])
+                except (TypeError, ValueError):
+                    value = 0
+                if value < 1:
+                    errors.append(f"context_policy.{key} must be a positive integer")
+        if "final_prompt_assembly" in context_policy and not isinstance(context_policy["final_prompt_assembly"], str):
+            errors.append("context_policy.final_prompt_assembly must be a string")
+        elif (
+            "final_prompt_assembly" in context_policy
+            and context_policy["final_prompt_assembly"] not in CONTEXT_FINAL_PROMPT_ASSEMBLIES
+        ):
+            errors.append(
+                "context_policy.final_prompt_assembly must be one of: "
+                f"{', '.join(sorted(CONTEXT_FINAL_PROMPT_ASSEMBLIES))}"
+            )
+        if "evidence_dedupe" in context_policy and not isinstance(context_policy["evidence_dedupe"], bool):
+            errors.append("context_policy.evidence_dedupe must be a boolean")
+        if "evidence_compression" in context_policy and not isinstance(context_policy["evidence_compression"], str):
+            errors.append("context_policy.evidence_compression must be a string")
+        elif (
+            "evidence_compression" in context_policy
+            and context_policy["evidence_compression"] not in CONTEXT_EVIDENCE_COMPRESSION_MODES
+        ):
+            errors.append(
+                "context_policy.evidence_compression must be one of: "
+                f"{', '.join(sorted(CONTEXT_EVIDENCE_COMPRESSION_MODES))}"
+            )
+    return errors

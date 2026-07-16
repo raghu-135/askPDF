@@ -5,9 +5,8 @@ from typing import Any, Dict
 
 from app.agent.tool_registry import (
     collect_tool_contract_metadata_errors,
-    known_tool_contract_ids,
-    tool_contracts_by_id as _default_tool_contracts_by_id,
 )
+from app.agent_workflows.hitl_policy_validation import collect_hitl_policy_errors
 from app.agent_workflows.node_catalog import (
     collect_node_catalog_errors,
     get_node_catalog as _default_get_node_catalog,
@@ -22,50 +21,12 @@ from app.agent_workflows.route_registry import (
     route_function_allowed_for_node_type,
     route_function_labels,
 )
-from app.agent_workflows.workflow_requirements import (
-    REQUIRED_TOOL_NODE_TYPES,
-    workflow_node_tool_requirements_for_allowed_tools,
+from app.agent_workflows.tool_permission_validation import (
+    collect_tool_permission_errors,
+    known_workflow_tool_ids,
+    tool_contracts_by_id,
 )
-from app.agent_workflows.workflow_runtime import ALLOWED_WORKFLOW_CONFIG_KEYS
-from app.models.llm_server_client import (
-    MAX_CUSTOM_INSTRUCTIONS_CHARS,
-    REPLANS_LIMIT,
-    MAX_SYSTEM_ROLE_CHARS,
-)
-
-
-HITL_ACTIONS = {"approve", "approve_selected", "continue_without", "reject", "edit"}
-HITL_PHASES = {"before", "after", "inside_tool"}
-HITL_MODES = {"approval", "choice", "review"}
-HITL_SELECTION_MODES = {"single", "multi", "single_or_multi"}
-CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"evidence_packets"}
-CONTEXT_EVIDENCE_COMPRESSION_MODES = {"none", "compact"}
-HITL_GATE_KEYS = {
-    "enabled",
-    "title",
-    "prompt",
-    "body",
-    "allowed_actions",
-    "default_action",
-    "target",
-    "phase",
-    "mode",
-    "interrupt_type",
-    "type",
-    "selection_mode",
-    "options",
-    "routes",
-    "conditions",
-    "payload_projection",
-    "editable_fields",
-    "requires_reason",
-    "reject_behavior",
-    "max_interrupts_per_run",
-}
-
-
-def _known_tool_ids() -> set[str]:
-    return known_tool_contract_ids()
+from app.agent_workflows.workflow_config_validation import collect_config_errors
 
 
 def get_node_catalog() -> Dict[str, Dict[str, Any]]:
@@ -79,182 +40,6 @@ def get_route_function_registry() -> Dict[str, Dict[str, Any]]:
     accessor = getattr(validator_module, "get_route_function_registry", _default_get_route_function_registry)
     return accessor()
 
-
-def tool_contracts_by_id() -> Dict[str, list[Dict[str, Any]]]:
-    validator_module = sys.modules.get("app.agent_workflows.validator")
-    accessor = getattr(validator_module, "tool_contracts_by_id", _default_tool_contracts_by_id)
-    return accessor()
-
-
-def collect_tool_permission_errors(spec: Dict[str, Any], allowed_tool_ids: set[str]) -> list[str]:
-    errors: list[str] = []
-    contracts_by_id = tool_contracts_by_id()
-    workflow_id = spec.get("workflow_id")
-    node_tool_requirements = workflow_node_tool_requirements_for_allowed_tools(spec, allowed_tool_ids)
-    config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
-    graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
-    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
-    node_types_by_id: Dict[str, str] = {}
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        node_id = node.get("id")
-        node_type = node.get("type")
-        if not isinstance(node_id, str) or not isinstance(node_type, str):
-            continue
-        node_types_by_id[node_id] = node_type
-        candidate_tool_ids = node_type_allowed_tool_contract_ids(node_type)
-        if node_type not in REQUIRED_TOOL_NODE_TYPES or not candidate_tool_ids:
-            continue
-        compatible_tool_ids = sorted(candidate_tool_ids & allowed_tool_ids)
-        if not compatible_tool_ids:
-            errors.append(f"missing required allowed_tool_ids: {', '.join(sorted(candidate_tool_ids))}")
-    for caller_node, contract_id in sorted(node_tool_requirements.items()):
-        if contract_id not in allowed_tool_ids:
-            continue
-        contracts = contracts_by_id.get(contract_id) or []
-        if not contracts:
-            errors.append(f"{workflow_id} required tool contract is not registered: {contract_id}")
-            continue
-        caller_node_type = node_types_by_id.get(caller_node)
-        if not any(
-            caller_node in (contract.get("allowed_caller_nodes") or [])
-            or caller_node_type in (contract.get("allowed_node_types") or [])
-            for contract in contracts
-        ):
-            errors.append(
-                f"{workflow_id} tool contract {contract_id} is not allowed from node {caller_node}"
-            )
-    return errors
-
-
-def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -> list[str]:
-    errors: list[str] = []
-    if not isinstance(hitl_policy, dict):
-        return ["hitl_policy must be an object"]
-    unknown_policy_keys = sorted(set(hitl_policy) - {"enabled", "gates", "max_interrupts_per_run"})
-    if unknown_policy_keys:
-        errors.append(f"hitl_policy only supports keys: enabled, gates, max_interrupts_per_run; unknown: {', '.join(unknown_policy_keys)}")
-    if "enabled" in hitl_policy and not isinstance(hitl_policy["enabled"], bool):
-        errors.append("hitl_policy.enabled must be a boolean")
-    if "max_interrupts_per_run" in hitl_policy:
-        try:
-            max_interrupts = int(hitl_policy.get("max_interrupts_per_run"))
-        except (TypeError, ValueError):
-            max_interrupts = 0
-        if max_interrupts < 1:
-            errors.append("hitl_policy.max_interrupts_per_run must be a positive integer")
-    gates = hitl_policy.get("gates", {})
-    if not isinstance(gates, dict):
-        errors.append("hitl_policy.gates must be an object")
-        return errors
-
-    graph_nodes = graph.get("nodes") if isinstance(graph, dict) else []
-    node_types = {
-        node.get("id"): node.get("type")
-        for node in graph_nodes
-        if isinstance(node, dict) and isinstance(node.get("id"), str) and isinstance(node.get("type"), str)
-    }
-    for gate_id, gate in gates.items():
-        if not isinstance(gate_id, str) or not gate_id:
-            errors.append("hitl_policy.gates keys must be non-empty strings")
-            continue
-        if not isinstance(gate, dict):
-            errors.append(f"hitl_policy.gates.{gate_id} must be an object")
-            continue
-
-        unknown_gate_keys = sorted(set(gate) - HITL_GATE_KEYS)
-        if unknown_gate_keys:
-            errors.append(f"hitl_policy.gates.{gate_id} has unknown keys: {', '.join(unknown_gate_keys)}")
-        if "enabled" in gate and not isinstance(gate["enabled"], bool):
-            errors.append(f"hitl_policy.gates.{gate_id}.enabled must be a boolean")
-
-        mode = str(gate.get("mode") or "approval")
-        if mode not in HITL_MODES:
-            errors.append(f"hitl_policy.gates.{gate_id}.mode must be one of: {', '.join(sorted(HITL_MODES))}")
-        phase = str(gate.get("phase") or "before")
-        if phase not in HITL_PHASES:
-            errors.append(f"hitl_policy.gates.{gate_id}.phase must be one of: {', '.join(sorted(HITL_PHASES))}")
-        if phase == "inside_tool":
-            errors.append(f"hitl_policy.gates.{gate_id}.phase inside_tool is reserved for tool wrappers")
-
-        target = gate.get("target")
-        if not isinstance(target, dict):
-            errors.append(f"hitl_policy.gates.{gate_id}.target must be an object")
-        else:
-            target_node_id = target.get("node_id")
-            target_node_type = target.get("node_type")
-            if target_node_id is not None and not isinstance(target_node_id, str):
-                errors.append(f"hitl_policy.gates.{gate_id}.target.node_id must be a string")
-            if target_node_type is not None and not isinstance(target_node_type, str):
-                errors.append(f"hitl_policy.gates.{gate_id}.target.node_type must be a string")
-            if not target_node_id and not target_node_type:
-                errors.append(f"hitl_policy.gates.{gate_id}.target must include node_id or node_type")
-            if isinstance(target_node_id, str) and target_node_id not in node_types:
-                errors.append(f"hitl_policy.gates.{gate_id}.target.node_id is unknown: {target_node_id}")
-            if isinstance(target_node_type, str) and target_node_type not in set(node_types.values()):
-                errors.append(f"hitl_policy.gates.{gate_id}.target.node_type is unknown: {target_node_type}")
-
-        for key in ("title", "prompt", "body", "default_action", "interrupt_type", "type", "selection_mode", "reject_behavior"):
-            if key in gate and not isinstance(gate[key], str):
-                errors.append(f"hitl_policy.gates.{gate_id}.{key} must be a string")
-        if "max_interrupts_per_run" in gate:
-            try:
-                max_interrupts = int(gate.get("max_interrupts_per_run"))
-            except (TypeError, ValueError):
-                max_interrupts = 0
-            if max_interrupts < 1:
-                errors.append(f"hitl_policy.gates.{gate_id}.max_interrupts_per_run must be a positive integer")
-        if "selection_mode" in gate and isinstance(gate.get("selection_mode"), str) and gate["selection_mode"] not in HITL_SELECTION_MODES:
-            errors.append(f"hitl_policy.gates.{gate_id}.selection_mode is unsupported")
-
-        allowed_actions = gate.get("allowed_actions", [])
-        if not isinstance(allowed_actions, list) or not all(isinstance(action, str) for action in allowed_actions):
-            errors.append(f"hitl_policy.gates.{gate_id}.allowed_actions must be a list of strings")
-            allowed_actions = []
-        else:
-            unsupported = sorted(set(allowed_actions) - HITL_ACTIONS)
-            if unsupported:
-                errors.append(f"hitl_policy.gates.{gate_id}.allowed_actions unsupported: {', '.join(unsupported)}")
-            if mode == "choice" and "approve_selected" not in allowed_actions:
-                errors.append(f"hitl_policy.gates.{gate_id}.allowed_actions must include approve_selected for choice gates")
-            if mode == "approval" and "approve" not in allowed_actions:
-                errors.append(f"hitl_policy.gates.{gate_id}.allowed_actions must include approve for approval gates")
-        default_action = gate.get("default_action")
-        if isinstance(default_action, str) and allowed_actions and default_action not in allowed_actions:
-            errors.append(f"hitl_policy.gates.{gate_id}.default_action must be in allowed_actions")
-
-        routes = gate.get("routes", {})
-        if routes is not None and not isinstance(routes, dict):
-            errors.append(f"hitl_policy.gates.{gate_id}.routes must be an object")
-        elif isinstance(routes, dict):
-            for route_name, route_target in routes.items():
-                if not isinstance(route_name, str) or not isinstance(route_target, str):
-                    errors.append(f"hitl_policy.gates.{gate_id}.routes keys and values must be strings")
-                elif route_target not in node_types and route_target != "END":
-                    errors.append(f"hitl_policy.gates.{gate_id}.routes.{route_name} target is unknown: {route_target}")
-
-        options = gate.get("options", [])
-        if mode == "choice":
-            if not isinstance(options, list) or not options:
-                errors.append(f"hitl_policy.gates.{gate_id}.options must be a non-empty list for choice gates")
-            else:
-                seen_option_ids: set[str] = set()
-                for option in options:
-                    if not isinstance(option, dict):
-                        errors.append(f"hitl_policy.gates.{gate_id}.options entries must be objects")
-                        continue
-                    option_id = option.get("id")
-                    target_node_id = option.get("target_node_id")
-                    if not isinstance(option_id, str) or not option_id:
-                        errors.append(f"hitl_policy.gates.{gate_id}.options entries require string id")
-                    elif option_id in seen_option_ids:
-                        errors.append(f"hitl_policy.gates.{gate_id}.options duplicate id: {option_id}")
-                    else:
-                        seen_option_ids.add(option_id)
-                    if not isinstance(target_node_id, str) or target_node_id not in node_types:
-                        errors.append(f"hitl_policy.gates.{gate_id}.options.{option_id or '?'} target_node_id is unknown")
-    return errors
 
 class GenericGraphValidator:
     """Catalog-backed validator for schema v2 graph specs."""
@@ -274,10 +59,10 @@ class GenericGraphValidator:
         if not isinstance(config, dict):
             errors.append("config must be an object")
             return errors
-        errors.extend(self._collect_config_errors(config, workflow_id))
+        errors.extend(collect_config_errors(config, workflow_id))
 
         allowed_tool_ids = config.get("allowed_tool_ids", [])
-        known_tool_ids = _known_tool_ids()
+        known_tool_ids = known_workflow_tool_ids()
         if not isinstance(allowed_tool_ids, list) or not all(isinstance(item, str) for item in allowed_tool_ids):
             errors.append("allowed_tool_ids must be a list of strings")
             allowed_tool_ids = []
@@ -421,94 +206,6 @@ class GenericGraphValidator:
 
         errors.extend(self._collect_loop_policy_errors(config.get("loop_policy"), adjacency, node_ids, node_types_by_id, node_catalog))
         errors.extend(self._collect_reachability_errors(adjacency, node_ids))
-        return errors
-
-    def _collect_config_errors(self, config: Dict[str, Any], workflow_id: Any) -> list[str]:
-        errors: list[str] = []
-        unknown_keys = sorted(set(config) - ALLOWED_WORKFLOW_CONFIG_KEYS)
-        if unknown_keys:
-            errors.append(f"unknown config keys: {', '.join(unknown_keys)}")
-
-        for key in ("use_web_search", "use_reranker"):
-            if key in config and not isinstance(config[key], bool):
-                errors.append(f"{key} must be a boolean")
-
-        if "replans" in config:
-            replans = config.get("replans")
-            if not isinstance(replans, int):
-                errors.append("replans must be an integer")
-            elif replans < 1 or replans > REPLANS_LIMIT:
-                errors.append(f"replans must be between 1 and {REPLANS_LIMIT}")
-
-        system_role = config.get("system_role", "")
-        if not isinstance(system_role, str) or len(system_role) > MAX_SYSTEM_ROLE_CHARS:
-            errors.append(f"system_role must be a string up to {MAX_SYSTEM_ROLE_CHARS} characters")
-
-        custom_instructions = config.get("custom_instructions", "")
-        if not isinstance(custom_instructions, str) or len(custom_instructions) > MAX_CUSTOM_INSTRUCTIONS_CHARS:
-            errors.append(f"custom_instructions must be a string up to {MAX_CUSTOM_INSTRUCTIONS_CHARS} characters")
-
-        tool_instructions = config.get("tool_instructions", {})
-        if not isinstance(tool_instructions, dict):
-            errors.append("tool_instructions must be an object")
-        elif not all(isinstance(k, str) and isinstance(v, str) for k, v in tool_instructions.items()):
-            errors.append("tool_instructions keys and values must be strings")
-
-        prefetch_policy = config.get("prefetch_policy", {})
-        if not isinstance(prefetch_policy, dict):
-            errors.append("prefetch_policy must be an object")
-        elif set(prefetch_policy) - {"enabled"}:
-            errors.append("prefetch_policy only supports the enabled key")
-        elif "enabled" in prefetch_policy and not isinstance(prefetch_policy["enabled"], bool):
-            errors.append("prefetch_policy.enabled must be a boolean")
-
-        context_policy = config.get("context_policy", {})
-        if not isinstance(context_policy, dict):
-            errors.append("context_policy must be an object")
-        else:
-            unknown_context_keys = sorted(
-                set(context_policy)
-                - {
-                    "evidence_packet_limit",
-                    "evidence_packet_content_limit",
-                    "final_prompt_assembly",
-                    "evidence_dedupe",
-                    "evidence_compression",
-                    "final_context_char_limit",
-                }
-            )
-            if unknown_context_keys:
-                errors.append(f"context_policy has unknown keys: {', '.join(unknown_context_keys)}")
-            for key in ("evidence_packet_limit", "evidence_packet_content_limit", "final_context_char_limit"):
-                if key in context_policy:
-                    try:
-                        value = int(context_policy[key])
-                    except (TypeError, ValueError):
-                        value = 0
-                    if value < 1:
-                        errors.append(f"context_policy.{key} must be a positive integer")
-            if "final_prompt_assembly" in context_policy and not isinstance(context_policy["final_prompt_assembly"], str):
-                errors.append("context_policy.final_prompt_assembly must be a string")
-            elif (
-                "final_prompt_assembly" in context_policy
-                and context_policy["final_prompt_assembly"] not in CONTEXT_FINAL_PROMPT_ASSEMBLIES
-            ):
-                errors.append(
-                    "context_policy.final_prompt_assembly must be one of: "
-                    f"{', '.join(sorted(CONTEXT_FINAL_PROMPT_ASSEMBLIES))}"
-                )
-            if "evidence_dedupe" in context_policy and not isinstance(context_policy["evidence_dedupe"], bool):
-                errors.append("context_policy.evidence_dedupe must be a boolean")
-            if "evidence_compression" in context_policy and not isinstance(context_policy["evidence_compression"], str):
-                errors.append("context_policy.evidence_compression must be a string")
-            elif (
-                "evidence_compression" in context_policy
-                and context_policy["evidence_compression"] not in CONTEXT_EVIDENCE_COMPRESSION_MODES
-            ):
-                errors.append(
-                    "context_policy.evidence_compression must be one of: "
-                    f"{', '.join(sorted(CONTEXT_EVIDENCE_COMPRESSION_MODES))}"
-                )
         return errors
 
     def _collect_catalog_route_function_errors(
