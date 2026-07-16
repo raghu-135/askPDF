@@ -269,6 +269,11 @@ def main(argv: list[str] | None = None) -> int:
         env["AGENT_CHECKPOINT_DATABASE_URL"] = test_db_url
         env["ASKPDF_AGENT_CHECKPOINTER_SETUP"] = "false"
         env["ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST"] = "1"
+    else:
+        env["ASKPDF_AGENT_CHECKPOINTER"] = "memory"
+        env.pop("AGENT_CHECKPOINT_DATABASE_URL", None)
+        env.pop("ASKPDF_AGENT_CHECKPOINTER_SETUP", None)
+        env.pop("ASKPDF_RUN_POSTGRES_CHECKPOINT_TEST", None)
 
     try:
         if targets:
