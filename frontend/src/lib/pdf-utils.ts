@@ -1,6 +1,7 @@
 import type { FormattedSelection } from "@embedpdf/plugin-selection/react";
 import type { SearchResult } from "@embedpdf/models";
 import type { PdfTab } from "../components/PdfTabs";
+import { ThreadFileSourceType } from "./enums";
 
 export type PdfSelectionBBox = {
   x: number;
@@ -60,7 +61,7 @@ export function handleTabChangeUtil(
   setActiveTabId(tabId);
   setCurrentPdfId(null);
   setPlayRequestId(null);
-  setActiveSource('pdf');
+  setActiveSource(ThreadFileSourceType.Pdf);
 }
 
 /**

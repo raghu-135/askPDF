@@ -64,6 +64,16 @@ import {
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbeddingModelReady } from '../lib/models-api';
+import {
+    AgentRunResumeAction as AgentRunResumeActionValue,
+    ChatComposerIndexingStatus,
+    EmbeddingReadinessStatus,
+    InterruptStatus,
+    MessageRole,
+    ReasoningFormat,
+    type ChatComposerIndexingStatus as ChatComposerIndexingStatusValue,
+    type ReasoningFormat as ReasoningFormatValue,
+} from '../lib/enums';
 import ChatSettingsDialog from './ChatSettingsDialog';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 import AgentRunDebugPanel from './agent-debug/AgentRunDebugPanel';
@@ -72,7 +82,7 @@ interface ChatMessage extends Message {
     isRecollected?: boolean;
     reasoning?: string;
     reasoning_available?: boolean;
-    reasoning_format?: 'structured' | 'tagged_text' | 'none';
+    reasoning_format?: ReasoningFormatValue;
     rewritten_query?: string;
     web_sources?: WebSource[];
     agent_run_id?: string;
@@ -162,7 +172,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const [indexingStatus, setIndexingStatus] = useState<'checking' | 'indexing' | 'ready' | 'blocked' | 'error'>('checking');
+    const [indexingStatus, setIndexingStatus] = useState<ChatComposerIndexingStatusValue>(ChatComposerIndexingStatus.Checking);
     const [useWebSearch, setUseWebSearch] = useState(false);
     const [contextWindow, setContextWindow] = useState<number>(0);
     const [replans, setReplans] = useState(1);
@@ -316,7 +326,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setMessages([]);
             setClarificationOptions(null);
             lastClarificationIdsRef.current = null;
-            setIndexingStatus('ready');
+            setIndexingStatus(ChatComposerIndexingStatus.Ready);
             applyThreadSettingsToState(undefined);
             setIsEmbeddingModelValid(null);
             setIsLlmToolsSupported(null);
@@ -430,8 +440,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 ...m,
                 content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
                 isRecollected: false,
-                rewritten_query: m.role === 'user' ? m.context_compact : undefined,
-                web_sources: m.role === 'assistant' ? (m.web_sources || []) : undefined,
+                rewritten_query: m.role === MessageRole.User ? m.context_compact : undefined,
+                web_sources: m.role === MessageRole.Assistant ? (m.web_sources || []) : undefined,
                 agent_run_id: m.agent_run_id,
                 agent_run_turn_kind: m.agent_run_turn_kind,
                 agent_run_sequence: m.agent_run_sequence,
@@ -459,7 +469,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             const run = await getAgentRun(latest.id, threadId);
             if (activeThreadIdRef.current !== threadId) return;
             const interrupt = run.pending_interrupt || latest.pending_interrupt;
-            if (!interrupt || interrupt.status && interrupt.status !== 'pending') {
+            if (!interrupt || interrupt.status && interrupt.status !== InterruptStatus.Pending) {
                 setPendingHumanReview(null);
                 setHumanReviewEditText('');
                 return;
@@ -489,7 +499,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 if (recoveredQuestion.trim()) {
                     recovered.push({
                         id: localUserMessageId,
-                        role: 'user',
+                        role: MessageRole.User,
                         content: recoveredQuestion.trim(),
                         created_at: run.started_at || new Date().toISOString(),
                         agent_run_id: run.id,
@@ -498,7 +508,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 }
                 recovered.push({
                     id: localAssistantMessageId,
-                    role: 'assistant',
+                    role: MessageRole.Assistant,
                     content: interrupt.title || 'Human review required before the agent can continue.',
                     created_at: interrupt.requested_at || run.started_at || new Date().toISOString(),
                     agent_run_id: run.id,
@@ -516,16 +526,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const checkIndexStatus = async () => {
         if (!activeThread) return;
         try {
-            setIndexingStatus('checking');
+            setIndexingStatus(ChatComposerIndexingStatus.Checking);
             const status = await getThreadIndexStatus(activeThread.id);
             // Map rag-service status ('ready' | 'blocked') to UI status
-            if (status.status === 'ready') {
-                setIndexingStatus('ready');
-            } else if (status.status === 'blocked') {
-                setIndexingStatus('blocked');
+            if (status.status === EmbeddingReadinessStatus.Ready) {
+                setIndexingStatus(ChatComposerIndexingStatus.Ready);
+            } else if (status.status === EmbeddingReadinessStatus.Blocked) {
+                setIndexingStatus(ChatComposerIndexingStatus.Blocked);
             } else {
                 // 'not_ready' means still indexing
-                setIndexingStatus('indexing');
+                setIndexingStatus(ChatComposerIndexingStatus.Indexing);
             }
             // Update embedding model status from the same endpoint
             if (status.embeddingModelReady !== undefined) {
@@ -534,7 +544,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         } catch (error) {
             console.error('Failed to check index status:', error);
             // Set to error state instead of falsely claiming ready
-            setIndexingStatus('error');
+            setIndexingStatus(ChatComposerIndexingStatus.Error);
             // Don't change embedding model status - keep previous state
         }
     };
@@ -556,12 +566,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (result.success && result.data !== undefined) {
             setIsEmbeddingModelValid(result.data);
             if (!result.data) {
-                setIndexingStatus('blocked');
+                setIndexingStatus(ChatComposerIndexingStatus.Blocked);
             }
         } else {
             console.error('Failed to check embedding model status after retries:', result.error);
             setIsEmbeddingModelValid(false);
-            setIndexingStatus('error');
+            setIndexingStatus(ChatComposerIndexingStatus.Error);
         }
     };
 
@@ -739,9 +749,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     // Polling for indexing and embedding model status
     useEffect(() => {
         if (!activeThread) return;
-        if (indexingStatus === 'blocked' || isEmbeddingModelValid === false) return;
+        if (indexingStatus === ChatComposerIndexingStatus.Blocked || isEmbeddingModelValid === false) return;
         // Keep polling if either indexing is in progress OR embedding model is not yet valid/checked
-        if (indexingStatus !== 'indexing' && isEmbeddingModelValid === true) return;
+        if (indexingStatus !== ChatComposerIndexingStatus.Indexing && isEmbeddingModelValid === true) return;
 
         let intervalId: NodeJS.Timeout | null = null;
 
@@ -752,8 +762,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     maxRetries: 3,
                     interval: 5000,
                     shouldStop: (status) => (
-                        (status.status === 'ready' && status.embeddingModelReady === true) ||
-                        status.status === 'blocked' ||
+                        (status.status === EmbeddingReadinessStatus.Ready && status.embeddingModelReady === true) ||
+                        status.status === EmbeddingReadinessStatus.Blocked ||
                         status.embeddingModelReady === false
                     ),
                     retryableErrors: (error) => isRetryableError(error) // Use smart error classification
@@ -762,13 +772,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
             if (result.success && result.data) {
                 // Update indexing status
-                if (result.data.status === 'ready') {
-                    setIndexingStatus('ready');
-                } else if (result.data.status === 'blocked') {
-                    setIndexingStatus('blocked');
+                if (result.data.status === EmbeddingReadinessStatus.Ready) {
+                    setIndexingStatus(ChatComposerIndexingStatus.Ready);
+                } else if (result.data.status === EmbeddingReadinessStatus.Blocked) {
+                    setIndexingStatus(ChatComposerIndexingStatus.Blocked);
                 } else {
                     // 'not_ready' means still indexing
-                    setIndexingStatus('indexing');
+                    setIndexingStatus(ChatComposerIndexingStatus.Indexing);
                 }
 
                 // Update embedding model status
@@ -790,11 +800,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     if (result.resourceNotFound) {
                         // Thread was deleted - reset to initial state
                         console.log('Thread no longer exists, stopping polling');
-                        setIndexingStatus('checking');
+                        setIndexingStatus(ChatComposerIndexingStatus.Checking);
                         setIsEmbeddingModelValid(false);
                     } else {
                         // Other error - set error state
-                        setIndexingStatus('error');
+                        setIndexingStatus(ChatComposerIndexingStatus.Error);
                     }
                 }
             }
@@ -862,7 +872,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const handleEditQuestion = (msg: ChatMessage, event: React.MouseEvent) => {
         event.stopPropagation();
-        if (loading || msg.role !== 'user') return;
+        if (loading || msg.role !== MessageRole.User) return;
 
         const content = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '');
         setInput(content);
@@ -888,7 +898,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 resume_token: interrupt.resume_token || undefined,
                 resume_version: interrupt.resume_version || undefined,
                 thread_id: activeThread.id,
-                edited_payload: action === 'edit' ? { final_answer: humanReviewEditText } : undefined,
+                edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
                 client_metadata: { source: 'chat_pending_review_panel' },
             });
             setAgentRunDetails(prev => ({ ...prev, [response.agent_run.id]: response.agent_run }));
@@ -947,7 +957,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
         const tempUserMsg: ChatMessage = {
             id: 'temp-user-' + Date.now(),
-            role: 'user',
+            role: MessageRole.User,
             content: textToSend,
             created_at: new Date().toISOString()
         };
@@ -1011,7 +1021,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         ...updated,
                         {
                             id: localUserMessageId,
-                            role: 'user',
+                            role: MessageRole.User,
                             content: textToSend,
                             rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
                             agent_run_id: response.agent_run_id,
@@ -1024,7 +1034,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         },
                         {
                             id: localAssistantMessageId,
-                            role: 'assistant',
+                            role: MessageRole.Assistant,
                             content: response.pending_interrupt.title || 'Human review required before the agent can continue.',
                             agent_run_id: response.agent_run_id,
                             agent_run_turn_kind: 'assistant_pending_review',
@@ -1086,7 +1096,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
                     finalMessages.push({
                         id: response.user_message_id || ('final-user-' + Date.now()),
-                        role: 'user',
+                        role: MessageRole.User,
                         content: textToSend, // Keep original input
                         rewritten_query: response.rewritten_query && response.rewritten_query !== textToSend ? response.rewritten_query : undefined,
                         agent_run_id: response.agent_run_id,
@@ -1102,11 +1112,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     if (response.assistant_message_id || response.answer) {
                         finalMessages.push({
                             id: response.assistant_message_id || ('assistant-' + Date.now()),
-                            role: 'assistant',
+                            role: MessageRole.Assistant,
                             content: typeof response.answer === 'string' ? response.answer : String(response.answer ?? ''),
                             reasoning: response.reasoning || '',
                             reasoning_available: !!response.reasoning_available,
-                            reasoning_format: response.reasoning_format || 'none',
+                            reasoning_format: response.reasoning_format || ReasoningFormat.None,
                             web_sources: response.web_sources || [],
                             agent_run_id: response.agent_run_id,
                             agent_run_turn_kind: response.agent_run_turn_kind,
@@ -1151,7 +1161,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             console.error(err);
             const errorMessage: ChatMessage = {
                 id: 'error-' + Date.now(),
-                role: 'assistant',
+                role: MessageRole.Assistant,
                 content: `Error: ${err.message || "Failed to get response."}`,
                 created_at: new Date().toISOString()
             };
@@ -1207,14 +1217,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     id.startsWith('review-asst-');
 
                 // Deleting a local assistant message also removes its preceding local user message.
-                if (msg.role === 'assistant' && idx > 0) {
+                if (msg.role === MessageRole.Assistant && idx > 0) {
                     const prevMsg = prev[idx - 1];
                     if (isLocalUser(prevMsg.id)) {
                         return prev.filter((_, i) => i !== idx && i !== idx - 1);
                     }
                 }
                 // Deleting a local user message also removes its following local assistant message.
-                if (msg.role === 'user' && idx < prev.length - 1) {
+                if (msg.role === MessageRole.User && idx < prev.length - 1) {
                     const nextMsg = prev[idx + 1];
                     if (isLocalAssistant(nextMsg.id)) {
                         return prev.filter((_, i) => i !== idx && i !== idx + 1);
@@ -1387,7 +1397,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             borderColor: 'primary.main',
         },
     };
-    const latestUserMessageId = [...messages].reverse().find(m => m.role === 'user')?.id ?? null;
+    const latestUserMessageId = [...messages].reverse().find(m => m.role === MessageRole.User)?.id ?? null;
     const pendingReviewInterrupt = pendingHumanReview?.interrupt ?? null;
     const pendingReviewActions = Array.isArray(pendingReviewInterrupt?.allowed_actions)
         ? pendingReviewInterrupt.allowed_actions.map(String)
@@ -1549,8 +1559,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <List sx={{ flexGrow: 1, minHeight: 0, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}>
                 {messages.map((msg, idx) => {
                     const isRecollected = recollectedIds.has(msg.id);
-                    const isUser = msg.role === 'user';
-                    const showAgentRunDebug = msg.role === 'assistant' && Boolean(msg.agent_run_id);
+                    const isUser = msg.role === MessageRole.User;
+                    const showAgentRunDebug = msg.role === MessageRole.Assistant && Boolean(msg.agent_run_id);
                     const isEditingThisMessage = editingMessageId === msg.id;
                     const isOlderQuestion = isUser && latestUserMessageId !== null && msg.id !== latestUserMessageId;
                     const editTooltip = isEditingThisMessage
@@ -1742,8 +1752,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
                                     '& blockquote': { m: 0, pl: 1.5, borderLeft: '3px solid', borderColor: 'divider', overflowWrap: 'anywhere', wordBreak: 'break-word' },
                                     '& a': { overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                                    '& code': { bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                                    '& pre': { maxWidth: '100%', bgcolor: msg.role === 'user' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 },
+                                    '& code': { bgcolor: msg.role === MessageRole.User ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                                    '& pre': { maxWidth: '100%', bgcolor: msg.role === MessageRole.User ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 },
                                     '& pre code': { overflowWrap: 'normal', wordBreak: 'normal' },
                                     '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', mb: 1 },
                                     '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.5 }
@@ -1752,7 +1762,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         {typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')}
                                     </ReactMarkdown>
                                 </Typography>
-                                {msg.role === 'user' && msg.rewritten_query && (
+                                {msg.role === MessageRole.User && msg.rewritten_query && (
                                     <Box sx={{ mt: 1 }}>
                                         <details>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
@@ -1784,7 +1794,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         </details>
                                     </Box>
                                 )}
-                                {msg.role === 'assistant' && msg.reasoning_available && msg.reasoning && (
+                                {msg.role === MessageRole.Assistant && msg.reasoning_available && msg.reasoning && (
                                     <Box sx={{ mt: 1 }}>
                                         <details>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
@@ -1841,7 +1851,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         </details>
                                     </Box>
                                 )}
-                                {msg.role === 'assistant' && msg.web_sources && msg.web_sources.length > 0 && (
+                                {msg.role === MessageRole.Assistant && msg.web_sources && msg.web_sources.length > 0 && (
                                     <Box sx={{ mt: 1 }}>
                                         <details>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
@@ -2049,9 +2059,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             multiline
                                             minRows={5}
                                             maxRows={12}
-                                            label={pendingReviewActions.includes('edit') ? 'Final answer draft' : 'Proposed final answer'}
+                                            label={pendingReviewActions.includes(AgentRunResumeActionValue.Edit) ? 'Final answer draft' : 'Proposed final answer'}
                                             value={humanReviewEditText}
-                                            disabled={!pendingReviewActions.includes('edit') || Boolean(humanReviewSubmitting)}
+                                            disabled={!pendingReviewActions.includes(AgentRunResumeActionValue.Edit) || Boolean(humanReviewSubmitting)}
                                             onChange={(event) => setHumanReviewEditText(event.target.value)}
                                             sx={{
                                                 '& .MuiOutlinedInput-root': {
@@ -2061,49 +2071,49 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         />
                                     )}
                                     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-                                        {pendingReviewActions.includes('approve') && (
+                                        {pendingReviewActions.includes(AgentRunResumeActionValue.Approve) && (
                                             <Button
                                                 size="small"
                                                 variant="contained"
                                                 startIcon={<CheckIcon fontSize="inherit" />}
                                                 disabled={Boolean(humanReviewSubmitting)}
-                                                onClick={() => handleHumanReviewAction('approve')}
+                                                onClick={() => handleHumanReviewAction(AgentRunResumeActionValue.Approve)}
                                             >
-                                                {humanReviewSubmitting === 'approve' ? 'Approving...' : approveLabel}
+                                                {humanReviewSubmitting === AgentRunResumeActionValue.Approve ? 'Approving...' : approveLabel}
                                             </Button>
                                         )}
-                                        {pendingReviewActions.includes('edit') && (
+                                        {pendingReviewActions.includes(AgentRunResumeActionValue.Edit) && (
                                             <Button
                                                 size="small"
                                                 variant="contained"
                                                 color="secondary"
                                                 startIcon={<EditIcon fontSize="inherit" />}
                                                 disabled={Boolean(humanReviewSubmitting) || !humanReviewEditText.trim()}
-                                                onClick={() => handleHumanReviewAction('edit')}
+                                                onClick={() => handleHumanReviewAction(AgentRunResumeActionValue.Edit)}
                                             >
-                                                {humanReviewSubmitting === 'edit' ? 'Saving...' : 'Save edit'}
+                                                {humanReviewSubmitting === AgentRunResumeActionValue.Edit ? 'Saving...' : 'Save edit'}
                                             </Button>
                                         )}
-                                        {pendingReviewActions.includes('continue_without') && (
+                                        {pendingReviewActions.includes(AgentRunResumeActionValue.ContinueWithout) && (
                                             <Button
                                                 size="small"
                                                 variant="outlined"
                                                 disabled={Boolean(humanReviewSubmitting)}
-                                                onClick={() => handleHumanReviewAction('continue_without')}
+                                                onClick={() => handleHumanReviewAction(AgentRunResumeActionValue.ContinueWithout)}
                                             >
-                                                {humanReviewSubmitting === 'continue_without' ? 'Continuing...' : continueWithoutLabel}
+                                                {humanReviewSubmitting === AgentRunResumeActionValue.ContinueWithout ? 'Continuing...' : continueWithoutLabel}
                                             </Button>
                                         )}
-                                        {pendingReviewActions.includes('reject') && (
+                                        {pendingReviewActions.includes(AgentRunResumeActionValue.Reject) && (
                                             <Button
                                                 size="small"
                                                 variant="outlined"
                                                 color="error"
                                                 startIcon={<CloseIcon fontSize="inherit" />}
                                                 disabled={Boolean(humanReviewSubmitting)}
-                                                onClick={() => handleHumanReviewAction('reject')}
+                                                onClick={() => handleHumanReviewAction(AgentRunResumeActionValue.Reject)}
                                             >
-                                                {humanReviewSubmitting === 'reject' ? 'Rejecting...' : 'Reject'}
+                                                {humanReviewSubmitting === AgentRunResumeActionValue.Reject ? 'Rejecting...' : 'Reject'}
                                             </Button>
                                         )}
                                     </Box>

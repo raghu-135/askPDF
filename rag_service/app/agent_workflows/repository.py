@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.agent_workflows.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
+from app.agent_workflows.enums import AgentRunResumeAction
 from app.agent_workflows.interrupts import (
     INTERRUPT_STATUS_EXPIRED,
     INTERRUPT_STATUS_PENDING,
@@ -54,6 +55,7 @@ from app.agent_workflows.workflow_store import (
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
+    AgentRunStatus,
     AgentWorkflow,
     AgentRun,
     ChatTurn,
@@ -61,13 +63,13 @@ from app.db.models_sqlmodel import (
 from app.time_utils import iso_utc_z, utc_now
 
 
-RUN_STATUS_RUNNING = "running"
-RUN_STATUS_AWAITING_HUMAN = "awaiting_human"
-RUN_STATUS_COMPLETED = "completed"
-RUN_STATUS_CLARIFICATION = "clarification"
-RUN_STATUS_FAILED = "failed"
-RUN_STATUS_REJECTED = "rejected"
-RUN_STATUS_EXPIRED = "expired"
+RUN_STATUS_RUNNING = AgentRunStatus.RUNNING.value
+RUN_STATUS_AWAITING_HUMAN = AgentRunStatus.AWAITING_HUMAN.value
+RUN_STATUS_COMPLETED = AgentRunStatus.COMPLETED.value
+RUN_STATUS_CLARIFICATION = AgentRunStatus.CLARIFICATION.value
+RUN_STATUS_FAILED = AgentRunStatus.FAILED.value
+RUN_STATUS_REJECTED = AgentRunStatus.REJECTED.value
+RUN_STATUS_EXPIRED = AgentRunStatus.EXPIRED.value
 
 
 class AgentWorkflowRepository:
@@ -338,7 +340,7 @@ class AgentWorkflowRepository:
     ) -> Optional[InterruptResolutionResult]:
         """Resolve one pending interrupt atomically and idempotently."""
 
-        if action not in RESUME_ACTIONS and action != "reject":
+        if action not in RESUME_ACTIONS and action != AgentRunResumeAction.REJECT.value:
             raise AgentRunInterruptError(
                 "invalid_interrupt_action",
                 f"Unsupported interrupt action: {action}",
@@ -439,13 +441,13 @@ class AgentWorkflowRepository:
                     },
                 )
                 outcome = INTERRUPT_STATUS_EXPIRED
-            elif action == "reject" and interrupt.get("reject_behavior") == "resume":
+            elif action == AgentRunResumeAction.REJECT.value and interrupt.get("reject_behavior") == "resume":
                 interrupt["status"] = INTERRUPT_STATUS_RESUMED
                 interrupt["decision"] = decision
                 run.status = RUN_STATUS_RUNNING
                 run.completed_at = None
                 outcome = INTERRUPT_STATUS_RESUMED
-            elif action == "reject":
+            elif action == AgentRunResumeAction.REJECT.value:
                 interrupt["status"] = INTERRUPT_STATUS_REJECTED
                 interrupt["decision"] = decision
                 run.status = RUN_STATUS_REJECTED

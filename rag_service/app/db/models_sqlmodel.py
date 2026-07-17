@@ -10,42 +10,19 @@ This module contains all SQLModel table classes with proper:
 from datetime import datetime
 import uuid
 from typing import Dict, Any, List, Optional
-from enum import Enum
 
 from sqlalchemy import Boolean, Column, DateTime, func, Index, String, Integer, Float, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
+from app.db.enums import (
+    AgentRunStatus,
+    ChatTurnStatus,
+    FileSourceType,
+    MessageRole,
+    ProcessStatus,
+    WorkflowVisibility,
+)
 from app.time_utils import iso_utc_z, utc_now
 from sqlmodel import SQLModel, Field, Relationship
-
-
-class ProcessStatus(str, Enum):
-    """Status values for processing operations."""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    UNKNOWN = "unknown"
-
-    @classmethod
-    def is_completed(cls, status: str) -> bool:
-        """Check if status is completed."""
-        return status == cls.COMPLETED.value
-
-    @classmethod
-    def is_failed(cls, status: str) -> bool:
-        """Check if status is failed."""
-        return status == cls.FAILED.value
-
-    @classmethod
-    def is_running(cls, status: str) -> bool:
-        """Check if status is running."""
-        return status == cls.RUNNING.value
-
-
-class MessageRole(str, Enum):
-    """Role values for chat messages."""
-    USER = "user"
-    ASSISTANT = "assistant"
 
 
 # ============================================================================
@@ -141,7 +118,7 @@ class File(SQLModel, table=True):
     file_hash: str = Field(primary_key=True)
     file_name: str = Field(index=True)  # Note: matches existing model, not 'filename'
     file_path: Optional[str] = None
-    source_type: str = Field(default="pdf", index=True)
+    source_type: str = Field(default=FileSourceType.PDF.value, index=True)
     file_status: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -192,7 +169,7 @@ class ChatTurn(SQLModel, table=True):
         default=None,
         sa_column=Column(JSONB)
     )
-    status: str = Field(default="completed", index=True)
+    status: str = Field(default=ChatTurnStatus.COMPLETED.value, index=True)
     payload: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -226,7 +203,7 @@ class AgentWorkflow(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     name: str = Field(index=True, unique=True)
     description: str = ""
-    visibility: str = Field(default="builtin", index=True)
+    visibility: str = Field(default=WorkflowVisibility.BUILTIN.value, index=True)
     is_builtin: bool = Field(
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default="false"),
@@ -286,7 +263,7 @@ class AgentRun(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
     )
-    status: str = Field(default="running", index=True)
+    status: str = Field(default=AgentRunStatus.RUNNING.value, index=True)
     checkpoint_thread_id: Optional[str] = None
     pending_interrupt_json: Optional[Dict[str, Any]] = Field(
         default=None,

@@ -8,6 +8,7 @@ import type {
   AgentTraceRefs,
   AgentWorkflowGraphSpec,
 } from './agent-graph-types';
+import { AgentGraphNodeStatus as AgentGraphNodeStatusValue } from '../../lib/enums.ts';
 export { formatNodeLabel, formatNodeInstanceLabel } from './agent-node-labels.js';
 import { formatNodeLabel, formatNodeInstanceLabel } from './agent-node-labels.js';
 
@@ -155,16 +156,16 @@ const deriveStatus = (
   toolSummaries: AgentGraphToolSummary[],
   executionPlan: string[],
 ): AgentGraphNodeStatus => {
-  if (events.some((event) => event.error || event.ok === false) || toolSummaries.some((tool) => !tool.ok)) return 'error';
-  if (events.some((event) => event.skipped === true)) return 'skipped';
-  if (events.length > 0) return 'active';
-  if (executionPlan.includes(nodeId)) return 'planned';
-  return 'inactive';
+  if (events.some((event) => event.error || event.ok === false) || toolSummaries.some((tool) => !tool.ok)) return AgentGraphNodeStatusValue.Error;
+  if (events.some((event) => event.skipped === true)) return AgentGraphNodeStatusValue.Skipped;
+  if (events.length > 0) return AgentGraphNodeStatusValue.Active;
+  if (executionPlan.includes(nodeId)) return AgentGraphNodeStatusValue.Planned;
+  return AgentGraphNodeStatusValue.Inactive;
 };
 
 const hasActiveNode = (nodeId: string, nodesById: Map<string, AgentGraphNode>) => {
   const status = nodesById.get(nodeId)?.status;
-  return status === 'active' || status === 'planned' || status === 'skipped' || status === 'error';
+  return status === AgentGraphNodeStatusValue.Active || status === AgentGraphNodeStatusValue.Planned || status === AgentGraphNodeStatusValue.Skipped || status === AgentGraphNodeStatusValue.Error;
 };
 
 const selectedConditionalRoute = (

@@ -14,6 +14,7 @@ import asyncio
 from collections import Counter
 from typing import Dict, Any, List, Optional, Tuple
 from app.db import (
+    FileSourceType,
     ProcessStatus,
     get_file,
     get_file_parsed_sentences,
@@ -350,7 +351,7 @@ async def _upsert_document_stats(
 ) -> None:
     """Persist thread-local document inventory metadata used by retrieval and agents."""
     file = await get_file(file_hash)
-    source_type = metadata.get("source_type") or metadata.get("source_kind") or (file.source_type if file else "pdf")
+    source_type = metadata.get("source_type") or metadata.get("source_kind") or (file.source_type if file else FileSourceType.PDF.value)
     title = metadata.get("title") or (file.file_name if file else file_hash)
     content_hash = metadata.get("content_hash")
 
@@ -804,7 +805,7 @@ async def index_document_for_thread(
 
             # 3. Prepare metadata for each chunk
             chunk_metadatas = []
-            source_kind = metadata.get("source_kind", "pdf")
+            source_kind = metadata.get("source_kind", FileSourceType.PDF.value)
             for i, _chunk in enumerate(chunks):
                 page_metadata = parsed_chunks[i].get("metadata", {}) if i < len(parsed_chunks) else {}
                 chunk_base_metadata = {
@@ -1112,7 +1113,7 @@ async def trigger_reembed_for_missing_sources(
                     embedding_model_name=embedding_model_name,
                 )
                 if result.get("status") == "success":
-                    reindexed_files.append({"file_hash": f.file_hash, "source_type": "pdf"})
+                    reindexed_files.append({"file_hash": f.file_hash, "source_type": FileSourceType.PDF.value})
             except Exception as item_err:
                 logger.warning("Skipping re-embed for file %s: %s", f.file_hash, item_err)
 

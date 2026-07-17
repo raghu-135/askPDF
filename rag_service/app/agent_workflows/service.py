@@ -8,11 +8,12 @@ from typing import Any, Dict, Optional
 
 from app.agent_workflows.checkpointing import open_agent_checkpointer
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
+from app.agent_workflows.enums import InterruptStatus
 from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.repository import AgentWorkflowRepository, InterruptResolutionResult
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
-from app.db import get_thread_settings
+from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
 
 logger = logging.getLogger(__name__)
@@ -189,9 +190,15 @@ class AgentRunService:
             error_json = result.get("agent_error") if isinstance(result, dict) else None
             status = result.get("status") if isinstance(result.get("status"), str) else None
             if status is None:
-                status = "failed" if error_json else "clarification" if result.get("clarification_options") else "completed"
+                status = (
+                    AgentRunStatus.FAILED.value
+                    if error_json
+                    else ChatTurnStatus.CLARIFICATION.value
+                    if result.get("clarification_options")
+                    else AgentRunStatus.COMPLETED.value
+                )
             metrics = build_run_metrics(result, duration_ms=duration_ms)
-            if status == "awaiting_human":
+            if status == AgentRunStatus.AWAITING_HUMAN.value:
                 if hasattr(trace_recorder, "record_runtime_event"):
                     trace_recorder.record_runtime_event(
                         "checkpoint.created",
@@ -199,7 +206,7 @@ class AgentRunService:
                             "askpdf.run.id": run.id,
                             "askpdf.thread.id": thread_id,
                             "askpdf.checkpoint.thread_id": run.checkpoint_thread_id,
-                            "askpdf.status": "awaiting_human",
+                            "askpdf.status": AgentRunStatus.AWAITING_HUMAN.value,
                         },
                         output_data={
                             "interrupt_id": (result.get("pending_interrupt") or {}).get("interrupt_id"),
@@ -252,7 +259,7 @@ class AgentRunService:
             metrics = build_run_metrics({"agent_error": error_json}, duration_ms=duration_ms)
             completed_run = await self.repository.complete_run(
                 run.id,
-                status="failed",
+                status=AgentRunStatus.FAILED.value,
                 metrics_json=metrics,
                 error_json=error_json,
             )
@@ -294,7 +301,7 @@ class AgentRunService:
             return None
         if (
             resolution.duplicate
-            or resolution.outcome != "resumed"
+            or resolution.outcome != InterruptStatus.RESUMED.value
             or not isinstance(resolution.interrupt, dict)
             or resolution.interrupt.get("checkpoint_resume") is not True
         ):
@@ -317,8 +324,8 @@ class AgentRunService:
                 **build_run_metrics(result, duration_ms=float(result.get("duration_ms") or 0)),
             }
             error_json = result.get("agent_error") if isinstance(result, dict) else None
-            status = result.get("status") if isinstance(result.get("status"), str) else "completed"
-            if status == "awaiting_human":
+            status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
+            if status == AgentRunStatus.AWAITING_HUMAN.value:
                 pending_interrupt = result.get("pending_interrupt") or {}
                 if hasattr(resume_trace_recorder, "record_runtime_event"):
                     resume_trace_recorder.record_runtime_event(
@@ -327,7 +334,7 @@ class AgentRunService:
                             "askpdf.run.id": resolution.run.id,
                             "askpdf.thread.id": resolution.run.thread_id,
                             "askpdf.checkpoint.thread_id": resolution.run.checkpoint_thread_id,
-                            "askpdf.status": "awaiting_human",
+                            "askpdf.status": AgentRunStatus.AWAITING_HUMAN.value,
                         },
                         output_data={
                             "interrupt_id": pending_interrupt.get("interrupt_id"),
@@ -408,7 +415,7 @@ class AgentRunService:
             prior_metrics["error_count"] = max(int(prior_metrics.get("error_count") or 0), 1)
             await self.repository.complete_run(
                 resolution.run.id,
-                status="failed",
+                status=AgentRunStatus.FAILED.value,
                 metrics_json=prior_metrics,
                 error_json={
                     "code": "agent_run_resume_failed",

@@ -9,6 +9,10 @@ using SQLModel with PostgreSQL as the primary database.
 from app.db.models_sqlmodel import (
     ProcessStatus,
     MessageRole,
+    FileSourceType,
+    ChatTurnStatus,
+    WorkflowVisibility,
+    AgentRunStatus,
     Thread,
     File,
     ThreadFile,
@@ -139,7 +143,12 @@ async def delete_thread(thread_id: str):
 
 
 # File operations
-async def create_or_get_file(file_hash: str, file_name: str, file_path: str = None, source_type: str = "pdf"):
+async def create_or_get_file(
+    file_hash: str,
+    file_name: str,
+    file_path: str = None,
+    source_type: str = FileSourceType.PDF.value,
+):
     """Create a new file record or return existing one."""
     return await get_file_repo().create_or_get(file_hash, file_name, file_path, source_type)
 
@@ -285,7 +294,7 @@ async def create_chat_turn(
     question: str,
     answer: str = None,
     rewritten_question: str = None,
-    status: str = "completed",
+    status: str = ChatTurnStatus.COMPLETED.value,
     reasoning: str = "",
     reasoning_available: bool = False,
     reasoning_format: str = "none",

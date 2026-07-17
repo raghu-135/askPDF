@@ -18,6 +18,7 @@ import {
 import type { SelectChangeEvent } from '@mui/material/Select';
 import type { AgentWorkflowCatalogResponse } from '../../lib/api';
 import type { AgentWorkflowBuilderState, BuilderEdgeState, BuilderNodeState } from '../../lib/agent-workflow-builder';
+import { AgentRunResumeAction, BuiltinAgentNodeType, HitlMode, HitlPhase } from '../../lib/enums';
 import {
   canConnectNodes,
   getAllowedRouteFunctionsForNode,
@@ -73,8 +74,8 @@ function NodeInspector({
   const allowedTools = getAllowedToolContractsForNode(catalog, node.type);
   const selectedToolIds = node.tool_contract_ids || [];
   const capabilities = entry?.capabilities || [];
-  const isHitl = node.type === 'hitl_gate';
-  const selectedActions = node.hitl?.allowed_actions || ['approve', 'reject', 'continue_without'];
+  const isHitl = node.type === BuiltinAgentNodeType.HitlGate;
+  const selectedActions = node.hitl?.allowed_actions || [AgentRunResumeAction.Approve, AgentRunResumeAction.Reject, AgentRunResumeAction.ContinueWithout];
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
@@ -179,12 +180,12 @@ function NodeInspector({
               <Select
                 labelId={`hitl-mode-${node.id}`}
                 label="Mode"
-                value={node.hitl?.mode || 'approval'}
+                value={node.hitl?.mode || HitlMode.Approval}
                 onChange={(event: SelectChangeEvent) => onUpdateNode(node.id, { hitl: { ...(node.hitl || {}), mode: event.target.value } })}
               >
-                <MenuItem value="approval">Approval</MenuItem>
-                <MenuItem value="review">Review</MenuItem>
-                <MenuItem value="choice">Choice</MenuItem>
+                <MenuItem value={HitlMode.Approval}>Approval</MenuItem>
+                <MenuItem value={HitlMode.Review}>Review</MenuItem>
+                <MenuItem value={HitlMode.Choice}>Choice</MenuItem>
               </Select>
             </FormControl>
             <FormControl size="small" disabled={disabled}>
@@ -192,11 +193,11 @@ function NodeInspector({
               <Select
                 labelId={`hitl-phase-${node.id}`}
                 label="Phase"
-                value={node.hitl?.phase || 'before'}
+                value={node.hitl?.phase || HitlPhase.Before}
                 onChange={(event: SelectChangeEvent) => onUpdateNode(node.id, { hitl: { ...(node.hitl || {}), phase: event.target.value } })}
               >
-                <MenuItem value="before">Before</MenuItem>
-                <MenuItem value="after">After</MenuItem>
+                <MenuItem value={HitlPhase.Before}>Before</MenuItem>
+                <MenuItem value={HitlPhase.After}>After</MenuItem>
               </Select>
             </FormControl>
           </Box>
@@ -213,7 +214,7 @@ function NodeInspector({
               }}
               renderValue={(selected) => (selected as string[]).join(', ')}
             >
-              {['approve', 'approve_selected', 'reject', 'edit', 'continue_without'].map((action) => (
+              {Object.values(AgentRunResumeAction).map((action) => (
                 <MenuItem key={action} value={action}>{action}</MenuItem>
               ))}
             </Select>
@@ -223,7 +224,7 @@ function NodeInspector({
             <Select
               labelId={`hitl-default-${node.id}`}
               label="Default action"
-              value={node.hitl?.default_action || 'continue_without'}
+              value={node.hitl?.default_action || AgentRunResumeAction.ContinueWithout}
               onChange={(event: SelectChangeEvent) => onUpdateNode(node.id, { hitl: { ...(node.hitl || {}), default_action: event.target.value } })}
             >
               {selectedActions.map((action) => (
@@ -238,7 +239,7 @@ function NodeInspector({
           variant="outlined"
           startIcon={<PersonAddAltIcon />}
           onClick={() => onAddHitlGate(node.id)}
-          disabled={disabled || !catalog.node_catalog.hitl_gate}
+          disabled={disabled || !catalog.node_catalog[BuiltinAgentNodeType.HitlGate]}
           sx={{ borderRadius: 1 }}
         >
           Add HITL Gate

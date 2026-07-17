@@ -6,6 +6,7 @@ import type {
   AgentWorkflowRouteFunctionMetadata,
   AgentWorkflowToolContract,
 } from './api';
+import { AgentRunResumeAction, BuiltinAgentNodeType, HitlMode, HitlPhase, RouteFunctionId } from './enums.ts';
 
 export type AgentWorkflowStarter = 'router' | 'plan_execute' | 'evaluator_replanner';
 
@@ -57,10 +58,10 @@ export interface CompatibilityResult {
 }
 
 const ROUTE_FUNCTION_BY_NODE_TYPE: Record<string, string> = {
-  router: 'router_route',
-  planner: 'planner_route',
-  evidence_evaluator: 'evaluator_route',
-  hitl_gate: 'hitl_gate_route',
+  [BuiltinAgentNodeType.Router]: RouteFunctionId.Router,
+  [BuiltinAgentNodeType.Planner]: RouteFunctionId.Planner,
+  [BuiltinAgentNodeType.EvidenceEvaluator]: RouteFunctionId.Evaluator,
+  [BuiltinAgentNodeType.HitlGate]: RouteFunctionId.HitlGate,
 };
 
 const REPEATABLE_NODE_TYPES = new Set([
@@ -272,7 +273,7 @@ const findPrimaryRouteTarget = (edge?: BuilderEdgeState): string | undefined => 
 };
 
 const materializeHitlPolicy = (state: AgentWorkflowBuilderState) => {
-  const hitlNodes = state.nodes.filter((node) => node.type === 'hitl_gate' && node.hitl);
+  const hitlNodes = state.nodes.filter((node) => node.type === BuiltinAgentNodeType.HitlGate && node.hitl);
   if (hitlNodes.length === 0) return state.hitl_policy ? clone(state.hitl_policy) : undefined;
   const base = state.hitl_policy ? clone(state.hitl_policy) : {};
   const gates = { ...(base.gates || {}) };
@@ -281,14 +282,14 @@ const materializeHitlPolicy = (state: AgentWorkflowBuilderState) => {
     const targetNodeId = findPrimaryRouteTarget(routeEdge);
     gates[node.id] = {
       enabled: true,
-      mode: node.hitl?.mode || 'approval',
-      phase: node.hitl?.phase || 'before',
+      mode: node.hitl?.mode || HitlMode.Approval,
+      phase: node.hitl?.phase || HitlPhase.Before,
       target: targetNodeId && targetNodeId !== 'END' ? { node_id: targetNodeId } : { node_type: 'finalizer' },
       title: node.hitl?.title || `Review ${targetNodeId || node.id}`,
       body: node.hitl?.body || '',
       prompt: node.hitl?.prompt || node.hitl?.body || '',
-      allowed_actions: node.hitl?.allowed_actions || ['approve', 'reject', 'continue_without'],
-      default_action: node.hitl?.default_action || 'continue_without',
+      allowed_actions: node.hitl?.allowed_actions || [AgentRunResumeAction.Approve, AgentRunResumeAction.Reject, AgentRunResumeAction.ContinueWithout],
+      default_action: node.hitl?.default_action || AgentRunResumeAction.ContinueWithout,
       routes: routeEdge?.routes ? clone(routeEdge.routes) : clone(node.hitl?.routes || {}),
     };
   });
@@ -320,7 +321,7 @@ export function createInitialBuilderState(
         {
           from: 'planner',
           conditional: true,
-          route_fn: getDefaultRouteFunctionForNode(catalog, 'planner') || 'planner_route',
+          route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.Planner) || RouteFunctionId.Planner,
           routes: { execute: 'retrieval_worker', direct: 'finalizer', clarify: 'finalizer' },
         },
         { from: 'retrieval_worker', to: 'synthesizer' },
@@ -353,14 +354,14 @@ export function createInitialBuilderState(
         {
           from: 'planner',
           conditional: true,
-          route_fn: getDefaultRouteFunctionForNode(catalog, 'planner') || 'planner_route',
+          route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.Planner) || RouteFunctionId.Planner,
           routes: { execute: 'retrieval_worker', direct: 'finalizer', clarify: 'finalizer' },
         },
         { from: 'retrieval_worker', to: 'evidence_evaluator' },
         {
           from: 'evidence_evaluator',
           conditional: true,
-          route_fn: getDefaultRouteFunctionForNode(catalog, 'evidence_evaluator') || 'evaluator_route',
+          route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.EvidenceEvaluator) || RouteFunctionId.Evaluator,
           routes: { answer: 'synthesizer', replan: 'replanner', answer_budget_exhausted: 'synthesizer' },
         },
         { from: 'replanner', to: 'retrieval_worker' },
@@ -390,7 +391,7 @@ export function createInitialBuilderState(
       {
         from: 'router',
         conditional: true,
-        route_fn: getDefaultRouteFunctionForNode(catalog, 'router') || 'router_route',
+        route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.Router) || RouteFunctionId.Router,
         routes: { document: 'retrieval_worker', direct: 'finalizer', clarify: 'finalizer' },
       },
       { from: 'retrieval_worker', to: 'synthesizer' },
@@ -505,17 +506,17 @@ export function createHitlGateForTarget(
   const gateId = options.id || getCanonicalNodeId(`hitl_${targetNodeId}`, state.nodes.map((node) => node.id));
   const gate: BuilderNodeState = {
     id: gateId,
-    type: 'hitl_gate',
+    type: BuiltinAgentNodeType.HitlGate,
     hitl: {
       title: options.title || `Review ${target.id}`,
       body: options.body || '',
-      mode: options.mode || 'approval',
-      allowed_actions: options.allowedActions || ['approve', 'reject', 'continue_without'],
-      default_action: options.defaultAction || 'continue_without',
+      mode: options.mode || HitlMode.Approval,
+      allowed_actions: options.allowedActions || [AgentRunResumeAction.Approve, AgentRunResumeAction.Reject, AgentRunResumeAction.ContinueWithout],
+      default_action: options.defaultAction || AgentRunResumeAction.ContinueWithout,
       routes: {
-        approve: target.id,
-        continue_without: target.id,
-        reject: 'END',
+        [AgentRunResumeAction.Approve]: target.id,
+        [AgentRunResumeAction.ContinueWithout]: target.id,
+        [AgentRunResumeAction.Reject]: 'END',
       },
     },
   };
@@ -531,7 +532,7 @@ export function createHitlGateForTarget(
   edges.push({
     from: gateId,
     conditional: true,
-    route_fn: getDefaultRouteFunctionForNode(catalog, 'hitl_gate') || 'hitl_gate_route',
+    route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.HitlGate) || RouteFunctionId.HitlGate,
     routes: gate.hitl?.routes || {},
   });
   return {

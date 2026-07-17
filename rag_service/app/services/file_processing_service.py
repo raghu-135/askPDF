@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import BackgroundTasks
 
-from app.db import ProcessStatus
+from app.db import FileSourceType, ProcessStatus
 
 # SQLModel repositories for atomic transactions
 from app.db.repositories.file_repo_sqlmodel import FileRepository
@@ -76,7 +76,7 @@ async def queue_file_processing(
     file_name: str,
     backend_url: str = "",  # No longer needed, files are read locally
     file_path: Optional[str] = None,
-    source_type: str = "pdf",
+    source_type: str = FileSourceType.PDF.value,
     indexing_metadata: Optional[Dict[str, Any]] = None,
     markdown_content: Optional[str] = None,
 ) -> None:

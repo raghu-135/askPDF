@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, Response
 
 from app.db import (
     DEFAULT_SENTENCES_JSON,
+    FileSourceType,
     ProcessStatus,
     get_file,
     get_file_parsed_sentences,
@@ -305,8 +306,8 @@ async def get_file_status_endpoint(
                     thread_id=thread_id,
                 )
                 # Override status to indicate processing
-                status["parsing"] = {"status": "pending"}
-                status["indexing"] = {"status": "pending"}
+                status["parsing"] = {"status": ProcessStatus.PENDING.value}
+                status["indexing"] = {"status": ProcessStatus.PENDING.value}
                 return status
             else:
                 raise HTTPException(status_code=404, detail="File is not attached to this thread")
@@ -495,7 +496,7 @@ async def capture_browser_page_endpoint(
             file_hash=capture["file_hash"],
             file_name=f"{capture['title']} - {capture['url']}",
             file_path=capture["url"],
-            source_type="browser",
+            source_type=FileSourceType.BROWSER.value,
             indexing_metadata={
                 "source_kind": "browser_capture",
                 "url": capture["url"],

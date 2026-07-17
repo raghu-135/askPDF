@@ -1,6 +1,7 @@
 import { PdfTab } from "../components/PdfTabs";
 import { Thread, getThread, getPdfByHash, API_BASE } from "./api";
 import { transformSentences } from "./bbox-derivation";
+import { ProcessStatus, ThreadFileSourceType } from "./enums";
 
 /**
  * Loads all PDF sources for a thread and returns PdfTabs.
@@ -22,8 +23,8 @@ export async function loadThreadTabs(thread: Thread): Promise<PdfTab[]> {
         downloadUrl: `${API_BASE}/api${pdfData.downloadUrl}?t=${Date.now()}`,
         sentences: transformedSentences,
         text: extractTextFromSentences(transformedSentences),
-        sourceType: 'pdf',
-        parsingStatus: 'completed',
+        sourceType: ThreadFileSourceType.Pdf,
+        parsingStatus: ProcessStatus.Completed,
       });
     } catch (err) {
       console.warn(`Failed to load file ${threadFile.fileHash}, creating tab with pending status:`, err);
@@ -35,8 +36,8 @@ export async function loadThreadTabs(thread: Thread): Promise<PdfTab[]> {
         downloadUrl: `${API_BASE}/api/threads/${thread.id}/files/${threadFile.fileHash}/download?t=${Date.now()}`,
         sentences: null,
         text: '',
-        sourceType: 'pdf',
-        parsingStatus: 'pending',
+        sourceType: ThreadFileSourceType.Pdf,
+        parsingStatus: ProcessStatus.Pending,
       });
     }
   }
@@ -58,8 +59,8 @@ export function createPdfTabFromUpload(data: any): PdfTab {
     downloadUrl: data?.downloadUrl ? `${API_BASE}/api${data.downloadUrl}?t=${Date.now()}` : '',
     sentences: sentences ? transformedSentences : null,
     text: sentences ? extractTextFromSentences(transformedSentences) : '',
-    sourceType: 'pdf',
-    parsingStatus: sentences ? 'completed' : 'pending',
+    sourceType: ThreadFileSourceType.Pdf,
+    parsingStatus: sentences ? ProcessStatus.Completed : ProcessStatus.Pending,
   };
 }
 

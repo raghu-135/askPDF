@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-
-HITL_ACTIONS = {"approve", "approve_selected", "continue_without", "reject", "edit"}
-HITL_PHASES = {"before", "after", "inside_tool"}
-HITL_MODES = {"approval", "choice", "review"}
-HITL_SELECTION_MODES = {"single", "multi", "single_or_multi"}
+from app.agent_workflows.enums import (
+    AgentRunResumeAction,
+    HitlMode,
+    HitlPhase,
+    HITL_ACTIONS,
+    HITL_MODES,
+    HITL_PHASES,
+    HITL_SELECTION_MODES,
+)
 HITL_GATE_KEYS = {
     "enabled",
     "title",
@@ -72,13 +76,13 @@ def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -
         if "enabled" in gate and not isinstance(gate["enabled"], bool):
             errors.append(f"hitl_policy.gates.{gate_id}.enabled must be a boolean")
 
-        mode = str(gate.get("mode") or "approval")
+        mode = str(gate.get("mode") or HitlMode.APPROVAL.value)
         if mode not in HITL_MODES:
             errors.append(f"hitl_policy.gates.{gate_id}.mode must be one of: {', '.join(sorted(HITL_MODES))}")
-        phase = str(gate.get("phase") or "before")
+        phase = str(gate.get("phase") or HitlPhase.BEFORE.value)
         if phase not in HITL_PHASES:
             errors.append(f"hitl_policy.gates.{gate_id}.phase must be one of: {', '.join(sorted(HITL_PHASES))}")
-        if phase == "inside_tool":
+        if phase == HitlPhase.INSIDE_TOOL.value:
             errors.append(f"hitl_policy.gates.{gate_id}.phase inside_tool is reserved for tool wrappers")
 
         target = gate.get("target")
@@ -119,9 +123,9 @@ def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -
             unsupported = sorted(set(allowed_actions) - HITL_ACTIONS)
             if unsupported:
                 errors.append(f"hitl_policy.gates.{gate_id}.allowed_actions unsupported: {', '.join(unsupported)}")
-            if mode == "choice" and "approve_selected" not in allowed_actions:
+            if mode == HitlMode.CHOICE.value and AgentRunResumeAction.APPROVE_SELECTED.value not in allowed_actions:
                 errors.append(f"hitl_policy.gates.{gate_id}.allowed_actions must include approve_selected for choice gates")
-            if mode == "approval" and "approve" not in allowed_actions:
+            if mode == HitlMode.APPROVAL.value and AgentRunResumeAction.APPROVE.value not in allowed_actions:
                 errors.append(f"hitl_policy.gates.{gate_id}.allowed_actions must include approve for approval gates")
         default_action = gate.get("default_action")
         if isinstance(default_action, str) and allowed_actions and default_action not in allowed_actions:
@@ -138,7 +142,7 @@ def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -
                     errors.append(f"hitl_policy.gates.{gate_id}.routes.{route_name} target is unknown: {route_target}")
 
         options = gate.get("options", [])
-        if mode == "choice":
+        if mode == HitlMode.CHOICE.value:
             if not isinstance(options, list) or not options:
                 errors.append(f"hitl_policy.gates.{gate_id}.options must be a non-empty list for choice gates")
             else:

@@ -38,6 +38,7 @@ from app.agent_workflows.evidence import (
     prefetch_refs as _prefetch_refs,
     state_evidence_refs as _state_evidence_refs,
 )
+from app.agent_workflows.enums import EvaluatorRoute, RouterRoute, ROUTER_ROUTES
 from app.agent_workflows.hitl_runtime import (
     WEB_APPROVAL_GATE_ID,
     hitl_gate_node,
@@ -298,12 +299,12 @@ class NodeRegistry:
             invoke_llm_for_node=_invoke_llm_for_node,
             safe_json_object=_safe_json_object,
         )
-        allowed_routes = {"document", "memory", "timeline", "direct", "clarify"}
+        allowed_routes = set(ROUTER_ROUTES) - {RouterRoute.WEB.value}
         if state.get("use_web_search", False):
-            allowed_routes.add("web")
-        route = parsed.get("route") if parsed.get("route") in allowed_routes else "document"
+            allowed_routes.add(RouterRoute.WEB.value)
+        route = parsed.get("route") if parsed.get("route") in allowed_routes else RouterRoute.DOCUMENT.value
         clarification_options = parsed.get("clarification_options")
-        if route == "clarify":
+        if route == RouterRoute.CLARIFY.value:
             clarification_options = _bounded_string_list(clarification_options)
             if not clarification_options:
                 clarification_options = _fallback_clarification_options()
@@ -323,7 +324,7 @@ class NodeRegistry:
                 "parsed": bool(parsed),
                 "route": route,
                 "route_reason": route_reason,
-                "clarification_option_count": len(clarification_options or []) if route == "clarify" else 0,
+                "clarification_option_count": len(clarification_options or []) if route == RouterRoute.CLARIFY.value else 0,
                 "llm": _llm_result_metadata(
                     response,
                     model_name=state.get("llm_model"),
@@ -336,7 +337,7 @@ class NodeRegistry:
         return {
             "route": route,
             "route_reason": route_reason,
-            "clarification_options": clarification_options if route == "clarify" else None,
+            "clarification_options": clarification_options if route == RouterRoute.CLARIFY.value else None,
             "node_events": _append_event(state, "router", data, started=started, config=config),
         }
 
@@ -411,17 +412,17 @@ class NodeRegistry:
         replan_count = _current_replan_count(state)
         replans = _replan_budget(state)
         if report["sufficient"]:
-            next_route = "answer"
+            next_route = EvaluatorRoute.ANSWER.value
             event_name = "evaluation.completed"
         elif replan_count < replans:
-            next_route = "replan"
+            next_route = EvaluatorRoute.REPLAN.value
             event_name = "replan.requested"
         else:
-            next_route = "answer_budget_exhausted"
+            next_route = EvaluatorRoute.ANSWER_BUDGET_EXHAUSTED.value
             event_name = "replan.budget_exhausted"
 
         evidence_update = state.get("evidence")
-        if next_route == "answer_budget_exhausted":
+        if next_route == EvaluatorRoute.ANSWER_BUDGET_EXHAUSTED.value:
             gaps = "; ".join(report.get("missing_evidence") or []) or "The evaluator found unresolved evidence gaps."
             evidence_update = _combine_evidence(
                 state.get("evidence"),

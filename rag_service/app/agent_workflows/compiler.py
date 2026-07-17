@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from langgraph.graph import END, START, StateGraph
 
+from app.agent_workflows.enums import RouteFunctionId
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.node_catalog import get_node_type_metadata
 from app.agent_workflows.routes import route_function_for_edge
@@ -80,10 +81,10 @@ class WorkflowMaterializer:
             if isinstance(node.get("id"), str) and isinstance(node.get("type"), str)
         }
         route_by_type = {
-            "router": "router_route",
-            "planner": "planner_route",
-            "evidence_evaluator": "evaluator_route",
-            "hitl_gate": "hitl_gate_route",
+            "router": RouteFunctionId.ROUTER.value,
+            "planner": RouteFunctionId.PLANNER.value,
+            "evidence_evaluator": RouteFunctionId.EVALUATOR.value,
+            "hitl_gate": RouteFunctionId.HITL_GATE.value,
         }
         edges = []
         for raw_edge in graph_spec.get("edges", []):

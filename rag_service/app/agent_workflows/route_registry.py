@@ -3,21 +3,28 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
+from app.agent_workflows.enums import (
+    EvaluatorRoute,
+    PlannerRoute,
+    RouteFunctionId,
+    RouterRoute,
+)
+
 
 ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
-    "router_route": {
+    RouteFunctionId.ROUTER.value: {
         "allowed_source_types": ["router"],
-        "route_labels": ["document", "memory", "timeline", "web", "direct", "clarify"],
+        "route_labels": [route.value for route in RouterRoute],
     },
-    "planner_route": {
+    RouteFunctionId.PLANNER.value: {
         "allowed_source_types": ["planner"],
-        "route_labels": ["execute", "direct", "clarify"],
+        "route_labels": [route.value for route in PlannerRoute],
     },
-    "evaluator_route": {
+    RouteFunctionId.EVALUATOR.value: {
         "allowed_source_types": ["evidence_evaluator"],
-        "route_labels": ["answer", "replan", "answer_budget_exhausted"],
+        "route_labels": [route.value for route in EvaluatorRoute],
     },
-    "hitl_gate_route": {
+    RouteFunctionId.HITL_GATE.value: {
         "allowed_source_types": ["hitl_gate"],
         "route_labels": None,
     },

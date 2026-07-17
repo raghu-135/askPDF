@@ -7,6 +7,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, Checkbox, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
 import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
+import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
 import AgentRunHeaderChips from './AgentRunHeaderChips';
 import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
 
@@ -37,7 +38,7 @@ export default function AgentRunDebugPanel({
   const resumeSubmissionKeyRef = useRef<string | null>(null);
   const debug = runDetails?.debug;
   const pendingInterrupt = runDetails?.pending_interrupt;
-  const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? 'pending' : undefined);
+  const interruptStatus = pendingInterrupt?.status || (pendingInterrupt ? InterruptStatus.Pending : undefined);
   const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
     ? pendingInterrupt.allowed_actions.map(String)
     : [];
@@ -47,8 +48,8 @@ export default function AgentRunDebugPanel({
   const interruptOptions = Array.isArray(pendingInterrupt?.options)
     ? pendingInterrupt.options.filter((option) => option && typeof option.id === 'string')
     : [];
-  const selectionMode = String(pendingInterrupt?.selection_mode || 'single');
-  const isMultiSelect = selectionMode === 'multi' || selectionMode === 'single_or_multi';
+  const selectionMode = String(pendingInterrupt?.selection_mode || HitlSelectionMode.Single);
+  const isMultiSelect = selectionMode === HitlSelectionMode.Multi || selectionMode === HitlSelectionMode.SingleOrMulti;
 
   useEffect(() => {
     if (interruptOptions.length === 0) {
@@ -100,7 +101,7 @@ export default function AgentRunDebugPanel({
         resume_token: pendingInterrupt.resume_token || undefined,
         resume_version: pendingInterrupt.resume_version || undefined,
         thread_id: runDetails.thread_id,
-        selected_option_ids: action === 'approve_selected' ? selectedOptionIds : undefined,
+        selected_option_ids: action === AgentRunResumeActionValue.ApproveSelected ? selectedOptionIds : undefined,
         client_metadata: { source: 'agent_run_debug_panel' },
       });
       onRunDetailsChange?.(response.agent_run);
@@ -108,9 +109,9 @@ export default function AgentRunDebugPanel({
       setResumeMessage(
         response.duplicate
           ? 'Decision already recorded.'
-          : status === 'completed' || status === 'clarification'
+          : status === AgentRunStatus.Completed || status === AgentRunStatus.Clarification
             ? 'Decision applied. Run resumed.'
-            : status === 'failed'
+            : status === AgentRunStatus.Failed
               ? 'Decision applied. Resume failed.'
               : 'Decision applied.'
       );
@@ -135,7 +136,7 @@ export default function AgentRunDebugPanel({
       <Button
         key={action}
         size="small"
-        variant={action === 'reject' ? 'outlined' : 'contained'}
+        variant={action === AgentRunResumeActionValue.Reject ? 'outlined' : 'contained'}
         color={color === 'inherit' ? undefined : color}
         startIcon={icon}
         disabled={Boolean(resumeSubmitting)}
@@ -197,7 +198,7 @@ export default function AgentRunDebugPanel({
               {pendingInterrupt.title || pendingInterrupt.prompt || pendingInterrupt.body}
             </Typography>
           )}
-          {interruptStatus === 'pending' && (
+          {interruptStatus === InterruptStatus.Pending && (
             <>
               {interruptOptions.length > 0 && (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
@@ -223,10 +224,10 @@ export default function AgentRunDebugPanel({
                 </Box>
               )}
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
-                {renderInterruptAction('approve', 'Approve', <CheckIcon fontSize="inherit" />)}
-                {renderInterruptAction('approve_selected', 'Approve selected', <CheckIcon fontSize="inherit" />)}
-                {renderInterruptAction('continue_without', 'Continue', <PlayArrowIcon fontSize="inherit" />)}
-                {renderInterruptAction('reject', 'Reject', <CloseIcon fontSize="inherit" />, 'error')}
+                {renderInterruptAction(AgentRunResumeActionValue.Approve, 'Approve', <CheckIcon fontSize="inherit" />)}
+                {renderInterruptAction(AgentRunResumeActionValue.ApproveSelected, 'Approve selected', <CheckIcon fontSize="inherit" />)}
+                {renderInterruptAction(AgentRunResumeActionValue.ContinueWithout, 'Continue', <PlayArrowIcon fontSize="inherit" />)}
+                {renderInterruptAction(AgentRunResumeActionValue.Reject, 'Reject', <CloseIcon fontSize="inherit" />, 'error')}
               </Box>
             </>
           )}

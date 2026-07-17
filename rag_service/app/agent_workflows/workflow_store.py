@@ -11,7 +11,7 @@ from sqlalchemy.future import select
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.agent_workflows.validator import WorkflowValidationError, WorkflowValidator
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import AgentWorkflow
+from app.db.models_sqlmodel import AgentWorkflow, WorkflowVisibility
 from app.time_utils import utc_now
 
 
@@ -67,7 +67,7 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
             validation_result = validator.validate(spec_json)
             builtin_key = workflow_def["builtin_key"]
             metadata = {
-                "source": "builtin",
+                "source": WorkflowVisibility.BUILTIN.value,
                 "builtin_key": builtin_key,
                 "version": spec_json.get("version") or 2,
                 "version_id": f"{builtin_key}:v{spec_json.get('version') or 2}",
@@ -90,7 +90,7 @@ async def seed_builtin_workflows(session: AsyncSession) -> None:
                 )
                 session.add(workflow)
             else:
-                if not workflow.is_builtin and workflow.visibility != "deleted":
+                if not workflow.is_builtin and workflow.visibility != WorkflowVisibility.DELETED.value:
                     raise ValueError(f"agent workflow name already exists: {workflow_def['name']}")
                 workflow.name = workflow_def["name"]
                 workflow.description = workflow_def["description"]
@@ -110,7 +110,7 @@ async def list_workflows(session: AsyncSession, *, include_custom: bool = False)
             if not include_custom
             else or_(
                 AgentWorkflow.is_builtin.is_(True),
-                AgentWorkflow.visibility.in_(["public", "internal"]),
+                AgentWorkflow.visibility.in_([WorkflowVisibility.PUBLIC.value, WorkflowVisibility.INTERNAL.value]),
             )
         )
         result = await session.execute(
@@ -128,7 +128,7 @@ async def mark_custom_workflow_deleted(session: AsyncSession, workflow_id: str) 
             if workflow is not None and workflow.is_builtin:
                 raise ValueError("built-in agent workflows cannot be deleted")
             return None
-        workflow.visibility = "deleted"
+        workflow.visibility = WorkflowVisibility.DELETED.value
         workflow.updated_at = utc_now()
         await session.flush()
         return workflow
@@ -148,7 +148,7 @@ async def get_workflow(
             return None
         if not include_custom and not workflow.is_builtin:
             return None
-        if include_custom and not workflow.is_builtin and workflow.visibility not in {"public", "internal"}:
+        if include_custom and not workflow.is_builtin and workflow.visibility not in {WorkflowVisibility.PUBLIC.value, WorkflowVisibility.INTERNAL.value}:
             return None
         return workflow
 
@@ -189,7 +189,7 @@ async def save_custom_workflow(
     name: str,
     spec_json: Dict[str, Any],
     description: str = "",
-    visibility: str = "internal",
+    visibility: str = WorkflowVisibility.INTERNAL.value,
     increment_version: bool = True,
 ) -> AgentWorkflow:
     """Create or update a mutable internal/custom workflow spec."""
@@ -258,7 +258,7 @@ async def save_internal_workflow_version(
     name: str,
     spec_json: Dict[str, Any],
     description: str = "",
-    visibility: str = "internal",
+    visibility: str = WorkflowVisibility.INTERNAL.value,
     changelog: str = "",
     increment_version: bool = True,
 ) -> tuple[AgentWorkflow, AgentWorkflowVersion]:

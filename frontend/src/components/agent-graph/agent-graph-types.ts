@@ -1,4 +1,6 @@
-export type AgentGraphMode = 'run-debug' | 'builder';
+import type { AgentGraphMode, AgentGraphNodeStatus } from '../../lib/enums.ts';
+
+export type { AgentGraphMode, AgentGraphNodeStatus };
 
 export interface AgentNodeCatalogEntry {
   displayName?: string;
@@ -10,8 +12,6 @@ export interface AgentNodeCatalogEntry {
 }
 
 export type AgentNodeCatalog = Record<string, AgentNodeCatalogEntry>;
-
-export type AgentGraphNodeStatus = 'active' | 'planned' | 'skipped' | 'inactive' | 'error';
 
 export interface AgentWorkflowGraphNodeSpec {
   id: string;

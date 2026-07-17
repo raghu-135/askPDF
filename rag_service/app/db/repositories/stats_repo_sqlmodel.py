@@ -13,7 +13,7 @@ from sqlalchemy.future import select
 from sqlalchemy import func
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.db.models_sqlmodel import Thread, ChatTurn, File, ThreadFile
+from app.db.models_sqlmodel import Thread, ChatTurn, ChatTurnStatus, File, ThreadFile
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import maybe_iso_utc_z
 from app.time_utils import utc_now
@@ -182,7 +182,7 @@ class StatsRepository:
                 )
                 .where(
                     ChatTurn.thread_id == thread_id,
-                    ChatTurn.status.in_(["completed", "clarification"]),
+                    ChatTurn.status.in_([ChatTurnStatus.COMPLETED.value, ChatTurnStatus.CLARIFICATION.value]),
                     ChatTurn.payload["answer"].astext.isnot(None),
                     ChatTurn.payload["answer"].astext != "",
                 )

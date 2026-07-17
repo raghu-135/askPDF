@@ -12,6 +12,13 @@ from app.agent_workflows.evidence import (
     combine_evidence,
     evidence_text_limit,
 )
+from app.agent_workflows.enums import (
+    AgentRunResumeAction,
+    HitlMode,
+    HitlPhase,
+    HitlSelectionMode,
+    HITL_ACTIONS,
+)
 from app.agent_workflows.planning import WORKER_NODE_ORDER
 from app.agent_workflows.runtime_invocation import (
     append_event,
@@ -78,8 +85,8 @@ def hitl_gates_from_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
 def normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]:
     gate = dict(gate_policy) if isinstance(gate_policy, dict) else {}
     if gate_id == WEB_APPROVAL_GATE_ID:
-        gate.setdefault("mode", "approval")
-        gate.setdefault("phase", "before")
+        gate.setdefault("mode", HitlMode.APPROVAL.value)
+        gate.setdefault("phase", HitlPhase.BEFORE.value)
         gate.setdefault("target", {"node_id": "web_worker", "node_type": "web_worker"})
         gate.setdefault("interrupt_type", "tool_approval")
         gate.setdefault("title", "Approve web search?")
@@ -87,37 +94,46 @@ def normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]
             "prompt",
             "This answer needs live web research. Approve web search or continue without it.",
         )
-        gate.setdefault("allowed_actions", ["approve", "continue_without"])
-        gate.setdefault("default_action", "continue_without")
-        gate.setdefault("routes", {"approve": "web_worker", "continue_without": "synthesizer"})
+        gate.setdefault("allowed_actions", [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.CONTINUE_WITHOUT.value])
+        gate.setdefault("default_action", AgentRunResumeAction.CONTINUE_WITHOUT.value)
+        gate.setdefault("routes", {AgentRunResumeAction.APPROVE.value: "web_worker", AgentRunResumeAction.CONTINUE_WITHOUT.value: "synthesizer"})
     if gate_id == FINAL_REVIEW_GATE_ID:
-        gate.setdefault("mode", "review")
-        gate.setdefault("phase", "after")
+        gate.setdefault("mode", HitlMode.REVIEW.value)
+        gate.setdefault("phase", HitlPhase.AFTER.value)
         gate.setdefault("target", {"node_id": "finalizer", "node_type": "finalizer"})
         gate.setdefault("interrupt_type", "final_answer_review")
         gate.setdefault("title", "Review final answer")
         gate.setdefault("prompt", "Approve this answer before it is saved to the thread.")
-        gate.setdefault("allowed_actions", ["approve", "edit", "continue_without", "reject"])
-        gate.setdefault("default_action", "approve")
-        gate.setdefault("routes", {"approve": "END", "edit": "END", "continue_without": "END"})
+        gate.setdefault("allowed_actions", [
+            AgentRunResumeAction.APPROVE.value,
+            AgentRunResumeAction.EDIT.value,
+            AgentRunResumeAction.CONTINUE_WITHOUT.value,
+            AgentRunResumeAction.REJECT.value,
+        ])
+        gate.setdefault("default_action", AgentRunResumeAction.APPROVE.value)
+        gate.setdefault("routes", {
+            AgentRunResumeAction.APPROVE.value: "END",
+            AgentRunResumeAction.EDIT.value: "END",
+            AgentRunResumeAction.CONTINUE_WITHOUT.value: "END",
+        })
         gate.setdefault("editable_fields", ["final_answer"])
-    gate.setdefault("mode", "approval")
-    gate.setdefault("phase", "before")
+    gate.setdefault("mode", HitlMode.APPROVAL.value)
+    gate.setdefault("phase", HitlPhase.BEFORE.value)
     if not isinstance(gate.get("routes"), dict):
         gate["routes"] = {}
     if not isinstance(gate.get("allowed_actions"), list):
-        gate["allowed_actions"] = ["approve_selected", "continue_without"] if gate.get("mode") == "choice" else ["approve", "continue_without"]
+        gate["allowed_actions"] = [AgentRunResumeAction.APPROVE_SELECTED.value, AgentRunResumeAction.CONTINUE_WITHOUT.value] if gate.get("mode") == HitlMode.CHOICE.value else [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.CONTINUE_WITHOUT.value]
     if not isinstance(gate.get("default_action"), str):
-        gate["default_action"] = "approve_selected" if gate.get("mode") == "choice" else "approve"
+        gate["default_action"] = AgentRunResumeAction.APPROVE_SELECTED.value if gate.get("mode") == HitlMode.CHOICE.value else AgentRunResumeAction.APPROVE.value
     return gate
 
 
 def normalize_hitl_actions(gate: Dict[str, Any]) -> List[str]:
     allowed = gate.get("allowed_actions")
     if not isinstance(allowed, list) or not all(isinstance(action, str) for action in allowed):
-        allowed = ["approve_selected", "continue_without"] if gate.get("mode") == "choice" else ["approve", "continue_without"]
-    allowed = [action for action in allowed if action in {"approve", "approve_selected", "continue_without", "reject", "edit"}]
-    return allowed or ["approve", "continue_without"]
+        allowed = [AgentRunResumeAction.APPROVE_SELECTED.value, AgentRunResumeAction.CONTINUE_WITHOUT.value] if gate.get("mode") == HitlMode.CHOICE.value else [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.CONTINUE_WITHOUT.value]
+    allowed = [action for action in allowed if action in HITL_ACTIONS]
+    return allowed or [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.CONTINUE_WITHOUT.value]
 
 
 def hitl_option_ids(gate: Dict[str, Any]) -> List[str]:
@@ -137,8 +153,8 @@ def hitl_selected_option_ids(decision: Dict[str, Any], gate: Dict[str, Any]) -> 
     if not isinstance(selected, list):
         selected = []
     normalized = [str(item) for item in selected if str(item) in valid_ids]
-    selection_mode = str(gate.get("selection_mode") or "single")
-    if selection_mode == "single" and len(normalized) > 1:
+    selection_mode = str(gate.get("selection_mode") or HitlSelectionMode.SINGLE.value)
+    if selection_mode == HitlSelectionMode.SINGLE.value and len(normalized) > 1:
         normalized = normalized[:1]
     return normalized
 
@@ -194,22 +210,22 @@ async def hitl_gate_node(
     enabled = bool(policy.get("enabled")) and gate_policy.get("enabled", True) is not False
     if not enabled:
         routes = dict(state.get("hitl_gate_routes") or {})
-        routes[node_id] = "approve"
+        routes[node_id] = AgentRunResumeAction.APPROVE.value
         return skipped_worker_update(state, config, node_id, started, "hitl_policy_disabled") | {
-            "hitl_gate_route": "approve",
+            "hitl_gate_route": AgentRunResumeAction.APPROVE.value,
             "hitl_gate_routes": routes,
         }
 
-    mode = str(gate_policy.get("mode") or "approval")
-    phase = str(gate_policy.get("phase") or "before")
+    mode = str(gate_policy.get("mode") or HitlMode.APPROVAL.value)
+    phase = str(gate_policy.get("phase") or HitlPhase.BEFORE.value)
     target = gate_policy.get("target") if isinstance(gate_policy.get("target"), dict) else {}
     target_node_id = target.get("node_id")
     target_node_type = target.get("node_type")
-    interrupt_type = str(gate_policy.get("interrupt_type") or gate_policy.get("type") or ("option_review" if mode == "choice" else "human_review"))
+    interrupt_type = str(gate_policy.get("interrupt_type") or gate_policy.get("type") or ("option_review" if mode == HitlMode.CHOICE.value else "human_review"))
     allowed_actions = normalize_hitl_actions(gate_policy)
-    default_action = str(gate_policy.get("default_action") or "continue_without")
+    default_action = str(gate_policy.get("default_action") or AgentRunResumeAction.CONTINUE_WITHOUT.value)
     if default_action not in allowed_actions:
-        default_action = "continue_without" if "continue_without" in allowed_actions else allowed_actions[0]
+        default_action = AgentRunResumeAction.CONTINUE_WITHOUT.value if AgentRunResumeAction.CONTINUE_WITHOUT.value in allowed_actions else allowed_actions[0]
     routes_by_action = gate_policy.get("routes") if isinstance(gate_policy.get("routes"), dict) else {}
     visit_index = runtime_visit_index(config)
     interrupt_count_key = hitl_interrupt_count_key(node_id, visit_index)
@@ -217,7 +233,7 @@ async def hitl_gate_node(
     interrupt_counts = hitl_interrupt_counts(state)
     interrupt_limit = hitl_interrupt_limit(policy, gate_policy)
     if interrupt_limit is not None and hitl_visit_interrupt_count(interrupt_counts, gate_id=node_id, visit_index=visit_index) >= interrupt_limit:
-        route = "continue_without" if "continue_without" in allowed_actions or "continue_without" in routes_by_action else default_action
+        route = AgentRunResumeAction.CONTINUE_WITHOUT.value if AgentRunResumeAction.CONTINUE_WITHOUT.value in allowed_actions or AgentRunResumeAction.CONTINUE_WITHOUT.value in routes_by_action else default_action
         gate_routes = dict(state.get("hitl_gate_routes") or {})
         gate_routes[node_id] = route
         update: Dict[str, Any] = {
@@ -225,7 +241,7 @@ async def hitl_gate_node(
             "hitl_gate_routes": gate_routes,
             "hitl_interrupt_counts": interrupt_counts,
         }
-        if route == "continue_without":
+        if route == AgentRunResumeAction.CONTINUE_WITHOUT.value:
             update["evidence"] = combine_evidence(
                 state.get("evidence"),
                 (
@@ -267,38 +283,38 @@ async def hitl_gate_node(
             "phase": phase,
             "mode": mode,
             "type": interrupt_type,
-            "title": gate_policy.get("title") or ("Choose approved options" if mode == "choice" else "Human review requested"),
+            "title": gate_policy.get("title") or ("Choose approved options" if mode == HitlMode.CHOICE.value else "Human review requested"),
             "prompt": gate_policy.get("prompt")
             or gate_policy.get("body")
-            or ("Select which options may run." if mode == "choice" else "Review this step before the graph continues."),
+            or ("Select which options may run." if mode == HitlMode.CHOICE.value else "Review this step before the graph continues."),
             "allowed_actions": allowed_actions,
             "default_action": default_action,
-            "selection_mode": gate_policy.get("selection_mode") if mode == "choice" else None,
-            "options": options if mode == "choice" else None,
+            "selection_mode": gate_policy.get("selection_mode") if mode == HitlMode.CHOICE.value else None,
+            "options": options if mode == HitlMode.CHOICE.value else None,
             "checkpoint_resume": True,
-            "reject_behavior": "resume" if "reject" in dict(gate_policy.get("routes") or {}) else gate_policy.get("reject_behavior"),
+            "reject_behavior": "resume" if AgentRunResumeAction.REJECT.value in dict(gate_policy.get("routes") or {}) else gate_policy.get("reject_behavior"),
             "input_summary": input_summary,
             "proposed_tool": proposed_tool,
-            "proposed_final_answer": compact_preview(state.get("final_answer"), limit=2000) if mode == "review" else None,
-            "editable_fields": gate_policy.get("editable_fields") if mode == "review" else None,
+            "proposed_final_answer": compact_preview(state.get("final_answer"), limit=2000) if mode == HitlMode.REVIEW.value else None,
+            "editable_fields": gate_policy.get("editable_fields") if mode == HitlMode.REVIEW.value else None,
         }
     )
     decision = decision if isinstance(decision, dict) else {"action": str(decision or default_action)}
     action = str(decision.get("action") or default_action)
     if action not in allowed_actions:
         action = default_action
-    selected_option_ids = hitl_selected_option_ids(decision, gate_policy) if mode == "choice" else []
-    if action == "approve_selected" and not selected_option_ids and option_ids:
+    selected_option_ids = hitl_selected_option_ids(decision, gate_policy) if mode == HitlMode.CHOICE.value else []
+    if action == AgentRunResumeAction.APPROVE_SELECTED.value and not selected_option_ids and option_ids:
         selected_option_ids = [option_ids[0]]
 
-    if mode == "choice" and action == "approve_selected":
-        route: Any = selected_option_ids[0] if selected_option_ids else "continue_without"
-    elif action == "approve":
-        route = "approve"
+    if mode == HitlMode.CHOICE.value and action == AgentRunResumeAction.APPROVE_SELECTED.value:
+        route: Any = selected_option_ids[0] if selected_option_ids else AgentRunResumeAction.CONTINUE_WITHOUT.value
+    elif action == AgentRunResumeAction.APPROVE.value:
+        route = AgentRunResumeAction.APPROVE.value
     elif action in routes_by_action:
         route = action
     else:
-        route = "continue_without" if action in {"continue_without", "reject"} else action
+        route = AgentRunResumeAction.CONTINUE_WITHOUT.value if action in {AgentRunResumeAction.CONTINUE_WITHOUT.value, AgentRunResumeAction.REJECT.value} else action
 
     gate_routes = dict(state.get("hitl_gate_routes") or {})
     gate_routes[node_id] = route
@@ -347,7 +363,7 @@ async def hitl_gate_node(
     elif isinstance(execution_plan, list):
         update["execution_plan"] = execution_plan
 
-    if mode == "review":
+    if mode == HitlMode.REVIEW.value:
         update["human_review_decision"] = {
             key: value
             for key, value in decision.items()
@@ -355,10 +371,10 @@ async def hitl_gate_node(
         }
         edited_payload = decision.get("edited_payload") if isinstance(decision.get("edited_payload"), dict) else {}
         edited_answer = edited_payload.get("final_answer") or edited_payload.get("answer")
-        if action == "edit" and isinstance(edited_answer, str) and edited_answer.strip():
+        if action == AgentRunResumeAction.EDIT.value and isinstance(edited_answer, str) and edited_answer.strip():
             update["final_answer"] = edited_answer.strip()
 
-    if route == "continue_without" or action == "reject":
+    if route == AgentRunResumeAction.CONTINUE_WITHOUT.value or action == AgentRunResumeAction.REJECT.value:
         update["evidence"] = combine_evidence(
             state.get("evidence"),
             (
@@ -378,13 +394,13 @@ async def hitl_gate_node(
             "question": compact_preview(state.get("question")),
             "route": state.get("route"),
             "route_reason": compact_preview(state.get("route_reason")),
-            "options": options if mode == "choice" else None,
-            "proposed_final_answer": compact_preview(state.get("final_answer")) if mode == "review" else None,
+            "options": options if mode == HitlMode.CHOICE.value else None,
+            "proposed_final_answer": compact_preview(state.get("final_answer")) if mode == HitlMode.REVIEW.value else None,
         },
         "output_preview": {
             "decision": update["hitl_decisions"][-1],
             "next": routes_by_action.get(route) or (selected_targets[0] if selected_targets else route),
-            "final_answer": compact_preview(update.get("final_answer") or state.get("final_answer")) if mode == "review" else None,
+            "final_answer": compact_preview(update.get("final_answer") or state.get("final_answer")) if mode == HitlMode.REVIEW.value else None,
         },
     }
     log_node_end(state, node_id, started, data)

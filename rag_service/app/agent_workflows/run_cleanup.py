@@ -9,16 +9,16 @@ from sqlalchemy.future import select
 
 from app.agent_workflows.checkpointing import delete_agent_checkpoints
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import AgentRun
+from app.db.models_sqlmodel import AgentRun, AgentRunStatus
 from app.time_utils import utc_now
 
 
 CHECKPOINT_PRUNABLE_RUN_STATUSES = {
-    "completed",
-    "clarification",
-    "failed",
-    "rejected",
-    "expired",
+    AgentRunStatus.COMPLETED.value,
+    AgentRunStatus.CLARIFICATION.value,
+    AgentRunStatus.FAILED.value,
+    AgentRunStatus.REJECTED.value,
+    AgentRunStatus.EXPIRED.value,
 }
 
 
@@ -97,7 +97,7 @@ async def fail_stale_running_runs(
         query = (
             select(AgentRun)
             .where(AgentRun.started_at < cutoff)
-            .where(AgentRun.status == "running")
+            .where(AgentRun.status == AgentRunStatus.RUNNING.value)
         )
         if thread_id is not None:
             query = query.where(AgentRun.thread_id == thread_id)
@@ -106,7 +106,7 @@ async def fail_stale_running_runs(
         runs = list(result.scalars().all())
         completed_at = utc_now()
         for run in runs:
-            run.status = "failed"
+            run.status = AgentRunStatus.FAILED.value
             run.completed_at = completed_at
             replace_jsonb_field(
                 run,

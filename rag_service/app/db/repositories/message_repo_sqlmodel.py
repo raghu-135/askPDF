@@ -17,13 +17,17 @@ from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import ChatTurn, MessageRole
+from app.db.models_sqlmodel import ChatTurn, ChatTurnStatus, MessageRole
 from app.time_utils import utc_now
 
 
 TURN_USER_SUFFIX = ":user"
 TURN_ASSISTANT_SUFFIX = ":assistant"
-VISIBLE_TURN_STATUSES = {"completed", "clarification", "failed"}
+VISIBLE_TURN_STATUSES = {
+    ChatTurnStatus.COMPLETED.value,
+    ChatTurnStatus.CLARIFICATION.value,
+    ChatTurnStatus.FAILED.value,
+}
 
 
 @dataclass
@@ -166,7 +170,7 @@ class MessageRepository:
         question: str,
         answer: Optional[str] = None,
         rewritten_question: Optional[str] = None,
-        status: str = "completed",
+        status: str = ChatTurnStatus.COMPLETED.value,
         reasoning: Optional[str] = "",
         reasoning_available: bool = False,
         reasoning_format: str = "none",
@@ -246,7 +250,7 @@ class MessageRepository:
                 thread_id=thread_id,
                 question=content,
                 rewritten_question=context_compact,
-                status="completed",
+                status=ChatTurnStatus.COMPLETED.value,
                 completed_at=None,
             )
             return _expand_turn(turn)[0]
@@ -255,7 +259,7 @@ class MessageRepository:
             thread_id=thread_id,
             question="",
             answer=content,
-            status="completed",
+            status=ChatTurnStatus.COMPLETED.value,
             reasoning=reasoning,
             reasoning_available=reasoning_available,
             reasoning_format=reasoning_format,
@@ -272,7 +276,7 @@ class MessageRepository:
     async def get(self, message_id: str) -> Optional[ExpandedMessage]:
         """Get a compatibility message by turn-derived message ID."""
         turn = await self.get_turn(turn_id_from_message_id(message_id))
-        if not turn or turn.status == "cancelled":
+        if not turn or turn.status == ChatTurnStatus.CANCELLED.value:
             return None
 
         requested_role = role_from_message_id(message_id)
@@ -292,7 +296,7 @@ class MessageRepository:
         async with session.begin():
             query = select(ChatTurn).where(ChatTurn.thread_id == thread_id)
             if not include_cancelled:
-                query = query.where(ChatTurn.status != "cancelled")
+                query = query.where(ChatTurn.status != ChatTurnStatus.CANCELLED.value)
             result = await session.execute(
                 query.order_by(ChatTurn.created_at.asc(), ChatTurn.id.asc())
                 .limit(limit)
@@ -321,7 +325,7 @@ class MessageRepository:
         async with session.begin():
             result = await session.execute(
                 select(ChatTurn)
-                .where(ChatTurn.thread_id == thread_id, ChatTurn.status != "cancelled")
+                .where(ChatTurn.thread_id == thread_id, ChatTurn.status != ChatTurnStatus.CANCELLED.value)
                 .order_by(ChatTurn.created_at.desc(), ChatTurn.id.desc())
                 .limit(10000)
             )
@@ -427,7 +431,7 @@ class MessageRepository:
             result = await session.execute(
                 select(func.count(ChatTurn.id)).where(
                     ChatTurn.thread_id == thread_id,
-                    ChatTurn.status != "cancelled",
+                    ChatTurn.status != ChatTurnStatus.CANCELLED.value,
                 )
             )
             return int(result.scalar() or 0)

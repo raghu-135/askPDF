@@ -4,6 +4,21 @@ import {
   type AnnotationTransferItem,
 } from "./annotation-utils";
 import { getBrowserRuntimeContext } from "./date-utils";
+import {
+  ProcessStatus as ProcessStatusEnum,
+  ThreadFileSourceType,
+  type AgentRunResumeAction as AgentRunResumeActionValue,
+  type EmbeddingReadinessStatus as EmbeddingReadinessStatusValue,
+  type FileStatusSection as FileStatusSectionValue,
+  type HitlMode as HitlModeValue,
+  type HitlPhase as HitlPhaseValue,
+  type HitlSelectionMode as HitlSelectionModeValue,
+  type InterruptStatus as InterruptStatusValue,
+  type MessageRole as MessageRoleValue,
+  type ProcessStatus as ProcessStatusValue,
+  type ReasoningFormat as ReasoningFormatValue,
+  type ThreadFileSourceType as ThreadFileSourceTypeValue,
+} from "./enums";
 
 // Unified API base - RAG service handles all endpoints
 const apiUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -14,7 +29,7 @@ export const API_BASE = apiUrl || "";
 
 // ============ PDF Upload ============
 
-export type ProcessStatus = 'pending' | 'running' | 'completed' | 'failed' | 'unknown';
+export type ProcessStatus = ProcessStatusValue;
 
 export interface ProcessSection {
   status: ProcessStatus;
@@ -46,11 +61,11 @@ export interface FileStatus {
 
 // Helper functions for status checks
 export const ProcessStatusHelper = {
-  isCompleted: (status: ProcessStatus) => status === 'completed',
-  isFailed: (status: ProcessStatus) => status === 'failed',
-  isRunning: (status: ProcessStatus) => status === 'running',
-  isPending: (status: ProcessStatus) => status === 'pending',
-  isTerminal: (status: ProcessStatus) => status === 'completed' || status === 'failed',
+  isCompleted: (status: ProcessStatusValue) => status === ProcessStatusEnum.Completed,
+  isFailed: (status: ProcessStatusValue) => status === ProcessStatusEnum.Failed,
+  isRunning: (status: ProcessStatusValue) => status === ProcessStatusEnum.Running,
+  isPending: (status: ProcessStatusValue) => status === ProcessStatusEnum.Pending,
+  isTerminal: (status: ProcessStatusValue) => status === ProcessStatusEnum.Completed || status === ProcessStatusEnum.Failed,
 };
 
 export interface UploadResponse {
@@ -86,7 +101,7 @@ export async function getFileStatus(
   fileHash: string,
   threadId: string,
   options?: {
-    section?: 'parsing' | 'indexing';
+    section?: FileStatusSectionValue;
     embeddingModel?: string;
   }
 ): Promise<FileStatus | { parsing: ProcessSection } | { indexing: IndexingSection }> {
@@ -435,14 +450,14 @@ export interface ThreadFile {
   fileHash: string;
   fileName: string;
   filePath?: string;
-  sourceType?: 'pdf' | 'browser';
+  sourceType?: ThreadFileSourceTypeValue;
 }
 
 interface RawThreadFile {
   file_hash: string;
   file_name: string;
   file_path?: string;
-  source_type?: 'pdf' | 'browser';
+  source_type?: ThreadFileSourceTypeValue;
 }
 
 const mapThreadFile = (raw: RawThreadFile): ThreadFile => ({
@@ -475,13 +490,13 @@ export interface AgentTraceRefs {
 
 export interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: MessageRoleValue;
   content: string;
   created_at: string;
   isRecollected?: boolean;
   reasoning?: string;
   reasoning_available?: boolean;
-  reasoning_format?: 'structured' | 'tagged_text' | 'none';
+  reasoning_format?: ReasoningFormatValue;
   context_compact?: string;
   web_sources?: WebSource[];
   metadata?: AgentMessageMetadata;
@@ -572,21 +587,21 @@ export interface AgentRunDebug {
   };
 }
 
-export type AgentRunResumeAction = 'approve' | 'approve_selected' | 'reject' | 'edit' | 'continue_without';
+export type AgentRunResumeAction = AgentRunResumeActionValue;
 
 export interface AgentRunPendingInterrupt {
   interrupt_id: string;
   gate_id?: string | null;
   node_id?: string | null;
   type?: string | null;
-  status?: 'pending' | 'resumed' | 'rejected' | 'expired' | string;
+  status?: InterruptStatusValue | string;
   requested_at?: string | null;
   expires_at?: string | null;
-  default_action?: AgentRunResumeAction | string | null;
-  allowed_actions?: AgentRunResumeAction[] | string[];
-  mode?: 'approval' | 'choice' | 'review' | string | null;
-  phase?: 'before' | 'after' | 'inside_tool' | string | null;
-  selection_mode?: 'single' | 'multi' | 'single_or_multi' | string | null;
+  default_action?: AgentRunResumeActionValue | string | null;
+  allowed_actions?: AgentRunResumeActionValue[] | string[];
+  mode?: HitlModeValue | string | null;
+  phase?: HitlPhaseValue | string | null;
+  selection_mode?: HitlSelectionModeValue | string | null;
   options?: {
     id: string;
     label?: string;
@@ -1079,11 +1094,11 @@ export async function threadChat(
   user_message_id: string | null;
   assistant_message_id: string | null;
   used_chat_ids: string[];
-  document_sources: { text: string; file_hash: string; score: number; source_type?: 'pdf'; title?: string; url?: string }[];
+  document_sources: { text: string; file_hash: string; score: number; source_type?: typeof ThreadFileSourceType.Pdf; title?: string; url?: string }[];
   web_sources?: WebSource[];
   reasoning?: string;
   reasoning_available?: boolean;
-  reasoning_format?: 'structured' | 'tagged_text' | 'none';
+  reasoning_format?: ReasoningFormatValue;
   rewritten_query?: string;
   clarification_options?: string[] | null;
   agent_run_id?: string;
@@ -1151,7 +1166,7 @@ export async function threadChat(
 
 export async function getThreadIndexStatus(threadId: string): Promise<{
   thread_id: string;
-  status: 'ready' | 'not_ready' | 'blocked';
+  status: EmbeddingReadinessStatusValue;
   stats: any;
   embeddingModelReady?: boolean;
 }> {

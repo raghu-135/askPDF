@@ -7,21 +7,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from app.agent_workflows.enums import (
+    AgentRunResumeAction,
+    HitlSelectionMode,
+    InterruptStatus,
+    RESUME_ACTIONS,
+    TERMINAL_INTERRUPT_STATUSES,
+)
 from app.db.models_sqlmodel import AgentRun
 from app.time_utils import iso_utc_z, parse_datetime_utc, utc_now
 
 
-INTERRUPT_STATUS_PENDING = "pending"
-INTERRUPT_STATUS_RESUMED = "resumed"
-INTERRUPT_STATUS_REJECTED = "rejected"
-INTERRUPT_STATUS_EXPIRED = "expired"
-
-RESUME_ACTIONS = {"approve", "approve_selected", "edit", "continue_without"}
-TERMINAL_INTERRUPT_STATUSES = {
-    INTERRUPT_STATUS_RESUMED,
-    INTERRUPT_STATUS_REJECTED,
-    INTERRUPT_STATUS_EXPIRED,
-}
+INTERRUPT_STATUS_PENDING = InterruptStatus.PENDING.value
+INTERRUPT_STATUS_RESUMED = InterruptStatus.RESUMED.value
+INTERRUPT_STATUS_REJECTED = InterruptStatus.REJECTED.value
+INTERRUPT_STATUS_EXPIRED = InterruptStatus.EXPIRED.value
 
 PENDING_INTERRUPT_MAX_BYTES = 16_000
 PENDING_INTERRUPT_STRING_LIMIT = 2_000
@@ -85,7 +85,7 @@ def normalize_pending_interrupt_payload(payload: Dict[str, Any], *, requested_at
 
     allowed_actions = normalized.get("allowed_actions")
     if not isinstance(allowed_actions, list) or not all(isinstance(action, str) for action in allowed_actions):
-        allowed_actions = ["approve", "reject"]
+        allowed_actions = [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.REJECT.value]
     normalized["allowed_actions"] = allowed_actions
 
     resume_version = normalized.get("resume_version")
@@ -238,7 +238,7 @@ def validate_pending_interrupt_request(
             "The resume version does not match the current interrupt.",
         )
 
-    if action == "approve_selected":
+    if action == AgentRunResumeAction.APPROVE_SELECTED.value:
         valid_option_ids = option_ids(interrupt)
         if not valid_option_ids:
             raise AgentRunInterruptError(
@@ -259,11 +259,10 @@ def validate_pending_interrupt_request(
                 f"Selected option ids are invalid: {', '.join(invalid_option_ids)}",
                 http_status=400,
             )
-        selection_mode = str(interrupt.get("selection_mode") or "single")
-        if selection_mode == "single" and len(selected_option_ids) != 1:
+        selection_mode = str(interrupt.get("selection_mode") or HitlSelectionMode.SINGLE.value)
+        if selection_mode == HitlSelectionMode.SINGLE.value and len(selected_option_ids) != 1:
             raise AgentRunInterruptError(
                 "interrupt_selection_count_invalid",
                 "This interrupt requires exactly one selected option.",
                 http_status=400,
             )
-

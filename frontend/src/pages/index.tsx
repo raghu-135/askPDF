@@ -30,6 +30,7 @@ import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, Proc
 import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
+import { ProcessStatus } from "../lib/enums";
 import { clampPanelRatio, PANEL_RATIOS } from "../lib/panel-ratio";
 
 export default function Home() {
@@ -236,7 +237,7 @@ export default function Home() {
           ...tab,
           sentences: transformedSentences,
           text: extractTextFromSentences(transformedSentences),
-          parsingStatus: 'completed',
+          parsingStatus: ProcessStatus.Completed,
         };
       }
       return tab;
@@ -256,7 +257,7 @@ export default function Home() {
 
   // Poll for parsing status when active tab is pending
   useEffect(() => {
-    if (!activeTab || activeTab.parsingStatus !== 'pending' || !activeThread) {
+    if (!activeTab || activeTab.parsingStatus !== ProcessStatus.Pending || !activeThread) {
       return;
     }
 

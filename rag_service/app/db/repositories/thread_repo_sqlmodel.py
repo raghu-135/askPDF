@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 
-from app.db.models_sqlmodel import Thread, ChatTurn, ThreadFile
+from app.db.models_sqlmodel import Thread, ChatTurn, ChatTurnStatus, ThreadFile
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import utc_now
@@ -99,7 +99,7 @@ class ThreadRepository:
                 select(func.count(ChatTurn.id))
                 .where(
                     ChatTurn.thread_id == Thread.id,
-                    ChatTurn.status != "cancelled",
+                    ChatTurn.status != ChatTurnStatus.CANCELLED.value,
                     ChatTurn.payload["question"].astext.isnot(None),
                     ChatTurn.payload["question"].astext != "",
                 )
@@ -110,7 +110,7 @@ class ThreadRepository:
                 select(func.count(ChatTurn.id))
                 .where(
                     ChatTurn.thread_id == Thread.id,
-                    ChatTurn.status != "cancelled",
+                    ChatTurn.status != ChatTurnStatus.CANCELLED.value,
                     ChatTurn.payload["answer"].astext.isnot(None),
                     ChatTurn.payload["answer"].astext != "",
                 )
@@ -125,7 +125,7 @@ class ThreadRepository:
             )
             last_message_at = (
                 select(func.max(ChatTurn.created_at))
-                .where(ChatTurn.thread_id == Thread.id, ChatTurn.status != "cancelled")
+                .where(ChatTurn.thread_id == Thread.id, ChatTurn.status != ChatTurnStatus.CANCELLED.value)
                 .correlate(Thread)
                 .scalar_subquery()
             )

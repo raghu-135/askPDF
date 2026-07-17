@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+from app.agent_workflows.enums import PlannerRoute, PLANNER_ROUTES
 from app.agent_workflows.trace import compact_preview
 
 
@@ -72,12 +73,11 @@ def normalize_execution_plan(
     use_web_search: bool,
     question: Optional[str] = None,
 ) -> Dict[str, Any]:
-    allowed_routes = {"execute", "direct", "clarify"}
-    route = parsed.get("route") if parsed.get("route") in allowed_routes else "execute"
+    route = parsed.get("route") if parsed.get("route") in PLANNER_ROUTES else PlannerRoute.EXECUTE.value
     required_steps = infer_required_plan_steps(question)
     normalization_notes: List[str] = []
-    if route == "direct" and required_steps:
-        route = "execute"
+    if route == PlannerRoute.DIRECT.value and required_steps:
+        route = PlannerRoute.EXECUTE.value
         normalization_notes.append("direct_route_clamped_to_execute")
     raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
     steps: List[str] = []
@@ -94,18 +94,18 @@ def normalize_execution_plan(
     if not use_web_search and "web_worker" in steps:
         steps = [step for step in steps if step != "web_worker"]
         normalization_notes.append("web_worker_removed_when_web_search_disabled")
-    if route == "execute":
+    if route == PlannerRoute.EXECUTE.value:
         for required_step in required_steps:
             if required_step not in steps:
                 steps.append(required_step)
-    if route == "execute" and not steps:
+    if route == PlannerRoute.EXECUTE.value and not steps:
         steps = ["retrieval_worker"]
         normalization_notes.append("empty_execute_plan_defaulted_to_retrieval_worker")
     steps = ordered_plan_steps(steps)
-    if route != "execute":
+    if route != PlannerRoute.EXECUTE.value:
         steps = []
     clarification_options = parsed.get("clarification_options")
-    if route == "clarify":
+    if route == PlannerRoute.CLARIFY.value:
         clarification_options = bounded_string_list(clarification_options)
         if not clarification_options:
             clarification_options = fallback_clarification_options()
@@ -113,7 +113,7 @@ def normalize_execution_plan(
         "route": route,
         "route_reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),
         "execution_plan": steps,
-        "clarification_options": clarification_options if route == "clarify" else None,
+        "clarification_options": clarification_options if route == PlannerRoute.CLARIFY.value else None,
         "normalization_notes": normalization_notes,
     }
 

@@ -16,7 +16,23 @@ try:
     from sqlmodel import SQLModel
     from app.db.models_sqlmodel import (
         Thread, File, ChatTurn, ThreadFile,
-        ProcessStatus, MessageRole
+        AgentRunStatus,
+        ChatTurnStatus,
+        FileSourceType,
+        MessageRole,
+        ProcessStatus,
+        WorkflowVisibility,
+    )
+    from app.agent_workflows.enums import (
+        AgentRunResumeAction,
+        EvaluatorRoute,
+        HitlMode,
+        HitlPhase,
+        HitlSelectionMode,
+        InterruptStatus,
+        PlannerRoute,
+        RouteFunctionId,
+        RouterRoute,
     )
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
@@ -198,6 +214,23 @@ class TestProcessStatusEnum:
         """Verify ProcessStatus enum comparison."""
         assert ProcessStatus.RUNNING == "running"
         assert ProcessStatus.COMPLETED == "completed"
+
+    def test_shared_domain_enum_wire_values(self):
+        """Verify domain enum values remain wire-compatible strings."""
+        assert FileSourceType.PDF.value == "pdf"
+        assert FileSourceType.BROWSER.value == "browser"
+        assert ChatTurnStatus.CANCELLED.value == "cancelled"
+        assert WorkflowVisibility.INTERNAL.value == "internal"
+        assert AgentRunStatus.AWAITING_HUMAN.value == "awaiting_human"
+        assert InterruptStatus.PENDING.value == "pending"
+        assert AgentRunResumeAction.CONTINUE_WITHOUT.value == "continue_without"
+        assert HitlMode.CHOICE.value == "choice"
+        assert HitlPhase.INSIDE_TOOL.value == "inside_tool"
+        assert HitlSelectionMode.SINGLE_OR_MULTI.value == "single_or_multi"
+        assert RouterRoute.DOCUMENT.value == "document"
+        assert PlannerRoute.EXECUTE.value == "execute"
+        assert EvaluatorRoute.ANSWER_BUDGET_EXHAUSTED.value == "answer_budget_exhausted"
+        assert RouteFunctionId.HITL_GATE.value == "hitl_gate_route"
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")

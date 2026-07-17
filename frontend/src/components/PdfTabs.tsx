@@ -9,6 +9,7 @@ import LanguageIcon from '@mui/icons-material/Language';
 import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
 import AddIcon from '@mui/icons-material/Add';
 import type { BackendSentence, BBox } from '../lib/bbox-derivation';
+import { ProcessStatus, ThreadFileSourceType, type ProcessStatus as ProcessStatusValue, type ThreadFileSourceType as ThreadFileSourceTypeValue } from '../lib/enums';
 
 type Sentence = Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] };
 
@@ -19,9 +20,9 @@ export type PdfTab = {
   downloadUrl: string;
   sentences: Sentence[] | null;
   text?: string;
-  sourceType?: 'pdf' | 'browser';
+  sourceType?: ThreadFileSourceTypeValue;
   sourceUrl?: string;
-  parsingStatus?: 'pending' | 'completed' | 'failed';
+  parsingStatus?: Extract<ProcessStatusValue, typeof ProcessStatus.Pending | typeof ProcessStatus.Completed | typeof ProcessStatus.Failed>;
 };
 
 type Props = {
@@ -145,7 +146,7 @@ const PdfTabs = React.memo(function PdfTabs({ tabs, activeTabId, onTabChange, on
             />
           )}
           {tabs.map((tab) => {
-            const isBrowser = tab.sourceType === 'browser';
+            const isBrowser = tab.sourceType === ThreadFileSourceType.Browser;
             const label = isBrowser
               ? (tab.sourceUrl ? new URL(tab.sourceUrl).hostname : tab.fileName)
               : truncateFileName(tab.fileName);

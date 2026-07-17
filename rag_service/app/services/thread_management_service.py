@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from sqlalchemy.future import select
 
 from app.db import (
+    ChatTurnStatus,
     ProcessStatus,
     get_scoped_indexing_status,
     get_thread_shape,
@@ -57,7 +58,7 @@ async def fork_thread(
 
             turns_result = await session.execute(
                 select(ChatTurn)
-                .where(ChatTurn.thread_id == source_thread_id, ChatTurn.status != "cancelled")
+                .where(ChatTurn.thread_id == source_thread_id, ChatTurn.status != ChatTurnStatus.CANCELLED.value)
                 .order_by(ChatTurn.created_at.asc(), ChatTurn.id.asc())
             )
             source_turns = list(turns_result.scalars().all())

@@ -1,6 +1,7 @@
 import { Button, Tooltip } from "@mui/material";
 import React from "react";
 import { getFileStatus, getParsedSentences, FileStatus, ProcessStatusHelper, uploadPdf as apiUploadPdf } from "../lib/api";
+import { ProcessStatus } from "../lib/enums";
 import { isRetryableError, isNotFoundError } from "../lib/error-utils";
 
 type Props = {
@@ -69,9 +70,9 @@ const PdfUploader = React.memo(function PdfUploader({
         const fullStatus: FileStatus = 'parsing' in status && 'indexing' in status
           ? status as FileStatus
           : {
-              parsing: { status: 'unknown' },
-              indexing: { status: 'unknown' },
-              indexing_status: { summary: { status: 'unknown' }, models: {} },
+              parsing: { status: ProcessStatus.Unknown },
+              indexing: { status: ProcessStatus.Unknown },
+              indexing_status: { summary: { status: ProcessStatus.Unknown }, models: {} },
               updated_at: new Date().toISOString(),
             };
 
@@ -160,9 +161,9 @@ const PdfUploader = React.memo(function PdfUploader({
       setFileStatus({
         fileHash: data.fileHash,
         status: {
-          parsing: { status: 'pending' },
-          indexing: { status: 'pending' },
-          indexing_status: { summary: { status: 'pending' }, models: {} },
+          parsing: { status: ProcessStatus.Pending },
+          indexing: { status: ProcessStatus.Pending },
+          indexing_status: { summary: { status: ProcessStatus.Pending }, models: {} },
           updated_at: new Date().toISOString()
         }
       });

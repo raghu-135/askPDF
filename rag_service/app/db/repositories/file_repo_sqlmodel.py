@@ -12,7 +12,7 @@ from typing import Optional, Dict, Any, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from app.db.models_sqlmodel import File, ProcessStatus
+from app.db.models_sqlmodel import File, FileSourceType, ProcessStatus
 from app.db.jsonb_utils import set_jsonb_field, merge_jsonb_field, replace_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.status import (
@@ -51,7 +51,7 @@ class FileRepository:
         file_hash: str,
         file_name: str,
         file_path: Optional[str] = None,
-        source_type: str = "pdf",
+        source_type: str = FileSourceType.PDF.value,
     ) -> File:
         """Create a new file record or return existing one."""
         session = await self._get_session()
