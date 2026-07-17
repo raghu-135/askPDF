@@ -164,7 +164,7 @@ class NodeRegistry:
             bundle = await prefetch_context(
                 thread_id=state["thread_id"],
                 raw_question=state["question"],
-                embedding_model_name=state["embedding_model"],
+                embedding_model=state["embedding_model"],
                 context_window=state.get("context_window", DEFAULT_TOKEN_BUDGET),
                 use_web_search=state.get("use_web_search", False),
                 use_reranker=state.get("use_reranker", True),

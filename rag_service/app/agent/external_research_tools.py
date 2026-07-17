@@ -169,7 +169,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
                         texts=texts,
                         urls=urls,
                         titles=titles,
-                        embedding_model_name=embedding_model,
+                        embedding_model=embedding_model,
                         web_search_performed_at=web_search_performed_at,
                     )
                 )

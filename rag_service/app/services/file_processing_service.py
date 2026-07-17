@@ -223,7 +223,7 @@ async def _background_index(
         result = await index_document_for_thread(
             thread_id=thread_id,
             file_hash=file_hash,
-            embedding_model_name=embedding_model,
+            embedding_model=embedding_model,
             metadata=metadata,
             markdown_content=markdown_content,
         )

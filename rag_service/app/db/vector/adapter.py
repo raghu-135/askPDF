@@ -341,7 +341,7 @@ class WeaviateAdapter:
     async def index_pdf_chunks(
         self,
         thread_id: str,
-        embedding_model_name: str,
+        embedding_model: str,
         file_hash: str,
         texts: List[str],
         embeddings: List[List[float]],
@@ -351,7 +351,7 @@ class WeaviateAdapter:
         
         Args:
             thread_id: Thread identifier.
-            embedding_model_name: Name of the embedding model used.
+            embedding_model: Name of the embedding model used.
             file_hash: Hash of the source file.
             texts: List of text chunks to index.
             embeddings: List of embedding vectors corresponding to texts.
@@ -365,13 +365,13 @@ class WeaviateAdapter:
             VectorDBInsertError: If insertion fails.
         """
         _validate_not_empty(thread_id, "thread_id")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         _validate_not_empty(file_hash, "file_hash")
         _validate_embeddings_match_texts(texts, embeddings)
         
         # Validate vectors against model dimensions
-        if not await self.collection_manager.validate_vectors_for_model(embeddings, embedding_model_name):
-            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model_name}'")
+        if not await self.collection_manager.validate_vectors_for_model(embeddings, embedding_model):
+            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model}'")
         
         logger.info(f"Indexing {len(texts)} PDF chunks for thread '{thread_id}', file '{file_hash}'")
         
@@ -389,7 +389,7 @@ class WeaviateAdapter:
             properties = {
                 "thread_id": thread_id,
                 "type": "knowledge_source",
-                "embedding_model": embedding_model_name,
+                "embedding_model": embedding_model,
                 "source_kind": source_kind,
                 "file_hash": file_hash,
                 "chunk_id": i,
@@ -410,7 +410,7 @@ class WeaviateAdapter:
                 }
             )
         # Use model-aware collection manager
-        collection = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
+        collection = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
         return await self._insert_many_model_aware(collection, points)
 
     async def index_chat_memory(
@@ -421,7 +421,7 @@ class WeaviateAdapter:
         answer: str,
         texts: List[str],
         embeddings: List[List[float]],
-        embedding_model_name: str,
+        embedding_model: str,
         message_created_at: Optional[str] = None,
     ) -> int:
         """Index compact chat-memory chunks into ChatMemoryChunk.
@@ -433,7 +433,7 @@ class WeaviateAdapter:
             answer: Assistant answer.
             texts: List of text chunks to index.
             embeddings: List of embedding vectors corresponding to texts.
-            embedding_model_name: Name of the embedding model used.
+            embedding_model: Name of the embedding model used.
             
         Returns:
             int: Number of chunks indexed.
@@ -446,7 +446,7 @@ class WeaviateAdapter:
         _validate_not_empty(message_id, "message_id")
         _validate_not_empty(question, "question")
         _validate_not_empty(answer, "answer")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         _validate_embeddings_match_texts(texts, embeddings)
         
         logger.info(f"Indexing {len(texts)} chat memory chunks for thread '{thread_id}', message '{message_id}'")
@@ -459,7 +459,7 @@ class WeaviateAdapter:
                     "properties": {
                         "thread_id": thread_id,
                         "type": "chat_memory",
-                        "embedding_model": embedding_model_name,
+                        "embedding_model": embedding_model,
                         "message_id": message_id,
                         "chunk_id": i,
                         "question": question,
@@ -470,7 +470,7 @@ class WeaviateAdapter:
                 }
             )
         # Use model-aware collection manager
-        collection = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model_name)
+        collection = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model)
         return await self._insert_many_model_aware(collection, points)
 
     async def index_web_search_chunks(
@@ -479,7 +479,7 @@ class WeaviateAdapter:
         query: str,
         texts: List[str],
         embeddings: List[List[float]],
-        embedding_model_name: str,
+        embedding_model: str,
         urls: Optional[List[str]] = None,
         titles: Optional[List[str]] = None,
         web_search_performed_at: Optional[str] = None,
@@ -491,7 +491,7 @@ class WeaviateAdapter:
             query: Search query that generated these results.
             texts: List of text chunks to index.
             embeddings: List of embedding vectors corresponding to texts.
-            embedding_model_name: Name of the embedding model used.
+            embedding_model: Name of the embedding model used.
             urls: Optional list of source URLs.
             titles: Optional list of page titles.
             
@@ -504,7 +504,7 @@ class WeaviateAdapter:
         """
         _validate_not_empty(thread_id, "thread_id")
         _validate_not_empty(query, "query")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         _validate_embeddings_match_texts(texts, embeddings)
         
         logger.info(f"Indexing {len(texts)} web search chunks for thread '{thread_id}', query '{query}'")
@@ -527,14 +527,14 @@ class WeaviateAdapter:
                 }
             )
         # Use model-aware collection manager
-        collection = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model_name)
+        collection = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model)
         return await self._insert_many_model_aware(collection, points)
 
     async def search_knowledge_sources(
         self,
         thread_id: str,
         query_vector: List[float],
-        embedding_model_name: str,
+        embedding_model: str,
         limit: int = 5,
         file_hash: Optional[str] = None,
         file_hashes: Optional[List[str]] = None,
@@ -545,7 +545,7 @@ class WeaviateAdapter:
         Args:
             thread_id: Thread identifier (for logging/context).
             query_vector: Query embedding vector.
-            embedding_model_name: Name of embedding model to filter by.
+            embedding_model: Name of embedding model to filter by.
             limit: Maximum number of results to return.
             file_hash: Optional specific file hash to filter by.
             file_hashes: Optional list of file hashes to filter by.
@@ -560,14 +560,14 @@ class WeaviateAdapter:
         """
         _validate_not_empty(thread_id, "thread_id")
         _validate_not_empty(query_vector, "query_vector")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         if limit <= 0:
             raise ValueError("limit must be positive")
         
-        logger.debug(f"Searching knowledge sources for thread '{thread_id}', model '{embedding_model_name}', limit={limit}")
+        logger.debug(f"Searching knowledge sources for thread '{thread_id}', model '{embedding_model}', limit={limit}")
         
         # Use model-aware collection - no need for embedding_model filter
-        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
         
         # Document chunks are shared per file_hash + embedding model. When the
         # caller supplies file filters, access has already been checked against
@@ -640,7 +640,7 @@ class WeaviateAdapter:
     async def get_knowledge_source_chunks_by_ids(
         self,
         thread_id: str,
-        embedding_model_name: str,
+        embedding_model: str,
         file_hash: str,
         chunk_ids: List[int],
     ) -> List[Dict[str, Any]]:
@@ -648,7 +648,7 @@ class WeaviateAdapter:
         
         Args:
             thread_id: Thread identifier (for logging/context).
-            embedding_model_name: Name of embedding model.
+            embedding_model: Name of embedding model.
             file_hash: File hash to filter by.
             chunk_ids: List of chunk IDs to fetch.
             
@@ -660,7 +660,7 @@ class WeaviateAdapter:
             VectorDBQueryError: If query fails.
         """
         _validate_not_empty(thread_id, "thread_id")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         _validate_not_empty(file_hash, "file_hash")
         if not chunk_ids:
             return []
@@ -668,7 +668,7 @@ class WeaviateAdapter:
         logger.debug(f"Fetching {len(chunk_ids)} chunks for file '{file_hash}'")
         
         # Use model-aware collection - no need for embedding_model filter
-        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
         
         filt = (
             wvc.query.Filter.by_property("file_hash").equal(file_hash)
@@ -719,7 +719,7 @@ class WeaviateAdapter:
         self,
         thread_id: str,
         query_vector: List[float],
-        embedding_model_name: str,
+        embedding_model: str,
         limit: int = 3,
         exclude_message_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
@@ -728,7 +728,7 @@ class WeaviateAdapter:
         Args:
             thread_id: Thread identifier.
             query_vector: Query embedding vector.
-            embedding_model_name: Embedding model name.
+            embedding_model: Embedding model name.
             limit: Maximum number of results to return.
             exclude_message_ids: Optional list of message IDs to exclude.
             
@@ -741,14 +741,14 @@ class WeaviateAdapter:
         """
         _validate_not_empty(thread_id, "thread_id")
         _validate_not_empty(query_vector, "query_vector")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         if limit <= 0:
             raise ValueError("limit must be positive")
         
         logger.debug(f"Searching chat memory for thread '{thread_id}', limit={limit}")
         
         # Use model-aware collection - no need for embedding_model filter
-        col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model_name)
+        col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model)
         
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
         if exclude_message_ids:
@@ -792,7 +792,7 @@ class WeaviateAdapter:
         self,
         thread_id: str,
         query_vector: List[float],
-        embedding_model_name: str,
+        embedding_model: str,
         limit: int = 5,
         query_text: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -801,7 +801,7 @@ class WeaviateAdapter:
         Args:
             thread_id: Thread identifier.
             query_vector: Query embedding vector.
-            embedding_model_name: Name of embedding model to filter by.
+            embedding_model: Name of embedding model to filter by.
             limit: Maximum number of results to return.
             query_text: Optional query text for hybrid search.
             
@@ -814,14 +814,14 @@ class WeaviateAdapter:
         """
         _validate_not_empty(thread_id, "thread_id")
         _validate_not_empty(query_vector, "query_vector")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         if limit <= 0:
             raise ValueError("limit must be positive")
         
         logger.debug(f"Searching web chunks for thread '{thread_id}', limit={limit}")
         
         # Use model-aware collection - no need for embedding_model filter
-        col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model_name)
+        col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model)
         
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
 
@@ -871,23 +871,23 @@ class WeaviateAdapter:
         logger.debug(f"Found {len(out)} web chunk results")
         return out
 
-    async def delete_chat_memory_by_message_id(self, thread_id: str, message_id: str, embedding_model_name: str) -> bool:
+    async def delete_chat_memory_by_message_id(self, thread_id: str, message_id: str, embedding_model: str) -> bool:
         """Delete all chat-memory chunks belonging to a single assistant message.
         
         Args:
             thread_id: Thread identifier.
             message_id: Message identifier.
-            embedding_model_name: Name of the embedding model used for the chat memory.
+            embedding_model: Name of the embedding model used for the chat memory.
             
         Returns:
             bool: True if deletion succeeded, False otherwise.
         """
         _validate_not_empty(thread_id, "thread_id")
         _validate_not_empty(message_id, "message_id")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         
         # Use model-aware collection
-        col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model_name)
+        col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model)
         
         filt = (
             wvc.query.Filter.by_property("thread_id").equal(thread_id)
@@ -905,24 +905,24 @@ class WeaviateAdapter:
             logger.error(f"Unexpected error deleting chat memory for message '{message_id}': {e}")
             return False
 
-    async def delete_web_chunks_by_urls(self, thread_id: str, urls: List[str], embedding_model_name: str) -> int:
+    async def delete_web_chunks_by_urls(self, thread_id: str, urls: List[str], embedding_model: str) -> int:
         """Delete web-search chunks for a thread whose URLs match any provided URL.
         
         Args:
             thread_id: Thread identifier.
             urls: List of URLs to delete.
-            embedding_model_name: Name of embedding model used for web search chunks.
+            embedding_model: Name of embedding model used for web search chunks.
             
         Returns:
             int: Number of URLs processed (not necessarily deleted count).
         """
         _validate_not_empty(thread_id, "thread_id")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         if not urls:
             return 0
         
         # Use model-aware collection
-        col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model_name)
+        col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model)
         
         filt = (
             wvc.query.Filter.by_property("thread_id").equal(thread_id)
@@ -939,26 +939,26 @@ class WeaviateAdapter:
             logger.error(f"Unexpected error deleting web chunks by URLs: {e}")
             return 0
 
-    async def delete_document_vectors_by_file_hash_and_model(self, file_hash: str, embedding_model_name: str) -> bool:
+    async def delete_document_vectors_by_file_hash_and_model(self, file_hash: str, embedding_model: str) -> bool:
         """Delete all document vectors for a file hash and embedding model.
         
         Args:
             file_hash: File hash to delete.
-            embedding_model_name: Embedding model name.
+            embedding_model: Embedding model name.
             
         Returns:
             bool: True if deletion succeeded, False otherwise.
         """
         _validate_not_empty(file_hash, "file_hash")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         
         # Use model-aware collection - no need for embedding_model filter
-        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
         
         filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
         try:
             await asyncio.to_thread(col.data.delete_many, where=filt)
-            logger.info(f"Deleted document vectors for file '{file_hash}', model '{embedding_model_name}'")
+            logger.info(f"Deleted document vectors for file '{file_hash}', model '{embedding_model}'")
             return True
         except WeaviateBaseError as e:
             logger.error(f"Failed to delete document vectors: {e}")
@@ -967,13 +967,13 @@ class WeaviateAdapter:
             logger.error(f"Unexpected error deleting document vectors: {e}")
             return False
 
-    async def has_file_indexed(self, thread_id: str, file_hash: str, embedding_model_name: str) -> bool:
+    async def has_file_indexed(self, thread_id: str, file_hash: str, embedding_model: str) -> bool:
         """Return whether document chunks exist for a file hash + embedding model.
         
         Args:
             thread_id: Thread identifier (for logging/context).
             file_hash: File hash to check.
-            embedding_model_name: Embedding model name.
+            embedding_model: Embedding model name.
             
         Returns:
             bool: True if file is indexed, False otherwise.
@@ -984,13 +984,13 @@ class WeaviateAdapter:
         """
         _validate_not_empty(thread_id, "thread_id")
         _validate_not_empty(file_hash, "file_hash")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         
         # Use model-aware collection for deduplication
         try:
-            col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
+            col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
             filt = (
-                wvc.query.Filter.by_property("embedding_model").equal(embedding_model_name)
+                wvc.query.Filter.by_property("embedding_model").equal(embedding_model)
                 & wvc.query.Filter.by_property("file_hash").equal(file_hash)
             )
             response = await asyncio.to_thread(col.aggregate.over_all, filters=filt)
@@ -1039,12 +1039,12 @@ class WeaviateAdapter:
             logger.error(f"Failed to check if chat memory indexed: {e}")
             raise VectorDBQueryError("Could not check if chat memory is indexed") from e
 
-    async def get_file_chunk_count(self, file_hash: str, embedding_model_name: str) -> int:
+    async def get_file_chunk_count(self, file_hash: str, embedding_model: str) -> int:
         """Return the number of indexed document chunks for a file/model pair.
         
         Args:
             file_hash: File hash to count chunks for.
-            embedding_model_name: Embedding model name.
+            embedding_model: Embedding model name.
             
         Returns:
             int: Number of indexed chunks.
@@ -1054,10 +1054,10 @@ class WeaviateAdapter:
             VectorDBQueryError: If query fails.
         """
         _validate_not_empty(file_hash, "file_hash")
-        _validate_not_empty(embedding_model_name, "embedding_model_name")
+        _validate_not_empty(embedding_model, "embedding_model")
         
         # Use model-aware collection - no need for embedding_model filter
-        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
+        col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
         
         filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
         try:
@@ -1073,14 +1073,14 @@ class WeaviateAdapter:
         self,
         thread_id: str,
         file_hashes: Optional[List[str]] = None,
-        embedding_model_name: Optional[str] = None,
+        embedding_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Return aggregate vector counts for thread-scoped chat/web and filtered documents.
         
         Args:
             thread_id: Thread identifier.
             file_hashes: Optional list of file hashes to filter documents by.
-            embedding_model_name: Optional embedding model name to filter by.
+            embedding_model: Optional embedding model name to filter by.
             
         Returns:
             Dict[str, Any]: Dictionary with counts for each collection type.
@@ -1095,11 +1095,11 @@ class WeaviateAdapter:
         
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
 
-        # Use model-aware collections if embedding_model_name is provided
-        if embedding_model_name:
-            doc_col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
-            chat_col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model_name)
-            web_col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model_name)
+        # Use model-aware collections if embedding_model is provided
+        if embedding_model:
+            doc_col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
+            chat_col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model)
+            web_col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model)
         else:
             # Fallback to old collections for backward compatibility
             doc_col = self.client.collections.use(CollectionNames.DOCUMENT)
@@ -1107,7 +1107,7 @@ class WeaviateAdapter:
             web_col = self.client.collections.use(CollectionNames.WEB_SEARCH)
 
         try:
-            if file_hashes and embedding_model_name:
+            if file_hashes and embedding_model:
                 # Use model-aware collection - no need for embedding_model filter
                 doc_filter = (
                     wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)

@@ -214,7 +214,7 @@ class TestThreadEndpoints:
         db.get_thread_stats.assert_awaited_once_with(
             thread_id="thread-1",
             file_hashes=[],
-            embedding_model_name="BAAI/bge-m3",
+            embedding_model="BAAI/bge-m3",
         )
 
     def test_get_nonexistent_thread(self, client):
@@ -671,10 +671,10 @@ class TestProactiveCollectionCreation:
         # Should create background work for both reembed and collection creation
         mock_reembed.assert_called_once_with(
             thread_id=sample_thread,
-            embedding_model_name="BAAI/bge-m3",
+            embedding_model="BAAI/bge-m3",
         )
         mock_collection_manager.ensure_collections_for_thread.assert_called_once_with(
-            embedding_model_name="BAAI/bge-m3"
+            embedding_model="BAAI/bge-m3"
         )
     
     @patch('app.api.threads.asyncio.create_task')
@@ -706,7 +706,7 @@ class TestProactiveCollectionCreation:
         
         # Should still attempt to create the collection background work
         mock_collection_manager.ensure_collections_for_thread.assert_called_once_with(
-            embedding_model_name="BAAI/bge-m3"
+            embedding_model="BAAI/bge-m3"
         )
     
     def test_nonexistent_thread_returns_404(self, client):

@@ -192,7 +192,7 @@ async def _persist_success_turn(
             message_id=turn.id,
             question=question,
             answer=answer,
-            embedding_model_name=embedding_model,
+            embedding_model=embedding_model,
             llm_name=llm_model,
             context_window=context_window,
             message_created_at=turn.completed_at or turn.created_at,

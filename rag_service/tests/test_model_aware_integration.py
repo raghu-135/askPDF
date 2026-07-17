@@ -184,7 +184,7 @@ class TestProductionEnvironmentScenarios:
             with pytest.raises(ValueError, match=r"Vector dimensions do not match"):
                 await adapter.index_pdf_chunks(
                     thread_id="test-thread",
-                    embedding_model_name="test-model",
+                    embedding_model="test-model",
                     file_hash="test-file",
                     texts=["test chunk"],
                     embeddings=[[0.1] * 768],  # Wrong dimensions
@@ -328,7 +328,7 @@ class TestProductionErrorHandling:
             # First indexing should succeed
             await adapter.index_pdf_chunks(
                 thread_id="test-thread",
-                embedding_model_name="test-model",
+                embedding_model="test-model",
                 file_hash="test-file-1",
                 texts=["test chunk 1"],
                 embeddings=[[0.1] * 384],
@@ -339,7 +339,7 @@ class TestProductionErrorHandling:
             with pytest.raises(ValueError, match=r"Vector dimensions do not match"):
                 await adapter.index_pdf_chunks(
                     thread_id="test-thread",
-                    embedding_model_name="test-model",
+                    embedding_model="test-model",
                     file_hash="test-file-2",
                     texts=["test chunk 2"],
                     embeddings=[[0.1] * 384],

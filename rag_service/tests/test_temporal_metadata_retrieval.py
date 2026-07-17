@@ -31,7 +31,7 @@ async def test_document_vector_properties_include_page_metadata_not_thread_tempo
 
     count = await adapter.index_pdf_chunks(
         thread_id="thread-1",
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
         file_hash="file-1",
         texts=["benefits text"],
         embeddings=[[0.1, 0.2]],
@@ -74,7 +74,7 @@ async def test_chat_and_web_vectors_store_event_specific_timestamp_only():
         answer="A.",
         texts=["Q: Q?\nA: A."],
         embeddings=[[0.1, 0.2]],
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
         message_created_at="2026-06-25T19:10:00Z",
     )
     chat_props = adapter.points[0]["properties"]
@@ -87,7 +87,7 @@ async def test_chat_and_web_vectors_store_event_specific_timestamp_only():
         query="query",
         texts=["snippet"],
         embeddings=[[0.1, 0.2]],
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
         urls=["https://example.com"],
         titles=["Example"],
         web_search_performed_at="2026-06-25T19:15:00Z",
@@ -119,7 +119,7 @@ async def test_chat_and_web_search_results_derive_timeline_metadata():
     chat_results = await adapter.search_chat_memory(
         thread_id="thread-1",
         query_vector=[0.1, 0.2],
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
     assert chat_results[0]["message_created_at"] == "2026-06-25T19:10:00Z"
     assert chat_results[0]["timeline_event_at"] == "2026-06-25T19:10:00Z"
@@ -140,7 +140,7 @@ async def test_chat_and_web_search_results_derive_timeline_metadata():
     web_results = await adapter.search_web_chunks(
         thread_id="thread-1",
         query_vector=[0.1, 0.2],
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
     assert web_results[0]["web_search_performed_at"] == "2026-06-25T19:15:00Z"
     assert web_results[0]["timeline_event_at"] == "2026-06-25T19:15:00Z"
@@ -402,7 +402,7 @@ async def test_document_indexing_keeps_thread_availability_out_of_shared_chunk_m
     result = await indexer.index_document_for_thread(
         thread_id="thread-1",
         file_hash="file-1",
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
 
     assert result["status"] == "success"
@@ -442,7 +442,7 @@ async def test_reused_embedding_stats_update_does_not_write_zero_total_chars(mon
     result = await indexer.index_document_for_thread(
         thread_id="thread-1",
         file_hash="file-1",
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
 
     assert result["status"] == "success"
@@ -500,7 +500,7 @@ async def test_semantic_history_includes_message_time_when_present(monkeypatch):
         query_vector=[0.1],
         query_text=None,
         limit=5,
-        embedding_model_name="embed-1",
+        embedding_model="embed-1",
     )
 
     assert "Earlier exchange at 2026-06-25T19:10:00Z:" in history

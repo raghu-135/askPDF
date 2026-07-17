@@ -120,7 +120,7 @@ class TestDimensionMismatchScenarios:
             with pytest.raises(ValueError, match=r"Vector dimensions do not match expected dimensions for model 'model-384'"):
                 await adapter.index_pdf_chunks(
                     thread_id="test-thread",
-                    embedding_model_name="model-384",
+                    embedding_model="model-384",
                     file_hash="test-file",
                     texts=["test chunk"],
                     embeddings=[[0.1] * 768],  # Wrong dimensions

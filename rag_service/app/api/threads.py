@@ -280,7 +280,7 @@ async def fork_thread_endpoint(thread_id: str, req: ThreadForkRequest):
         asyncio.create_task(
             trigger_reembed_for_missing_sources(
                 thread_id=thread.id,
-                embedding_model_name=thread.embedding_model,
+                embedding_model=thread.embedding_model,
                 file_hashes=[f.file_hash for f in files],
             )
         )
@@ -317,20 +317,20 @@ async def get_thread_endpoint(thread_id: str):
             asyncio.create_task(
                 trigger_reembed_for_missing_sources(
                     thread_id=thread_id,
-                    embedding_model_name=thread.embedding_model,
+                    embedding_model=thread.embedding_model,
                 )
             )
             # Proactively ensure all collections exist for this thread's embedding model
             asyncio.create_task(
                 get_vector_db().collection_manager.ensure_collections_for_thread(
-                    embedding_model_name=thread.embedding_model
+                    embedding_model=thread.embedding_model
                 )
             )
             db = get_vector_db()
             stats = await db.get_thread_stats(
                 thread_id=thread_id,
                 file_hashes=[f.file_hash for f in files],
-                embedding_model_name=thread.embedding_model,
+                embedding_model=thread.embedding_model,
             )
         else:
             stats_unavailable_reason = "Embedding model is not ready"
@@ -530,7 +530,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
         stats = await db.get_thread_stats(
             thread_id=thread_id,
             file_hashes=file_hashes,
-            embedding_model_name=thread.embedding_model,
+            embedding_model=thread.embedding_model,
         )
 
         return {

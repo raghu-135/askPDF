@@ -249,7 +249,7 @@ class TestWeaviateAdapterIntegration:
         result = await adapter.search_knowledge_sources(
             thread_id="test-thread",
             query_vector=[0.1] * 384,
-            embedding_model_name="test-model",
+            embedding_model="test-model",
             limit=5
         )
         
@@ -276,7 +276,7 @@ class TestWeaviateAdapterIntegration:
         await adapter.search_knowledge_sources(
             thread_id="second-thread",
             query_vector=[0.1] * 384,
-            embedding_model_name="test-model",
+            embedding_model="test-model",
             limit=5,
             file_hashes=["shared-file-hash"],
         )
@@ -296,7 +296,7 @@ class TestWeaviateAdapterIntegration:
         with pytest.raises(ValueError, match=r"Vector dimensions do not match expected dimensions"):
             await adapter.index_pdf_chunks(
                 thread_id="test-thread",
-                embedding_model_name="test-model",
+                embedding_model="test-model",
                 file_hash="test-file",
                 texts=["test chunk"],
                 embeddings=[[0.1] * 768],  # Wrong dimensions
@@ -397,7 +397,7 @@ class TestBackwardCompatibility:
             result = await adapter.search_knowledge_sources(
                 thread_id="test-thread",
                 query_vector=[0.1] * 384,
-                embedding_model_name="legacy-model",
+                embedding_model="legacy-model",
                 limit=5
             )
             

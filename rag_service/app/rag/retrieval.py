@@ -236,7 +236,7 @@ async def fetch_semantic_history(
     limit: int,
     char_budget: Optional[int] = None,
     use_reranker: bool = True,
-    embedding_model_name: str = None,
+    embedding_model: str = None,
     include_refs: bool = False,
 ) -> tuple:
     """Fetch semantic chat memory text plus the list of used message IDs."""
@@ -245,7 +245,7 @@ async def fetch_semantic_history(
     recalled = await db.search_chat_memory(
         thread_id=thread_id,
         query_vector=query_vector,
-        embedding_model_name=embedding_model_name,
+        embedding_model=embedding_model,
         limit=limit,
     )
     if use_reranker and query_text:

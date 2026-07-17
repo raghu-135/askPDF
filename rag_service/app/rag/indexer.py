@@ -333,9 +333,9 @@ async def _get_existing_sentence_count(file_hash: str) -> Optional[int]:
     return None
 
 
-def _document_index_lock(file_hash: str, embedding_model_name: str) -> asyncio.Lock:
+def _document_index_lock(file_hash: str, embedding_model: str) -> asyncio.Lock:
     """Return the shared lock for a file/model indexing run."""
-    key = f"{file_hash}:{embedding_model_name}"
+    key = f"{file_hash}:{embedding_model}"
     if key not in _document_index_locks:
         _document_index_locks[key] = asyncio.Lock()
     return _document_index_locks[key]
@@ -639,14 +639,14 @@ def split_chat_memory_text(compact_text: str) -> List[str]:
     return [c.page_content for c in chunks]
 
 
-async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> List[List[float]]:
+async def generate_embeddings(chunks: List[str], embedding_model: str) -> List[List[float]]:
     """
     Generate embeddings for each chunk using the specified embedding model.
     Note: Some LLM APIs/servers (like DMR) may have strict batch size limits.
     Uses asyncio.to_thread to prevent blocking the FastAPI event loop.
     """
     from app.models.retry import invoke_with_retry
-    embedding_model = get_embedding_model(embedding_model_name)
+    embedding_client = get_embedding_model(embedding_model)
     batch_size = 100  # LLM API/server strict batch size limits
     vectors = []
     
@@ -657,7 +657,7 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     async def process_batch(start_idx: int) -> List[List[float]]:
         async with semaphore:
             batch = chunks[start_idx:start_idx + batch_size]
-            return await invoke_with_retry(embedding_model.aembed_documents, batch)
+            return await invoke_with_retry(embedding_client.aembed_documents, batch)
     
     # Create tasks for each batch
     for i in range(0, len(chunks), batch_size):
@@ -680,7 +680,7 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
 async def index_document_for_thread(
     thread_id: str,
     file_hash: str,
-    embedding_model_name: str,
+    embedding_model: str,
     metadata: Optional[Dict[str, Any]] = None,
     markdown_content: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -692,7 +692,7 @@ async def index_document_for_thread(
     Args:
         thread_id: The thread ID to index into
         file_hash: Unique hash of the file
-        embedding_model_name: The embedding model to use
+        embedding_model: The embedding model to use
         metadata: Additional metadata to store with chunks
         markdown_content: Optional markdown content for web sources (bypasses PDF parsing)
 
@@ -723,23 +723,23 @@ async def index_document_for_thread(
         await update_indexing_status(
             file_hash=file_hash,
             status=ProcessStatus.RUNNING.value,
-            embedding_model=embedding_model_name,
+            embedding_model=embedding_model,
             thread_id=thread_id,
             started_at=started_at,
             claim=True,
         )
 
-        async with _document_index_lock(file_hash, embedding_model_name):
-            if await db_client.has_file_indexed(thread_id, file_hash, embedding_model_name):
+        async with _document_index_lock(file_hash, embedding_model):
+            if await db_client.has_file_indexed(thread_id, file_hash, embedding_model):
                 file_status = await get_file_status(file_hash)
-                model_status = get_scoped_indexing_status(file_status, embedding_model=embedding_model_name)
-                shared_chunks = await db_client.get_file_chunk_count(file_hash, embedding_model_name)
+                model_status = get_scoped_indexing_status(file_status, embedding_model=embedding_model)
+                shared_chunks = await db_client.get_file_chunk_count(file_hash, embedding_model)
                 total_chars = int(model_status.get("total_chars", 0) or 0)
                 finished_at = iso_utc_z()
                 await update_indexing_status(
                     file_hash=file_hash,
                     status=ProcessStatus.COMPLETED.value,
-                    embedding_model=embedding_model_name,
+                    embedding_model=embedding_model,
                     thread_id=thread_id,
                     started_at=started_at,
                     finished_at=finished_at,
@@ -790,7 +790,7 @@ async def index_document_for_thread(
                 await update_indexing_status(
                     file_hash=file_hash,
                     status=ProcessStatus.FAILED.value,
-                    embedding_model=embedding_model_name,
+                    embedding_model=embedding_model,
                     thread_id=thread_id,
                     started_at=started_at,
                     finished_at=iso_utc_z(),
@@ -801,7 +801,7 @@ async def index_document_for_thread(
             logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
 
             # 2. Generate embeddings
-            vectors = await generate_embeddings(chunks, embedding_model_name)
+            vectors = await generate_embeddings(chunks, embedding_model)
 
             # 3. Prepare metadata for each chunk
             chunk_metadatas = []
@@ -824,12 +824,12 @@ async def index_document_for_thread(
 
             # 4. Index into document collection using model-aware manager
             # Validate vectors before indexing
-            if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model_name):
-                raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model_name}'")
+            if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model):
+                raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model}'")
             
             indexed_count = await db_client.index_pdf_chunks(
                 thread_id=thread_id,
-                embedding_model_name=embedding_model_name,
+                embedding_model=embedding_model,
                 file_hash=file_hash,
                 texts=chunks,
                 embeddings=vectors,
@@ -854,7 +854,7 @@ async def index_document_for_thread(
             await update_indexing_status(
                 file_hash=file_hash,
                 status=ProcessStatus.COMPLETED.value,
-                embedding_model=embedding_model_name,
+                embedding_model=embedding_model,
                 thread_id=thread_id,
                 started_at=started_at,
                 finished_at=finished_at,
@@ -884,7 +884,7 @@ async def index_document_for_thread(
             await update_indexing_status(
                 file_hash=file_hash,
                 status=ProcessStatus.FAILED.value,
-                embedding_model=embedding_model_name,
+                embedding_model=embedding_model,
                 thread_id=thread_id,
                 started_at=started_at,
                 finished_at=iso_utc_z(),
@@ -900,7 +900,7 @@ async def index_chat_memory_for_thread(
     message_id: str,
     question: str,
     answer: str,
-    embedding_model_name: str,
+    embedding_model: str,
     llm_name: Optional[str] = None,
     context_window: int = DEFAULT_TOKEN_BUDGET,
     message_created_at: Optional[Any] = None,
@@ -927,11 +927,11 @@ async def index_chat_memory_for_thread(
         chunks = split_chat_memory_text(compact_text)
         
         # 2. Generate embeddings
-        vectors = await generate_embeddings(chunks, embedding_model_name)
+        vectors = await generate_embeddings(chunks, embedding_model)
         
         # Validate vectors before indexing
-        if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model_name):
-            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model_name}'")
+        if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model):
+            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model}'")
         
         # 3. Store into vector database
         indexed_count = await db_client.index_chat_memory(
@@ -941,7 +941,7 @@ async def index_chat_memory_for_thread(
             answer=answer,
             texts=chunks,
             embeddings=vectors,
-            embedding_model_name=embedding_model_name,
+            embedding_model=embedding_model,
             message_created_at=message_created_at_iso,
         )
         
@@ -973,7 +973,7 @@ async def index_chat_memory_from_compact_for_thread(
     message_id: str,
     compact_text: str,
     answer: str,
-    embedding_model_name: str,
+    embedding_model: str,
     message_created_at: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
@@ -987,7 +987,7 @@ async def index_chat_memory_from_compact_for_thread(
             message_created_at = getattr(message, "created_at", None) if message else None
         message_created_at_iso = iso_utc_z(message_created_at)
         chunks = split_chat_memory_text(compact_text)
-        vectors = await generate_embeddings(chunks, embedding_model_name)
+        vectors = await generate_embeddings(chunks, embedding_model)
         indexed_count = await db_client.index_chat_memory(
             thread_id=thread_id,
             message_id=message_id,
@@ -995,7 +995,7 @@ async def index_chat_memory_from_compact_for_thread(
             answer=answer,
             texts=chunks,
             embeddings=vectors,
-            embedding_model_name=embedding_model_name,
+            embedding_model=embedding_model,
             message_created_at=message_created_at_iso,
         )
         return {"status": "success", "chunks_count": indexed_count}
@@ -1016,7 +1016,7 @@ async def index_web_search_for_thread(
     texts: List[str],
     urls: Optional[List[str]],
     titles: Optional[List[str]],
-    embedding_model_name: str,
+    embedding_model: str,
     web_search_performed_at: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
@@ -1029,7 +1029,7 @@ async def index_web_search_for_thread(
         texts: List of result snippet texts.
         urls: Corresponding source URLs (parallel to texts).
         titles: Corresponding page titles (parallel to texts).
-        embedding_model_name: Embedding model to use.
+        embedding_model: Embedding model to use.
 
     Returns:
         Status dict with indexed chunk count.
@@ -1037,18 +1037,18 @@ async def index_web_search_for_thread(
     db_client = get_vector_db()
     try:
         web_search_performed_at_iso = iso_utc_z(web_search_performed_at)
-        vectors = await generate_embeddings(texts, embedding_model_name)
+        vectors = await generate_embeddings(texts, embedding_model)
         
         # Validate vectors before indexing
-        if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model_name):
-            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model_name}'")
+        if not await db_client.collection_manager.validate_vectors_for_model(vectors, embedding_model):
+            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model}'")
         
         indexed_count = await db_client.index_web_search_chunks(
             thread_id=thread_id,
             query=query,
             texts=texts,
             embeddings=vectors,
-            embedding_model_name=embedding_model_name,
+            embedding_model=embedding_model,
             urls=urls,
             titles=titles,
             web_search_performed_at=web_search_performed_at_iso,
@@ -1071,7 +1071,7 @@ def _thread_reembed_lock(thread_id: str) -> asyncio.Lock:
 
 async def trigger_reembed_for_missing_sources(
     thread_id: str,
-    embedding_model_name: str,
+    embedding_model: str,
     file_hashes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
@@ -1079,7 +1079,7 @@ async def trigger_reembed_for_missing_sources(
     Called when a thread is opened.
     """
     from app.db import get_thread_files, get_thread_turns
-    if not await embedding_model_check(thread_id, embedding_model_name):
+    if not await embedding_model_check(thread_id, embedding_model):
         return {"status": "skipped", "reason": "embedding_model_not_ready"}
 
     lock = _thread_reembed_lock(thread_id)
@@ -1098,19 +1098,19 @@ async def trigger_reembed_for_missing_sources(
 
         for f in files:
             try:
-                if not await embedding_model_check(thread_id, embedding_model_name, during_run=True):
+                if not await embedding_model_check(thread_id, embedding_model, during_run=True):
                     logger.warning(
                         "Stopping re-embed for thread %s: embed model '%s' became unavailable",
                         thread_id,
-                        embedding_model_name,
+                        embedding_model,
                     )
                     break
-                if await db.has_file_indexed(thread_id, f.file_hash, embedding_model_name):
+                if await db.has_file_indexed(thread_id, f.file_hash, embedding_model):
                     continue
                 result = await index_document_for_thread(
                     thread_id=thread_id,
                     file_hash=f.file_hash,
-                    embedding_model_name=embedding_model_name,
+                    embedding_model=embedding_model,
                 )
                 if result.get("status") == "success":
                     reindexed_files.append({"file_hash": f.file_hash, "source_type": FileSourceType.PDF.value})
@@ -1120,11 +1120,11 @@ async def trigger_reembed_for_missing_sources(
         try:
             turns = await get_thread_turns(thread_id, limit=10000)
             for turn in turns:
-                if not await embedding_model_check(thread_id, embedding_model_name, during_run=True):
+                if not await embedding_model_check(thread_id, embedding_model, during_run=True):
                     logger.warning(
                         "Stopping chat-memory backfill for thread %s: embed model '%s' became unavailable",
                         thread_id,
-                        embedding_model_name,
+                        embedding_model,
                     )
                     break
                 payload = turn.payload or {}
@@ -1142,7 +1142,7 @@ async def trigger_reembed_for_missing_sources(
                     message_id=turn.id,
                     compact_text=compact_text,
                     answer=answer,
-                    embedding_model_name=embedding_model_name,
+                    embedding_model=embedding_model,
                     message_created_at=turn.completed_at or turn.created_at,
                 )
                 if chat_result.get("status") == "success":
@@ -1160,7 +1160,7 @@ async def trigger_reembed_for_missing_sources(
 
 
 async def embedding_model_check(
-    thread_id: str, embedding_model_name: str, during_run: bool = False
+    thread_id: str, embedding_model: str, during_run: bool = False
 ) -> bool:
     """
     Verify embedding-model availability for re-index paths.
@@ -1169,14 +1169,14 @@ async def embedding_model_check(
     from app.models.llm_server_client import check_embedding_model_ready
 
     try:
-        ready = await check_embedding_model_ready(embedding_model_name, use_cache=False)
+        ready = await check_embedding_model_ready(embedding_model, use_cache=False)
     except Exception as ready_err:
         phase = "during re-embed run" if during_run else "before re-embed trigger"
         logger.warning(
             "Skipping re-embed for thread %s: embed-model readiness check failed %s for '%s': %s",
             thread_id,
             phase,
-            embedding_model_name,
+            embedding_model,
             ready_err,
         )
         return False
@@ -1185,7 +1185,7 @@ async def embedding_model_check(
         logger.info(
             "Skipping re-embed for thread %s: embed model '%s' is not ready",
             thread_id,
-            embedding_model_name,
+            embedding_model,
         )
         return False
 

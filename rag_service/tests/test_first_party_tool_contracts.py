@@ -116,6 +116,9 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
     )
     assert payload["sources"] == payload["artifacts"]["document_sources"]
     assert payload["__document_sources__"] == payload["artifacts"]["document_sources"]
+    assert fake_db.search_knowledge_sources.call_args.kwargs["embedding_model"] == "embed-1"
+    assert fake_db.get_knowledge_source_chunks_by_ids.call_args.kwargs["embedding_model"] == "embed-1"
+    assert fake_db.search_web_chunks.call_args.kwargs["embedding_model"] == "embed-1"
 
 
 @pytest.mark.asyncio
@@ -146,6 +149,7 @@ async def test_search_conversation_history_returns_used_chat_ids_contract(monkey
     )
     assert payload["artifacts"]["used_chat_ids"] == ["turn-1:assistant"]
     assert payload["__used_chat_ids__"] == ["turn-1:assistant"]
+    assert agent_tools.fetch_semantic_history.call_args.kwargs["embedding_model"] == "embed-1"
 
 
 @pytest.mark.asyncio
@@ -191,6 +195,7 @@ async def test_search_thread_timeline_returns_timeline_artifacts_contract(monkey
     )
     assert payload["artifacts"]["timeline_events"][0]["message_id"] == "turn-1:assistant"
     assert payload["__timeline_events__"] == payload["artifacts"]["timeline_events"]
+    assert fake_db.search_chat_memory.call_args.kwargs["embedding_model"] == "embed-1"
 
 
 @pytest.mark.asyncio

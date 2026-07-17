@@ -62,7 +62,7 @@ async def cleanup_detached_file(file_hash: str, thread_id: str, embedding_model:
     if remaining_model_refs == 0:
         await vector_db.delete_document_vectors_by_file_hash_and_model(
             file_hash=file_hash,
-            embedding_model_name=embedding_model,
+            embedding_model=embedding_model,
         )
 
     remaining_refs = await count_threads_with_file(file_hash)
@@ -76,7 +76,7 @@ async def cleanup_detached_file(file_hash: str, thread_id: str, embedding_model:
         for model_name in model_names:
             await vector_db.delete_document_vectors_by_file_hash_and_model(
                 file_hash=file_hash,
-                embedding_model_name=model_name,
+                embedding_model=model_name,
             )
         await delete_file_record(file_hash)
         await delete_file_artifacts(file_hash)

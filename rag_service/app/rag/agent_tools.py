@@ -264,8 +264,8 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
-        embedding_model = get_embedding_model(embedding_model)
-        query_vector = await invoke_with_retry(embedding_model.aembed_query, query)
+        embedding_client = get_embedding_model(embedding_model)
+        query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
 
         db = get_vector_db()
         document_lookup = await get_document_metadata_lookup(thread_id)
@@ -282,7 +282,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         raw_doc_chunks = await db.search_knowledge_sources(
             thread_id=thread_id,
             query_vector=query_vector,
-            embedding_model_name=embedding_model,
+            embedding_model=embedding_model,
             limit=max_results,
             file_hashes=thread_file_hashes,
             query_text=query,
@@ -319,7 +319,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         for file_hash, id_set in file_chunk_map.items():
             expanded_batch = await db.get_knowledge_source_chunks_by_ids(
                 thread_id=thread_id,
-                embedding_model_name=embedding_model,
+                embedding_model=embedding_model,
                 file_hash=file_hash,
                 chunk_ids=list(id_set),
             )
@@ -330,7 +330,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         web_chunks = await db.search_web_chunks(
             thread_id=thread_id,
             query_vector=query_vector,
-            embedding_model_name=embedding_model,
+            embedding_model=embedding_model,
             limit=max(3, max_results // 3),
             query_text=query,
         )
@@ -437,15 +437,15 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
                 warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
-        embedding_model = get_embedding_model(embedding_model)
-        query_vector = await invoke_with_retry(embedding_model.aembed_query, query)
+        embedding_client = get_embedding_model(embedding_model)
+        query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
         history, used_ids = await fetch_semantic_history(
             thread_id=thread_id,
             query_vector=query_vector,
             query_text=query,
             limit=max_results,
             use_reranker=use_reranker,
-            embedding_model_name=embedding_model,
+            embedding_model=embedding_model,
         )
 
         if not history:
@@ -515,14 +515,14 @@ async def search_thread_timeline(
         needs_vector = requested_sources in {"all", "conversation", "web_cache"}
         query_vector: Optional[List[float]] = None
         if needs_vector:
-            embedding_model = get_embedding_model(embedding_model)
-            query_vector = await invoke_with_retry(embedding_model.aembed_query, query)
+            embedding_client = get_embedding_model(embedding_model)
+            query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
 
         if requested_sources in {"all", "conversation"} and query_vector is not None:
             recalled = await db.search_chat_memory(
                 thread_id=thread_id,
                 query_vector=query_vector,
-                embedding_model_name=embedding_model,
+                embedding_model=embedding_model,
                 limit=max_results,
             )
             if use_reranker and query:
@@ -545,7 +545,7 @@ async def search_thread_timeline(
             web_chunks = await db.search_web_chunks(
                 thread_id=thread_id,
                 query_vector=query_vector,
-                embedding_model_name=embedding_model,
+                embedding_model=embedding_model,
                 limit=max_results,
                 query_text=query,
             )
