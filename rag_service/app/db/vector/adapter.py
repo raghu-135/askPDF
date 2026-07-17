@@ -141,7 +141,7 @@ class WeaviateAdapter:
             [
                 ("thread_id", wvc.config.DataType.TEXT),
                 ("type", wvc.config.DataType.TEXT),
-                ("embed_model", wvc.config.DataType.TEXT),
+                ("embedding_model", wvc.config.DataType.TEXT),
                 ("source_kind", wvc.config.DataType.TEXT),
                 ("file_hash", wvc.config.DataType.TEXT),
                 ("chunk_id", wvc.config.DataType.INT),
@@ -389,7 +389,7 @@ class WeaviateAdapter:
             properties = {
                 "thread_id": thread_id,
                 "type": "knowledge_source",
-                "embed_model": embedding_model_name,
+                "embedding_model": embedding_model_name,
                 "source_kind": source_kind,
                 "file_hash": file_hash,
                 "chunk_id": i,
@@ -459,7 +459,7 @@ class WeaviateAdapter:
                     "properties": {
                         "thread_id": thread_id,
                         "type": "chat_memory",
-                        "embed_model": embedding_model_name,
+                        "embedding_model": embedding_model_name,
                         "message_id": message_id,
                         "chunk_id": i,
                         "question": question,
@@ -566,7 +566,7 @@ class WeaviateAdapter:
         
         logger.debug(f"Searching knowledge sources for thread '{thread_id}', model '{embedding_model_name}', limit={limit}")
         
-        # Use model-aware collection - no need for embed_model filter
+        # Use model-aware collection - no need for embedding_model filter
         col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
         
         # Document chunks are shared per file_hash + embedding model. When the
@@ -667,7 +667,7 @@ class WeaviateAdapter:
         
         logger.debug(f"Fetching {len(chunk_ids)} chunks for file '{file_hash}'")
         
-        # Use model-aware collection - no need for embed_model filter
+        # Use model-aware collection - no need for embedding_model filter
         col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
         
         filt = (
@@ -747,7 +747,7 @@ class WeaviateAdapter:
         
         logger.debug(f"Searching chat memory for thread '{thread_id}', limit={limit}")
         
-        # Use model-aware collection - no need for embed_model filter
+        # Use model-aware collection - no need for embedding_model filter
         col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, embedding_model_name)
         
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
@@ -820,7 +820,7 @@ class WeaviateAdapter:
         
         logger.debug(f"Searching web chunks for thread '{thread_id}', limit={limit}")
         
-        # Use model-aware collection - no need for embed_model filter
+        # Use model-aware collection - no need for embedding_model filter
         col = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model_name)
         
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
@@ -952,7 +952,7 @@ class WeaviateAdapter:
         _validate_not_empty(file_hash, "file_hash")
         _validate_not_empty(embedding_model_name, "embedding_model_name")
         
-        # Use model-aware collection - no need for embed_model filter
+        # Use model-aware collection - no need for embedding_model filter
         col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
         
         filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
@@ -990,7 +990,7 @@ class WeaviateAdapter:
         try:
             col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
             filt = (
-                wvc.query.Filter.by_property("embed_model").equal(embedding_model_name)
+                wvc.query.Filter.by_property("embedding_model").equal(embedding_model_name)
                 & wvc.query.Filter.by_property("file_hash").equal(file_hash)
             )
             response = await asyncio.to_thread(col.aggregate.over_all, filters=filt)
@@ -1026,7 +1026,7 @@ class WeaviateAdapter:
             if not thread:
                 return False
             
-            col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, thread.embed_model)
+            col = await self.collection_manager.get_collection(CollectionNames.CHAT_MEMORY, thread.embedding_model)
             filt = (
                 wvc.query.Filter.by_property("thread_id").equal(thread_id)
                 & wvc.query.Filter.by_property("message_id").equal(message_id)
@@ -1056,7 +1056,7 @@ class WeaviateAdapter:
         _validate_not_empty(file_hash, "file_hash")
         _validate_not_empty(embedding_model_name, "embedding_model_name")
         
-        # Use model-aware collection - no need for embed_model filter
+        # Use model-aware collection - no need for embedding_model filter
         col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model_name)
         
         filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
@@ -1108,7 +1108,7 @@ class WeaviateAdapter:
 
         try:
             if file_hashes and embedding_model_name:
-                # Use model-aware collection - no need for embed_model filter
+                # Use model-aware collection - no need for embedding_model filter
                 doc_filter = (
                     wvc.query.Filter.by_property("file_hash").contains_any(file_hashes)
                 )

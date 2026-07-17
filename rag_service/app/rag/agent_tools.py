@@ -264,8 +264,8 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
                 warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
-        embed_model = get_embedding_model(embedding_model)
-        query_vector = await invoke_with_retry(embed_model.aembed_query, query)
+        embedding_model = get_embedding_model(embedding_model)
+        query_vector = await invoke_with_retry(embedding_model.aembed_query, query)
 
         db = get_vector_db()
         document_lookup = await get_document_metadata_lookup(thread_id)
@@ -289,7 +289,7 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
         )
         if not raw_doc_chunks:
             logger.error(
-                "Missing document vectors for thread %s (files=%d, embed_model=%s). Open thread endpoint should trigger recovery.",
+                "Missing document vectors for thread %s (files=%d, embedding_model=%s). Open thread endpoint should trigger recovery.",
                 thread_id,
                 len(thread_file_hashes),
                 embedding_model,
@@ -437,8 +437,8 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
                 warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
-        embed_model = get_embedding_model(embedding_model)
-        query_vector = await invoke_with_retry(embed_model.aembed_query, query)
+        embedding_model = get_embedding_model(embedding_model)
+        query_vector = await invoke_with_retry(embedding_model.aembed_query, query)
         history, used_ids = await fetch_semantic_history(
             thread_id=thread_id,
             query_vector=query_vector,
@@ -515,8 +515,8 @@ async def search_thread_timeline(
         needs_vector = requested_sources in {"all", "conversation", "web_cache"}
         query_vector: Optional[List[float]] = None
         if needs_vector:
-            embed_model = get_embedding_model(embedding_model)
-            query_vector = await invoke_with_retry(embed_model.aembed_query, query)
+            embedding_model = get_embedding_model(embedding_model)
+            query_vector = await invoke_with_retry(embedding_model.aembed_query, query)
 
         if requested_sources in {"all", "conversation"} and query_vector is not None:
             recalled = await db.search_chat_memory(

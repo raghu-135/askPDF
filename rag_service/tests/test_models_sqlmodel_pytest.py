@@ -35,14 +35,14 @@ class TestThreadModel:
         thread = Thread(
             id=thread_id,
             name="Test Thread",
-            embed_model="BAAI/bge-m3",
+            embedding_model="BAAI/bge-m3",
             settings={"replans": 10},
             created_at=datetime.utcnow()
         )
         
         assert thread.id == thread_id
         assert thread.name == "Test Thread"
-        assert thread.embed_model == "BAAI/bge-m3"
+        assert thread.embedding_model == "BAAI/bge-m3"
         assert thread.settings == {"replans": 10}
         assert isinstance(thread.created_at, datetime)
 
@@ -52,7 +52,7 @@ class TestThreadModel:
         thread = Thread(
             id=str(uuid.uuid4()),
             name="Test Thread",
-            embed_model="test-model"
+            embedding_model="test-model"
         )
         
         # Settings should default to empty dict
@@ -165,7 +165,7 @@ class TestThreadStatsFields:
         thread = Thread(
             id="thread-123",
             name="Stats Thread",
-            embed_model="test-model",
+            embedding_model="test-model",
             total_qa_pairs=10,
             total_qa_chars=5000,
             avg_qa_chars=500.0,
@@ -211,7 +211,7 @@ class TestModelValidation:
         thread = Thread(
             id=str(uuid.uuid4()),
             name="Valid Thread Name",
-            embed_model="test-model"
+            embedding_model="test-model"
         )
         assert thread.name == "Valid Thread Name"
 
@@ -242,7 +242,7 @@ class TestJSONBFields:
         thread = Thread(
             id=str(uuid.uuid4()),
             name="Test Thread",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings=settings
         )
         
@@ -273,7 +273,7 @@ class TestDateTimeFields:
         thread = Thread(
             id=str(uuid.uuid4()),
             name="Test Thread",
-            embed_model="test-model",
+            embedding_model="test-model",
             created_at=now
         )
         
@@ -287,7 +287,7 @@ class TestDateTimeFields:
         thread = Thread(
             id=str(uuid.uuid4()),
             name="Test Thread",
-            embed_model="test-model",
+            embedding_model="test-model",
             created_at=now
         )
         

@@ -49,7 +49,7 @@ import {
   forkThread,
   updateThread,
 } from '../lib/api';
-import { fetchAvailableEmbedModels, checkEmbedModelReady } from '../lib/models-api';
+import { fetchAvailableEmbeddingModels, checkEmbeddingModelReady } from '../lib/models-api';
 import { formatDate } from '../lib/date-utils';
 import ThreadReferenceChip from './ThreadReferenceChip';
 
@@ -73,7 +73,7 @@ interface ThreadSidebarProps {
   activeThreadId: string | null;
   onThreadSelect: (thread: Thread | null) => void;
   onThreadForked?: (thread: Thread) => void;
-  onEmbedModelChange?: (model: string) => void;
+  onEmbeddingModelChange?: (model: string) => void;
   hideHeader?: boolean;
   onHeaderStateChange?: (state: ThreadSidebarHeaderState | null) => void;
   darkMode?: boolean;
@@ -83,7 +83,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   activeThreadId,
   onThreadSelect,
   onThreadForked,
-  onEmbedModelChange,
+  onEmbeddingModelChange,
   hideHeader = false,
   onHeaderStateChange,
   darkMode = false,
@@ -96,8 +96,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     const now = new Date();
     return `Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
   });
-  const [newThreadEmbedModel, setNewThreadEmbedModel] = useState('');
-  const [availableEmbedModels, setAvailableEmbedModels] = useState<{
+  const [newThreadEmbeddingModel, setNewThreadEmbeddingModel] = useState('');
+  const [availableEmbeddingModels, setAvailableEmbeddingModels] = useState<{
     local_embedding_models: string[];
     embedding_models: string[];
     not_embedding_models: string[];
@@ -106,8 +106,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [expanded, setExpanded] = useState(true);
-  const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
-  const [isCheckingEmbedModel, setIsCheckingEmbedModel] = useState(false);
+  const [isEmbeddingModelValid, setIsEmbeddingModelValid] = useState<boolean | null>(null);
+  const [isCheckingEmbeddingModel, setIsCheckingEmbeddingModel] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
   const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
@@ -127,11 +127,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
   // Helper function to get icon and color for model type
   const getModelIcon = (modelName: string) => {
-    if (availableEmbedModels.embedding_models.includes(modelName)) {
+    if (availableEmbeddingModels.embedding_models.includes(modelName)) {
       return <CheckCircleIcon fontSize="inherit" color="primary" />;
-    } else if (availableEmbedModels.local_embedding_models.includes(modelName)) {
+    } else if (availableEmbeddingModels.local_embedding_models.includes(modelName)) {
       return <CheckCircleIcon fontSize="inherit" sx={{ color: 'orange' }} />;
-    } else if (availableEmbedModels.not_embedding_models.includes(modelName)) {
+    } else if (availableEmbeddingModels.not_embedding_models.includes(modelName)) {
       return <ErrorIcon fontSize="inherit" color="error" />;
     }
     return null;
@@ -140,12 +140,12 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   // Load threads and embedding models on mount
   useEffect(() => {
     loadThreads();
-    fetchAvailableEmbedModels().then((models) => {
-      setAvailableEmbedModels(models);
+    fetchAvailableEmbeddingModels().then((models) => {
+      setAvailableEmbeddingModels(models);
       const allModels = [...models.embedding_models, ...models.local_embedding_models, ...models.not_embedding_models];
       const defaultModel = allModels[0] || '';
-      if (!newThreadEmbedModel && defaultModel) {
-        setNewThreadEmbedModel(defaultModel);
+      if (!newThreadEmbeddingModel && defaultModel) {
+        setNewThreadEmbeddingModel(defaultModel);
       }
     });
   }, []);
@@ -163,27 +163,27 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   };
 
   const handleCreateThread = async () => {
-    if (!newThreadName.trim() || !newThreadEmbedModel) return;
+    if (!newThreadName.trim() || !newThreadEmbeddingModel) return;
 
     try {
       // Check if the embedding model is valid before proceeding
-      const isReady = await checkEmbedModelReady(newThreadEmbedModel);
+      const isReady = await checkEmbeddingModelReady(newThreadEmbeddingModel);
       if (!isReady) {
-        setIsEmbedModelValid(false);
+        setIsEmbeddingModelValid(false);
         return;
       }
 
-      setIsEmbedModelValid(true);
+      setIsEmbeddingModelValid(true);
       setCreating(true);
-      const thread = await createThread(newThreadName.trim(), newThreadEmbedModel);
+      const thread = await createThread(newThreadName.trim(), newThreadEmbeddingModel);
       setThreads(prev => [thread, ...prev]);
       onThreadSelect(thread);
-      if (onEmbedModelChange) {
-        onEmbedModelChange(newThreadEmbedModel);
+      if (onEmbeddingModelChange) {
+        onEmbeddingModelChange(newThreadEmbeddingModel);
       }
       setCreateDialogOpen(false);
       setNewThreadName('');
-      setNewThreadEmbedModel('');
+      setNewThreadEmbeddingModel('');
     } catch (error) {
       console.error('Failed to create thread:', error);
     } finally {
@@ -352,27 +352,27 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
   // Add validation check when embedding model changes
   useEffect(() => {
-    if (!newThreadEmbedModel) {
-      setIsEmbedModelValid(null);
-      setIsCheckingEmbedModel(false);
+    if (!newThreadEmbeddingModel) {
+      setIsEmbeddingModelValid(null);
+      setIsCheckingEmbeddingModel(false);
       return;
     }
 
-    const validateEmbedModel = async () => {
-      setIsCheckingEmbedModel(true);
-      setIsEmbedModelValid(null);
+    const validateEmbeddingModel = async () => {
+      setIsCheckingEmbeddingModel(true);
+      setIsEmbeddingModelValid(null);
       try {
-        const isReady = await checkEmbedModelReady(newThreadEmbedModel);
-        setIsEmbedModelValid(isReady);
+        const isReady = await checkEmbeddingModelReady(newThreadEmbeddingModel);
+        setIsEmbeddingModelValid(isReady);
       } catch (error) {
-        setIsEmbedModelValid(false);
+        setIsEmbeddingModelValid(false);
       } finally {
-        setIsCheckingEmbedModel(false);
+        setIsCheckingEmbeddingModel(false);
       }
     };
 
-    validateEmbedModel();
-  }, [newThreadEmbedModel]);
+    validateEmbeddingModel();
+  }, [newThreadEmbeddingModel]);
 
   const handleOpenCreateDialog = useCallback(() => {
     const now = new Date();
@@ -491,7 +491,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             Embedding model
           </Typography>
           <Typography variant="caption" component="div" sx={{ wordBreak: 'break-word' }}>
-            {thread.embed_model}
+            {thread.embeddingModel}
           </Typography>
         </Box>
         {forkInfo?.parent_thread_id && (
@@ -908,22 +908,22 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           <FormControl fullWidth margin="dense">
             <InputLabel>Embedding Model</InputLabel>
             <Select
-              value={newThreadEmbedModel}
+              value={newThreadEmbeddingModel}
               label="Embedding Model"
-              onChange={(e) => setNewThreadEmbedModel(e.target.value)}
+              onChange={(e) => setNewThreadEmbeddingModel(e.target.value)}
             >
-              {[...availableEmbedModels.embedding_models, ...availableEmbedModels.local_embedding_models, ...availableEmbedModels.not_embedding_models].map((model) => (
+              {[...availableEmbeddingModels.embedding_models, ...availableEmbeddingModels.local_embedding_models, ...availableEmbeddingModels.not_embedding_models].map((model) => (
                 <MenuItem key={model} value={model}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     {getModelIcon(model)}
                     <Box>
                       {model}
-                      {availableEmbedModels.local_embedding_models.includes(model) && (
+                      {availableEmbeddingModels.local_embedding_models.includes(model) && (
                         <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
                           (slower)
                         </Typography>
                       )}
-                      {availableEmbedModels.not_embedding_models.includes(model) && (
+                      {availableEmbeddingModels.not_embedding_models.includes(model) && (
                         <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
                           (may not work)
                         </Typography>
@@ -934,13 +934,13 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               ))}
             </Select>
           </FormControl>
-          {isCheckingEmbedModel && (
+          {isCheckingEmbeddingModel && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
               <CircularProgress size={20} />
               <Typography variant="body2">Checking embedding model...</Typography>
             </Box>
           )}
-          {isEmbedModelValid === false && !isCheckingEmbedModel && (
+          {isEmbeddingModelValid === false && !isCheckingEmbeddingModel && (
             <Typography color="error" variant="body2" sx={{ mt: 1 }}>
               The selected model is not an embedding model. Please choose a valid model.
             </Typography>
@@ -960,7 +960,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           <Button
             onClick={handleCreateThread}
             variant="contained"
-            disabled={!newThreadName.trim() || !newThreadEmbedModel || creating || isEmbedModelValid === false || isCheckingEmbedModel}
+            disabled={!newThreadName.trim() || !newThreadEmbeddingModel || creating || isEmbeddingModelValid === false || isCheckingEmbeddingModel}
           >
             {creating ? <CircularProgress size={20} /> : 'Create'}
           </Button>

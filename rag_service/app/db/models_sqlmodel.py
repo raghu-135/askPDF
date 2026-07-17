@@ -86,7 +86,7 @@ class Thread(SQLModel, table=True):
     
     id: str = Field(primary_key=True)
     name: str = Field(index=True)
-    embed_model: str = Field(index=True)
+    embedding_model: str = Field(index=True)
     settings: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)

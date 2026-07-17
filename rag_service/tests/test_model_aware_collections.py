@@ -258,10 +258,10 @@ class TestWeaviateAdapterIntegration:
         
         # Should call near_vector since no query_text provided
         mock_collection.query.near_vector.assert_called_once()
-        # Check that embed_model filter is not in the call
+        # Check that embedding_model filter is not in the call
         call_args = mock_collection.query.near_vector.call_args
         filters = call_args[1].get('filters')
-        assert 'embed_model' not in str(filters)
+        assert 'embedding_model' not in str(filters)
 
     @pytest.mark.asyncio
     async def test_search_knowledge_sources_file_hash_filter_is_not_thread_scoped(self, adapter):

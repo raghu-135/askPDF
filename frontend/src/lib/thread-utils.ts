@@ -11,28 +11,28 @@ export async function loadThreadTabs(thread: Thread): Promise<PdfTab[]> {
   const loadedTabs: PdfTab[] = [];
   
   // Process files in the order returned by backend (already ordered by added_at DESC)
-  for (const file of threadData.files) {
+  for (const threadFile of threadData.files) {
     try {
-      const pdfData = await getPdfByHash(file.file_hash, thread.id);
+      const pdfData = await getPdfByHash(threadFile.fileHash, thread.id);
       const transformedSentences = transformSentences(pdfData.sentences);
       loadedTabs.push({
-        id: file.file_hash,
-        fileName: file.file_name,
-        fileHash: file.file_hash,
-        pdfUrl: `${API_BASE}/api${pdfData.pdfUrl}?t=${Date.now()}`,
+        id: threadFile.fileHash,
+        fileName: threadFile.fileName,
+        fileHash: threadFile.fileHash,
+        downloadUrl: `${API_BASE}/api${pdfData.downloadUrl}?t=${Date.now()}`,
         sentences: transformedSentences,
         text: extractTextFromSentences(transformedSentences),
         sourceType: 'pdf',
         parsingStatus: 'completed',
       });
     } catch (err) {
-      console.warn(`Failed to load file ${file.file_hash}, creating tab with pending status:`, err);
+      console.warn(`Failed to load file ${threadFile.fileHash}, creating tab with pending status:`, err);
       // Create tab with basic info even if API call fails
       loadedTabs.push({
-        id: file.file_hash,
-        fileName: file.file_name,
-        fileHash: file.file_hash,
-        pdfUrl: `${API_BASE}/api/threads/${thread.id}/files/${file.file_hash}/download?t=${Date.now()}`,
+        id: threadFile.fileHash,
+        fileName: threadFile.fileName,
+        fileHash: threadFile.fileHash,
+        downloadUrl: `${API_BASE}/api/threads/${thread.id}/files/${threadFile.fileHash}/download?t=${Date.now()}`,
         sentences: null,
         text: '',
         sourceType: 'pdf',
@@ -55,7 +55,7 @@ export function createPdfTabFromUpload(data: any): PdfTab {
     id: data?.fileHash || `tab-${Date.now()}`,
     fileName: data?.fileName || 'Untitled.pdf',
     fileHash: data?.fileHash || '',
-    pdfUrl: data?.pdfUrl ? `${API_BASE}/api${data.pdfUrl}?t=${Date.now()}` : '',
+    downloadUrl: data?.downloadUrl ? `${API_BASE}/api${data.downloadUrl}?t=${Date.now()}` : '',
     sentences: sentences ? transformedSentences : null,
     text: sentences ? extractTextFromSentences(transformedSentences) : '',
     sourceType: 'pdf',

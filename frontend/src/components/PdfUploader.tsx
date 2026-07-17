@@ -6,7 +6,7 @@ import { isRetryableError, isNotFoundError } from "../lib/error-utils";
 type Props = {
   threadId?: string | null;
   embeddingModel?: string | null;
-  onUploaded: (data: { sentences: any[] | null; pdfUrl: string; fileHash: string; fileName?: string }) => void;
+  onUploaded: (data: { sentences: any[] | null; downloadUrl: string; fileHash: string; fileName?: string }) => void;
   onIndexingComplete?: (fileHash: string) => void;
   onParsingComplete?: (fileHash: string, sentences: any[]) => void;
   disabled?: boolean;

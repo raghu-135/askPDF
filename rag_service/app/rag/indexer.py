@@ -645,7 +645,7 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     Uses asyncio.to_thread to prevent blocking the FastAPI event loop.
     """
     from app.models.retry import invoke_with_retry
-    embed_model = get_embedding_model(embedding_model_name)
+    embedding_model = get_embedding_model(embedding_model_name)
     batch_size = 100  # LLM API/server strict batch size limits
     vectors = []
     
@@ -656,7 +656,7 @@ async def generate_embeddings(chunks: List[str], embedding_model_name: str) -> L
     async def process_batch(start_idx: int) -> List[List[float]]:
         async with semaphore:
             batch = chunks[start_idx:start_idx + batch_size]
-            return await invoke_with_retry(embed_model.aembed_documents, batch)
+            return await invoke_with_retry(embedding_model.aembed_documents, batch)
     
     # Create tasks for each batch
     for i in range(0, len(chunks), batch_size):
@@ -1078,8 +1078,8 @@ async def trigger_reembed_for_missing_sources(
     Called when a thread is opened.
     """
     from app.db import get_thread_files, get_thread_turns
-    if not await embed_model_check(thread_id, embedding_model_name):
-        return {"status": "skipped", "reason": "embed_model_not_ready"}
+    if not await embedding_model_check(thread_id, embedding_model_name):
+        return {"status": "skipped", "reason": "embedding_model_not_ready"}
 
     lock = _thread_reembed_lock(thread_id)
     if lock.locked():
@@ -1097,7 +1097,7 @@ async def trigger_reembed_for_missing_sources(
 
         for f in files:
             try:
-                if not await embed_model_check(thread_id, embedding_model_name, during_run=True):
+                if not await embedding_model_check(thread_id, embedding_model_name, during_run=True):
                     logger.warning(
                         "Stopping re-embed for thread %s: embed model '%s' became unavailable",
                         thread_id,
@@ -1119,7 +1119,7 @@ async def trigger_reembed_for_missing_sources(
         try:
             turns = await get_thread_turns(thread_id, limit=10000)
             for turn in turns:
-                if not await embed_model_check(thread_id, embedding_model_name, during_run=True):
+                if not await embedding_model_check(thread_id, embedding_model_name, during_run=True):
                     logger.warning(
                         "Stopping chat-memory backfill for thread %s: embed model '%s' became unavailable",
                         thread_id,
@@ -1158,17 +1158,17 @@ async def trigger_reembed_for_missing_sources(
         }
 
 
-async def embed_model_check(
+async def embedding_model_check(
     thread_id: str, embedding_model_name: str, during_run: bool = False
 ) -> bool:
     """
     Verify embedding-model availability for re-index paths.
     Returns False on both hard not-ready and check failures.
     """
-    from app.models.llm_server_client import check_embed_model_ready
+    from app.models.llm_server_client import check_embedding_model_ready
 
     try:
-        ready = await check_embed_model_ready(embedding_model_name, use_cache=False)
+        ready = await check_embedding_model_ready(embedding_model_name, use_cache=False)
     except Exception as ready_err:
         phase = "during re-embed run" if during_run else "before re-embed trigger"
         logger.warning(

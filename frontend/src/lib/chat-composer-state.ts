@@ -6,8 +6,8 @@ export type ChatComposerStatus =
   | 'llm_checking'
   | 'llm_unavailable'
   | 'llm_tools_unsupported'
-  | 'embed_checking'
-  | 'embed_unavailable'
+  | 'embedding_checking'
+  | 'embedding_unavailable'
   | 'index_error'
   | 'indexing'
   | 'ready';
@@ -17,7 +17,7 @@ export interface ChatComposerStateInput {
   llmModel: string;
   isLlmModelValid: boolean | null;
   isLlmToolsSupported: boolean | null;
-  isEmbedModelValid: boolean | null;
+  isEmbeddingModelValid: boolean | null;
   indexingStatus: ChatComposerIndexingStatus;
   hasInput: boolean;
 }
@@ -63,12 +63,12 @@ export function getChatComposerState(input: ChatComposerStateInput): ChatCompose
     return locked('llm_tools_unsupported', 'Selected LLM does not support tools.');
   }
 
-  if (input.isEmbedModelValid === null) {
-    return locked('embed_checking', 'Checking embedding model...', true);
+  if (input.isEmbeddingModelValid === null) {
+    return locked('embedding_checking', 'Checking embedding model...', true);
   }
 
-  if (input.isEmbedModelValid === false || input.indexingStatus === 'blocked') {
-    return locked('embed_unavailable', 'Blocked: selected embedding model is unavailable on server.');
+  if (input.isEmbeddingModelValid === false || input.indexingStatus === 'blocked') {
+    return locked('embedding_unavailable', 'Blocked: selected embedding model is unavailable on server.');
   }
 
   if (input.indexingStatus === 'error') {

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 async def prefetch_context(
     thread_id: str,
     raw_question: str,
-    embed_model_name: str,
+    embedding_model_name: str,
     context_window: int,
     use_web_search: bool,
     use_reranker: bool,
@@ -67,8 +67,8 @@ async def prefetch_context(
     budget = compute_prefetch_budget(context_window)
 
     # Embed the raw question ONCE and share the vector across parallel tasks
-    embed_model = get_embedding_model(embed_model_name)
-    shared_query_vector = await invoke_with_retry(embed_model.aembed_query, raw_question)
+    embedding_model = get_embedding_model(embedding_model_name)
+    shared_query_vector = await invoke_with_retry(embedding_model.aembed_query, raw_question)
 
     def _message_ref(msg: Any) -> Dict[str, Any]:
         text = (getattr(msg, "context_compact", None) or getattr(msg, "content", None) or "").strip()
@@ -144,7 +144,7 @@ async def prefetch_context(
                 limit=budget["semantic_limit"],
                 char_budget=budget["semantic_history_chars"],
                 use_reranker=use_reranker,
-                embedding_model_name=embed_model_name,
+                embedding_model_name=embedding_model_name,
                 include_refs=True,
             )
         except Exception as exc:
@@ -163,18 +163,18 @@ async def prefetch_context(
             raw_chunks = await db.search_knowledge_sources(
                 thread_id=thread_id,
                 query_vector=shared_query_vector,
-                embedding_model_name=embed_model_name,
+                embedding_model_name=embedding_model_name,
                 limit=rerank_fetch_k,
                 file_hashes=thread_file_hashes,
                 query_text=raw_question,
             )
             if not raw_chunks:
                 logger.error(
-                    "Missing document vectors for thread %s (files=%d, embed_model=%s). "
+                    "Missing document vectors for thread %s (files=%d, embedding_model=%s). "
                     "Recovery is only triggered on thread open.",
                     thread_id,
                     len(thread_file_hashes),
-                    embed_model_name,
+                    embedding_model_name,
                 )
                 return "", []
             document_lookup = await get_document_metadata_lookup(thread_id)

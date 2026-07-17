@@ -50,15 +50,26 @@ class TestThreadEndpoints:
         """Test creating a new thread."""
         response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
         )
         assert response.status_code == 200
         data = response.json()
         assert "id" in data
         assert data["name"] == "Test Thread"
-        assert data["embed_model"] == "BAAI/bge-m3"
+        assert data["embedding_model"] == "BAAI/bge-m3"
 
-    def test_create_thread_default_embed_model(self, client):
+    def test_create_thread_accepts_legacy_embed_model_alias(self, client):
+        """Test creating a thread with the legacy embed_model request field."""
+        response = client.post(
+            "/api/threads",
+            json={"name": "Legacy Alias Thread", "embed_model": "BAAI/bge-m3"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "Legacy Alias Thread"
+        assert data["embedding_model"] == "BAAI/bge-m3"
+
+    def test_create_thread_default_embedding_model(self, client):
         """Test creating a thread with default embed model."""
         response = client.post(
             "/api/threads",
@@ -68,14 +79,14 @@ class TestThreadEndpoints:
         data = response.json()
         assert "id" in data
         assert data["name"] == "Test Thread"
-        assert data["embed_model"] is not None
+        assert data["embedding_model"] is not None
 
     def test_list_threads(self, client):
         """Test listing all threads."""
         # Create a thread first
         client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
         )
         
         response = client.get("/api/threads")
@@ -89,25 +100,25 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
         )
         thread_id = create_response.json()["id"]
         
-        with patch("app.api.threads.check_embed_model_ready", new_callable=AsyncMock, return_value=False):
+        with patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=False):
             response = client.get(f"/api/threads/{thread_id}")
         assert response.status_code == 200
         data = response.json()
         assert data["id"] == thread_id
         assert data["name"] == "Test Thread"
-        assert data["embed_model_ready"] is False
+        assert data["embedding_model_ready"] is False
 
     @pytest.mark.asyncio
-    async def test_get_thread_returns_metadata_when_embed_model_offline(self):
+    async def test_get_thread_returns_metadata_when_embedding_model_offline(self):
         """Thread detail should not require vector dimensions when embeddings are offline."""
         thread = SimpleNamespace(
             id="thread-1",
             name="Offline Thread",
-            embed_model="text-embedding-nomic-embed-text-v1.5",
+            embedding_model="text-embedding-nomic-embed-text-v1.5",
             settings={},
             created_at=datetime(2026, 1, 1),
         )
@@ -122,7 +133,7 @@ class TestThreadEndpoints:
             patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
             patch("app.api.threads.get_thread_files", new_callable=AsyncMock, return_value=[file]),
             patch("app.api.threads.repair_thread_documents_meta", new_callable=AsyncMock) as repair_meta,
-            patch("app.api.threads.check_embed_model_ready", new_callable=AsyncMock, return_value=False),
+            patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=False),
             patch("app.api.threads.get_vector_db") as get_vector_db,
             patch("app.api.threads.trigger_reembed_for_missing_sources", new_callable=AsyncMock) as trigger_reembed,
         ):
@@ -130,7 +141,7 @@ class TestThreadEndpoints:
 
         assert data["id"] == "thread-1"
         assert data["files"][0]["file_hash"] == "file-1"
-        assert data["embed_model_ready"] is False
+        assert data["embedding_model_ready"] is False
         assert data["stats"] == threads_api._empty_thread_stats()
         assert data["stats_unavailable_reason"] == "Embedding model is not ready"
         get_vector_db.assert_not_called()
@@ -138,19 +149,19 @@ class TestThreadEndpoints:
         trigger_reembed.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_thread_index_status_blocks_when_embed_model_offline(self):
+    async def test_thread_index_status_blocks_when_embedding_model_offline(self):
         """Index status should not probe vector collections when embeddings are offline."""
         thread = SimpleNamespace(
             id="thread-1",
             name="Offline Thread",
-            embed_model="text-embedding-nomic-embed-text-v1.5",
+            embedding_model="text-embedding-nomic-embed-text-v1.5",
             settings={},
             created_at=datetime(2026, 1, 1),
         )
 
         with (
             patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
-            patch("app.api.threads.check_embed_model_ready", new_callable=AsyncMock, return_value=False),
+            patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=False),
             patch("app.api.threads.get_vector_db") as get_vector_db,
         ):
             data = await threads_api.get_thread_index_status_endpoint("thread-1")
@@ -159,17 +170,17 @@ class TestThreadEndpoints:
             "thread_id": "thread-1",
             "status": "blocked",
             "stats": threads_api._empty_thread_stats(),
-            "embed_model_ready": False,
+            "embedding_model_ready": False,
         }
         get_vector_db.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_get_thread_uses_real_stats_when_embed_model_ready(self):
+    async def test_get_thread_uses_real_stats_when_embedding_model_ready(self):
         """Ready embeddings should keep the existing vector stats path."""
         thread = SimpleNamespace(
             id="thread-1",
             name="Ready Thread",
-            embed_model="BAAI/bge-m3",
+            embedding_model="BAAI/bge-m3",
             settings={},
             created_at=datetime(2026, 1, 1),
         )
@@ -190,14 +201,14 @@ class TestThreadEndpoints:
             patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
             patch("app.api.threads.get_thread_files", new_callable=AsyncMock, return_value=[]),
             patch("app.api.threads.repair_thread_documents_meta", new_callable=AsyncMock),
-            patch("app.api.threads.check_embed_model_ready", new_callable=AsyncMock, return_value=True),
+            patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=True),
             patch("app.api.threads.get_vector_db", return_value=db),
             patch("app.api.threads.trigger_reembed_for_missing_sources", Mock(return_value=None)),
             patch("app.api.threads.asyncio.create_task"),
         ):
             data = await threads_api.get_thread_endpoint("thread-1")
 
-        assert data["embed_model_ready"] is True
+        assert data["embedding_model_ready"] is True
         assert data["stats"] == stats
         assert data["stats_unavailable_reason"] is None
         db.get_thread_stats.assert_awaited_once_with(
@@ -216,7 +227,7 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "Original Name", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Original Name", "embedding_model": "BAAI/bge-m3"}
         )
         thread_id = create_response.json()["id"]
         
@@ -241,7 +252,7 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
         )
         thread_id = create_response.json()["id"]
         
@@ -255,7 +266,7 @@ class TestThreadEndpoints:
         """Stored replans above the current limit should not break settings reads."""
         create_response = client.post(
             "/api/threads",
-            json={"name": "Legacy Settings Thread", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Legacy Settings Thread", "embedding_model": "BAAI/bge-m3"}
         )
         thread_id = create_response.json()["id"]
 
@@ -279,7 +290,7 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
         )
         thread_id = create_response.json()["id"]
         
@@ -311,7 +322,7 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "To Delete", "embed_model": "BAAI/bge-m3"}
+            json={"name": "To Delete", "embedding_model": "BAAI/bge-m3"}
         )
         thread_id = create_response.json()["id"]
         
@@ -390,7 +401,7 @@ class TestThreadEndpoints:
         forked_thread = SimpleNamespace(
             id="forked-thread",
             name="Source Thread (Fork)",
-            embed_model="BAAI/bge-m3",
+            embedding_model="BAAI/bge-m3",
             settings={"replans": 3},
             thread_metadata={
                 "fork": {
@@ -543,7 +554,7 @@ class TestMessageEndpoints:
         """Create a sample thread for message tests."""
         response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
         )
         return response.json()["id"]
 
@@ -587,7 +598,7 @@ class TestFileEndpoints:
         """Create a sample thread for file tests."""
         response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
         )
         return response.json()["id"]
 
@@ -628,13 +639,13 @@ class TestProactiveCollectionCreation:
         """Create a sample thread for collection tests."""
         response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embed_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
         )
         return response.json()["id"]
     
     @patch('app.api.threads.asyncio.create_task')
     @patch('app.api.threads.repair_thread_documents_meta', new_callable=AsyncMock)
-    @patch('app.api.threads.check_embed_model_ready', new_callable=AsyncMock, return_value=True)
+    @patch('app.api.threads.check_embedding_model_ready', new_callable=AsyncMock, return_value=True)
     @patch('app.api.threads.get_vector_db')
     @patch('app.api.threads.trigger_reembed_for_missing_sources')
     def test_thread_access_triggers_collection_creation(self, mock_reembed, mock_get_db, mock_check_ready, mock_repair_meta, mock_create_task, client, sample_thread):
@@ -668,7 +679,7 @@ class TestProactiveCollectionCreation:
     
     @patch('app.api.threads.asyncio.create_task')
     @patch('app.api.threads.repair_thread_documents_meta', new_callable=AsyncMock)
-    @patch('app.api.threads.check_embed_model_ready', new_callable=AsyncMock, return_value=True)
+    @patch('app.api.threads.check_embedding_model_ready', new_callable=AsyncMock, return_value=True)
     @patch('app.api.threads.get_vector_db')
     @patch('app.api.threads.trigger_reembed_for_missing_sources')
     def test_thread_access_handles_collection_creation_failure(self, mock_reembed, mock_get_db, mock_check_ready, mock_repair_meta, mock_create_task, client, sample_thread):

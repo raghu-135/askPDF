@@ -153,7 +153,7 @@ async def delete_message_endpoint(message_id: str):
         vector_message_id = getattr(message, "turn_id", None) or (
             (assistant_msg_id or message_id).split(":")[0]
         )
-        await db.delete_chat_memory_by_message_id(message.thread_id, vector_message_id, thread.embed_model)
+        await db.delete_chat_memory_by_message_id(message.thread_id, vector_message_id, thread.embedding_model)
 
         # Delete orphaned web_search chunks
         if urls_to_check:
@@ -167,7 +167,7 @@ async def delete_message_endpoint(message_id: str):
                             still_needed.add(url)
             orphaned = urls_to_check - still_needed
             if orphaned:
-                await db.delete_web_chunks_by_urls(message.thread_id, list(orphaned), thread.embed_model)
+                await db.delete_web_chunks_by_urls(message.thread_id, list(orphaned), thread.embedding_model)
 
         # Delete from database (pair-aware)
         deleted_ids = await delete_message_pair(message_id)
@@ -212,7 +212,7 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
             )
         if req.custom_instructions_override is None:
             req.custom_instructions_override = thread_settings["custom_instructions"]
-        result = await AgentRunService().run_thread_chat(thread_id, req, thread.embed_model)
+        result = await AgentRunService().run_thread_chat(thread_id, req, thread.embedding_model)
         return result
     except HTTPException:
         raise

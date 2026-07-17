@@ -64,7 +64,7 @@ const ThreadLineageTooltipContent: React.FC<ThreadLineageTooltipContentProps> = 
           Embedding model
         </Typography>
         <Typography variant="caption" component="div" sx={{ wordBreak: 'break-word' }}>
-          {thread.embed_model}
+          {thread.embeddingModel}
         </Typography>
       </Box>
       {(forkInfo || childThreadIds.length > 0) && (

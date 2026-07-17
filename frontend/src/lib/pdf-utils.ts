@@ -115,17 +115,17 @@ export function getActiveTab(pdfTabs: PdfTab[], activeTabId: string | null): Pdf
  * Returns the sentences, URL, file hash, and file name for the active tab.
  *
  * @param activeTab The currently active PdfTab, or null.
- * @returns An object containing pdfSentences, pdfUrl, fileHash, and fileName.
+ * @returns An object containing pdfSentences, downloadUrl, fileHash, and fileName.
  */
 export function getActiveTabData(activeTab: PdfTab | null): {
   pdfSentences: any[];
-  pdfUrl: string | null;
+  downloadUrl: string | null;
   fileHash: string | null;
   fileName: string | null;
 } {
   return {
     pdfSentences: activeTab?.sentences || [],
-    pdfUrl: activeTab?.pdfUrl || null,
+    downloadUrl: activeTab?.downloadUrl || null,
     fileHash: activeTab?.fileHash || null,
     fileName: activeTab?.fileName || null,
   };

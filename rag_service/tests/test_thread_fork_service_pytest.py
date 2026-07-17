@@ -36,7 +36,7 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
                 Thread(
                     id="source-thread",
                     name="Source Thread",
-                    embed_model="BAAI/bge-m3",
+                    embedding_model="BAAI/bge-m3",
                     settings={"replans": 3},
                     thread_metadata={"existing": True},
                     created_at=created_at,
@@ -171,14 +171,14 @@ async def test_fork_thread_rejects_message_from_another_thread(engine, monkeypat
                     Thread(
                         id="source-thread",
                         name="Source Thread",
-                        embed_model="BAAI/bge-m3",
+                        embedding_model="BAAI/bge-m3",
                         settings={},
                         thread_metadata={},
                     ),
                     Thread(
                         id="other-thread",
                         name="Other Thread",
-                        embed_model="BAAI/bge-m3",
+                        embedding_model="BAAI/bge-m3",
                         settings={},
                         thread_metadata={},
                     ),

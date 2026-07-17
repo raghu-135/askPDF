@@ -93,7 +93,7 @@ async def fork_thread(
             forked_thread = Thread(
                 id=new_thread_id,
                 name=(name or "").strip() or f"{source_thread.name} (Fork)",
-                embed_model=source_thread.embed_model,
+                embedding_model=source_thread.embedding_model,
                 settings=copy.deepcopy(source_thread.settings or {}),
                 thread_metadata=source_metadata,
                 created_at=forked_at,

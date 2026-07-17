@@ -40,7 +40,7 @@ export default function Home() {
 
   // Get active tab and its data using utility
   const activeTab = getActiveTab(pdfTabs, activeTabId);
-  const { pdfSentences, pdfUrl, fileHash, fileName } = getActiveTabData(activeTab);
+  const { pdfSentences, downloadUrl, fileHash, fileName } = getActiveTabData(activeTab);
 
   const [activeSource, setActiveSource] = useState<'pdf' | 'chat'>('pdf');
   const [currentPdfId, setCurrentPdfId] = useState<number | null>(null);
@@ -350,7 +350,7 @@ export default function Home() {
       const result = await captureBrowserPage(activeThread.id);
 
       // Pre-verify file is accessible before creating tab
-      const isReady = await pollForFileReady(activeThread.id, result.file_hash, {
+      const isReady = await pollForFileReady(activeThread.id, result.fileHash, {
         maxAttempts: 10,
         intervalMs: 500,
         timeoutMs: 5000,
@@ -369,9 +369,9 @@ export default function Home() {
 
       // Transform to match PDF upload format and reuse handler for consistent behavior
       const uploadData = {
-        fileHash: result.file_hash,
+        fileHash: result.fileHash,
         fileName: displayTitle,
-        pdfUrl: `/threads/${activeThread.id}/files/${result.file_hash}/download`,
+        downloadUrl: `/threads/${activeThread.id}/files/${result.fileHash}/download`,
         sentences: null,
       };
 
@@ -705,7 +705,7 @@ export default function Home() {
               {/* PDF Uploader */}
               <PdfUploader
                 threadId={activeThread?.id ?? null}
-                embeddingModel={activeThread?.embed_model ?? null}
+                embeddingModel={activeThread?.embeddingModel ?? null}
                 onUploaded={handlePdfUploaded}
                 onIndexingComplete={handleIndexingComplete}
                 onParsingComplete={handleParsingComplete}
@@ -804,9 +804,9 @@ export default function Home() {
                 <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
                 <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
               </Box>
-            ) : pdfUrl ? (
+            ) : downloadUrl ? (
               <PdfViewer
-                pdfUrl={pdfUrl}
+                downloadUrl={downloadUrl}
                 sentences={pdfSentences}
                 currentId={activeSource === 'pdf' ? currentPdfId : null}
                 onJump={(id) => {

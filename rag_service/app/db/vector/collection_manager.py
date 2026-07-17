@@ -92,7 +92,7 @@ class ModelAwareCollectionManager:
             return [
                 wvc.config.Property(name="thread_id", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="type", data_type=wvc.config.DataType.TEXT),
-                wvc.config.Property(name="embed_model", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="embedding_model", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="source_kind", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="file_hash", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="chunk_id", data_type=wvc.config.DataType.INT),
@@ -108,7 +108,7 @@ class ModelAwareCollectionManager:
             return [
                 wvc.config.Property(name="thread_id", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="type", data_type=wvc.config.DataType.TEXT),
-                wvc.config.Property(name="embed_model", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="embedding_model", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="message_id", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="chunk_id", data_type=wvc.config.DataType.INT),
                 wvc.config.Property(name="question", data_type=wvc.config.DataType.TEXT),

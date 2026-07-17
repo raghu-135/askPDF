@@ -126,7 +126,7 @@ class TestThreadFileRepository:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name=f"Thread {i}",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )
@@ -160,7 +160,7 @@ class TestThreadFileRepository:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name=f"Thread for {model}",
-                embed_model=model,
+                embedding_model=model,
                 settings={},
                 created_at=datetime.utcnow()
             )
@@ -181,7 +181,7 @@ class TestThreadFileRepository:
             .join(Thread, Thread.id == ThreadFile.thread_id)
             .where(
                 ThreadFile.file_hash == sample_file.file_hash,
-                Thread.embed_model == "BAAI/bge-m3"
+                Thread.embedding_model == "BAAI/bge-m3"
             )
         )
         count = len(result.scalars().all())
@@ -197,7 +197,7 @@ class TestThreadFileRepository:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name=f"Thread {i}",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )

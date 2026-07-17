@@ -95,21 +95,21 @@ async def queue_file_processing(
     from app.db import get_scoped_indexing_status
     scoped_indexing = get_scoped_indexing_status(
         file_status,
-        embedding_model=thread.embed_model,
+        embedding_model=thread.embedding_model,
         thread_id=thread.id,
     )
     if not ProcessStatus.is_completed(scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)) and not ProcessStatus.is_running(scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)):
         await update_indexing_status(
             file_hash=file_hash,
             status=ProcessStatus.PENDING.value,
-            embedding_model=thread.embed_model,
+            embedding_model=thread.embedding_model,
             thread_id=thread.id,
         )
         background_tasks.add_task(
             _background_index,
             file_hash,
             thread.id,
-            thread.embed_model,
+            thread.embedding_model,
             file_name,
             backend_url,
             indexing_metadata or {},

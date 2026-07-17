@@ -97,9 +97,9 @@ async def upload_pdf_endpoint(
     # Return immediately with sentences: null to indicate parsing not yet done
     return {
         "sentences": None,
-        "pdfUrl": f"/threads/{thread_id}/files/{file_hash}/download",
-        "fileHash": file_hash,
-        "fileName": file.filename,
+        "download_url": f"/threads/{thread_id}/files/{file_hash}/download",
+        "file_hash": file_hash,
+        "file_name": file.filename,
     }
 
 
@@ -190,15 +190,15 @@ async def get_pdf_data_endpoint(thread_id: str, file_hash: str):
         sentences = parsed_data.get("sentences", [])
         return {
             "sentences": sentences,
-            "pdfUrl": f"/threads/{thread_id}/files/{file_hash}/download",
-            "fileHash": file_hash,
+            "download_url": f"/threads/{thread_id}/files/{file_hash}/download",
+            "file_hash": file_hash,
         }
 
     # If not parsed yet, return empty sentences
     return {
         "sentences": [],
-        "pdfUrl": f"/threads/{thread_id}/files/{file_hash}/download",
-        "fileHash": file_hash,
+        "download_url": f"/threads/{thread_id}/files/{file_hash}/download",
+        "file_hash": file_hash,
     }
 
 
@@ -301,7 +301,7 @@ async def get_file_status_endpoint(
                 status = _scoped_status_payload(
                     file_hash=file_hash,
                     status=await get_file_status(file_hash),
-                    embedding_model=thread.embed_model,
+                    embedding_model=thread.embedding_model,
                     thread_id=thread_id,
                 )
                 # Override status to indicate processing
@@ -315,9 +315,9 @@ async def get_file_status_endpoint(
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
 
-        # Use thread's embed_model if not specified
+        # Use thread's embedding_model if not specified
         if not embedding_model:
-            embedding_model = thread.embed_model
+            embedding_model = thread.embedding_model
 
         status = _scoped_status_payload(
             file_hash=file_hash,
@@ -370,7 +370,7 @@ async def remove_source_from_thread_endpoint(thread_id: str, file_hash: str):
         # Remove from database
         removed = await remove_file_from_thread(thread_id, file_hash)
         if removed:
-            await cleanup_detached_file(file_hash, thread_id, thread.embed_model)
+            await cleanup_detached_file(file_hash, thread_id, thread.embedding_model)
 
         return {
             "status": "deleted",

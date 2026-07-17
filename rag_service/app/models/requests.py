@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
@@ -17,8 +17,13 @@ from app.models.llm_server_client import (
 class ThreadCreateRequest(BaseModel):
     """Request body for creating a thread."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str
-    embed_model: str = Field(default=LOCAL_EMBEDDING_MODEL)
+    embedding_model: str = Field(
+        default=LOCAL_EMBEDDING_MODEL,
+        validation_alias=AliasChoices("embedding_model", "embed_model"),
+    )
 
 
 class ThreadUpdateRequest(BaseModel):

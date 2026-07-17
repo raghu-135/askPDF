@@ -31,7 +31,7 @@ class ThreadRepository:
             return self._session
         return async_session_maker()
 
-    async def create(self, name: str, embed_model: str) -> Thread:
+    async def create(self, name: str, embedding_model: str) -> Thread:
         """Create a new thread with default settings."""
         thread_id = str(uuid.uuid4())
         created_at = utc_now()
@@ -39,7 +39,7 @@ class ThreadRepository:
         thread = Thread(
             id=thread_id,
             name=name,
-            embed_model=embed_model,
+            embedding_model=embedding_model,
             settings={},
             thread_metadata={},
             created_at=created_at
@@ -145,7 +145,7 @@ class ThreadRepository:
                 threads.append({
                     "id": thread.id,
                     "name": thread.name,
-                    "embed_model": thread.embed_model,
+                    "embedding_model": thread.embedding_model,
                     "settings": thread.settings if thread.settings else {},
                     "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
                     "documents_meta": thread.documents_meta if thread.documents_meta else {},

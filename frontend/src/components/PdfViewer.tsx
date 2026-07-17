@@ -123,7 +123,7 @@ type PageSentence = Sentence & SentenceWithPageBBoxes<BBox>;
 type SentencesByPage = { [key: number]: PageSentence[] };
 
 type Props = {
-  pdfUrl: string;
+  downloadUrl: string;
   sentences: Sentence[] | null;
   currentId: number | null;
   onJump: (id: number) => void;
@@ -212,10 +212,10 @@ const ANNOTATION_TOOLS = [
   },
 ];
 
-function buildPlugins(pdfUrl: string) {
+function buildPlugins(downloadUrl: string) {
   return [
     createPluginRegistration(DocumentManagerPluginPackage, {
-      initialDocuments: [{ url: pdfUrl, autoActivate: true }],
+      initialDocuments: [{ url: downloadUrl, autoActivate: true }],
     }),
     createPluginRegistration(ViewportPluginPackage, {
       viewportGap: 0,
@@ -334,7 +334,7 @@ function DocumentLoadedSync({
 function EmbedPdfDocumentBody({
   documentId,
   pdfEngine,
-  pdfUrl: _pdfUrl,
+  downloadUrl: _downloadUrl,
   sentences,
   currentId,
   onJump,
@@ -949,7 +949,7 @@ function EmbedPdfDocumentBody({
 }
 
 const PdfViewer = React.memo(function PdfViewer({
-  pdfUrl,
+  downloadUrl,
   sentences,
   currentId,
   onJump,
@@ -962,7 +962,7 @@ const PdfViewer = React.memo(function PdfViewer({
 }: Props) {
   const theme = useTheme();
   const { engine, isLoading, error } = usePdfiumEngine();
-  const plugins = useMemo(() => buildPlugins(pdfUrl), [fileHash]);
+  const plugins = useMemo(() => buildPlugins(downloadUrl), [fileHash]);
   const [pdfLoaded, setPdfLoaded] = useState(false);
   const isHistoryProcessingRef = useRef(false);
 
@@ -1016,7 +1016,7 @@ const PdfViewer = React.memo(function PdfViewer({
             <EmbedPdfDocumentBody
               documentId={ctx.activeDocumentId}
               pdfEngine={engine}
-              pdfUrl={pdfUrl}
+              downloadUrl={downloadUrl}
               sentences={sentences}
               currentId={currentId}
               onJump={onJump}

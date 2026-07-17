@@ -41,7 +41,7 @@ class TestThreadRepository:
         thread = Thread(
             id=thread_id,
             name="Test Thread",
-            embed_model="BAAI/bge-m3",
+            embedding_model="BAAI/bge-m3",
             settings={"replans": 10},
             created_at=datetime.utcnow()
         )
@@ -57,7 +57,7 @@ class TestThreadRepository:
         
         assert persisted is not None
         assert persisted.name == "Test Thread"
-        assert persisted.embed_model == "BAAI/bge-m3"
+        assert persisted.embedding_model == "BAAI/bge-m3"
         assert persisted.settings == {"replans": 10}
 
     @pytest.mark.asyncio
@@ -71,7 +71,7 @@ class TestThreadRepository:
         assert thread is not None
         assert thread.id == sample_thread.id
         assert thread.name == sample_thread.name
-        assert thread.embed_model == sample_thread.embed_model
+        assert thread.embedding_model == sample_thread.embedding_model
         assert thread.settings == sample_thread.settings
 
     @pytest.mark.asyncio
@@ -201,7 +201,7 @@ class TestThreadRepository:
         thread = Thread(
             id=str(uuid.uuid4()),
             name="Complex Settings Thread",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings=complex_settings,
             created_at=datetime.utcnow()
         )
@@ -214,7 +214,7 @@ class TestThreadRepository:
         assert thread.settings["array"] == [1, 2, 3, 4, 5]
 
     @pytest.mark.asyncio
-    async def test_thread_embed_model_variations(self, repo):
+    async def test_thread_embedding_model_variations(self, repo):
         """Test threads with different embedding models."""
         import uuid
         models = ["BAAI/bge-m3", "openai/text-embedding-3-small", "cohere/embed-english-v3.0"]
@@ -223,7 +223,7 @@ class TestThreadRepository:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name=f"Thread for {model}",
-                embed_model=model,
+                embedding_model=model,
                 settings={},
                 created_at=datetime.utcnow()
             )
@@ -233,10 +233,10 @@ class TestThreadRepository:
         
         # Verify all were saved
         result = await repo.execute(
-            select(Thread).where(Thread.embed_model.in_(models))
+            select(Thread).where(Thread.embedding_model.in_(models))
         )
         threads = result.scalars().all()
         
         assert len(threads) == 3
-        embed_models = {t.embed_model for t in threads}
-        assert embed_models == set(models)
+        embedding_models = {t.embedding_model for t in threads}
+        assert embedding_models == set(models)

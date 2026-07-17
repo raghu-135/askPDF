@@ -148,7 +148,7 @@ class ThreadFileRepository:
     async def count_threads_with_file_for_model(
         self,
         file_hash: str,
-        embed_model: str,
+        embedding_model: str,
         exclude_thread_id: Optional[str] = None,
     ) -> int:
         """Count threads referencing a file with a specific embedding model."""
@@ -159,7 +159,7 @@ class ThreadFileRepository:
                 .join(Thread, ThreadFile.thread_id == Thread.id)
                 .where(
                     ThreadFile.file_hash == file_hash,
-                    Thread.embed_model == embed_model
+                    Thread.embedding_model == embedding_model
                 )
             )
             if exclude_thread_id:

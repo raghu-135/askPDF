@@ -103,9 +103,9 @@ def get_agent_workflow_repo():
 
 
 # Thread operations
-async def create_thread(name: str, embed_model: str):
+async def create_thread(name: str, embedding_model: str):
     """Create a new thread."""
-    return await get_thread_repo().create(name, embed_model)
+    return await get_thread_repo().create(name, embedding_model)
 
 
 async def get_thread(thread_id: str):
@@ -232,9 +232,9 @@ async def is_file_in_thread(thread_id: str, file_hash: str):
     return await get_thread_file_repo().is_file_in_thread(thread_id, file_hash)
 
 
-async def count_threads_with_file_for_model(file_hash: str, embed_model: str, exclude_thread_id: str = None):
+async def count_threads_with_file_for_model(file_hash: str, embedding_model: str, exclude_thread_id: str = None):
     """Count thread associations for a file restricted to a specific embedding model."""
-    return await get_thread_file_repo().count_threads_with_file_for_model(file_hash, embed_model, exclude_thread_id)
+    return await get_thread_file_repo().count_threads_with_file_for_model(file_hash, embedding_model, exclude_thread_id)
 
 
 async def count_threads_with_file(file_hash: str):

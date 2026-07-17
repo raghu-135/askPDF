@@ -217,7 +217,7 @@ def thread_data():
     """Generate sample thread data."""
     return {
         "name": fake.sentence(nb_words=4),
-        "embed_model": "BAAI/bge-m3",
+        "embedding_model": "BAAI/bge-m3",
         "settings": {"replans": 10, "token_budget": 8192}
     }
 
@@ -230,7 +230,7 @@ async def sample_thread(session, thread_data):
     thread = Thread(
         id=str(uuid.uuid4()),
         name=thread_data["name"],
-        embed_model=thread_data["embed_model"],
+        embedding_model=thread_data["embedding_model"],
         settings=thread_data["settings"],
         created_at=datetime.utcnow()
     )
@@ -380,7 +380,7 @@ async def multiple_threads(session, thread_data):
         thread = Thread(
             id=str(uuid.uuid4()),
             name=f"{thread_data['name']} {i}",
-            embed_model=thread_data["embed_model"],
+            embedding_model=thread_data["embedding_model"],
             settings=thread_data["settings"],
             created_at=datetime.utcnow()
         )

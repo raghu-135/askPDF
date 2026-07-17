@@ -3146,7 +3146,7 @@ class TestAgentRunService:
 
             repo.get_workflow_with_current_version = fake_get_workflow_with_current_version
             service = AgentRunService(repository=repo)
-            paused = await service.run_thread_chat(sample_thread.id, self._agent_req(), sample_thread.embed_model)
+            paused = await service.run_thread_chat(sample_thread.id, self._agent_req(), sample_thread.embedding_model)
             paused_run = await repo.get_run(paused["agent_run_id"])
             paused_debug = paused_run.debug_trace_json
             paused_turns = await repo.list_chat_turns_for_run(paused_run.id)
@@ -3202,7 +3202,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": "simple_rag_agent"}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_context.update(agent_run_context or {})
                 return {
                     "answer": "router fallback",
@@ -3231,7 +3231,7 @@ class TestAgentRunService:
             result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
 
             run = await repo.get_run(result["agent_run_id"])
@@ -3259,7 +3259,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 return {
                     "answer": "router default",
                     "document_sources": [],
@@ -3287,7 +3287,7 @@ class TestAgentRunService:
             result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
 
         assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
@@ -3309,7 +3309,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": ROUTER_RAG_AGENT_ID}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 node_event = {"node": "router", "elapsed_ms": 3.5, "route": "direct"}
                 tool_event = {
@@ -3349,7 +3349,7 @@ class TestAgentRunService:
             result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
 
             run = await repo.get_run(result["agent_run_id"])
@@ -3387,7 +3387,7 @@ class TestAgentRunService:
                     }
                 }
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
                     "answer": "router v2 ok",
@@ -3416,7 +3416,7 @@ class TestAgentRunService:
             result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
 
             run = await repo.get_run(result["agent_run_id"])
@@ -3457,7 +3457,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": "internal_custom_rag_agent"}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
                     "answer": "router fallback",
@@ -3486,7 +3486,7 @@ class TestAgentRunService:
             result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
             run = await repo.get_run(result["agent_run_id"])
 
@@ -3518,7 +3518,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": "internal_custom_rag_agent"}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
                     "answer": "custom ok",
@@ -3550,7 +3550,7 @@ class TestAgentRunService:
             ).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
             run = await repo.get_run(result["agent_run_id"])
 
@@ -3582,7 +3582,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": "internal_custom_rag_agent"}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
                     "answer": "custom ok",
@@ -3614,7 +3614,7 @@ class TestAgentRunService:
             ).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
             run = await repo.get_run(result["agent_run_id"])
 
@@ -3648,7 +3648,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": "internal_custom_rag_agent"}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
                     "answer": "router fallback",
@@ -3677,7 +3677,7 @@ class TestAgentRunService:
             result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
             run = await repo.get_run(result["agent_run_id"])
 
@@ -3722,7 +3722,7 @@ class TestAgentRunService:
                     }
                 }
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
                     "answer": "custom current ok",
@@ -3754,7 +3754,7 @@ class TestAgentRunService:
             ).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
             run = await repo.get_run(result["agent_run_id"])
 
@@ -3866,11 +3866,11 @@ class TestAgentRunService:
 
         thread_response = await async_api_client.post(
             "/api/threads",
-            json={"name": "Custom Workflow Thread", "embed_model": "BAAI/bge-m3"},
+            json={"name": "Custom Workflow Thread", "embedding_model": "BAAI/bge-m3"},
         )
         other_thread_response = await async_api_client.post(
             "/api/threads",
-            json={"name": "Default Workflow Thread", "embed_model": "BAAI/bge-m3"},
+            json={"name": "Default Workflow Thread", "embedding_model": "BAAI/bge-m3"},
         )
         created = await async_api_client.post(
             "/api/internal/agent-workflows",
@@ -3983,7 +3983,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": PLAN_EXECUTE_RAG_AGENT_ID}}
 
-            async def fake_handle_plan_execute_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_plan_execute_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 node_event = {"node": "planner", "elapsed_ms": 2.0, "route": "execute", "execution_plan": ["retrieval_worker"]}
                 trace_recorder.record_node_event(node_event)
@@ -4018,7 +4018,7 @@ class TestAgentRunService:
             result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
 
             run = await repo.get_run(result["agent_run_id"])
@@ -4052,7 +4052,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": EVALUATOR_REPLANNER_RAG_AGENT_ID}}
 
-            async def fake_handle_evaluator_replanner_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_evaluator_replanner_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 node_event = {
                     "node": "evidence_evaluator",
@@ -4095,7 +4095,7 @@ class TestAgentRunService:
             result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
 
             run = await repo.get_run(result["agent_run_id"])
@@ -4266,7 +4266,7 @@ class TestAgentRunService:
                 client_now_iso="2026-07-05T12:00:00.000Z",
             )
 
-            paused = await service.run_thread_chat(sample_thread.id, req, sample_thread.embed_model)
+            paused = await service.run_thread_chat(sample_thread.id, req, sample_thread.embedding_model)
             run = await repo.get_run(paused["agent_run_id"])
             pending = run.pending_interrupt_json
             paused_run_status = run.status
@@ -4612,14 +4612,14 @@ class TestAgentRunService:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name="Postgres checkpoint test",
-                embed_model="BAAI/bge-m3",
+                embedding_model="BAAI/bge-m3",
                 settings={},
             )
             setup_session.add(thread)
             await setup_session.commit()
             await setup_session.refresh(thread)
             thread_id = thread.id
-            embed_model = thread.embed_model
+            embedding_model = thread.embedding_model
 
         monkeypatch.setenv("ASKPDF_AGENT_CHECKPOINTER", "postgres")
         monkeypatch.setenv("AGENT_CHECKPOINT_DATABASE_URL", test_database_url)
@@ -4653,7 +4653,7 @@ class TestAgentRunService:
             paused = await AgentRunService(repository=first_repo).run_thread_chat(
                 thread_id,
                 req,
-                embed_model,
+                embedding_model,
             )
             paused_run = await first_repo.get_run(paused["agent_run_id"])
             pending = paused_run.pending_interrupt_json
@@ -4905,7 +4905,7 @@ class TestAgentRunService:
             async def fake_get_thread_settings(_thread_id):
                 return {"agent_workflow": {"workflow_id": ROUTER_RAG_AGENT_ID}}
 
-            async def fake_handle_router_rag_chat(_thread_id, _req, _embed_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
+            async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 node_event = {"node": "router", "elapsed_ms": 4.0, "route": "document"}
                 trace_recorder.record_node_event(node_event)
                 return {
@@ -4938,7 +4938,7 @@ class TestAgentRunService:
             result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
-                sample_thread.embed_model,
+                sample_thread.embedding_model,
             )
 
             run = await repo.get_run(result["agent_run_id"])
@@ -5146,7 +5146,7 @@ class TestRouterRagRuntime:
         result = await handle_router_rag_chat(
             sample_thread.id,
             req,
-            sample_thread.embed_model,
+            sample_thread.embedding_model,
             resolved_spec=spec,
             agent_run_context={
                 "agent_run_id": "run-1",
@@ -5389,7 +5389,7 @@ class TestRouterRagRuntime:
         result = await handle_router_rag_chat(
             sample_thread.id,
             req,
-            sample_thread.embed_model,
+            sample_thread.embedding_model,
             resolved_spec=spec,
             agent_run_context={
                 "agent_run_id": run_id,
@@ -5565,7 +5565,7 @@ class TestRouterRagRuntime:
         result = await handle_router_rag_chat(
             sample_thread.id,
             req,
-            sample_thread.embed_model,
+            sample_thread.embedding_model,
             resolved_spec=spec,
             agent_run_context={
                 "agent_run_id": "run-failed",

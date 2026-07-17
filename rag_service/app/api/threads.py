@@ -46,7 +46,7 @@ from app.db import (
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import (
     LOCAL_EMBEDDING_MODEL,
-    check_embed_model_ready,
+    check_embedding_model_ready,
     merge_thread_settings,
 )
 from app.models.requests import (
@@ -104,7 +104,7 @@ def _thread_payload(thread) -> dict:
     return {
         "id": thread.id,
         "name": thread.name,
-        "embed_model": thread.embed_model,
+        "embedding_model": thread.embedding_model,
         "settings": _public_thread_settings(thread.settings),
         "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
         "created_at": iso_utc_z(thread.created_at),
@@ -131,7 +131,7 @@ async def _delete_thread_resources(thread_id: str) -> bool:
         return False
 
     for file in files:
-        await cleanup_detached_file(file.file_hash, thread_id, thread.embed_model)
+        await cleanup_detached_file(file.file_hash, thread_id, thread.embedding_model)
 
     return True
 
@@ -192,15 +192,15 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
 async def create_thread_endpoint(req: ThreadCreateRequest):
     """Create a new chat thread."""
     try:
-        embed_model = (req.embed_model or "").strip() or LOCAL_EMBEDDING_MODEL
-        if not embed_model:
+        embedding_model = (req.embedding_model or "").strip() or LOCAL_EMBEDDING_MODEL
+        if not embedding_model:
             raise HTTPException(
                 status_code=400,
-                detail="embed_model is required (set LOCAL_EMBEDDING_MODEL or pass embed_model).",
+                detail="embedding_model is required (set LOCAL_EMBEDDING_MODEL or pass embedding_model).",
             )
         # Create thread in database
         from app.db import create_thread
-        thread = await create_thread(req.name, embed_model)
+        thread = await create_thread(req.name, embedding_model)
 
         return _thread_payload(thread)
     except Exception as e:
@@ -280,7 +280,7 @@ async def fork_thread_endpoint(thread_id: str, req: ThreadForkRequest):
         asyncio.create_task(
             trigger_reembed_for_missing_sources(
                 thread_id=thread.id,
-                embedding_model_name=thread.embed_model,
+                embedding_model_name=thread.embedding_model,
                 file_hashes=[f.file_hash for f in files],
             )
         )
@@ -308,29 +308,29 @@ async def get_thread_endpoint(thread_id: str):
             raise HTTPException(status_code=404, detail="Thread not found")
 
         files = await get_thread_files(thread_id)
-        embed_model_ready = await check_embed_model_ready(thread.embed_model)
+        embedding_model_ready = await check_embedding_model_ready(thread.embedding_model)
         stats = _empty_thread_stats()
         stats_unavailable_reason = None
 
-        if embed_model_ready:
-            await repair_thread_documents_meta(thread_id, thread.embed_model, files)
+        if embedding_model_ready:
+            await repair_thread_documents_meta(thread_id, thread.embedding_model, files)
             asyncio.create_task(
                 trigger_reembed_for_missing_sources(
                     thread_id=thread_id,
-                    embedding_model_name=thread.embed_model,
+                    embedding_model_name=thread.embedding_model,
                 )
             )
             # Proactively ensure all collections exist for this thread's embedding model
             asyncio.create_task(
                 get_vector_db().collection_manager.ensure_collections_for_thread(
-                    embedding_model_name=thread.embed_model
+                    embedding_model_name=thread.embedding_model
                 )
             )
             db = get_vector_db()
             stats = await db.get_thread_stats(
                 thread_id=thread_id,
                 file_hashes=[f.file_hash for f in files],
-                embedding_model_name=thread.embed_model,
+                embedding_model_name=thread.embedding_model,
             )
         else:
             stats_unavailable_reason = "Embedding model is not ready"
@@ -338,7 +338,7 @@ async def get_thread_endpoint(thread_id: str):
         return {
             "id": thread.id,
             "name": thread.name,
-            "embed_model": thread.embed_model,
+            "embedding_model": thread.embedding_model,
             "settings": _public_thread_settings(thread.settings),
             "thread_metadata": getattr(thread, "thread_metadata", None) or {},
             "created_at": iso_utc_z(thread.created_at),
@@ -352,7 +352,7 @@ async def get_thread_endpoint(thread_id: str):
                 for f in files
             ],
             "stats": stats,
-            "embed_model_ready": embed_model_ready,
+            "embedding_model_ready": embedding_model_ready,
             "stats_unavailable_reason": stats_unavailable_reason,
             "file_count": len(files),
         }
@@ -367,7 +367,7 @@ async def get_thread_endpoint(thread_id: str):
 async def update_thread_endpoint(thread_id: str, req: ThreadUpdateRequest):
     """
     Update a thread's name.
-    Note: embed_model cannot be changed once set.
+    Note: embedding_model cannot be changed once set.
     """
     try:
         thread = await update_thread(thread_id, req.name)
@@ -462,13 +462,13 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        embed_model_ready = await check_embed_model_ready(thread.embed_model)
-        if not embed_model_ready:
+        embedding_model_ready = await check_embedding_model_ready(thread.embedding_model)
+        if not embedding_model_ready:
             return {
                 "thread_id": thread_id,
                 "status": "blocked",
                 "stats": _empty_thread_stats(),
-                "embed_model_ready": False,
+                "embedding_model_ready": False,
             }
 
         db = get_vector_db()
@@ -485,11 +485,11 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                     "thread_id": thread_id,
                     "status": "not_ready",
                     "stats": _empty_thread_stats(),
-                    "embed_model_ready": embed_model_ready,
+                    "embedding_model_ready": embedding_model_ready,
                 }
             scoped_indexing = get_scoped_indexing_status(
                 file_status,
-                embedding_model=thread.embed_model,
+                embedding_model=thread.embedding_model,
                 thread_id=thread_id,
             )
             indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
@@ -501,7 +501,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                 status = "not_ready"
             else:
                 # Fallback to vector DB check for backward compatibility
-                is_indexed = await db.has_file_indexed(thread_id, file_hash, thread.embed_model)
+                is_indexed = await db.has_file_indexed(thread_id, file_hash, thread.embedding_model)
                 status = "ready" if is_indexed else "not_ready"
         else:
             # Check all files in thread using file_status
@@ -514,13 +514,13 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                     file_status = await get_file_status(f.file_hash)
                     scoped_indexing = get_scoped_indexing_status(
                         file_status,
-                        embedding_model=thread.embed_model,
+                        embedding_model=thread.embedding_model,
                         thread_id=thread_id,
                     )
                     indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
                     if not ProcessStatus.is_completed(indexing_status):
                         # Fallback to vector DB check for backward compatibility
-                        if not await db.has_file_indexed(thread_id, f.file_hash, thread.embed_model):
+                        if not await db.has_file_indexed(thread_id, f.file_hash, thread.embedding_model):
                             all_indexed = False
                             break
                 status = "ready" if all_indexed else "not_ready"
@@ -530,14 +530,14 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
         stats = await db.get_thread_stats(
             thread_id=thread_id,
             file_hashes=file_hashes,
-            embedding_model_name=thread.embed_model,
+            embedding_model_name=thread.embedding_model,
         )
 
         return {
             "thread_id": thread_id,
             "status": status,
             "stats": stats,
-            "embed_model_ready": embed_model_ready,
+            "embedding_model_ready": embedding_model_ready,
         }
     except HTTPException:
         raise

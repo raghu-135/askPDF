@@ -41,7 +41,7 @@ class TestJSONBOperations:
         thread = Thread(
             id=str(uuid.uuid4()),
             name="JSONB Insert Test",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings=settings,
             created_at=datetime.utcnow()
         )
@@ -180,7 +180,7 @@ class TestJSONBOperations:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name=f"Perf Thread {i}",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={"index": i, "data": f"value-{i}"},
                 created_at=datetime.utcnow()
             )

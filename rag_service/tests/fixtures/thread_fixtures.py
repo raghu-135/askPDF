@@ -11,7 +11,7 @@ def sample_thread_data():
     """Generate sample thread data."""
     return {
         "name": "Test Thread",
-        "embed_model": "BAAI/bge-m3",
+        "embedding_model": "BAAI/bge-m3",
         "settings": {
             "replans": 10,
             "token_budget": 8192,
@@ -24,7 +24,7 @@ def sample_thread_with_complex_settings():
     """Generate thread with complex nested settings."""
     return {
         "name": "Complex Settings Thread",
-        "embed_model": "openai/text-embedding-3-small",
+        "embedding_model": "openai/text-embedding-3-small",
         "settings": {
             "replans": 20,
             "token_budget": 16384,
@@ -51,7 +51,7 @@ def sample_threads_list(count=3):
     for i in range(count):
         threads.append({
             "name": f"Thread {i}",
-            "embed_model": models[i % len(models)],
+            "embedding_model": models[i % len(models)],
             "settings": {
                 "replans": 10 + i,
                 "token_budget": 8192 * (i + 1)
@@ -65,12 +65,12 @@ def sample_thread_settings_variations():
     return [
         {
             "name": "Minimal Thread",
-            "embed_model": "BAAI/bge-m3",
+            "embedding_model": "BAAI/bge-m3",
             "settings": {}
         },
         {
             "name": "Conservative Thread",
-            "embed_model": "BAAI/bge-m3",
+            "embedding_model": "BAAI/bge-m3",
             "settings": {
                 "replans": 5,
                 "token_budget": 4096,
@@ -79,7 +79,7 @@ def sample_thread_settings_variations():
         },
         {
             "name": "Aggressive Thread",
-            "embed_model": "BAAI/bge-m3",
+            "embedding_model": "BAAI/bge-m3",
             "settings": {
                 "replans": 30,
                 "token_budget": 32768,

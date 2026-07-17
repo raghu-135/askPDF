@@ -63,7 +63,7 @@ import {
 } from '../lib/api';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
-import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbedModelReady } from '../lib/models-api';
+import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbeddingModelReady } from '../lib/models-api';
 import ChatSettingsDialog from './ChatSettingsDialog';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 import AgentRunDebugPanel from './agent-debug/AgentRunDebugPanel';
@@ -195,7 +195,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const [isLlmModelValid, setIsLlmModelValid] = useState<boolean | null>(true);
     const [isLlmToolsSupported, setIsLlmToolsSupported] = useState<boolean | null>(null);
-    const [isEmbedModelValid, setIsEmbedModelValid] = useState<boolean | null>(null);
+    const [isEmbeddingModelValid, setIsEmbeddingModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
     const [lineageThreads, setLineageThreads] = useState<Thread[]>([]);
@@ -311,14 +311,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             recoverPendingHumanReview(activeThread.id);
             checkIndexStatus();
             loadThreadSettings();
-            checkEmbedModelStatus();
+            checkEmbeddingModelStatus();
         } else {
             setMessages([]);
             setClarificationOptions(null);
             lastClarificationIdsRef.current = null;
             setIndexingStatus('ready');
             applyThreadSettingsToState(undefined);
-            setIsEmbedModelValid(null);
+            setIsEmbeddingModelValid(null);
             setIsLlmToolsSupported(null);
         }
     }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState]);
@@ -528,24 +528,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 setIndexingStatus('indexing');
             }
             // Update embedding model status from the same endpoint
-            if (status.embed_model_ready !== undefined) {
-                setIsEmbedModelValid(status.embed_model_ready);
+            if (status.embeddingModelReady !== undefined) {
+                setIsEmbeddingModelValid(status.embeddingModelReady);
             }
         } catch (error) {
             console.error('Failed to check index status:', error);
             // Set to error state instead of falsely claiming ready
             setIndexingStatus('error');
-            // Don't change embed model status - keep previous state
+            // Don't change embedding model status - keep previous state
         }
     };
 
-    const checkEmbedModelStatus = async () => {
+    const checkEmbeddingModelStatus = async () => {
         if (!activeThread) return;
         
-        setIsEmbedModelValid(null);
+        setIsEmbeddingModelValid(null);
         
         const result = await withRetry(
-            () => checkEmbedModelReady(activeThread.embed_model),
+            () => checkEmbeddingModelReady(activeThread.embeddingModel),
             {
                 maxRetries: 2,
                 baseDelay: 1000,
@@ -554,13 +554,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         );
         
         if (result.success && result.data !== undefined) {
-            setIsEmbedModelValid(result.data);
+            setIsEmbeddingModelValid(result.data);
             if (!result.data) {
                 setIndexingStatus('blocked');
             }
         } else {
-            console.error('Failed to check embed model status after retries:', result.error);
-            setIsEmbedModelValid(false);
+            console.error('Failed to check embedding model status after retries:', result.error);
+            setIsEmbeddingModelValid(false);
             setIndexingStatus('error');
         }
     };
@@ -739,9 +739,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     // Polling for indexing and embedding model status
     useEffect(() => {
         if (!activeThread) return;
-        if (indexingStatus === 'blocked' || isEmbedModelValid === false) return;
-        // Keep polling if either indexing is in progress OR embed model is not yet valid/checked
-        if (indexingStatus !== 'indexing' && isEmbedModelValid === true) return;
+        if (indexingStatus === 'blocked' || isEmbeddingModelValid === false) return;
+        // Keep polling if either indexing is in progress OR embedding model is not yet valid/checked
+        if (indexingStatus !== 'indexing' && isEmbeddingModelValid === true) return;
 
         let intervalId: NodeJS.Timeout | null = null;
 
@@ -752,9 +752,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     maxRetries: 3,
                     interval: 5000,
                     shouldStop: (status) => (
-                        (status.status === 'ready' && status.embed_model_ready === true) ||
+                        (status.status === 'ready' && status.embeddingModelReady === true) ||
                         status.status === 'blocked' ||
-                        status.embed_model_ready === false
+                        status.embeddingModelReady === false
                     ),
                     retryableErrors: (error) => isRetryableError(error) // Use smart error classification
                 }
@@ -772,8 +772,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 }
 
                 // Update embedding model status
-                if (result.data.embed_model_ready !== undefined) {
-                    setIsEmbedModelValid(result.data.embed_model_ready);
+                if (result.data.embeddingModelReady !== undefined) {
+                    setIsEmbeddingModelValid(result.data.embeddingModelReady);
                 }
             }
 
@@ -791,7 +791,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         // Thread was deleted - reset to initial state
                         console.log('Thread no longer exists, stopping polling');
                         setIndexingStatus('checking');
-                        setIsEmbedModelValid(false);
+                        setIsEmbeddingModelValid(false);
                     } else {
                         // Other error - set error state
                         setIndexingStatus('error');
@@ -808,7 +808,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 clearInterval(intervalId);
             }
         };
-    }, [activeThread?.id, indexingStatus, isEmbedModelValid]);
+    }, [activeThread?.id, indexingStatus, isEmbeddingModelValid]);
 
     // Load browser memory settings (last selected LLM, context window, and web search) on mount
     useEffect(() => {
@@ -840,7 +840,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         llmModel,
         isLlmModelValid,
         isLlmToolsSupported,
-        isEmbedModelValid,
+        isEmbeddingModelValid,
         indexingStatus,
         hasInput: Boolean(input),
     }), [
@@ -848,7 +848,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         llmModel,
         isLlmModelValid,
         isLlmToolsSupported,
-        isEmbedModelValid,
+        isEmbeddingModelValid,
         indexingStatus,
         input,
     ]);
@@ -1412,22 +1412,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <Box sx={{ mb: 0.5, pt: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
                     <Tooltip title={
-                        isEmbedModelValid === null ? "Checking embedding model status..." :
-                            isEmbedModelValid ? `Embedding model: ${activeThread.embed_model}` :
-                                `Embedding model ${activeThread.embed_model} not found`
+                        isEmbeddingModelValid === null ? "Checking embedding model status..." :
+                            isEmbeddingModelValid ? `Embedding model: ${activeThread.embeddingModel}` :
+                                `Embedding model ${activeThread.embeddingModel} not found`
                     }>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            {isEmbedModelValid === true ? (
+                            {isEmbeddingModelValid === true ? (
                                 <CheckCircleIcon fontSize="medium" color="primary" />
-                            ) : isEmbedModelValid === false ? (
+                            ) : isEmbeddingModelValid === false ? (
                                 <ErrorIcon fontSize="medium" color="error" />
                             ) : (
                                 <CircularProgress size={20} />
                             )}
-                            {isEmbedModelValid === null && (
+                            {isEmbeddingModelValid === null && (
                                 <Typography variant="caption" color="warning.main" sx={{ ml: 0.5, fontWeight: 'bold' }}>CHECKING...</Typography>
                             )}
-                            {isEmbedModelValid === false && <Typography variant="caption" color="error" sx={{ fontWeight: 'bold' }}>OFFLINE</Typography>}
+                            {isEmbeddingModelValid === false && <Typography variant="caption" color="error" sx={{ fontWeight: 'bold' }}>OFFLINE</Typography>}
                         </Box>
                     </Tooltip>
                     {hasLineage && (

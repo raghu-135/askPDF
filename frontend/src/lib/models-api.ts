@@ -9,7 +9,7 @@ import ErrorIcon from '@mui/icons-material/Error';
  * Fetches available embedding models from the backend RAG API.
  * @returns A promise resolving to a map with embedding model categories.
  */
-export const fetchAvailableEmbedModels = async (): Promise<{
+export const fetchAvailableEmbeddingModels = async (): Promise<{
   embedding_models: string[];
   local_embedding_models: string[];
   not_embedding_models: string[];
@@ -58,11 +58,11 @@ export const fetchAvailableLlmModels = async (): Promise<string[]> => {
  * @param model - The embedding model name to check.
  * @returns A promise resolving to true if the model is ready, false otherwise.
  */
-export const checkEmbedModelReady = async (model: string): Promise<boolean> => {
+export const checkEmbeddingModelReady = async (model: string): Promise<boolean> => {
   try {
     const res = await fetch(`${API_BASE}/api/health/embed-model/${encodeURIComponent(model)}`);
     const data = await res.json();
-    return data.embed_model_ready === true;
+    return data.embedding_model_ready === true;
   } catch {
     return false;
   }

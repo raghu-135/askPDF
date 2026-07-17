@@ -126,7 +126,7 @@ class TestMessageEndpoints:
             role=MessageRole.ASSISTANT.value,
             web_sources=[{"url": "https://example.com/keep"}],
         )
-        thread = SimpleNamespace(id="thread-1", embed_model="BAAI/bge-m3")
+        thread = SimpleNamespace(id="thread-1", embedding_model="BAAI/bge-m3")
         vector_db = SimpleNamespace(
             delete_chat_memory_by_message_id=AsyncMock(),
             delete_web_chunks_by_urls=AsyncMock(),

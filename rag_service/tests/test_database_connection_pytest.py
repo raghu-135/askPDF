@@ -95,7 +95,7 @@ class TestPostgreSQLConnection:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name="Test Thread",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )
@@ -144,7 +144,7 @@ class TestPostgreSQLConnection:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name="Rollback Test",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )
@@ -179,7 +179,7 @@ class TestPostgreSQLConnection:
                 thread = Thread(
                     id=str(uuid.uuid4()),
                     name=f"Thread {i}",
-                    embed_model="test-model",
+                    embedding_model="test-model",
                     settings={},
                     created_at=datetime.utcnow()
                 )

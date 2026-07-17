@@ -33,7 +33,7 @@ def _runtime_config(
     *,
     app_thread_id: str,
     checkpoint_thread_id: str,
-    embed_model: Any = None,
+    embedding_model: Any = None,
     context_window: Any = None,
     use_web_search: Any = None,
     use_reranker: Any = None,
@@ -47,8 +47,8 @@ def _runtime_config(
         "telemetry_sink": telemetry_sink,
         "trace_recorder": trace_recorder,
     }
-    if embed_model is not None:
-        configurable["embedding_model"] = embed_model
+    if embedding_model is not None:
+        configurable["embedding_model"] = embedding_model
     if context_window is not None:
         configurable["context_window"] = context_window
     if use_web_search is not None:
@@ -158,7 +158,7 @@ async def _persist_success_turn(
     answer = result.get("final_answer") or "I was unable to compose an answer. Please try rephrasing your question."
     clarification_options = result.get("clarification_options")
     status = "clarification" if clarification_options else "completed"
-    embed_model = result.get("embedding_model")
+    embedding_model = result.get("embedding_model")
     llm_model = result.get("llm_model")
     context_window = result.get("context_window") or DEFAULT_TOKEN_BUDGET
     metadata = {
@@ -186,13 +186,13 @@ async def _persist_success_turn(
         agent_trace_refs_json=None,
     )
 
-    if not clarification_options and embed_model and llm_model:
+    if not clarification_options and embedding_model and llm_model:
         indexing_result = await index_chat_memory_for_thread(
             thread_id=thread_id,
             message_id=turn.id,
             question=question,
             answer=answer,
-            embedding_model_name=embed_model,
+            embedding_model_name=embedding_model,
             llm_name=llm_model,
             context_window=context_window,
             message_created_at=turn.completed_at or turn.created_at,
@@ -236,7 +236,7 @@ async def _persist_success_turn(
 async def execute_compiled_rag_chat(
     thread_id: str,
     req: Any,
-    embed_model: str,
+    embedding_model: str,
     *,
     resolved_spec: Dict[str, Any],
     agent_run_context: Dict[str, Any],
@@ -248,7 +248,7 @@ async def execute_compiled_rag_chat(
     return await _handle_compiled_rag_chat(
         thread_id,
         req,
-        embed_model,
+        embedding_model,
         resolved_spec=resolved_spec,
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
@@ -264,7 +264,7 @@ async def execute_compiled_rag_chat(
 async def handle_router_rag_chat(
     thread_id: str,
     req: Any,
-    embed_model: str,
+    embedding_model: str,
     *,
     resolved_spec: Dict[str, Any],
     agent_run_context: Dict[str, Any],
@@ -277,7 +277,7 @@ async def handle_router_rag_chat(
     return await execute_compiled_rag_chat(
         thread_id,
         req,
-        embed_model,
+        embedding_model,
         resolved_spec=resolved_spec,
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
@@ -288,7 +288,7 @@ async def handle_router_rag_chat(
 async def handle_plan_execute_rag_chat(
     thread_id: str,
     req: Any,
-    embed_model: str,
+    embedding_model: str,
     *,
     resolved_spec: Dict[str, Any],
     agent_run_context: Dict[str, Any],
@@ -301,7 +301,7 @@ async def handle_plan_execute_rag_chat(
     return await execute_compiled_rag_chat(
         thread_id,
         req,
-        embed_model,
+        embedding_model,
         resolved_spec=resolved_spec,
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
@@ -312,7 +312,7 @@ async def handle_plan_execute_rag_chat(
 async def handle_evaluator_replanner_rag_chat(
     thread_id: str,
     req: Any,
-    embed_model: str,
+    embedding_model: str,
     *,
     resolved_spec: Dict[str, Any],
     agent_run_context: Dict[str, Any],
@@ -325,7 +325,7 @@ async def handle_evaluator_replanner_rag_chat(
     return await execute_compiled_rag_chat(
         thread_id,
         req,
-        embed_model,
+        embedding_model,
         resolved_spec=resolved_spec,
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
@@ -336,7 +336,7 @@ async def handle_evaluator_replanner_rag_chat(
 async def _handle_compiled_rag_chat(
     thread_id: str,
     req: Any,
-    embed_model: str,
+    embedding_model: str,
     *,
     resolved_spec: Dict[str, Any],
     agent_run_context: Dict[str, Any],
@@ -382,7 +382,7 @@ async def _handle_compiled_rag_chat(
     config = _runtime_config(
         app_thread_id=thread_id,
         checkpoint_thread_id=checkpoint_thread_id,
-        embed_model=embed_model,
+        embedding_model=embedding_model,
         context_window=context_window,
         use_web_search=use_web_search,
         use_reranker=use_reranker,
@@ -395,7 +395,7 @@ async def _handle_compiled_rag_chat(
         "thread_id": thread_id,
         "question": question,
         "llm_model": llm_model,
-        "embedding_model": embed_model,
+        "embedding_model": embedding_model,
         "context_window": context_window,
         "use_web_search": use_web_search,
         "use_reranker": use_reranker,
@@ -625,7 +625,7 @@ async def resume_compiled_rag_chat(
     config = _runtime_config(
         app_thread_id=run.thread_id,
         checkpoint_thread_id=checkpoint_thread_id,
-        embed_model=snapshot_values.get("embedding_model"),
+        embedding_model=snapshot_values.get("embedding_model"),
         context_window=snapshot_values.get("context_window") or DEFAULT_TOKEN_BUDGET,
         use_web_search=snapshot_values.get("use_web_search"),
         use_reranker=snapshot_values.get("use_reranker"),

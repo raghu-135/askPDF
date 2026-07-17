@@ -55,17 +55,31 @@ export const ProcessStatusHelper = {
 
 export interface UploadResponse {
   sentences: any[];
-  pdfUrl: string;
+  downloadUrl: string;
   fileHash: string;
   fileName: string;
 }
+
+interface RawUploadResponse {
+  sentences: any[];
+  download_url: string;
+  file_hash: string;
+  file_name: string;
+}
+
+const mapUploadResponse = (raw: RawUploadResponse): UploadResponse => ({
+  sentences: raw.sentences,
+  downloadUrl: raw.download_url,
+  fileHash: raw.file_hash,
+  fileName: raw.file_name,
+});
 
 export async function uploadPdf(file: File, threadId: string): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/upload`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return mapUploadResponse(await res.json());
 }
 
 export async function getFileStatus(
@@ -88,14 +102,26 @@ export async function getFileStatus(
 
 export interface PdfData {
   sentences: any[];
-  pdfUrl: string;
+  downloadUrl: string;
   fileHash: string;
 }
+
+interface RawPdfData {
+  sentences: any[];
+  download_url: string;
+  file_hash: string;
+}
+
+const mapPdfData = (raw: RawPdfData): PdfData => ({
+  sentences: raw.sentences,
+  downloadUrl: raw.download_url,
+  fileHash: raw.file_hash,
+});
 
 export async function getPdfByHash(fileHash: string, threadId: string): Promise<PdfData> {
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/${fileHash}`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return mapPdfData(await res.json());
 }
 
 export async function getParsedSentences(fileHash: string, threadId: string): Promise<{ version: string; sentences: any[] }> {
@@ -109,7 +135,7 @@ export async function getParsedSentences(fileHash: string, threadId: string): Pr
 export interface Thread {
   id: string;
   name: string;
-  embed_model: string;
+  embeddingModel: string;
   settings?: ThreadSettings;
   thread_metadata?: ThreadMetadata;
   documents_meta?: Record<string, ThreadDocumentMeta>;
@@ -117,6 +143,30 @@ export interface Thread {
   message_count?: number;
   file_count?: number;
 }
+
+interface RawThread {
+  id: string;
+  name: string;
+  embedding_model: string;
+  settings?: ThreadSettings;
+  thread_metadata?: ThreadMetadata;
+  documents_meta?: Record<string, ThreadDocumentMeta>;
+  created_at: string;
+  message_count?: number;
+  file_count?: number;
+}
+
+const mapThread = (raw: RawThread): Thread => ({
+  id: raw.id,
+  name: raw.name,
+  embeddingModel: raw.embedding_model,
+  settings: raw.settings,
+  thread_metadata: raw.thread_metadata,
+  documents_meta: raw.documents_meta,
+  created_at: raw.created_at,
+  message_count: raw.message_count,
+  file_count: raw.file_count,
+});
 
 export interface ThreadDocumentMeta {
   file_name?: string | null;
@@ -382,11 +432,25 @@ export interface PromptDefaults {
 }
 
 export interface ThreadFile {
+  fileHash: string;
+  fileName: string;
+  filePath?: string;
+  sourceType?: 'pdf' | 'browser';
+}
+
+interface RawThreadFile {
   file_hash: string;
   file_name: string;
   file_path?: string;
-  source_type?: 'pdf';
+  source_type?: 'pdf' | 'browser';
 }
+
+const mapThreadFile = (raw: RawThreadFile): ThreadFile => ({
+  fileHash: raw.file_hash,
+  fileName: raw.file_name,
+  filePath: raw.file_path,
+  sourceType: raw.source_type,
+});
 
 export interface WebSource {
   text: string;
@@ -578,31 +642,39 @@ export interface AgentRunSummary {
   [key: string]: any;
 }
 
-export async function createThread(name: string, embedModel: string): Promise<Thread> {
+export async function createThread(name: string, embeddingModel: string): Promise<Thread> {
   const res = await fetch(`${API_BASE}/api/threads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, embed_model: embedModel })
+    body: JSON.stringify({ name, embedding_model: embeddingModel })
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return mapThread(await res.json());
 }
 
 export async function listThreads(): Promise<{ threads: Thread[] }> {
   const res = await fetch(`${API_BASE}/api/threads`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const raw = await res.json();
+  return { threads: (raw.threads || []).map(mapThread) };
 }
 
 export async function getThread(threadId: string): Promise<Thread & {
   files: ThreadFile[];
   stats: any;
-  embed_model_ready?: boolean;
+  embeddingModelReady?: boolean;
   stats_unavailable_reason?: string | null;
 }> {
   const res = await fetch(`${API_BASE}/api/threads/${threadId}`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const raw = await res.json();
+  return {
+    ...mapThread(raw),
+    files: (raw.files || []).map(mapThreadFile),
+    stats: raw.stats,
+    embeddingModelReady: raw.embedding_model_ready,
+    stats_unavailable_reason: raw.stats_unavailable_reason,
+  };
 }
 
 export async function updateThread(threadId: string, name: string): Promise<Thread> {
@@ -612,7 +684,7 @@ export async function updateThread(threadId: string, name: string): Promise<Thre
     body: JSON.stringify({ name })
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return mapThread(await res.json());
 }
 
 export async function forkThread(
@@ -628,7 +700,7 @@ export async function forkThread(
     }),
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return mapThread(await res.json());
 }
 
 export async function getThreadSettings(threadId: string): Promise<ThreadSettings> {
@@ -801,7 +873,8 @@ export async function addFileToThread(
 export async function getThreadFiles(threadId: string): Promise<{ files: ThreadFile[] }> {
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/files`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const raw = await res.json();
+  return { files: (raw.files || []).map(mapThreadFile) };
 }
 
 export interface ThreadFileAnnotationsResponse {
@@ -847,7 +920,7 @@ export async function updateThreadFileAnnotations(
 
 export async function captureBrowserPage(threadId: string): Promise<{
   status: string;
-  file_hash: string;
+  fileHash: string;
   url: string;
   title: string;
   indexing: string;
@@ -861,7 +934,15 @@ export async function captureBrowserPage(threadId: string): Promise<{
     const error = await res.text();
     throw new Error(error);
   }
-  return res.json();
+  const raw = await res.json();
+  return {
+    status: raw.status,
+    fileHash: raw.file_hash,
+    url: raw.url,
+    title: raw.title,
+    indexing: raw.indexing,
+    ready: raw.ready,
+  };
 }
 
 /**
@@ -1072,9 +1153,15 @@ export async function getThreadIndexStatus(threadId: string): Promise<{
   thread_id: string;
   status: 'ready' | 'not_ready' | 'blocked';
   stats: any;
-  embed_model_ready?: boolean;
+  embeddingModelReady?: boolean;
 }> {
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/indexing/status`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const raw = await res.json();
+  return {
+    thread_id: raw.thread_id,
+    status: raw.status,
+    stats: raw.stats,
+    embeddingModelReady: raw.embedding_model_ready,
+  };
 }

@@ -35,7 +35,7 @@ class TestRepositoryTransactions:
         thread = Thread(
             id=thread_id,
             name="Commit Test",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings={},
             created_at=datetime.utcnow()
         )
@@ -62,7 +62,7 @@ class TestRepositoryTransactions:
         thread = Thread(
             id=thread_id,
             name="Rollback Test",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings={},
             created_at=datetime.utcnow()
         )
@@ -88,7 +88,7 @@ class TestRepositoryTransactions:
         thread = Thread(
             id=str(uuid.uuid4()),
             name="Outer Thread",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings={},
             created_at=datetime.utcnow()
         )
@@ -125,7 +125,7 @@ class TestRepositoryTransactions:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name=f"Concurrent Thread {i}",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )
@@ -206,7 +206,7 @@ class TestRepositoryTransactions:
         thread = Thread(
             id=thread_id,
             name="Isolation Test",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings={},
             created_at=datetime.utcnow()
         )
@@ -238,7 +238,7 @@ class TestRepositoryTransactions:
         thread = Thread(
             id=thread_id,
             name="Rollback Thread",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings={},
             created_at=datetime.utcnow()
         )
@@ -273,7 +273,7 @@ class TestRepositoryTransactions:
         thread1 = Thread(
             id=str(uuid.uuid4()),
             name="Rollback Thread",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings={},
             created_at=datetime.utcnow()
         )
@@ -284,7 +284,7 @@ class TestRepositoryTransactions:
         thread2 = Thread(
             id=str(uuid.uuid4()),
             name="Commit Thread",
-            embed_model="test-model",
+            embedding_model="test-model",
             settings={},
             created_at=datetime.utcnow()
         )
@@ -353,7 +353,7 @@ class TestRepositoryTransactions:
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name=f"Batch Thread {i}",
-                embed_model="test-model",
+                embedding_model="test-model",
                 settings={},
                 created_at=datetime.utcnow()
             )

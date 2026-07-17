@@ -24,7 +24,7 @@ class TestAPIIntegration:
             "/api/threads",
             json={
                 "name": "Test Thread",
-                "embed_model": "BAAI/bge-m3"
+                "embedding_model": "BAAI/bge-m3"
             }
         )
 
@@ -32,7 +32,7 @@ class TestAPIIntegration:
         data = response.json()
         assert "id" in data
         assert data["name"] == "Test Thread"
-        assert data["embed_model"] == "BAAI/bge-m3"
+        assert data["embedding_model"] == "BAAI/bge-m3"
 
         # Cleanup
         await client.delete(f"/api/threads/{data['id']}")

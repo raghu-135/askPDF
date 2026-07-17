@@ -16,7 +16,7 @@ export type PdfTab = {
   id: string;
   fileName: string;
   fileHash: string;
-  pdfUrl: string;
+  downloadUrl: string;
   sentences: Sentence[] | null;
   text?: string;
   sourceType?: 'pdf' | 'browser';

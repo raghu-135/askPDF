@@ -48,7 +48,7 @@ class AgentRunService:
             else os.getenv("ASKPDF_CUSTOM_AGENT_WORKFLOWS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
         )
 
-    async def run_thread_chat(self, thread_id: str, req: Any, embed_model: str) -> Dict[str, Any]:
+    async def run_thread_chat(self, thread_id: str, req: Any, embedding_model: str) -> Dict[str, Any]:
         thread_settings = await get_thread_settings(thread_id)
         agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
@@ -179,7 +179,7 @@ class AgentRunService:
                 result = await handler(
                     thread_id,
                     req,
-                    embed_model,
+                    embedding_model,
                     resolved_spec=stored_resolved_spec,
                     agent_run_context=context,
                     trace_recorder=trace_recorder,

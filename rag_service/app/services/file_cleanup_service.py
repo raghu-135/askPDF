@@ -52,17 +52,17 @@ async def delete_file_artifacts(file_hash: str) -> None:
             logger.warning("Failed to delete webpage mapping %s: %s", mapping_path, exc)
 
 
-async def cleanup_detached_file(file_hash: str, thread_id: str, embed_model: str) -> None:
+async def cleanup_detached_file(file_hash: str, thread_id: str, embedding_model: str) -> None:
     """Apply post-detach cleanup for status, vector data, and orphaned file artifacts."""
     await remove_document_from_stats(thread_id, file_hash)
-    await remove_thread_indexing_status(file_hash, embed_model, thread_id)
+    await remove_thread_indexing_status(file_hash, embedding_model, thread_id)
 
     vector_db = get_vector_db()
-    remaining_model_refs = await count_threads_with_file_for_model(file_hash, embed_model)
+    remaining_model_refs = await count_threads_with_file_for_model(file_hash, embedding_model)
     if remaining_model_refs == 0:
         await vector_db.delete_document_vectors_by_file_hash_and_model(
             file_hash=file_hash,
-            embedding_model_name=embed_model,
+            embedding_model_name=embedding_model,
         )
 
     remaining_refs = await count_threads_with_file(file_hash)
@@ -72,7 +72,7 @@ async def cleanup_detached_file(file_hash: str, thread_id: str, embed_model: str
         models = indexing_status.get("models", {}) if isinstance(indexing_status, dict) else {}
         model_names = [name for name in models.keys() if isinstance(name, str) and name]
         if not model_names:
-            model_names = [embed_model]
+            model_names = [embedding_model]
         for model_name in model_names:
             await vector_db.delete_document_vectors_by_file_hash_and_model(
                 file_hash=file_hash,
