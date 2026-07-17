@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
@@ -42,7 +42,6 @@ from app.agent_workflows.hitl_runtime import (
     WEB_APPROVAL_GATE_ID,
     hitl_gate_node,
     normalize_hitl_policy_for_thread_settings,
-    with_web_approval_hitl_policy,
 )
 from app.agent_workflows.planning import (
     WORKER_NODE_ORDER,

@@ -50,7 +50,6 @@ from app.agent_workflows.workflow_store import (
     save_custom_workflow as workflow_store_save_custom_workflow,
     save_internal_workflow_version as workflow_store_save_internal_workflow_version,
     seed_builtin_workflows as workflow_store_seed_builtin_workflows,
-    workflow_version as _workflow_version,
 )
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field

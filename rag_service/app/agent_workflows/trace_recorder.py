@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
 
-from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.trace import SpanKind, StatusCode, set_span_in_context
@@ -579,5 +578,4 @@ class AgentTraceRecorder:
 
     def _build_summary(self, trace: Dict[str, Any]) -> Dict[str, Any]:
         return _build_summary_from_trace(trace, self.resolved_spec)
-
 

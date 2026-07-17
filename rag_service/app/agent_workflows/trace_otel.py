@@ -15,8 +15,6 @@ from app.agent_workflows.trace_sanitization import (
     _as_list,
     _bounded_value,
     _clean_dict,
-    _otel_attr_value,
-    _set_attributes,
 )
 from app.time_utils import iso_utc_z
 
@@ -372,4 +370,3 @@ def _llm_usage_metrics(spans: List[Dict[str, Any]]) -> Dict[str, int]:
         metrics["llm_token_count_reasoning"] += _first_number(attributes.get("llm.token_count.reasoning"))
         metrics["llm_token_count_cached"] += _first_number(attributes.get("llm.token_count.cached"))
     return {key: value for key, value in metrics.items() if value}
-
