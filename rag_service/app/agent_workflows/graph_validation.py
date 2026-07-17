@@ -6,6 +6,7 @@ from typing import Any, Dict
 from app.agent.tool_registry import (
     collect_tool_contract_metadata_errors,
 )
+from app.agent_workflows.enums import GraphSentinel
 from app.agent_workflows.hitl_policy_validation import collect_hitl_policy_errors
 from app.agent_workflows.node_catalog import (
     collect_node_catalog_errors,
@@ -114,7 +115,7 @@ class GenericGraphValidator:
             if not isinstance(node_id, str) or not node_id:
                 errors.append("graph node entries require non-empty string id")
                 continue
-            if node_id in {"START", "END"}:
+            if node_id in {GraphSentinel.START.value, GraphSentinel.END.value}:
                 errors.append(f"graph node id is reserved: {node_id}")
             if node_id in node_ids:
                 errors.append(f"duplicate graph node id: {node_id}")
@@ -158,8 +159,8 @@ class GenericGraphValidator:
             if isinstance(max_instances, int) and not isinstance(max_instances, bool) and count > max_instances:
                 errors.append(f"graph has {count} nodes of type {node_type}; maximum allowed is {max_instances}")
 
-        valid_sources = set(node_ids) | {"START"}
-        valid_targets = set(node_ids) | {"END"}
+        valid_sources = set(node_ids) | {GraphSentinel.START.value}
+        valid_targets = set(node_ids) | {GraphSentinel.END.value}
         adjacency: dict[str, set[str]] = {}
         for edge in edges:
             if not isinstance(edge, dict):
@@ -348,7 +349,7 @@ class GenericGraphValidator:
         node_types_by_id: dict[str, str],
         node_catalog: Dict[str, Dict[str, Any]],
     ) -> list[str]:
-        if source == "START" or target == "END":
+        if source == GraphSentinel.START.value or target == GraphSentinel.END.value:
             return []
         source_type = node_types_by_id.get(source)
         target_type = node_types_by_id.get(target)
@@ -436,7 +437,7 @@ class GenericGraphValidator:
         visited: set[str] = set()
 
         def visit(node: str) -> bool:
-            if node in {"START", "END"}:
+            if node in {GraphSentinel.START.value, GraphSentinel.END.value}:
                 return False
             if node in visiting:
                 return True
@@ -454,22 +455,22 @@ class GenericGraphValidator:
 
     def _collect_reachability_errors(self, adjacency: dict[str, set[str]], node_ids: set[str]) -> list[str]:
         errors: list[str] = []
-        if "START" not in adjacency:
+        if GraphSentinel.START.value not in adjacency:
             errors.append("graph must have an edge from START")
             return errors
         visited: set[str] = set()
-        stack = list(adjacency.get("START") or [])
+        stack = list(adjacency.get(GraphSentinel.START.value) or [])
         while stack:
             node = stack.pop()
             if node in visited:
                 continue
             visited.add(node)
-            if node == "END":
+            if node == GraphSentinel.END.value:
                 continue
             stack.extend(adjacency.get(node) or [])
         unreachable = sorted(node_ids - visited)
         if unreachable:
             errors.append(f"graph contains unreachable nodes: {', '.join(unreachable)}")
-        if "END" not in visited:
+        if GraphSentinel.END.value not in visited:
             errors.append("graph must be able to reach END from START")
         return errors

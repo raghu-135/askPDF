@@ -7,6 +7,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.trace import SpanKind, StatusCode, set_span_in_context
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
+from app.agent_workflows.enums import NodeEventStatus, TraceStatus
 from app.agent_workflows.trace_otel import (
     _BufferedSpanExporter,
     _artifacts_from_refs,
@@ -211,10 +212,10 @@ class AgentTraceRecorder:
             *_warning_events(event.get("warnings")),
             *([exception] if exception else []),
         ]
-        if status == "skipped":
+        if status == NodeEventStatus.SKIPPED.value:
             events.append(
                 {
-                    "name": "skipped",
+                    "name": NodeEventStatus.SKIPPED.value,
                     "attributes": _clean_dict({"askpdf.skip_reason": event.get("skip_reason")}),
                 }
             )
@@ -361,7 +362,7 @@ class AgentTraceRecorder:
         caller_node = enriched.get("caller_node")
         caller_node_type = enriched.get("caller_node_type")
         parent_span_id = self._node_span_by_node.get(str(caller_node)) or self.run_span_id
-        status = "error" if enriched.get("ok") is False or enriched.get("error") else "completed"
+        status = TraceStatus.ERROR.value if enriched.get("ok") is False or enriched.get("error") else NodeEventStatus.COMPLETED.value
         span_id = f"tool:{tool_name}:{index}"
         exception = _exception_event(enriched.get("error"))
         events = [
@@ -492,14 +493,14 @@ class AgentTraceRecorder:
             _set_attributes(self._root_span, run_attributes)
             root_sidecar = self._sidecars[self.run_span_id]
             root_sidecar["attributes"] = _clean_dict({**root_sidecar["attributes"], **run_attributes})
-            root_sidecar["status"] = str(getattr(run, "status", None) or "completed")
+            root_sidecar["status"] = str(getattr(run, "status", None) or NodeEventStatus.COMPLETED.value)
             root_sidecar["attributes"]["askpdf.status"] = root_sidecar["status"]
             if error:
                 exception = _exception_event(error)
                 if exception:
                     self._root_span.add_event("exception", attributes=_exception_attributes(error))
                     root_sidecar["events"].append(exception)
-                self._root_span.set_status(_otel_status("error"))
+                self._root_span.set_status(_otel_status(TraceStatus.ERROR.value))
             else:
                 self._root_span.set_status(_otel_status(root_sidecar["status"]))
             self._root_span.end(end_time=_parse_time_ns(getattr(run, "completed_at", None)))
@@ -528,7 +529,9 @@ class AgentTraceRecorder:
             "parent_span_id": sidecar.get("parent_span_id"),
             "name": span.name,
             "kind": sidecar.get("kind") or attrs.get(SpanAttributes.OPENINFERENCE_SPAN_KIND) or OpenInferenceSpanKindValues.UNKNOWN.value,
-            "status": sidecar.get("status") or attrs.get("askpdf.status") or ("error" if span.status.status_code == StatusCode.ERROR else "completed"),
+            "status": sidecar.get("status")
+            or attrs.get("askpdf.status")
+            or (TraceStatus.ERROR.value if span.status.status_code == StatusCode.ERROR else NodeEventStatus.COMPLETED.value),
             "start_time": _ns_to_iso(span.start_time),
             "end_time": _ns_to_iso(span.end_time),
             "duration_ms": round((span.end_time - span.start_time) / 1_000_000, 2) if span.start_time and span.end_time else None,
@@ -578,4 +581,3 @@ class AgentTraceRecorder:
 
     def _build_summary(self, trace: Dict[str, Any]) -> Dict[str, Any]:
         return _build_summary_from_trace(trace, self.resolved_spec)
-

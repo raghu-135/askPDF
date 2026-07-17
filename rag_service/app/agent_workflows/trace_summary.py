@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Mapping
 
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
+from app.agent_workflows.enums import DebugGraphNodeStatus, GraphSentinel, NodeEventStatus, TraceStatus, WorkflowNodeType
 from app.agent_workflows.trace_otel import (
     _first_number,
     _node_display_name,
@@ -41,7 +42,7 @@ def _summary_node(span: Mapping[str, Any]) -> Dict[str, Any]:
         "label": attributes.get("askpdf.node.name"),
         "visitIndex": attributes.get("askpdf.node.visit_index"),
         "status": span.get("status"),
-        "skipped": span.get("status") == "skipped",
+        "skipped": span.get("status") == NodeEventStatus.SKIPPED.value,
         "durationMs": span.get("duration_ms"),
         "route": attributes.get("askpdf.route"),
         "routeReason": attributes.get("askpdf.route_reason"),
@@ -72,7 +73,7 @@ def _summary_tool(span: Mapping[str, Any]) -> Dict[str, Any]:
         "callerNode": attributes.get("askpdf.caller_node"),
         "callerNodeType": attributes.get("askpdf.caller_node_type"),
         "callerVisitIndex": attributes.get("askpdf.caller_visit_index"),
-        "ok": span.get("status") != "error",
+        "ok": span.get("status") != TraceStatus.ERROR.value,
         "durationMs": span.get("duration_ms"),
         "sourceCount": attributes.get("askpdf.source_count"),
         "warningCodes": [str(warning) for warning in warning_events if warning],
@@ -105,8 +106,8 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
     if errors:
         error_count = max(error_count, len(errors))
     config = _as_dict(resolved_spec.get("config"))
-    evaluator_nodes = [node for node in nodes if node.get("id") == "evidence_evaluator"]
-    replanner_nodes = [node for node in nodes if node.get("id") == "replanner"]
+    evaluator_nodes = [node for node in nodes if node.get("id") == WorkflowNodeType.EVIDENCE_EVALUATOR.value]
+    replanner_nodes = [node for node in nodes if node.get("id") == WorkflowNodeType.REPLANNER.value]
     last_evaluator = evaluator_nodes[-1] if evaluator_nodes else {}
     last_evaluator_raw = _as_dict(last_evaluator.get("raw"))
     replan_count = max(
@@ -155,19 +156,24 @@ def _graph_node_status(
     execution_plan: List[str],
 ) -> str:
     if summary_node.get("error") or any(not tool.get("ok", True) for tool in tool_summaries):
-        return "error"
+        return DebugGraphNodeStatus.ERROR.value
     if summary_node.get("skipped"):
-        return "skipped"
+        return NodeEventStatus.SKIPPED.value
     if summary_node:
-        return "active"
+        return DebugGraphNodeStatus.ACTIVE.value
     if node_id in execution_plan:
-        return "planned"
-    return "inactive"
+        return DebugGraphNodeStatus.PLANNED.value
+    return DebugGraphNodeStatus.INACTIVE.value
 
 
 def _has_active_node(node_id: str, nodes_by_id: Mapping[str, Mapping[str, Any]]) -> bool:
     status = _as_dict(nodes_by_id.get(node_id)).get("status")
-    return status in {"active", "planned", "skipped", "error"}
+    return status in {
+        DebugGraphNodeStatus.ACTIVE.value,
+        DebugGraphNodeStatus.PLANNED.value,
+        NodeEventStatus.SKIPPED.value,
+        DebugGraphNodeStatus.ERROR.value,
+    }
 
 
 def _graph_tool_summary(tool: Mapping[str, Any]) -> Dict[str, Any]:
@@ -235,7 +241,7 @@ def build_debug_graph(
                 "replanCount": summary_node.get("replanCount"),
                 "skipped": bool(summary_node.get("skipped")),
                 "skipReason": raw.get("skip_reason"),
-                "executionPlan": execution_plan if node_id in {"planner", "replanner"} else None,
+                "executionPlan": execution_plan if node_id in {WorkflowNodeType.PLANNER.value, WorkflowNodeType.REPLANNER.value} else None,
                 "warnings": summary_node.get("warningCodes") or [],
                 "inputRefs": raw.get("input_refs"),
                 "outputRefs": raw.get("output_refs"),
@@ -258,7 +264,7 @@ def build_debug_graph(
     edges = []
     for index, edge in enumerate(spec_edges):
         source = edge.get("from")
-        if source == "START" or edge.get("to") == "END":
+        if source == GraphSentinel.START.value or edge.get("to") == GraphSentinel.END.value:
             continue
         if edge.get("conditional") and isinstance(edge.get("routes"), dict):
             source_node = nodes_by_id.get(str(source), {})
@@ -267,7 +273,7 @@ def build_debug_graph(
                 if not isinstance(target, str):
                     continue
                 selected = selected_route == route or (
-                    source == "evidence_evaluator"
+                    source == WorkflowNodeType.EVIDENCE_EVALUATOR.value
                     and (source_node.get("evaluatorRoute") == route or source_raw.get("evaluator_route") == route)
                 )
                 edges.append(
@@ -305,4 +311,3 @@ def build_debug_graph(
         "executionPlan": execution_plan,
         "selectedRoute": selected_route,
     }
-

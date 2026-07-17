@@ -8,24 +8,25 @@ from app.agent_workflows.enums import (
     PlannerRoute,
     RouteFunctionId,
     RouterRoute,
+    WorkflowNodeType,
 )
 
 
 ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
     RouteFunctionId.ROUTER.value: {
-        "allowed_source_types": ["router"],
+        "allowed_source_types": [WorkflowNodeType.ROUTER.value],
         "route_labels": [route.value for route in RouterRoute],
     },
     RouteFunctionId.PLANNER.value: {
-        "allowed_source_types": ["planner"],
+        "allowed_source_types": [WorkflowNodeType.PLANNER.value],
         "route_labels": [route.value for route in PlannerRoute],
     },
     RouteFunctionId.EVALUATOR.value: {
-        "allowed_source_types": ["evidence_evaluator"],
+        "allowed_source_types": [WorkflowNodeType.EVIDENCE_EVALUATOR.value],
         "route_labels": [route.value for route in EvaluatorRoute],
     },
     RouteFunctionId.HITL_GATE.value: {
-        "allowed_source_types": ["hitl_gate"],
+        "allowed_source_types": [WorkflowNodeType.HITL_GATE.value],
         "route_labels": None,
     },
 }

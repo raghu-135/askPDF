@@ -7,8 +7,11 @@ from typing import Any, Dict
 from langgraph.types import Command
 
 from app.agent_workflows.compiler import WorkflowCompiler
+from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
 from app.agent_workflows.workflow_runtime import runtime_execution_options
 from app.db import (
+    AgentRunStatus,
+    ChatTurnStatus,
     create_chat_turn,
     increment_qa_stats,
     update_message_context_compact,
@@ -95,10 +98,10 @@ def _as_resume_action(interrupt: Dict[str, Any]) -> Any:
 
 
 def _interrupted_node_event(partial: Dict[str, Any], pending_interrupt: Dict[str, Any]) -> Dict[str, Any]:
-    node_id = str(pending_interrupt.get("node_id") or pending_interrupt.get("gate_id") or "hitl_gate")
+    node_id = str(pending_interrupt.get("node_id") or pending_interrupt.get("gate_id") or WorkflowNodeType.HITL_GATE.value)
     return {
         "node": node_id,
-        "status": "interrupted",
+        "status": NodeEventStatus.INTERRUPTED.value,
         "route": partial.get("route"),
         "route_reason": partial.get("route_reason"),
         "input_preview": {
@@ -136,7 +139,7 @@ def _node_events_with_interrupted_gate(
     has_interrupted = any(
         isinstance(event, dict)
         and event.get("node") == node_id
-        and event.get("status") == "interrupted"
+        and event.get("status") == NodeEventStatus.INTERRUPTED.value
         for event in node_events
     )
     if not has_interrupted:
@@ -157,7 +160,7 @@ async def _persist_success_turn(
 ) -> Dict[str, Any]:
     answer = result.get("final_answer") or "I was unable to compose an answer. Please try rephrasing your question."
     clarification_options = result.get("clarification_options")
-    status = "clarification" if clarification_options else "completed"
+    status = ChatTurnStatus.CLARIFICATION.value if clarification_options else ChatTurnStatus.COMPLETED.value
     embedding_model = result.get("embedding_model")
     llm_model = result.get("llm_model")
     context_window = result.get("context_window") or DEFAULT_TOKEN_BUDGET
@@ -471,7 +474,7 @@ async def _handle_compiled_rag_chat(
                 "node_events": node_events,
                 "tool_events": partial.get("tool_events") or [],
                 "duration_ms": duration_ms,
-                "status": "awaiting_human",
+                "status": AgentRunStatus.AWAITING_HUMAN.value,
                 "pending_interrupt": pending_interrupt,
                 "agent_trace_refs": {"interrupt_id": pending_interrupt.get("interrupt_id")},
                 **agent_run_context,
@@ -555,7 +558,7 @@ async def _handle_compiled_rag_chat(
             thread_id=thread_id,
             question=req.question,
             answer=fallback_answer,
-            status="failed",
+            status=ChatTurnStatus.FAILED.value,
             reasoning=f"{failure_reason_prefix}: {exc}",
             reasoning_available=True,
             reasoning_format="markdown",
@@ -589,7 +592,7 @@ async def _handle_compiled_rag_chat(
             "tool_events": tool_events,
             "errors": errors,
             "duration_ms": duration_ms,
-            "status": "failed",
+            "status": NodeEventStatus.FAILED.value,
             "agent_error": error_payload,
             "agent_run_turn_kind": "assistant_final",
             "agent_run_sequence": 0,
@@ -668,7 +671,7 @@ async def resume_compiled_rag_chat(
         return {
             **partial,
             "node_events": node_events,
-            "status": "awaiting_human",
+            "status": AgentRunStatus.AWAITING_HUMAN.value,
             "pending_interrupt": pending_interrupt,
             "duration_ms": duration_ms,
             **agent_run_context,

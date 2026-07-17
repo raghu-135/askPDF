@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from app.agent_workflows.enums import WorkflowNodeType
 from app.agent_workflows.node_catalog import node_type_allowed_tool_contract_ids
 
 
-REQUIRED_TOOL_NODE_TYPES = {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker"}
+REQUIRED_TOOL_NODE_TYPES = {
+    WorkflowNodeType.RETRIEVAL_WORKER.value,
+    WorkflowNodeType.MEMORY_WORKER.value,
+    WorkflowNodeType.TIMELINE_WORKER.value,
+    WorkflowNodeType.WEB_WORKER.value,
+}
 
 
 def workflow_required_tool_ids(spec: Dict[str, Any]) -> set[str]:

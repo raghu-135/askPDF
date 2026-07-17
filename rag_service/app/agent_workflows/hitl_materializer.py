@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from app.agent_workflows.enums import AgentRunResumeAction, HitlMode, HitlPhase, RouteFunctionId
+from app.agent_workflows.enums import (
+    AgentRunResumeAction,
+    GraphSentinel,
+    HitlMode,
+    HitlPhase,
+    RouteFunctionId,
+    WorkflowNodeType,
+)
 
 
 FINAL_REVIEW_GATE_ID = "human_review_gate"
@@ -18,7 +25,13 @@ def _normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any
     if gate_id == WEB_APPROVAL_GATE_ID:
         gate.setdefault("mode", HitlMode.APPROVAL.value)
         gate.setdefault("phase", HitlPhase.BEFORE.value)
-        gate.setdefault("target", {"node_id": "web_worker", "node_type": "web_worker"})
+        gate.setdefault(
+            "target",
+            {
+                "node_id": WorkflowNodeType.WEB_WORKER.value,
+                "node_type": WorkflowNodeType.WEB_WORKER.value,
+            },
+        )
         gate.setdefault("interrupt_type", "tool_approval")
         gate.setdefault("title", "Approve web search?")
         gate.setdefault(
@@ -27,11 +40,23 @@ def _normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any
         )
         gate.setdefault("allowed_actions", [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.CONTINUE_WITHOUT.value])
         gate.setdefault("default_action", AgentRunResumeAction.CONTINUE_WITHOUT.value)
-        gate.setdefault("routes", {AgentRunResumeAction.APPROVE.value: "web_worker", AgentRunResumeAction.CONTINUE_WITHOUT.value: "synthesizer"})
+        gate.setdefault(
+            "routes",
+            {
+                AgentRunResumeAction.APPROVE.value: WorkflowNodeType.WEB_WORKER.value,
+                AgentRunResumeAction.CONTINUE_WITHOUT.value: WorkflowNodeType.SYNTHESIZER.value,
+            },
+        )
     if gate_id == FINAL_REVIEW_GATE_ID:
         gate.setdefault("mode", HitlMode.REVIEW.value)
         gate.setdefault("phase", HitlPhase.AFTER.value)
-        gate.setdefault("target", {"node_id": "finalizer", "node_type": "finalizer"})
+        gate.setdefault(
+            "target",
+            {
+                "node_id": WorkflowNodeType.FINALIZER.value,
+                "node_type": WorkflowNodeType.FINALIZER.value,
+            },
+        )
         gate.setdefault("interrupt_type", "final_answer_review")
         gate.setdefault("title", "Review final answer")
         gate.setdefault("prompt", "Approve this answer before it is saved to the thread.")
@@ -43,9 +68,9 @@ def _normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any
         ])
         gate.setdefault("default_action", AgentRunResumeAction.APPROVE.value)
         gate.setdefault("routes", {
-            AgentRunResumeAction.APPROVE.value: "END",
-            AgentRunResumeAction.EDIT.value: "END",
-            AgentRunResumeAction.CONTINUE_WITHOUT.value: "END",
+            AgentRunResumeAction.APPROVE.value: GraphSentinel.END.value,
+            AgentRunResumeAction.EDIT.value: GraphSentinel.END.value,
+            AgentRunResumeAction.CONTINUE_WITHOUT.value: GraphSentinel.END.value,
         })
         gate.setdefault("editable_fields", ["final_answer"])
     gate.setdefault("mode", HitlMode.APPROVAL.value)
@@ -76,7 +101,7 @@ def default_bypass_target(target_node_id: str, edges: List[Dict[str, Any]]) -> s
     for edge in edges:
         if edge.get("from") == target_node_id and isinstance(edge.get("to"), str):
             return str(edge["to"])
-    return "END"
+    return GraphSentinel.END.value
 
 
 def hitl_gate_routes(gate: Dict[str, Any], target_node_id: str, edges: List[Dict[str, Any]], *, phase: str) -> Dict[str, str]:
@@ -164,7 +189,7 @@ def materialize_hitl_gates(graph_spec: Dict[str, Any], *, hitl_policy: Dict[str,
         if not target_node_id:
             continue
 
-        nodes.append({"id": gate_id, "type": "hitl_gate"})
+        nodes.append({"id": gate_id, "type": WorkflowNodeType.HITL_GATE.value})
         existing_node_ids.add(gate_id)
         routes = hitl_gate_routes(gate, target_node_id, edges, phase=phase)
         if phase == HitlPhase.BEFORE.value:

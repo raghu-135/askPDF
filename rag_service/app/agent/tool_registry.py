@@ -13,154 +13,218 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, List
 
+from app.agent.tool_contract import ToolWarningCode
+from app.agent_workflows.enums import NodeCapability, NodeCategory, ToolContractId, ToolName, WorkflowNodeType
+
+
+NODE_CONTEXT_LOADER = WorkflowNodeType.CONTEXT_LOADER.value
+NODE_ROUTER = WorkflowNodeType.ROUTER.value
+NODE_PLANNER = WorkflowNodeType.PLANNER.value
+NODE_RETRIEVAL_WORKER = WorkflowNodeType.RETRIEVAL_WORKER.value
+NODE_MEMORY_WORKER = WorkflowNodeType.MEMORY_WORKER.value
+NODE_TIMELINE_WORKER = WorkflowNodeType.TIMELINE_WORKER.value
+NODE_WEB_WORKER = WorkflowNodeType.WEB_WORKER.value
+NODE_EVIDENCE_EVALUATOR = WorkflowNodeType.EVIDENCE_EVALUATOR.value
+NODE_REPLANNER = WorkflowNodeType.REPLANNER.value
+NODE_FINALIZER = WorkflowNodeType.FINALIZER.value
+
+CAT_CONTEXT = NodeCategory.CONTEXT.value
+CAT_CONTROL = NodeCategory.CONTROL.value
+CAT_RETRIEVAL = NodeCategory.RETRIEVAL.value
+CAT_MEMORY = NodeCategory.MEMORY.value
+CAT_TIMELINE = NodeCategory.TIMELINE.value
+CAT_WEB = NodeCategory.WEB.value
+CAT_EXTERNAL_RESEARCH = NodeCategory.EXTERNAL_RESEARCH.value
+
+CAP_CONTEXT_PREFETCH = NodeCapability.CONTEXT_PREFETCH.value
+CAP_ROUTE_INTENT = NodeCapability.ROUTE_INTENT.value
+CAP_CLARIFY = NodeCapability.CLARIFY.value
+CAP_RETRIEVAL_DOCUMENT = NodeCapability.RETRIEVAL_DOCUMENT.value
+CAP_RETRIEVAL_MEMORY = NodeCapability.RETRIEVAL_MEMORY.value
+CAP_RETRIEVAL_TIMELINE = NodeCapability.RETRIEVAL_TIMELINE.value
+CAP_RETRIEVAL_WEB = NodeCapability.RETRIEVAL_WEB.value
+CAP_EXTERNAL_RESEARCH = NodeCapability.EXTERNAL_RESEARCH.value
+
+TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
+TOOL_DOCUMENT_EVIDENCE = ToolContractId.DOCUMENT_EVIDENCE.value
+TOOL_FOCUSED_DOCUMENT_EVIDENCE = ToolContractId.FOCUSED_DOCUMENT_EVIDENCE.value
+TOOL_DEEP_MEMORY = ToolContractId.DEEP_MEMORY.value
+TOOL_THREAD_TIMELINE = ToolContractId.THREAD_TIMELINE.value
+TOOL_LIVE_WEB_RECON = ToolContractId.LIVE_WEB_RECON.value
+TOOL_WIKIPEDIA_REFERENCE = ToolContractId.WIKIPEDIA_REFERENCE.value
+TOOL_WIKIDATA_REFERENCE = ToolContractId.WIKIDATA_REFERENCE.value
+TOOL_ARXIV_RESEARCH = ToolContractId.ARXIV_RESEARCH.value
+TOOL_PUBMED_RESEARCH = ToolContractId.PUBMED_RESEARCH.value
+TOOL_SEMANTIC_SCHOLAR_RESEARCH = ToolContractId.SEMANTIC_SCHOLAR_RESEARCH.value
+TOOL_STACKEXCHANGE_REFERENCE = ToolContractId.STACKEXCHANGE_REFERENCE.value
+TOOL_YAHOO_FINANCE_NEWS = ToolContractId.YAHOO_FINANCE_NEWS.value
+TOOL_CLARIFY_INTENT = ToolContractId.CLARIFY_INTENT.value
+
+TOOL_NAME_GET_THREAD_SHAPE = ToolName.GET_THREAD_SHAPE.value
+TOOL_NAME_SEARCH_DOCUMENTS = ToolName.SEARCH_DOCUMENTS.value
+TOOL_NAME_SEARCH_DOCUMENT_BY_ID = ToolName.SEARCH_DOCUMENT_BY_ID.value
+TOOL_NAME_SEARCH_CONVERSATION_HISTORY = ToolName.SEARCH_CONVERSATION_HISTORY.value
+TOOL_NAME_SEARCH_THREAD_TIMELINE = ToolName.SEARCH_THREAD_TIMELINE.value
+TOOL_NAME_SEARCH_WEB = ToolName.SEARCH_WEB.value
+TOOL_NAME_WIKIPEDIA = ToolName.WIKIPEDIA.value
+TOOL_NAME_WIKIDATA = ToolName.WIKIDATA.value
+TOOL_NAME_ARXIV = ToolName.ARXIV.value
+TOOL_NAME_PUB_MED = ToolName.PUB_MED.value
+TOOL_NAME_PUBMED = ToolName.PUBMED.value
+TOOL_NAME_SEMANTIC_SCHOLAR_LEGACY = ToolName.SEMANTIC_SCHOLAR_LEGACY.value
+TOOL_NAME_SEMANTIC_SCHOLAR = ToolName.SEMANTIC_SCHOLAR.value
+TOOL_NAME_STACK_EXCHANGE = ToolName.STACK_EXCHANGE.value
+TOOL_NAME_YAHOO_FINANCE_NEWS = ToolName.YAHOO_FINANCE_NEWS.value
+TOOL_NAME_ASK_FOR_CLARIFICATION = ToolName.ASK_FOR_CLARIFICATION.value
+
 
 TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
-    "get_thread_shape": {
-        "id": "thread_shape",
-        "category": "context",
-        "allowed_caller_nodes": ["context_loader", "router", "retrieval_worker", "memory_worker", "timeline_worker"],
-        "allowed_node_types": ["context_loader", "router", "retrieval_worker", "memory_worker", "timeline_worker"],
-        "required_node_capabilities": ["context.prefetch", "route.intent", "retrieval.document", "retrieval.memory", "retrieval.timeline"],
-        "artifact_keys": ["thread_shape"],
-        "warning_codes": ["missing_thread_id"],
+    TOOL_NAME_GET_THREAD_SHAPE: {
+        "id": TOOL_THREAD_SHAPE,
+        "category": CAT_CONTEXT,
+        "allowed_caller_nodes": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_TIMELINE_WORKER],
+        "allowed_node_types": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_TIMELINE_WORKER],
+        "required_node_capabilities": [CAP_CONTEXT_PREFETCH, CAP_ROUTE_INTENT, CAP_RETRIEVAL_DOCUMENT, CAP_RETRIEVAL_MEMORY, CAP_RETRIEVAL_TIMELINE],
+        "artifact_keys": [TOOL_THREAD_SHAPE],
+        "warning_codes": [ToolWarningCode.MISSING_THREAD_ID],
     },
-    "search_documents": {
-        "id": "document_evidence",
-        "category": "retrieval",
-        "allowed_caller_nodes": ["retrieval_worker"],
-        "allowed_node_types": ["retrieval_worker"],
-        "required_node_capabilities": ["retrieval.document"],
+    TOOL_NAME_SEARCH_DOCUMENTS: {
+        "id": TOOL_DOCUMENT_EVIDENCE,
+        "category": CAT_RETRIEVAL,
+        "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER],
+        "allowed_node_types": [NODE_RETRIEVAL_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_DOCUMENT],
         "artifact_keys": ["document_sources", "web_sources"],
         "warning_codes": [
-            "missing_thread_context",
-            "no_thread_documents",
-            "missing_document_vectors",
-            "no_relevant_content",
+            ToolWarningCode.MISSING_THREAD_CONTEXT,
+            ToolWarningCode.NO_THREAD_DOCUMENTS,
+            ToolWarningCode.MISSING_DOCUMENT_VECTORS,
+            ToolWarningCode.NO_RELEVANT_CONTENT,
         ],
     },
-    "search_document_by_id": {
-        "id": "focused_document_evidence",
-        "category": "retrieval",
-        "allowed_caller_nodes": ["retrieval_worker"],
-        "allowed_node_types": ["retrieval_worker"],
-        "required_node_capabilities": ["retrieval.document"],
+    TOOL_NAME_SEARCH_DOCUMENT_BY_ID: {
+        "id": TOOL_FOCUSED_DOCUMENT_EVIDENCE,
+        "category": CAT_RETRIEVAL,
+        "allowed_caller_nodes": [NODE_RETRIEVAL_WORKER],
+        "allowed_node_types": [NODE_RETRIEVAL_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_DOCUMENT],
         "artifact_keys": ["document_sources"],
-        "warning_codes": ["missing_thread_context", "missing_document_vectors", "no_relevant_content"],
+        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.NO_RELEVANT_CONTENT],
     },
-    "search_conversation_history": {
-        "id": "deep_memory",
-        "category": "memory",
-        "allowed_caller_nodes": ["memory_worker"],
-        "allowed_node_types": ["memory_worker"],
-        "required_node_capabilities": ["retrieval.memory"],
+    TOOL_NAME_SEARCH_CONVERSATION_HISTORY: {
+        "id": TOOL_DEEP_MEMORY,
+        "category": CAT_MEMORY,
+        "allowed_caller_nodes": [NODE_MEMORY_WORKER],
+        "allowed_node_types": [NODE_MEMORY_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_MEMORY],
         "artifact_keys": ["used_chat_ids"],
-        "warning_codes": ["missing_thread_context", "no_relevant_conversation_history"],
+        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_RELEVANT_CONVERSATION_HISTORY],
     },
-    "search_thread_timeline": {
-        "id": "thread_timeline",
-        "category": "timeline",
-        "allowed_caller_nodes": ["timeline_worker"],
-        "allowed_node_types": ["timeline_worker"],
-        "required_node_capabilities": ["retrieval.timeline"],
+    TOOL_NAME_SEARCH_THREAD_TIMELINE: {
+        "id": TOOL_THREAD_TIMELINE,
+        "category": CAT_TIMELINE,
+        "allowed_caller_nodes": [NODE_TIMELINE_WORKER],
+        "allowed_node_types": [NODE_TIMELINE_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_TIMELINE],
         "artifact_keys": ["timeline_events"],
-        "warning_codes": ["missing_thread_context", "no_timeline_events"],
+        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_TIMELINE_EVENTS],
     },
-    "search_web": {
-        "id": "live_web_recon",
-        "category": "web",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["retrieval.web"],
+    TOOL_NAME_SEARCH_WEB: {
+        "id": TOOL_LIVE_WEB_RECON,
+        "category": CAT_WEB,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_WEB],
         "artifact_keys": ["web_sources"],
-        "warning_codes": ["web_search_disabled", "no_usable_web_results"],
+        "warning_codes": [ToolWarningCode.WEB_SEARCH_DISABLED, ToolWarningCode.NO_USABLE_WEB_RESULTS],
     },
-    "wikipedia": {
-        "id": "wikipedia_reference",
-        "category": "external_research",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["external_research"],
+    TOOL_NAME_WIKIPEDIA: {
+        "id": TOOL_WIKIPEDIA_REFERENCE,
+        "category": CAT_EXTERNAL_RESEARCH,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
-        "warning_codes": ["empty_external_tool_result"],
+        "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
-    "wikidata": {
-        "id": "wikidata_reference",
-        "category": "external_research",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["external_research"],
+    TOOL_NAME_WIKIDATA: {
+        "id": TOOL_WIKIDATA_REFERENCE,
+        "category": CAT_EXTERNAL_RESEARCH,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
-        "warning_codes": ["empty_external_tool_result"],
+        "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
-    "arxiv": {
-        "id": "arxiv_research",
-        "category": "external_research",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["external_research"],
+    TOOL_NAME_ARXIV: {
+        "id": TOOL_ARXIV_RESEARCH,
+        "category": CAT_EXTERNAL_RESEARCH,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
-        "warning_codes": ["empty_external_tool_result"],
+        "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
-    "pub_med": {
-        "id": "pubmed_research",
-        "category": "external_research",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["external_research"],
+    TOOL_NAME_PUB_MED: {
+        "id": TOOL_PUBMED_RESEARCH,
+        "category": CAT_EXTERNAL_RESEARCH,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
-        "warning_codes": ["empty_external_tool_result"],
+        "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
-    "pubmed": {
-        "id": "pubmed_research",
-        "category": "external_research",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["external_research"],
+    TOOL_NAME_PUBMED: {
+        "id": TOOL_PUBMED_RESEARCH,
+        "category": CAT_EXTERNAL_RESEARCH,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
-        "warning_codes": ["empty_external_tool_result"],
+        "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
-    "semanticscholar": {
-        "id": "semantic_scholar_research",
-        "category": "external_research",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["external_research"],
+    TOOL_NAME_SEMANTIC_SCHOLAR_LEGACY: {
+        "id": TOOL_SEMANTIC_SCHOLAR_RESEARCH,
+        "category": CAT_EXTERNAL_RESEARCH,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
-        "warning_codes": ["empty_external_tool_result"],
+        "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
-    "semantic_scholar": {
-        "id": "semantic_scholar_research",
-        "category": "external_research",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["external_research"],
+    TOOL_NAME_SEMANTIC_SCHOLAR: {
+        "id": TOOL_SEMANTIC_SCHOLAR_RESEARCH,
+        "category": CAT_EXTERNAL_RESEARCH,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
-        "warning_codes": ["empty_external_tool_result"],
+        "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
-    "stack_exchange": {
-        "id": "stackexchange_reference",
-        "category": "external_research",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["external_research"],
+    TOOL_NAME_STACK_EXCHANGE: {
+        "id": TOOL_STACKEXCHANGE_REFERENCE,
+        "category": CAT_EXTERNAL_RESEARCH,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
-        "warning_codes": ["empty_external_tool_result"],
+        "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
-    "yahoo_finance_news": {
-        "id": "yahoo_finance_news",
-        "category": "external_research",
-        "allowed_caller_nodes": ["web_worker"],
-        "allowed_node_types": ["web_worker"],
-        "required_node_capabilities": ["external_research"],
+    TOOL_NAME_YAHOO_FINANCE_NEWS: {
+        "id": TOOL_YAHOO_FINANCE_NEWS,
+        "category": CAT_EXTERNAL_RESEARCH,
+        "allowed_caller_nodes": [NODE_WEB_WORKER],
+        "allowed_node_types": [NODE_WEB_WORKER],
+        "required_node_capabilities": [CAP_EXTERNAL_RESEARCH],
         "artifact_keys": ["provider_tool"],
-        "warning_codes": ["empty_external_tool_result"],
+        "warning_codes": [ToolWarningCode.EMPTY_EXTERNAL_TOOL_RESULT],
     },
-    "ask_for_clarification": {
-        "id": "clarify_intent",
-        "category": "control",
-        "allowed_caller_nodes": ["router", "planner", "evidence_evaluator", "replanner", "finalizer"],
-        "allowed_node_types": ["router", "planner", "evidence_evaluator", "replanner", "finalizer"],
-        "required_node_capabilities": ["clarify"],
+    TOOL_NAME_ASK_FOR_CLARIFICATION: {
+        "id": TOOL_CLARIFY_INTENT,
+        "category": CAT_CONTROL,
+        "allowed_caller_nodes": [NODE_ROUTER, NODE_PLANNER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_FINALIZER],
+        "allowed_node_types": [NODE_ROUTER, NODE_PLANNER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_FINALIZER],
+        "required_node_capabilities": [CAP_CLARIFY],
         "artifact_keys": [],
         "warning_codes": [],
     },
@@ -282,98 +346,98 @@ def validate_tool_call_allowed(
 
 
 TOOL_FRIENDLY_CONFIG = {
-    "search_documents": {
-        "id": "document_evidence",
+    TOOL_NAME_SEARCH_DOCUMENTS: {
+        "id": TOOL_DOCUMENT_EVIDENCE,
         "display_name": "Document Evidence",
         "description": "Semantic search across uploaded documents and cached web snippets when the user needs evidence content. Use this when the target document is unknown, the question spans multiple documents, or cached web snippets may contain the answer. Do not use it just to answer first/latest/since/order questions; use search_thread_timeline when chronology is central.",
         "default_prompt": "Use for evidence content from uploaded documents or cached web snippets. Prefer search_document_by_id when a specific file_hash is known. Prefer search_thread_timeline when the user's wording depends on first/latest/earlier/since/before/after or mixed-source ordering.",
     },
-    "search_document_by_id": {
-        "id": "focused_document_evidence",
+    TOOL_NAME_SEARCH_DOCUMENT_BY_ID: {
+        "id": TOOL_FOCUSED_DOCUMENT_EVIDENCE,
         "display_name": "Focused Document Evidence",
         "description": "Semantic search within one uploaded document identified by file_hash. Use this when the user names or clearly points to a specific document and thread shape provides the file_hash. Do not use it for cross-document comparison or timeline ordering unless paired with search_thread_timeline.",
         "default_prompt": "Use when a specific document is known and its file_hash is available. Keep the query focused on the requested fact. Use search_thread_timeline instead for document added-to-thread time or chronology questions.",
     },
-    "search_conversation_history": {
-        "id": "deep_memory",
+    TOOL_NAME_SEARCH_CONVERSATION_HISTORY: {
+        "id": TOOL_DEEP_MEMORY,
         "display_name": "Deep Memory",
         "description": "Semantic search across past Q/A pairs in this thread when the user asks what was previously discussed or decided. Use this for topical recall where ordering is not the main question. Do not use it for first/latest/earlier/since/before/after questions; use search_thread_timeline for temporal reasoning.",
         "default_prompt": "Use for non-temporal recall of prior discussion, decisions, or answers about a topic. Avoid using it merely to reread recent turns already present in prefetch. Prefer search_thread_timeline for chronological questions.",
     },
-    "search_thread_timeline": {
-        "id": "thread_timeline",
+    TOOL_NAME_SEARCH_THREAD_TIMELINE: {
+        "id": TOOL_THREAD_TIMELINE,
         "display_name": "Thread Timeline",
         "description": "Search timestamped timeline events across conversation memory, document added-to-thread time, and cached web evidence. Use this for earliest/latest/first/earlier/since/before/after questions or when mixed-source ordering matters. It returns source-specific timestamps plus derived timeline_event_at and timeline_event_type; document timestamps mean added to this thread, not document publication time.",
         "default_prompt": "Use when the answer depends on chronology, recency, sequence, or comparing event times across conversation, documents, and cached web. Set order=oldest for first/earliest, order=newest for latest/recent, and sources to narrow the search when the user names a source class. Do not use it for ordinary semantic evidence lookup where time is irrelevant.",
     },
-    "search_web": {
-        "id": "live_web_recon",
+    TOOL_NAME_SEARCH_WEB: {
+        "id": TOOL_LIVE_WEB_RECON,
         "display_name": "Internet Search",
         "description": "Live web search for external or time-sensitive information; cached to the thread.",
         "default_prompt": "Use when information is outside the uploaded documents or likely time-sensitive. Run in parallel with document search when enabled.",
     },
-    "wikipedia": {
-        "id": "wikipedia_reference",
+    TOOL_NAME_WIKIPEDIA: {
+        "id": TOOL_WIKIPEDIA_REFERENCE,
         "display_name": "Wikipedia",
         "description": "Lookup concise encyclopedia-style background on people, places, organizations, concepts, and historical topics.",
         "default_prompt": "Use for stable background, definitions, and entity overviews. Input should be a short entity/topic query, not a full multi-part question. Good for orientation before synthesis; do not use as the only source for current events, specialized papers, financial news, or claims that must come from uploaded documents.",
     },
-    "wikidata": {
-        "id": "wikidata_reference",
+    TOOL_NAME_WIKIDATA: {
+        "id": TOOL_WIKIDATA_REFERENCE,
         "display_name": "Wikidata",
         "description": "Lookup structured entity facts from Wikidata.",
         "default_prompt": "Use for structured entity facts such as identifiers, entity type, relationships, dates, locations, creator/author, organization, occupation, and canonical metadata. Input should be an exact entity name or Wikidata QID, optionally with the fact needed. Prefer Wikipedia for narrative context; disclose if Wikidata returns sparse or ambiguous entity matches.",
     },
-    "arxiv": {
-        "id": "arxiv_research",
+    TOOL_NAME_ARXIV: {
+        "id": TOOL_ARXIV_RESEARCH,
         "display_name": "arXiv",
         "description": "Search arXiv for scientific and technical papers.",
         "default_prompt": "Use for preprints and papers in computer science, math, physics, quantitative biology, quantitative finance, statistics, electrical engineering, economics, and related technical fields. Input may be a concise keyword query, exact paper title, author/topic, or arXiv identifier. Do not use for biomedical-only literature when PubMed is a better fit.",
     },
-    "pub_med": {
-        "id": "pubmed_research",
+    TOOL_NAME_PUB_MED: {
+        "id": TOOL_PUBMED_RESEARCH,
         "display_name": "PubMed",
         "description": "Search PubMed for biomedical and life-sciences literature.",
         "default_prompt": "Use for biomedical, clinical, medicine, genetics, public-health, and life-sciences literature. Input should be a concise PubMed-style query with key concepts, conditions, interventions, genes, or outcomes; avoid very long natural-language prompts because the API wrapper truncates long queries. Summarize findings cautiously and avoid medical advice.",
     },
-    "pubmed": {
-        "id": "pubmed_research",
+    TOOL_NAME_PUBMED: {
+        "id": TOOL_PUBMED_RESEARCH,
         "display_name": "PubMed",
         "description": "Search PubMed for biomedical and life-sciences literature.",
         "default_prompt": "Use for biomedical, clinical, medicine, genetics, public-health, and life-sciences literature. Input should be a concise PubMed-style query with key concepts, conditions, interventions, genes, or outcomes; avoid very long natural-language prompts because the API wrapper truncates long queries. Summarize findings cautiously and avoid medical advice.",
     },
-    "semanticscholar": {
-        "id": "semantic_scholar_research",
+    TOOL_NAME_SEMANTIC_SCHOLAR_LEGACY: {
+        "id": TOOL_SEMANTIC_SCHOLAR_RESEARCH,
         "display_name": "Semantic Scholar",
         "description": "Search Semantic Scholar for academic papers across disciplines.",
         "default_prompt": "Use for broad scholarly paper discovery across disciplines, especially when the field is not limited to arXiv or PubMed. Input should be a concise paper/topic/author query. Results commonly include title, abstract, venue, year, citations, IDs, authors, and open-access links when available; verify with arXiv/PubMed for field-specific depth.",
     },
-    "semantic_scholar": {
-        "id": "semantic_scholar_research",
+    TOOL_NAME_SEMANTIC_SCHOLAR: {
+        "id": TOOL_SEMANTIC_SCHOLAR_RESEARCH,
         "display_name": "Semantic Scholar",
         "description": "Search Semantic Scholar for academic papers across disciplines.",
         "default_prompt": "Use for broad scholarly paper discovery across disciplines, especially when the field is not limited to arXiv or PubMed. Input should be a concise paper/topic/author query. Results commonly include title, abstract, venue, year, citations, IDs, authors, and open-access links when available; verify with arXiv/PubMed for field-specific depth.",
     },
-    "stack_exchange": {
-        "id": "stackexchange_reference",
+    TOOL_NAME_STACK_EXCHANGE: {
+        "id": TOOL_STACKEXCHANGE_REFERENCE,
         "display_name": "StackExchange",
         "description": "Search Stack Overflow / StackExchange style technical Q&A.",
         "default_prompt": "Use for programming, debugging, command-line, library usage, library/framework behavior, and practical implementation questions. Input should be a concise technical query with the language/library/error. Treat answers as community Q&A evidence, not authoritative docs; prefer official docs or uploaded project files for final implementation decisions.",
     },
-    "yahoo_finance_news": {
-        "id": "yahoo_finance_news",
+    TOOL_NAME_YAHOO_FINANCE_NEWS: {
+        "id": TOOL_YAHOO_FINANCE_NEWS,
         "display_name": "Yahoo Finance News",
         "description": "Search Yahoo Finance news for a public company ticker.",
         "default_prompt": "Use for recent public-company finance/business news only after you know the listed ticker. Input must be only the ticker symbol, such as AAPL, MSFT, or NVDA; do not pass a company name, natural-language sentence, exchange name, or private company. If the user gives only a company name, first call search_web with a query like \"Nvidia stock ticker\" to find the ticker, then call yahoo_finance_news with just that ticker. If no public ticker exists, do not call this tool. Use for news context, not investment advice, valuation, real-time quotes, or private-company research.",
     },
-    "ask_for_clarification": {
-        "id": "clarify_intent",
+    TOOL_NAME_ASK_FOR_CLARIFICATION: {
+        "id": TOOL_CLARIFY_INTENT,
         "display_name": "Clarify Intent",
         "description": "Present 2–4 alternative interpretations for user selection.",
         "default_prompt": "Use only when ambiguity would materially change the answer.",
     },
-    "get_thread_shape": {
-        "id": "thread_shape",
+    TOOL_NAME_GET_THREAD_SHAPE: {
+        "id": TOOL_THREAD_SHAPE,
         "display_name": "Thread Shape",
         "description": "Snapshot of document inventory and QA history volume.",
         "default_prompt": "Use to choose between broad doc search, scoped search, or memory search. Call once per turn.",

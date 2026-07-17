@@ -3,359 +3,456 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict
 
+from app.agent_workflows.enums import (
+    ContextBudget,
+    ContextPolicyMode,
+    GraphSentinel,
+    NodeCapability,
+    NodeCategory,
+    RouteFunctionId,
+    ToolContractId,
+    TracePayloadMode,
+    TraceSpanKind,
+    WorkflowNodeType,
+)
 from app.models.llm_server_client import REPLANS_LIMIT
 
 
+NODE_CONTEXT_LOADER = WorkflowNodeType.CONTEXT_LOADER.value
+NODE_ROUTER = WorkflowNodeType.ROUTER.value
+NODE_PLANNER = WorkflowNodeType.PLANNER.value
+NODE_RETRIEVAL_WORKER = WorkflowNodeType.RETRIEVAL_WORKER.value
+NODE_MEMORY_WORKER = WorkflowNodeType.MEMORY_WORKER.value
+NODE_TIMELINE_WORKER = WorkflowNodeType.TIMELINE_WORKER.value
+NODE_WEB_WORKER = WorkflowNodeType.WEB_WORKER.value
+NODE_EVIDENCE_EVALUATOR = WorkflowNodeType.EVIDENCE_EVALUATOR.value
+NODE_REPLANNER = WorkflowNodeType.REPLANNER.value
+NODE_DIRECT_ANSWER = WorkflowNodeType.DIRECT_ANSWER.value
+NODE_SYNTHESIZER = WorkflowNodeType.SYNTHESIZER.value
+NODE_FINALIZER = WorkflowNodeType.FINALIZER.value
+NODE_HITL_GATE = WorkflowNodeType.HITL_GATE.value
+START_NODE = GraphSentinel.START.value
+END_NODE = GraphSentinel.END.value
+
+CAT_CONTEXT = NodeCategory.CONTEXT.value
+CAT_CONTROL = NodeCategory.CONTROL.value
+CAT_RETRIEVAL = NodeCategory.RETRIEVAL.value
+CAT_ANSWER = NodeCategory.ANSWER.value
+CAT_HUMAN_REVIEW = NodeCategory.HUMAN_REVIEW.value
+
+CAP_CONTEXT_PREFETCH = NodeCapability.CONTEXT_PREFETCH.value
+CAP_ROUTE_INTENT = NodeCapability.ROUTE_INTENT.value
+CAP_CLARIFY = NodeCapability.CLARIFY.value
+CAP_PLAN_EXECUTION = NodeCapability.PLAN_EXECUTION.value
+CAP_PLAN_REPLAN = NodeCapability.PLAN_REPLAN.value
+CAP_RETRIEVAL_DOCUMENT = NodeCapability.RETRIEVAL_DOCUMENT.value
+CAP_RETRIEVAL_MEMORY = NodeCapability.RETRIEVAL_MEMORY.value
+CAP_RETRIEVAL_TIMELINE = NodeCapability.RETRIEVAL_TIMELINE.value
+CAP_RETRIEVAL_WEB = NodeCapability.RETRIEVAL_WEB.value
+CAP_EXTERNAL_RESEARCH = NodeCapability.EXTERNAL_RESEARCH.value
+CAP_EVALUATE_EVIDENCE = NodeCapability.EVALUATE_EVIDENCE.value
+CAP_ANSWER_DIRECT = NodeCapability.ANSWER_DIRECT.value
+CAP_ANSWER_SYNTHESIZE = NodeCapability.ANSWER_SYNTHESIZE.value
+CAP_ANSWER_FINAL = NodeCapability.ANSWER_FINAL.value
+CAP_HITL_INTERRUPT = NodeCapability.HITL_INTERRUPT.value
+
+ROUTE_ROUTER = RouteFunctionId.ROUTER.value
+ROUTE_PLANNER = RouteFunctionId.PLANNER.value
+ROUTE_EVALUATOR = RouteFunctionId.EVALUATOR.value
+ROUTE_HITL_GATE = RouteFunctionId.HITL_GATE.value
+
+TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
+TOOL_DOCUMENT_EVIDENCE = ToolContractId.DOCUMENT_EVIDENCE.value
+TOOL_FOCUSED_DOCUMENT_EVIDENCE = ToolContractId.FOCUSED_DOCUMENT_EVIDENCE.value
+TOOL_DEEP_MEMORY = ToolContractId.DEEP_MEMORY.value
+TOOL_THREAD_TIMELINE = ToolContractId.THREAD_TIMELINE.value
+TOOL_LIVE_WEB_RECON = ToolContractId.LIVE_WEB_RECON.value
+TOOL_WIKIPEDIA_REFERENCE = ToolContractId.WIKIPEDIA_REFERENCE.value
+TOOL_WIKIDATA_REFERENCE = ToolContractId.WIKIDATA_REFERENCE.value
+TOOL_ARXIV_RESEARCH = ToolContractId.ARXIV_RESEARCH.value
+TOOL_PUBMED_RESEARCH = ToolContractId.PUBMED_RESEARCH.value
+TOOL_SEMANTIC_SCHOLAR_RESEARCH = ToolContractId.SEMANTIC_SCHOLAR_RESEARCH.value
+TOOL_STACKEXCHANGE_REFERENCE = ToolContractId.STACKEXCHANGE_REFERENCE.value
+TOOL_YAHOO_FINANCE_NEWS = ToolContractId.YAHOO_FINANCE_NEWS.value
+TOOL_CLARIFY_INTENT = ToolContractId.CLARIFY_INTENT.value
+
+POLICY_PREFETCH = ContextPolicyMode.PREFETCH.value
+POLICY_ROUTE = ContextPolicyMode.ROUTE.value
+POLICY_PLAN = ContextPolicyMode.PLAN.value
+POLICY_APPEND_EVIDENCE = ContextPolicyMode.APPEND_EVIDENCE.value
+POLICY_EVALUATE_EVIDENCE = ContextPolicyMode.EVALUATE_EVIDENCE.value
+POLICY_ASSEMBLE_ANSWER = ContextPolicyMode.ASSEMBLE_ANSWER.value
+POLICY_FINALIZE = ContextPolicyMode.FINALIZE.value
+POLICY_INTERRUPT = ContextPolicyMode.INTERRUPT.value
+
+BUDGET_REQUEST = ContextBudget.REQUEST.value
+BUDGET_BOUNDED = ContextBudget.BOUNDED.value
+BUDGET_BOUNDED_PREFETCH = ContextBudget.BOUNDED_PREFETCH.value
+BUDGET_TOOL_QUERY = ContextBudget.TOOL_QUERY.value
+BUDGET_EVIDENCE_PACKET = ContextBudget.EVIDENCE_PACKET.value
+BUDGET_BOUNDED_EVIDENCE = ContextBudget.BOUNDED_EVIDENCE.value
+BUDGET_BOUNDED_SUMMARY = ContextBudget.BOUNDED_SUMMARY.value
+BUDGET_DECISION = ContextBudget.DECISION.value
+BUDGET_ANSWER = ContextBudget.ANSWER.value
+
+SPAN_CONTEXT = TraceSpanKind.CONTEXT.value
+SPAN_CONTROL = TraceSpanKind.CONTROL.value
+SPAN_TOOL_WORKER = TraceSpanKind.TOOL_WORKER.value
+SPAN_ANSWER = TraceSpanKind.ANSWER.value
+SPAN_HUMAN_REVIEW = TraceSpanKind.HUMAN_REVIEW.value
+RAW_PAYLOAD_BOUNDED = TracePayloadMode.BOUNDED.value
+
+
 NODE_CATALOG: Dict[str, Dict[str, Any]] = {
-    "context_loader": {
+    NODE_CONTEXT_LOADER: {
         "display_name": "Context Loader",
-        "category": "context",
-        "capabilities": ["context.prefetch"],
+        "category": CAT_CONTEXT,
+        "capabilities": [CAP_CONTEXT_PREFETCH],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": ["thread_shape"],
-        "allowed_parent_types": ["START"],
-        "allowed_child_types": ["router", "planner"],
+        "allowed_tool_contract_ids": [TOOL_THREAD_SHAPE],
+        "allowed_parent_types": [START_NODE],
+        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER],
         "limits": {"default_max_visits": 1},
     },
-    "router": {
+    NODE_ROUTER: {
         "display_name": "Router",
-        "category": "control",
-        "capabilities": ["route.intent", "clarify"],
-        "allowed_route_functions": ["router_route"],
-        "allowed_tool_contract_ids": ["clarify_intent"],
-        "allowed_parent_types": ["context_loader", "hitl_gate"],
+        "category": CAT_CONTROL,
+        "capabilities": [CAP_ROUTE_INTENT, CAP_CLARIFY],
+        "allowed_route_functions": [ROUTE_ROUTER],
+        "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
+        "allowed_parent_types": [NODE_CONTEXT_LOADER, NODE_HITL_GATE],
         "allowed_child_types": [
-            "retrieval_worker",
-            "memory_worker",
-            "timeline_worker",
-            "web_worker",
-            "direct_answer",
-            "finalizer",
-            "hitl_gate",
+            NODE_RETRIEVAL_WORKER,
+            NODE_MEMORY_WORKER,
+            NODE_TIMELINE_WORKER,
+            NODE_WEB_WORKER,
+            NODE_DIRECT_ANSWER,
+            NODE_FINALIZER,
+            NODE_HITL_GATE,
         ],
         "limits": {"default_max_visits": 1},
     },
-    "planner": {
+    NODE_PLANNER: {
         "display_name": "Planner",
-        "category": "control",
-        "capabilities": ["plan.execution", "clarify"],
-        "allowed_route_functions": ["planner_route"],
-        "allowed_tool_contract_ids": ["clarify_intent"],
-        "allowed_parent_types": ["context_loader", "hitl_gate"],
-        "allowed_child_types": ["retrieval_worker", "direct_answer", "finalizer", "hitl_gate"],
+        "category": CAT_CONTROL,
+        "capabilities": [CAP_PLAN_EXECUTION, CAP_CLARIFY],
+        "allowed_route_functions": [ROUTE_PLANNER],
+        "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
+        "allowed_parent_types": [NODE_CONTEXT_LOADER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_DIRECT_ANSWER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1},
     },
-    "retrieval_worker": {
+    NODE_RETRIEVAL_WORKER: {
         "display_name": "Document Retrieval",
-        "category": "retrieval",
-        "capabilities": ["retrieval.document"],
+        "category": CAT_RETRIEVAL,
+        "capabilities": [CAP_RETRIEVAL_DOCUMENT],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": ["document_evidence", "focused_document_evidence"],
-        "allowed_parent_types": ["router", "planner", "replanner", "hitl_gate"],
+        "allowed_tool_contract_ids": [TOOL_DOCUMENT_EVIDENCE, TOOL_FOCUSED_DOCUMENT_EVIDENCE],
+        "allowed_parent_types": [NODE_ROUTER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
         "allowed_child_types": [
-            "memory_worker",
-            "timeline_worker",
-            "web_worker",
-            "evidence_evaluator",
-            "synthesizer",
-            "finalizer",
-            "hitl_gate",
+            NODE_MEMORY_WORKER,
+            NODE_TIMELINE_WORKER,
+            NODE_WEB_WORKER,
+            NODE_EVIDENCE_EVALUATOR,
+            NODE_SYNTHESIZER,
+            NODE_FINALIZER,
+            NODE_HITL_GATE,
         ],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
-    "memory_worker": {
+    NODE_MEMORY_WORKER: {
         "display_name": "Memory Retrieval",
-        "category": "retrieval",
-        "capabilities": ["retrieval.memory"],
+        "category": CAT_RETRIEVAL,
+        "capabilities": [CAP_RETRIEVAL_MEMORY],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": ["deep_memory"],
-        "allowed_parent_types": ["router", "retrieval_worker", "planner", "replanner", "hitl_gate"],
+        "allowed_tool_contract_ids": [TOOL_DEEP_MEMORY],
+        "allowed_parent_types": [NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
         "allowed_child_types": [
-            "timeline_worker",
-            "web_worker",
-            "evidence_evaluator",
-            "synthesizer",
-            "finalizer",
-            "hitl_gate",
+            NODE_TIMELINE_WORKER,
+            NODE_WEB_WORKER,
+            NODE_EVIDENCE_EVALUATOR,
+            NODE_SYNTHESIZER,
+            NODE_FINALIZER,
+            NODE_HITL_GATE,
         ],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
-    "timeline_worker": {
+    NODE_TIMELINE_WORKER: {
         "display_name": "Timeline Retrieval",
-        "category": "retrieval",
-        "capabilities": ["retrieval.timeline"],
+        "category": CAT_RETRIEVAL,
+        "capabilities": [CAP_RETRIEVAL_TIMELINE],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": ["thread_timeline"],
-        "allowed_parent_types": ["router", "memory_worker", "planner", "replanner", "hitl_gate"],
-        "allowed_child_types": ["web_worker", "evidence_evaluator", "synthesizer", "finalizer", "hitl_gate"],
+        "allowed_tool_contract_ids": [TOOL_THREAD_TIMELINE],
+        "allowed_parent_types": [NODE_ROUTER, NODE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
-    "web_worker": {
+    NODE_WEB_WORKER: {
         "display_name": "Web Retrieval",
-        "category": "retrieval",
-        "capabilities": ["retrieval.web", "external_research"],
+        "category": CAT_RETRIEVAL,
+        "capabilities": [CAP_RETRIEVAL_WEB, CAP_EXTERNAL_RESEARCH],
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [
-            "live_web_recon",
-            "wikipedia_reference",
-            "wikidata_reference",
-            "arxiv_research",
-            "pubmed_research",
-            "semantic_scholar_research",
-            "stackexchange_reference",
-            "yahoo_finance_news",
+            TOOL_LIVE_WEB_RECON,
+            TOOL_WIKIPEDIA_REFERENCE,
+            TOOL_WIKIDATA_REFERENCE,
+            TOOL_ARXIV_RESEARCH,
+            TOOL_PUBMED_RESEARCH,
+            TOOL_SEMANTIC_SCHOLAR_RESEARCH,
+            TOOL_STACKEXCHANGE_REFERENCE,
+            TOOL_YAHOO_FINANCE_NEWS,
         ],
-        "allowed_parent_types": ["router", "timeline_worker", "memory_worker", "planner", "replanner", "hitl_gate"],
-        "allowed_child_types": ["evidence_evaluator", "synthesizer", "finalizer", "hitl_gate"],
+        "allowed_parent_types": [NODE_ROUTER, NODE_TIMELINE_WORKER, NODE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_EVIDENCE_EVALUATOR, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
-    "evidence_evaluator": {
+    NODE_EVIDENCE_EVALUATOR: {
         "display_name": "Evidence Evaluator",
-        "category": "control",
-        "capabilities": ["evaluate.evidence", "clarify"],
-        "allowed_route_functions": ["evaluator_route"],
-        "allowed_tool_contract_ids": ["clarify_intent"],
-        "allowed_parent_types": ["retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "hitl_gate"],
-        "allowed_child_types": ["synthesizer", "replanner", "hitl_gate"],
+        "category": CAT_CONTROL,
+        "capabilities": [CAP_EVALUATE_EVIDENCE, CAP_CLARIFY],
+        "allowed_route_functions": [ROUTE_EVALUATOR],
+        "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
+        "allowed_parent_types": [NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_SYNTHESIZER, NODE_REPLANNER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
-    "replanner": {
+    NODE_REPLANNER: {
         "display_name": "Replanner",
-        "category": "control",
-        "capabilities": ["plan.replan", "clarify"],
+        "category": CAT_CONTROL,
+        "capabilities": [CAP_PLAN_REPLAN, CAP_CLARIFY],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": ["clarify_intent"],
-        "allowed_parent_types": ["evidence_evaluator", "hitl_gate"],
-        "allowed_child_types": ["retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "hitl_gate"],
+        "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
+        "allowed_parent_types": [NODE_EVIDENCE_EVALUATOR, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1, "max_visits": REPLANS_LIMIT},
     },
-    "direct_answer": {
+    NODE_DIRECT_ANSWER: {
         "display_name": "Direct Answer",
-        "category": "answer",
-        "capabilities": ["answer.direct"],
+        "category": CAT_ANSWER,
+        "capabilities": [CAP_ANSWER_DIRECT],
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [],
-        "allowed_parent_types": ["router", "planner", "hitl_gate"],
-        "allowed_child_types": ["finalizer", "hitl_gate"],
+        "allowed_parent_types": [NODE_ROUTER, NODE_PLANNER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1},
     },
-    "synthesizer": {
+    NODE_SYNTHESIZER: {
         "display_name": "Synthesizer",
-        "category": "answer",
-        "capabilities": ["answer.synthesize"],
+        "category": CAT_ANSWER,
+        "capabilities": [CAP_ANSWER_SYNTHESIZE],
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [],
         "allowed_parent_types": [
-            "retrieval_worker",
-            "memory_worker",
-            "timeline_worker",
-            "web_worker",
-            "evidence_evaluator",
-            "hitl_gate",
+            NODE_RETRIEVAL_WORKER,
+            NODE_MEMORY_WORKER,
+            NODE_TIMELINE_WORKER,
+            NODE_WEB_WORKER,
+            NODE_EVIDENCE_EVALUATOR,
+            NODE_HITL_GATE,
         ],
-        "allowed_child_types": ["finalizer", "hitl_gate"],
+        "allowed_child_types": [NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1},
     },
-    "finalizer": {
+    NODE_FINALIZER: {
         "display_name": "Finalizer",
-        "category": "answer",
-        "capabilities": ["answer.final", "clarify"],
+        "category": CAT_ANSWER,
+        "capabilities": [CAP_ANSWER_FINAL, CAP_CLARIFY],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": ["clarify_intent"],
+        "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
         "allowed_parent_types": [
-            "router",
-            "planner",
-            "retrieval_worker",
-            "memory_worker",
-            "timeline_worker",
-            "web_worker",
-            "direct_answer",
-            "synthesizer",
-            "hitl_gate",
+            NODE_ROUTER,
+            NODE_PLANNER,
+            NODE_RETRIEVAL_WORKER,
+            NODE_MEMORY_WORKER,
+            NODE_TIMELINE_WORKER,
+            NODE_WEB_WORKER,
+            NODE_DIRECT_ANSWER,
+            NODE_SYNTHESIZER,
+            NODE_HITL_GATE,
         ],
-        "allowed_child_types": ["hitl_gate", "END"],
+        "allowed_child_types": [NODE_HITL_GATE, END_NODE],
         "limits": {"default_max_visits": 1},
     },
-    "hitl_gate": {
+    NODE_HITL_GATE: {
         "display_name": "HITL Gate",
-        "category": "human_review",
-        "capabilities": ["hitl.interrupt"],
-        "allowed_route_functions": ["hitl_gate_route"],
+        "category": CAT_HUMAN_REVIEW,
+        "capabilities": [CAP_HITL_INTERRUPT],
+        "allowed_route_functions": [ROUTE_HITL_GATE],
         "allowed_tool_contract_ids": [],
-        "allowed_parent_types": ["router", "planner", "retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "evidence_evaluator", "replanner", "direct_answer", "synthesizer", "finalizer"],
-        "allowed_child_types": ["router", "planner", "retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "evidence_evaluator", "replanner", "direct_answer", "synthesizer", "finalizer", "END"],
+        "allowed_parent_types": [NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_FINALIZER],
+        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_FINALIZER, END_NODE],
         "limits": {"default_max_visits": 1},
     },
 }
 
 
 _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
-    "context_loader": {
+    NODE_CONTEXT_LOADER: {
         "state_reads": ["thread_id", "question", "embedding_model", "context_window", "use_web_search", "use_reranker"],
         "state_writes": ["pre_fetch_bundle", "document_sources", "web_sources", "used_chat_ids"],
         "prompt_slots": [],
-        "context_policy": {"mode": "prefetch", "input_budget": "request", "output_budget": "bounded"},
+        "context_policy": {"mode": POLICY_PREFETCH, "input_budget": BUDGET_REQUEST, "output_budget": BUDGET_BOUNDED},
         "observability": {
-            "span_kind": "context",
-            "event_prefix": "context_loader",
+            "span_kind": SPAN_CONTEXT,
+            "event_prefix": NODE_CONTEXT_LOADER,
             "summary_fields": ["document_source_count", "web_source_count", "used_chat_id_count"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 1,
     },
-    "router": {
+    NODE_ROUTER: {
         "state_reads": ["question", "pre_fetch_bundle", "use_web_search", "client_timezone", "client_locale", "client_now_iso"],
         "state_writes": ["route", "route_reason", "clarification_options"],
-        "prompt_slots": ["router"],
-        "context_policy": {"mode": "route", "input_budget": "bounded_prefetch", "output_budget": "decision"},
+        "prompt_slots": [NODE_ROUTER],
+        "context_policy": {"mode": POLICY_ROUTE, "input_budget": BUDGET_BOUNDED_PREFETCH, "output_budget": BUDGET_DECISION},
         "observability": {
-            "span_kind": "control",
-            "event_prefix": "router",
+            "span_kind": SPAN_CONTROL,
+            "event_prefix": NODE_ROUTER,
             "summary_fields": ["route", "route_reason"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 1,
     },
-    "planner": {
+    NODE_PLANNER: {
         "state_reads": ["question", "pre_fetch_bundle", "use_web_search", "client_timezone", "client_locale", "client_now_iso"],
         "state_writes": ["route", "route_reason", "execution_plan", "clarification_options"],
-        "prompt_slots": ["planner"],
-        "context_policy": {"mode": "plan", "input_budget": "bounded_prefetch", "output_budget": "decision"},
+        "prompt_slots": [NODE_PLANNER],
+        "context_policy": {"mode": POLICY_PLAN, "input_budget": BUDGET_BOUNDED_PREFETCH, "output_budget": BUDGET_DECISION},
         "observability": {
-            "span_kind": "control",
-            "event_prefix": "planner",
+            "span_kind": SPAN_CONTROL,
+            "event_prefix": NODE_PLANNER,
             "summary_fields": ["route", "route_reason", "execution_plan"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 1,
     },
-    "retrieval_worker": {
+    NODE_RETRIEVAL_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "use_reranker", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "document_sources", "web_sources", "tool_events"],
         "prompt_slots": [],
-        "context_policy": {"mode": "append_evidence", "input_budget": "tool_query", "output_budget": "evidence_packet"},
+        "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
-            "span_kind": "tool_worker",
-            "event_prefix": "retrieval_worker",
+            "span_kind": SPAN_TOOL_WORKER,
+            "event_prefix": NODE_RETRIEVAL_WORKER,
             "summary_fields": ["document_source_count", "web_source_count", "evidence_chars"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 4,
     },
-    "memory_worker": {
+    NODE_MEMORY_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "used_chat_ids", "tool_events"],
         "prompt_slots": [],
-        "context_policy": {"mode": "append_evidence", "input_budget": "tool_query", "output_budget": "evidence_packet"},
+        "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
-            "span_kind": "tool_worker",
-            "event_prefix": "memory_worker",
+            "span_kind": SPAN_TOOL_WORKER,
+            "event_prefix": NODE_MEMORY_WORKER,
             "summary_fields": ["used_chat_id_count", "evidence_chars"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 4,
     },
-    "timeline_worker": {
+    NODE_TIMELINE_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "tool_events"],
         "prompt_slots": [],
-        "context_policy": {"mode": "append_evidence", "input_budget": "tool_query", "output_budget": "evidence_packet"},
+        "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
-            "span_kind": "tool_worker",
-            "event_prefix": "timeline_worker",
+            "span_kind": SPAN_TOOL_WORKER,
+            "event_prefix": NODE_TIMELINE_WORKER,
             "summary_fields": ["timeline_event_count", "evidence_chars"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 4,
     },
-    "web_worker": {
+    NODE_WEB_WORKER: {
         "state_reads": ["question", "use_web_search", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "web_sources", "tool_events"],
         "prompt_slots": ["web_search_mandate"],
-        "context_policy": {"mode": "append_evidence", "input_budget": "tool_query", "output_budget": "evidence_packet"},
+        "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
-            "span_kind": "tool_worker",
-            "event_prefix": "web_worker",
+            "span_kind": SPAN_TOOL_WORKER,
+            "event_prefix": NODE_WEB_WORKER,
             "summary_fields": ["web_source_count", "evidence_chars"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 4,
     },
-    "evidence_evaluator": {
+    NODE_EVIDENCE_EVALUATOR: {
         "state_reads": ["question", "evidence", "evidence_packets", "replan_count", "replans"],
         "state_writes": ["evaluator_report", "evidence_gaps", "evaluation_confidence", "evaluator_route"],
         "prompt_slots": ["evaluator"],
-        "context_policy": {"mode": "evaluate_evidence", "input_budget": "bounded_evidence", "output_budget": "decision"},
+        "context_policy": {"mode": POLICY_EVALUATE_EVIDENCE, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_DECISION},
         "observability": {
-            "span_kind": "control",
-            "event_prefix": "evidence_evaluator",
+            "span_kind": SPAN_CONTROL,
+            "event_prefix": NODE_EVIDENCE_EVALUATOR,
             "summary_fields": ["evaluator_route", "evaluation_confidence", "evidence_gaps"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 2,
     },
-    "replanner": {
+    NODE_REPLANNER: {
         "state_reads": ["question", "evidence", "evaluator_report", "replan_count", "replans"],
         "state_writes": ["execution_plan", "replan_count", "replan_reason", "replan_history"],
-        "prompt_slots": ["replanner"],
-        "context_policy": {"mode": "plan", "input_budget": "bounded_evidence", "output_budget": "decision"},
+        "prompt_slots": [NODE_REPLANNER],
+        "context_policy": {"mode": POLICY_PLAN, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_DECISION},
         "observability": {
-            "span_kind": "control",
-            "event_prefix": "replanner",
+            "span_kind": SPAN_CONTROL,
+            "event_prefix": NODE_REPLANNER,
             "summary_fields": ["execution_plan", "replan_count", "replan_reason"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 1,
     },
-    "direct_answer": {
+    NODE_DIRECT_ANSWER: {
         "state_reads": ["question", "pre_fetch_bundle", "route_reason"],
         "state_writes": ["final_answer", "reasoning", "reasoning_available", "reasoning_format"],
         "prompt_slots": ["final_answer"],
-        "context_policy": {"mode": "assemble_answer", "input_budget": "bounded_prefetch", "output_budget": "answer"},
+        "context_policy": {"mode": POLICY_ASSEMBLE_ANSWER, "input_budget": BUDGET_BOUNDED_PREFETCH, "output_budget": BUDGET_ANSWER},
         "observability": {
-            "span_kind": "answer",
-            "event_prefix": "direct_answer",
+            "span_kind": SPAN_ANSWER,
+            "event_prefix": NODE_DIRECT_ANSWER,
             "summary_fields": ["answer_chars"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 1,
     },
-    "synthesizer": {
+    NODE_SYNTHESIZER: {
         "state_reads": ["question", "evidence", "evidence_packets", "document_sources", "web_sources", "used_chat_ids"],
         "state_writes": ["final_answer", "reasoning", "reasoning_available", "reasoning_format"],
         "prompt_slots": ["final_answer"],
-        "context_policy": {"mode": "assemble_answer", "input_budget": "bounded_evidence", "output_budget": "answer"},
+        "context_policy": {"mode": POLICY_ASSEMBLE_ANSWER, "input_budget": BUDGET_BOUNDED_EVIDENCE, "output_budget": BUDGET_ANSWER},
         "observability": {
-            "span_kind": "answer",
-            "event_prefix": "synthesizer",
+            "span_kind": SPAN_ANSWER,
+            "event_prefix": NODE_SYNTHESIZER,
             "summary_fields": ["answer_chars", "document_source_count", "web_source_count"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 1,
     },
-    "finalizer": {
+    NODE_FINALIZER: {
         "state_reads": ["final_answer", "clarification_options", "document_sources", "web_sources", "used_chat_ids"],
         "state_writes": ["final_answer", "reasoning", "reasoning_available", "reasoning_format"],
         "prompt_slots": ["final_answer"],
-        "context_policy": {"mode": "finalize", "input_budget": "answer", "output_budget": "answer"},
+        "context_policy": {"mode": POLICY_FINALIZE, "input_budget": BUDGET_ANSWER, "output_budget": BUDGET_ANSWER},
         "observability": {
-            "span_kind": "answer",
-            "event_prefix": "finalizer",
+            "span_kind": SPAN_ANSWER,
+            "event_prefix": NODE_FINALIZER,
             "summary_fields": ["answer_chars", "clarification_option_count"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 1,
     },
-    "hitl_gate": {
+    NODE_HITL_GATE: {
         "state_reads": ["hitl_policy", "hitl_gate_routes", "hitl_interrupt_counts", "route", "route_reason", "final_answer"],
         "state_writes": ["hitl_gate_route", "hitl_gate_routes", "hitl_decisions", "hitl_interrupt_counts", "human_review_decision"],
         "prompt_slots": [],
-        "context_policy": {"mode": "interrupt", "input_budget": "bounded_summary", "output_budget": "decision"},
+        "context_policy": {"mode": POLICY_INTERRUPT, "input_budget": BUDGET_BOUNDED_SUMMARY, "output_budget": BUDGET_DECISION},
         "observability": {
-            "span_kind": "human_review",
-            "event_prefix": "hitl_gate",
+            "span_kind": SPAN_HUMAN_REVIEW,
+            "event_prefix": NODE_HITL_GATE,
             "summary_fields": ["action", "gate_id", "target_node_id"],
-            "raw_payload": "bounded",
+            "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 8,
     },

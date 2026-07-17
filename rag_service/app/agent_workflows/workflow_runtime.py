@@ -4,8 +4,10 @@ import os
 from copy import deepcopy
 from typing import Any, Dict
 
+from app.agent_workflows.enums import WorkflowNodeType
+
 DEFAULT_AGENT_WORKFLOW_KEY_ENV = "ASKPDF_DEFAULT_AGENT_WORKFLOW_KEY"
-DEFAULT_AGENT_WORKFLOW_KEY = "_".join(("router", "rag", "agent"))
+DEFAULT_AGENT_WORKFLOW_KEY = "_".join((WorkflowNodeType.ROUTER.value, "rag", "agent"))
 SUPPORTED_RUNTIME_KINDS = {"compiled_rag"}
 RUNTIME_TEXT_FIELDS = {
     "label",
@@ -22,7 +24,7 @@ DEFAULT_COMPILED_RAG_RUNTIME = {
     "success_context": "Context retrieved by compiled RAG workflow.",
     "failure_context": "Compiled RAG workflow execution failed gracefully.",
     "features": {"supports_replans": False},
-    "prompt_preview": "router",
+    "prompt_preview": WorkflowNodeType.ROUTER.value,
 }
 ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "use_web_search",
@@ -74,7 +76,14 @@ def repeatable_node_types_for_replans(spec: Dict[str, Any]) -> set[str]:
         for node in nodes
         if isinstance(node, dict)
         and isinstance(node.get("type"), str)
-        and node.get("type") in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "evidence_evaluator"}
+        and node.get("type")
+        in {
+            WorkflowNodeType.RETRIEVAL_WORKER.value,
+            WorkflowNodeType.MEMORY_WORKER.value,
+            WorkflowNodeType.TIMELINE_WORKER.value,
+            WorkflowNodeType.WEB_WORKER.value,
+            WorkflowNodeType.EVIDENCE_EVALUATOR.value,
+        }
     }
 
 
@@ -96,7 +105,7 @@ def replan_loop_policy(spec: Dict[str, Any], config: Dict[str, Any]) -> Dict[str
         if node_type in repeatable_node_types
     }
     for node_id, node_type in node_types.items():
-        if node_type == "replanner":
+        if node_type == WorkflowNodeType.REPLANNER.value:
             node_visit_limits[node_id] = replans
     max_total_visits = sum(node_visit_limits.get(node_id, 1) for node_id in node_types)
     return {

@@ -38,7 +38,7 @@ from app.agent_workflows.evidence import (
     prefetch_refs as _prefetch_refs,
     state_evidence_refs as _state_evidence_refs,
 )
-from app.agent_workflows.enums import EvaluatorRoute, RouterRoute, ROUTER_ROUTES
+from app.agent_workflows.enums import EvaluatorRoute, NodeEventStatus, RouterRoute, ROUTER_ROUTES, WorkflowNodeType
 from app.agent_workflows.hitl_runtime import (
     WEB_APPROVAL_GATE_ID,
     hitl_gate_node,
@@ -107,19 +107,19 @@ class NodeRegistry:
 
     def __init__(self):
         self._nodes: Dict[str, Callable[..., Any]] = {
-            "context_loader": self.context_loader,
-            "planner": self.planner,
-            "router": self.router,
-            "retrieval_worker": self.retrieval_worker,
-            "memory_worker": self.memory_worker,
-            "timeline_worker": self.timeline_worker,
-            "web_worker": self.web_worker,
-            "evidence_evaluator": self.evidence_evaluator,
-            "replanner": self.replanner,
-            "direct_answer": self.direct_answer,
-            "synthesizer": self.synthesizer,
-            "finalizer": self.finalizer,
-            "hitl_gate": self.hitl_gate,
+            WorkflowNodeType.CONTEXT_LOADER.value: self.context_loader,
+            WorkflowNodeType.PLANNER.value: self.planner,
+            WorkflowNodeType.ROUTER.value: self.router,
+            WorkflowNodeType.RETRIEVAL_WORKER.value: self.retrieval_worker,
+            WorkflowNodeType.MEMORY_WORKER.value: self.memory_worker,
+            WorkflowNodeType.TIMELINE_WORKER.value: self.timeline_worker,
+            WorkflowNodeType.WEB_WORKER.value: self.web_worker,
+            WorkflowNodeType.EVIDENCE_EVALUATOR.value: self.evidence_evaluator,
+            WorkflowNodeType.REPLANNER.value: self.replanner,
+            WorkflowNodeType.DIRECT_ANSWER.value: self.direct_answer,
+            WorkflowNodeType.SYNTHESIZER.value: self.synthesizer,
+            WorkflowNodeType.FINALIZER.value: self.finalizer,
+            WorkflowNodeType.HITL_GATE.value: self.hitl_gate,
         }
 
     def get(self, node_type: str) -> Callable[..., Any]:
@@ -144,7 +144,7 @@ class NodeRegistry:
                 capabilities=capabilities,
                 visit_index=visit_index,
             )
-            if node_type == "hitl_gate":
+            if node_type == WorkflowNodeType.HITL_GATE.value:
                 update = await self.hitl_gate(state, runtime_config, node_id=node_id)
             else:
                 update = await node_impl(state, runtime_config)
@@ -170,10 +170,10 @@ class NodeRegistry:
                 use_reranker=state.get("use_reranker", True),
             )
         except Exception as exc:
-            _append_failed_node_event(state, config, "context_loader", started, exc)
+            _append_failed_node_event(state, config, WorkflowNodeType.CONTEXT_LOADER.value, started, exc)
             raise
         data = {
-            "status": "completed",
+            "status": NodeEventStatus.COMPLETED.value,
             "document_source_count": len(bundle.get("document_sources", [])),
             "web_source_count": len(bundle.get("web_sources", [])),
             "used_chat_id_count": len(bundle.get("used_chat_ids", [])),
@@ -192,13 +192,13 @@ class NodeRegistry:
                 "document_evidence": compact_preview(bundle.get("document_evidence_text")),
             },
         }
-        _log_node_end(state, "context_loader", started, data)
+        _log_node_end(state, WorkflowNodeType.CONTEXT_LOADER.value, started, data)
         return {
             "pre_fetch_bundle": bundle,
             "document_sources": list(bundle.get("document_sources", [])),
             "web_sources": list(bundle.get("web_sources", [])),
             "used_chat_ids": list(bundle.get("used_chat_ids", [])),
-            "node_events": _append_event(state, "context_loader", data, started=started, config=config),
+            "node_events": _append_event(state, WorkflowNodeType.CONTEXT_LOADER.value, data, started=started, config=config),
         }
 
     async def planner(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -210,7 +210,7 @@ class NodeRegistry:
             config,
             started=started,
             spec=JsonDecisionNodeSpec(
-                node_name="planner",
+                node_name=WorkflowNodeType.PLANNER.value,
                 prompt_section="Planner Node Prompt",
                 system_message="You are a strict planner for a scoped RAG workflow.",
                 prompt=prompt,
@@ -266,10 +266,10 @@ class NodeRegistry:
             output_refs=_prefetch_refs(state.get("pre_fetch_bundle") or {}),
             output_preview=worker_summary,
         )
-        _log_node_end(state, "planner", started, data)
+        _log_node_end(state, WorkflowNodeType.PLANNER.value, started, data)
         return {
             **normalized,
-            "node_events": _append_event(state, "planner", data, started=started, config=config),
+            "node_events": _append_event(state, WorkflowNodeType.PLANNER.value, data, started=started, config=config),
         }
 
     async def router(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -281,7 +281,7 @@ class NodeRegistry:
             config,
             started=started,
             spec=JsonDecisionNodeSpec(
-                node_name="router",
+                node_name=WorkflowNodeType.ROUTER.value,
                 prompt_section="Router Node Prompt",
                 system_message="You are a strict router for a RAG workflow.",
                 prompt=prompt,
@@ -333,25 +333,25 @@ class NodeRegistry:
             },
             output_refs=_prefetch_refs(state.get("pre_fetch_bundle") or {}),
         )
-        _log_node_end(state, "router", started, data)
+        _log_node_end(state, WorkflowNodeType.ROUTER.value, started, data)
         return {
             "route": route,
             "route_reason": route_reason,
             "clarification_options": clarification_options if route == RouterRoute.CLARIFY.value else None,
-            "node_events": _append_event(state, "router", data, started=started, config=config),
+            "node_events": _append_event(state, WorkflowNodeType.ROUTER.value, data, started=started, config=config),
         }
 
     async def retrieval_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        return await self._tool_worker("retrieval_worker", state, config)
+        return await self._tool_worker(WorkflowNodeType.RETRIEVAL_WORKER.value, state, config)
 
     async def memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        return await self._tool_worker("memory_worker", state, config)
+        return await self._tool_worker(WorkflowNodeType.MEMORY_WORKER.value, state, config)
 
     async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        return await self._tool_worker("timeline_worker", state, config)
+        return await self._tool_worker(WorkflowNodeType.TIMELINE_WORKER.value, state, config)
 
     async def web_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        return await self._tool_worker("web_worker", state, config)
+        return await self._tool_worker(WorkflowNodeType.WEB_WORKER.value, state, config)
 
     async def _tool_worker(self, node_name: str, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()
@@ -389,7 +389,7 @@ class NodeRegistry:
             config,
             started=started,
             spec=JsonDecisionNodeSpec(
-                node_name="evidence_evaluator",
+                node_name=WorkflowNodeType.EVIDENCE_EVALUATOR.value,
                 prompt_section="Evidence Evaluator Prompt",
                 system_message="You are a strict evidence evaluator for a bounded RAG workflow.",
                 prompt=prompt,
@@ -469,14 +469,14 @@ class NodeRegistry:
                 "evaluator_report": report,
             },
         )
-        _log_node_end(state, "evidence_evaluator", started, data)
+        _log_node_end(state, WorkflowNodeType.EVIDENCE_EVALUATOR.value, started, data)
         return {
             "evaluator_route": next_route,
             "evaluator_report": report,
             "evidence_gaps": report["missing_evidence"],
             "evaluation_confidence": report["confidence"],
             "evidence": evidence_update,
-            "node_events": _append_event(state, "evidence_evaluator", data, started=started, config=config),
+            "node_events": _append_event(state, WorkflowNodeType.EVIDENCE_EVALUATOR.value, data, started=started, config=config),
         }
 
     async def replanner(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
@@ -488,7 +488,7 @@ class NodeRegistry:
             config,
             started=started,
             spec=JsonDecisionNodeSpec(
-                node_name="replanner",
+                node_name=WorkflowNodeType.REPLANNER.value,
                 prompt_section="Replanner Prompt",
                 system_message="You are a strict replanner for a bounded RAG workflow.",
                 prompt=prompt,
@@ -556,13 +556,13 @@ class NodeRegistry:
                 "replan_reason": compact_preview(normalized["reason"]),
             },
         )
-        _log_node_end(state, "replanner", started, data)
+        _log_node_end(state, WorkflowNodeType.REPLANNER.value, started, data)
         return {
             "execution_plan": normalized["execution_plan"],
             "replan_count": replan_count,
             "replan_reason": normalized["reason"],
             "replan_history": replan_history,
-            "node_events": _append_event(state, "replanner", data, started=started, config=config),
+            "node_events": _append_event(state, WorkflowNodeType.REPLANNER.value, data, started=started, config=config),
         }
 
     async def direct_answer(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:

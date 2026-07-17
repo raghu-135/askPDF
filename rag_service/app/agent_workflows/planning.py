@@ -3,15 +3,15 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-from app.agent_workflows.enums import PlannerRoute, PLANNER_ROUTES
+from app.agent_workflows.enums import PlannerRoute, PLANNER_ROUTES, ToolContractId, WorkflowNodeType
 from app.agent_workflows.trace import compact_preview
 
 
 WORKER_NODE_ORDER = [
-    "retrieval_worker",
-    "memory_worker",
-    "timeline_worker",
-    "web_worker",
+    WorkflowNodeType.RETRIEVAL_WORKER.value,
+    WorkflowNodeType.MEMORY_WORKER.value,
+    WorkflowNodeType.TIMELINE_WORKER.value,
+    WorkflowNodeType.WEB_WORKER.value,
 ]
 
 
@@ -47,11 +47,15 @@ def infer_required_plan_steps(question: Optional[str]) -> List[str]:
     text = str(question or "")
     required: List[str] = []
     if TEMPORAL_PLAN_RE.search(text):
-        required.append("timeline_worker")
-    if MEMORY_PLAN_RE.search(text) and "memory_worker" not in required and "timeline_worker" not in required:
-        required.append("memory_worker")
-    if DOCUMENT_PLAN_RE.search(text) and "retrieval_worker" not in required:
-        required.append("retrieval_worker")
+        required.append(WorkflowNodeType.TIMELINE_WORKER.value)
+    if (
+        MEMORY_PLAN_RE.search(text)
+        and WorkflowNodeType.MEMORY_WORKER.value not in required
+        and WorkflowNodeType.TIMELINE_WORKER.value not in required
+    ):
+        required.append(WorkflowNodeType.MEMORY_WORKER.value)
+    if DOCUMENT_PLAN_RE.search(text) and WorkflowNodeType.RETRIEVAL_WORKER.value not in required:
+        required.append(WorkflowNodeType.RETRIEVAL_WORKER.value)
     return required
 
 
@@ -91,15 +95,15 @@ def normalize_execution_plan(
                 continue
             if node in WORKER_NODE_ORDER and node not in steps:
                 steps.append(node)
-    if not use_web_search and "web_worker" in steps:
-        steps = [step for step in steps if step != "web_worker"]
+    if not use_web_search and WorkflowNodeType.WEB_WORKER.value in steps:
+        steps = [step for step in steps if step != WorkflowNodeType.WEB_WORKER.value]
         normalization_notes.append("web_worker_removed_when_web_search_disabled")
     if route == PlannerRoute.EXECUTE.value:
         for required_step in required_steps:
             if required_step not in steps:
                 steps.append(required_step)
     if route == PlannerRoute.EXECUTE.value and not steps:
-        steps = ["retrieval_worker"]
+        steps = [WorkflowNodeType.RETRIEVAL_WORKER.value]
         normalization_notes.append("empty_execute_plan_defaulted_to_retrieval_worker")
     steps = ordered_plan_steps(steps)
     if route != PlannerRoute.EXECUTE.value:
@@ -196,12 +200,12 @@ def normalize_replanner_execution_plan(
                 continue
             if node in WORKER_NODE_ORDER and node not in steps:
                 steps.append(node)
-    if not use_web_search and "web_worker" in steps:
-        steps = [step for step in steps if step != "web_worker"]
+    if not use_web_search and WorkflowNodeType.WEB_WORKER.value in steps:
+        steps = [step for step in steps if step != WorkflowNodeType.WEB_WORKER.value]
         normalization_notes.append("web_worker_removed_when_web_search_disabled")
     allowed_ids = set(allowed_tool_ids if isinstance(allowed_tool_ids, list) else [])
-    if "live_web_recon" not in allowed_ids and "web_worker" in steps:
-        steps = [step for step in steps if step != "web_worker"]
+    if ToolContractId.LIVE_WEB_RECON.value not in allowed_ids and WorkflowNodeType.WEB_WORKER.value in steps:
+        steps = [step for step in steps if step != WorkflowNodeType.WEB_WORKER.value]
         normalization_notes.append("web_worker_removed_when_tool_disallowed")
     return {
         "execution_plan": ordered_plan_steps(steps),

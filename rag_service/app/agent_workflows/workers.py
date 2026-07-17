@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableConfig
 
 from app.agent.external_research_tools import search_web
 from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
+from app.agent_workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
 from app.agent_workflows.trace import refs_from_timeline
 
 
@@ -25,10 +26,10 @@ class ToolWorkerSpec:
 
 
 TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
-    "retrieval_worker": ToolWorkerSpec(
-        node_name="retrieval_worker",
-        tool_name="search_documents",
-        evidence_kind="document",
+    WorkflowNodeType.RETRIEVAL_WORKER.value: ToolWorkerSpec(
+        node_name=WorkflowNodeType.RETRIEVAL_WORKER.value,
+        tool_name=ToolName.SEARCH_DOCUMENTS.value,
+        evidence_kind=EvidenceKind.DOCUMENT.value,
         evidence_label="Document evidence",
         tool=search_documents,
         tool_input=lambda current: {"query": current["question"], "max_results": 10},
@@ -37,10 +38,10 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
             "web_sources": [*current.get("web_sources", []), *artifacts.get("web_sources", [])],
         },
     ),
-    "memory_worker": ToolWorkerSpec(
-        node_name="memory_worker",
-        tool_name="search_conversation_history",
-        evidence_kind="memory",
+    WorkflowNodeType.MEMORY_WORKER.value: ToolWorkerSpec(
+        node_name=WorkflowNodeType.MEMORY_WORKER.value,
+        tool_name=ToolName.SEARCH_CONVERSATION_HISTORY.value,
+        evidence_kind=EvidenceKind.MEMORY.value,
         evidence_label="Memory evidence",
         tool=search_conversation_history,
         tool_input=lambda current: {"query": current["question"], "max_results": 10},
@@ -48,10 +49,10 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
             "used_chat_ids": [*current.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])],
         },
     ),
-    "timeline_worker": ToolWorkerSpec(
-        node_name="timeline_worker",
-        tool_name="search_thread_timeline",
-        evidence_kind="timeline",
+    WorkflowNodeType.TIMELINE_WORKER.value: ToolWorkerSpec(
+        node_name=WorkflowNodeType.TIMELINE_WORKER.value,
+        tool_name=ToolName.SEARCH_THREAD_TIMELINE.value,
+        evidence_kind=EvidenceKind.TIMELINE.value,
         evidence_label="Timeline evidence",
         tool=search_thread_timeline,
         tool_input=lambda current: {
@@ -65,10 +66,10 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
             "timeline_refs": {"timeline_events": refs_from_timeline(artifacts.get("timeline_events"))},
         },
     ),
-    "web_worker": ToolWorkerSpec(
-        node_name="web_worker",
-        tool_name="search_web",
-        evidence_kind="web",
+    WorkflowNodeType.WEB_WORKER.value: ToolWorkerSpec(
+        node_name=WorkflowNodeType.WEB_WORKER.value,
+        tool_name=ToolName.SEARCH_WEB.value,
+        evidence_kind=EvidenceKind.WEB.value,
         evidence_label="Web evidence",
         tool=search_web,
         tool_input=lambda current: current["question"],
@@ -155,7 +156,7 @@ async def run_tool_worker(
     update = spec.state_update(state, payload, artifacts, evidence, evidence_packets) if spec.state_update else {}
     output_state = {**state, **update, "evidence": evidence, "evidence_packets": evidence_packets}
     data = {
-        "status": "completed" if payload.get("ok", True) else "failed",
+        "status": NodeEventStatus.COMPLETED.value if payload.get("ok", True) else NodeEventStatus.FAILED.value,
         "warnings": normalize_warnings(payload.get("warnings")),
         "input_refs": state_evidence_refs(state),
         "input_preview": {

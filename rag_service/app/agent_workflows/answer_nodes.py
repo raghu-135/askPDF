@@ -16,6 +16,7 @@ from app.agent_workflows.evidence import (
     prefetch_refs,
     state_evidence_refs,
 )
+from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
 from app.agent_workflows.prompting import build_final_answer_messages
 from app.agent_workflows.runtime_invocation import (
     append_event,
@@ -36,11 +37,11 @@ def _get_llm(model_name: str) -> Any:
 
 
 async def direct_answer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-    return await answer_from_context_node(state, config, node_name="direct_answer")
+    return await answer_from_context_node(state, config, node_name=WorkflowNodeType.DIRECT_ANSWER.value)
 
 
 async def synthesizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-    return await answer_from_context_node(state, config, node_name="synthesizer")
+    return await answer_from_context_node(state, config, node_name=WorkflowNodeType.SYNTHESIZER.value)
 
 
 async def answer_from_context_node(state: RouterRagState, config: RunnableConfig, *, node_name: str) -> Dict[str, Any]:
@@ -86,7 +87,7 @@ async def answer_from_context_node(state: RouterRagState, config: RunnableConfig
     )
     normalized = normalize_ai_response(response)
     data = {
-        "status": "completed",
+        "status": NodeEventStatus.COMPLETED.value,
         "input_refs": state_evidence_refs(state) or prefetch_refs(state.get("pre_fetch_bundle") or {}),
         "input_preview": {
             "question": compact_preview(state.get("question")),
@@ -127,7 +128,7 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             f"- {option}" for option in state["clarification_options"]
         )
         data = {
-            "status": "completed",
+            "status": NodeEventStatus.COMPLETED.value,
             "answer_chars": len(answer),
             "output_preview": {
                 "answer": compact_preview(answer),
@@ -137,19 +138,19 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
                 "clarification_option_count": len(state.get("clarification_options") or []),
             },
         }
-        log_node_end(state, "finalizer", started, data)
+        log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
         return {
             "final_answer": answer,
             "reasoning": "",
             "reasoning_available": False,
             "reasoning_format": "none",
-            "node_events": append_event(state, "finalizer", data, started=started, config=config),
+            "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
         }
     data = {
-        "status": "completed",
+        "status": NodeEventStatus.COMPLETED.value,
         "answer_chars": len(state.get("final_answer") or ""),
         "output_refs": state_evidence_refs(state),
         "output_preview": {"answer": compact_preview(state.get("final_answer"))},
     }
-    log_node_end(state, "finalizer", started, data)
-    return {"node_events": append_event(state, "finalizer", data, started=started, config=config)}
+    log_node_end(state, WorkflowNodeType.FINALIZER.value, started, data)
+    return {"node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config)}

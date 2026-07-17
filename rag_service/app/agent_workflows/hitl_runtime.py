@@ -14,10 +14,14 @@ from app.agent_workflows.evidence import (
 )
 from app.agent_workflows.enums import (
     AgentRunResumeAction,
+    GraphSentinel,
     HitlMode,
     HitlPhase,
     HitlSelectionMode,
     HITL_ACTIONS,
+    NodeEventStatus,
+    ToolName,
+    WorkflowNodeType,
 )
 from app.agent_workflows.planning import WORKER_NODE_ORDER
 from app.agent_workflows.runtime_invocation import (
@@ -87,7 +91,13 @@ def normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]
     if gate_id == WEB_APPROVAL_GATE_ID:
         gate.setdefault("mode", HitlMode.APPROVAL.value)
         gate.setdefault("phase", HitlPhase.BEFORE.value)
-        gate.setdefault("target", {"node_id": "web_worker", "node_type": "web_worker"})
+        gate.setdefault(
+            "target",
+            {
+                "node_id": WorkflowNodeType.WEB_WORKER.value,
+                "node_type": WorkflowNodeType.WEB_WORKER.value,
+            },
+        )
         gate.setdefault("interrupt_type", "tool_approval")
         gate.setdefault("title", "Approve web search?")
         gate.setdefault(
@@ -96,11 +106,23 @@ def normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]
         )
         gate.setdefault("allowed_actions", [AgentRunResumeAction.APPROVE.value, AgentRunResumeAction.CONTINUE_WITHOUT.value])
         gate.setdefault("default_action", AgentRunResumeAction.CONTINUE_WITHOUT.value)
-        gate.setdefault("routes", {AgentRunResumeAction.APPROVE.value: "web_worker", AgentRunResumeAction.CONTINUE_WITHOUT.value: "synthesizer"})
+        gate.setdefault(
+            "routes",
+            {
+                AgentRunResumeAction.APPROVE.value: WorkflowNodeType.WEB_WORKER.value,
+                AgentRunResumeAction.CONTINUE_WITHOUT.value: WorkflowNodeType.SYNTHESIZER.value,
+            },
+        )
     if gate_id == FINAL_REVIEW_GATE_ID:
         gate.setdefault("mode", HitlMode.REVIEW.value)
         gate.setdefault("phase", HitlPhase.AFTER.value)
-        gate.setdefault("target", {"node_id": "finalizer", "node_type": "finalizer"})
+        gate.setdefault(
+            "target",
+            {
+                "node_id": WorkflowNodeType.FINALIZER.value,
+                "node_type": WorkflowNodeType.FINALIZER.value,
+            },
+        )
         gate.setdefault("interrupt_type", "final_answer_review")
         gate.setdefault("title", "Review final answer")
         gate.setdefault("prompt", "Approve this answer before it is saved to the thread.")
@@ -112,9 +134,9 @@ def normalize_hitl_gate_policy(gate_id: str, gate_policy: Any) -> Dict[str, Any]
         ])
         gate.setdefault("default_action", AgentRunResumeAction.APPROVE.value)
         gate.setdefault("routes", {
-            AgentRunResumeAction.APPROVE.value: "END",
-            AgentRunResumeAction.EDIT.value: "END",
-            AgentRunResumeAction.CONTINUE_WITHOUT.value: "END",
+            AgentRunResumeAction.APPROVE.value: GraphSentinel.END.value,
+            AgentRunResumeAction.EDIT.value: GraphSentinel.END.value,
+            AgentRunResumeAction.CONTINUE_WITHOUT.value: GraphSentinel.END.value,
         })
         gate.setdefault("editable_fields", ["final_answer"])
     gate.setdefault("mode", HitlMode.APPROVAL.value)
@@ -265,10 +287,10 @@ async def hitl_gate_node(
         "evidence": compact_preview(state.get("evidence")),
     }
     proposed_tool = None
-    if target_node_id == "web_worker" or node_id == WEB_APPROVAL_GATE_ID:
+    if target_node_id == WorkflowNodeType.WEB_WORKER.value or node_id == WEB_APPROVAL_GATE_ID:
         proposed_tool = {
-            "name": "search_web",
-            "caller_node": "web_worker",
+            "name": ToolName.SEARCH_WEB.value,
+            "caller_node": WorkflowNodeType.WEB_WORKER.value,
             "input": compact_preview(state.get("question"), limit=1000),
         }
 
@@ -386,7 +408,7 @@ async def hitl_gate_node(
         )
 
     data = {
-        "status": "completed",
+        "status": NodeEventStatus.COMPLETED.value,
         "action": action,
         "route": state.get("route"),
         "route_reason": state.get("route_reason"),

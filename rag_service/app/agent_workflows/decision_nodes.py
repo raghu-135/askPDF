@@ -6,6 +6,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
+from app.agent_workflows.enums import NodeEventStatus
+
 
 @dataclass(frozen=True)
 class JsonDecisionNodeSpec:
@@ -27,7 +29,7 @@ def build_decision_node_event_data(
     output_preview: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     data = {
-        "status": "completed",
+        "status": NodeEventStatus.COMPLETED.value,
         **leading_fields,
         "input_refs": input_refs,
         "input_preview": input_preview,

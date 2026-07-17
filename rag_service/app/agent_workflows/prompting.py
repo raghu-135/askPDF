@@ -10,16 +10,17 @@ from app.agent.prompting import (
     sanitize_custom_instructions,
     sanitize_system_role,
 )
+from app.agent_workflows.enums import PromptProfile, ToolName
 from app.prompts.loaders import get_web_search_mandate, load_prompt
 
 
 GRAPH_TOOL_NAMES = [
-    "search_documents",
-    "search_document_by_id",
-    "search_conversation_history",
-    "search_thread_timeline",
-    "search_web",
-    "ask_for_clarification",
+    ToolName.SEARCH_DOCUMENTS.value,
+    ToolName.SEARCH_DOCUMENT_BY_ID.value,
+    ToolName.SEARCH_CONVERSATION_HISTORY.value,
+    ToolName.SEARCH_THREAD_TIMELINE.value,
+    ToolName.SEARCH_WEB.value,
+    ToolName.ASK_FOR_CLARIFICATION.value,
 ]
 
 QUESTION_PLACEHOLDER = "{{QUESTION}}"
@@ -63,7 +64,7 @@ def _format_prefetch_summary(bundle: Optional[Dict[str, Any]]) -> str:
 
 def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
     use_web_search = bool(state_or_settings.get("use_web_search", False))
-    active_tools = list(GRAPH_TOOL_NAMES if use_web_search else [name for name in GRAPH_TOOL_NAMES if name != "search_web"])
+    active_tools = list(GRAPH_TOOL_NAMES if use_web_search else [name for name in GRAPH_TOOL_NAMES if name != ToolName.SEARCH_WEB.value])
     catalog = get_tool_catalog(active_tools)
     playbook = normalize_tool_instructions(
         state_or_settings.get("tool_instructions") or {},
@@ -194,9 +195,9 @@ def build_agent_workflow_prompt_preview(
 ) -> str:
     if prompt_profile is None:
         prompt_profile = {
-            "plan_execute_rag_agent": "planner",
-            "evaluator_replanner_rag_agent": "evaluator_replanner",
-        }.get(str(workflow_id or ""), "router")
+            "plan_execute_rag_agent": PromptProfile.PLANNER.value,
+            "evaluator_replanner_rag_agent": PromptProfile.EVALUATOR_REPLANNER.value,
+        }.get(str(workflow_id or ""), PromptProfile.ROUTER.value)
     state = {
         "question": QUESTION_PLACEHOLDER,
         "pre_fetch_bundle": {},
@@ -211,7 +212,7 @@ def build_agent_workflow_prompt_preview(
     }
     final_messages = build_final_answer_messages(state, CONTEXT_PLACEHOLDER)
     sections: List[str] = []
-    if prompt_profile == "evaluator_replanner":
+    if prompt_profile == PromptProfile.EVALUATOR_REPLANNER.value:
         sections.append(
             "# Planner Node Prompt\n\n"
             "This is the system + human prompt for the planner LLM call. It decides route and initial worker inclusion only.\n\n"
@@ -233,7 +234,7 @@ def build_agent_workflow_prompt_preview(
             "## Human Message\n\n"
             + build_replanner_prompt(state)
         )
-    elif prompt_profile == "planner":
+    elif prompt_profile == PromptProfile.PLANNER.value:
         sections.append(
             "# Planner Node Prompt\n\n"
             "This is the system + human prompt for the planner LLM call. It decides route and worker inclusion only.\n\n"

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agent_workflows.enums import RouteFunctionId
+from app.agent_workflows.enums import GraphSentinel, RouteFunctionId, WorkflowNodeType
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.node_catalog import get_node_type_metadata
 from app.agent_workflows.routes import route_function_for_edge
@@ -16,19 +16,19 @@ if TYPE_CHECKING:
 
 
 CANONICAL_NODE_TYPE_ORDER = {
-    "context_loader": 0,
-    "router": 1,
-    "planner": 1,
-    "retrieval_worker": 2,
-    "memory_worker": 3,
-    "timeline_worker": 4,
-    "web_worker": 5,
-    "evidence_evaluator": 6,
-    "replanner": 7,
-    "direct_answer": 8,
-    "synthesizer": 9,
-    "finalizer": 10,
-    "hitl_gate": 11,
+    WorkflowNodeType.CONTEXT_LOADER.value: 0,
+    WorkflowNodeType.ROUTER.value: 1,
+    WorkflowNodeType.PLANNER.value: 1,
+    WorkflowNodeType.RETRIEVAL_WORKER.value: 2,
+    WorkflowNodeType.MEMORY_WORKER.value: 3,
+    WorkflowNodeType.TIMELINE_WORKER.value: 4,
+    WorkflowNodeType.WEB_WORKER.value: 5,
+    WorkflowNodeType.EVIDENCE_EVALUATOR.value: 6,
+    WorkflowNodeType.REPLANNER.value: 7,
+    WorkflowNodeType.DIRECT_ANSWER.value: 8,
+    WorkflowNodeType.SYNTHESIZER.value: 9,
+    WorkflowNodeType.FINALIZER.value: 10,
+    WorkflowNodeType.HITL_GATE.value: 11,
 }
 
 
@@ -81,10 +81,10 @@ class WorkflowMaterializer:
             if isinstance(node.get("id"), str) and isinstance(node.get("type"), str)
         }
         route_by_type = {
-            "router": RouteFunctionId.ROUTER.value,
-            "planner": RouteFunctionId.PLANNER.value,
-            "evidence_evaluator": RouteFunctionId.EVALUATOR.value,
-            "hitl_gate": RouteFunctionId.HITL_GATE.value,
+            WorkflowNodeType.ROUTER.value: RouteFunctionId.ROUTER.value,
+            WorkflowNodeType.PLANNER.value: RouteFunctionId.PLANNER.value,
+            WorkflowNodeType.EVIDENCE_EVALUATOR.value: RouteFunctionId.EVALUATOR.value,
+            WorkflowNodeType.HITL_GATE.value: RouteFunctionId.HITL_GATE.value,
         }
         edges = []
         for raw_edge in graph_spec.get("edges", []):
@@ -108,7 +108,7 @@ class WorkflowMaterializer:
 
     def _edge_order(self, edge: Dict[str, Any], node_types: Dict[str, str]) -> int:
         source = edge.get("from")
-        if source == "START":
+        if source == GraphSentinel.START.value:
             return -1
         source_type = node_types.get(str(source))
         return CANONICAL_NODE_TYPE_ORDER.get(str(source_type), 100)
@@ -193,13 +193,13 @@ class WorkflowCompiler(WorkflowMaterializer):
                     node_types=node_types,
                 )
                 routes = {
-                    key: END if value == "END" else value
+                    key: END if value == GraphSentinel.END.value else value
                     for key, value in dict(edge["routes"]).items()
                 }
                 workflow.add_conditional_edges(source, route_fn, routes)
                 continue
-            source_ref = START if source == "START" else source
-            target_ref = END if target == "END" else target
+            source_ref = START if source == GraphSentinel.START.value else source
+            target_ref = END if target == GraphSentinel.END.value else target
             workflow.add_edge(source_ref, target_ref)
 
         return workflow.compile(checkpointer=checkpointer)

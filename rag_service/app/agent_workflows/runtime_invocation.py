@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.tool_registry import get_tool_contract_id, validate_tool_call_allowed
+from app.agent_workflows.enums import NodeEventStatus
 from app.agent_workflows.events import append_node_event, append_tool_event
 from app.agent_workflows.evidence import state_evidence_refs
 from app.agent_workflows.node_catalog import node_type_capabilities
@@ -85,7 +86,7 @@ def append_failed_node_event(
     data: Optional[Dict[str, Any]] = None,
 ) -> None:
     payload = {
-        "status": "failed",
+        "status": NodeEventStatus.FAILED.value,
         "error": error_summary(exc, code=f"{node}_failed"),
         "input_preview": {"question": compact_preview(state.get("question"))},
         **(data or {}),
@@ -340,7 +341,7 @@ def skipped_worker_update(
     reason: str,
 ) -> Dict[str, Any]:
     data = {
-        "status": "skipped",
+        "status": NodeEventStatus.SKIPPED.value,
         "skipped": True,
         "skip_reason": reason,
         "input_preview": {"question": compact_preview(state.get("question"))},

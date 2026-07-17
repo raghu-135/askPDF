@@ -9,6 +9,7 @@ from opentelemetry.trace import Status, StatusCode
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.agent.tool_registry import get_tool_contract_metadata
+from app.agent_workflows.enums import NodeEventStatus, TraceStatus
 from app.agent_workflows.node_catalog import get_node_type_metadata
 from app.agent_workflows.trace_sanitization import (
     _as_dict,
@@ -68,15 +69,15 @@ def _event_time(value: Any) -> Optional[str]:
 
 def _span_status(event: Mapping[str, Any]) -> str:
     status = str(event.get("status") or "").lower()
-    if event.get("error") or event.get("ok") is False or status in {"failed", "error"}:
-        return "error"
-    if status == "skipped" or event.get("skipped") is True:
-        return "skipped"
-    return str(event.get("status") or "completed")
+    if event.get("error") or event.get("ok") is False or status in {NodeEventStatus.FAILED.value, TraceStatus.ERROR.value}:
+        return TraceStatus.ERROR.value
+    if status == NodeEventStatus.SKIPPED.value or event.get("skipped") is True:
+        return NodeEventStatus.SKIPPED.value
+    return str(event.get("status") or NodeEventStatus.COMPLETED.value)
 
 
 def _otel_status(status: str) -> Status:
-    return Status(StatusCode.ERROR if status == "error" else StatusCode.OK)
+    return Status(StatusCode.ERROR if status == TraceStatus.ERROR.value else StatusCode.OK)
 
 
 def _node_metadata(node_type: Optional[str]) -> Dict[str, Any]:

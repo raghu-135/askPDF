@@ -4,6 +4,7 @@ from typing import Any
 
 from app.agent_workflows.enums import (
     AgentRunResumeAction,
+    GraphSentinel,
     HitlMode,
     HitlPhase,
     HITL_ACTIONS,
@@ -138,7 +139,7 @@ def collect_hitl_policy_errors(hitl_policy: Any, workflow_id: Any, graph: Any) -
             for route_name, route_target in routes.items():
                 if not isinstance(route_name, str) or not isinstance(route_target, str):
                     errors.append(f"hitl_policy.gates.{gate_id}.routes keys and values must be strings")
-                elif route_target not in node_types and route_target != "END":
+                elif route_target not in node_types and route_target != GraphSentinel.END.value:
                     errors.append(f"hitl_policy.gates.{gate_id}.routes.{route_name} target is unknown: {route_target}")
 
         options = gate.get("options", [])
