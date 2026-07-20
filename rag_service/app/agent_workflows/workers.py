@@ -130,6 +130,12 @@ async def run_tool_worker(
         tool_name=spec.tool_name,
         started=started,
     )
+    studio_queue = ((tool_config.get("configurable") or {}).get("studio_event_queue"))
+    if studio_queue is not None:
+        await studio_queue.put({
+            "event": "tool.started",
+            "data": {"tool_name": spec.tool_name, "node_id": spec.node_name},
+        })
     raw = await invoke_tool_for_node(
         spec.tool,
         tool_input,

@@ -8,4 +8,6 @@ export interface BuilderValidationIssue {
   severity: 'error' | 'warning';
   message: string;
   selection: BuilderSelection;
+  code?: string;
+  fix?: { kind: string; [key: string]: any } | null;
 }

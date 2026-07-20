@@ -116,6 +116,16 @@ export interface AgentGraphNode {
   artifactCount: number;
   traceSpans?: Record<string, any>[];
   rawEvents: Record<string, any>[];
+  authoring?: boolean;
+  inputLabel?: string;
+  outputPorts?: { id: string; label: string; description?: string }[];
+  compatible?: boolean;
+  compatibilityReason?: string;
+  issueCount?: number;
+  usesLlm?: boolean;
+  usesTools?: boolean;
+  onAddNext?: (nodeId: string, route?: string) => void;
+  onAddPrevious?: (nodeId: string) => void;
 }
 
 export interface AgentGraphEdge {

@@ -41,6 +41,7 @@ export default function BuilderPersistencePanel({
   boundaryMessages,
   onSave,
   onDelete,
+  showHeader = true,
 }: {
   form: BuilderPersistenceState;
   onFormChange: (patch: Partial<BuilderPersistenceState>) => void;
@@ -53,6 +54,7 @@ export default function BuilderPersistencePanel({
   boundaryMessages?: BuilderBoundaryMessage[];
   onSave: () => void;
   onDelete: () => void;
+  showHeader?: boolean;
 }) {
   const savedWorkflowId = persisted?.workflow.id;
   const saveDisabled = authoringDisabled || !canSave || busyAction === 'save';
@@ -61,15 +63,19 @@ export default function BuilderPersistencePanel({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Save Workflow
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          Custom workflow available to every thread after saving
-        </Typography>
-      </Box>
-      <Divider />
+      {showHeader ? (
+        <>
+          <Box>
+            <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+              Save Workflow
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Custom workflow available to every thread after saving
+            </Typography>
+          </Box>
+          <Divider />
+        </>
+      ) : null}
       {(boundaryMessages || []).map((message) => (
         <Alert key={`${message.severity}-${message.message}`} severity={message.severity}>
           {message.message}

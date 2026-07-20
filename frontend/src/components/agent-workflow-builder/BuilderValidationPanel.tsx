@@ -38,6 +38,7 @@ export default function BuilderValidationPanel({
   previewResult,
   previewError,
   onSelectIssue,
+  onApplyFix,
 }: {
   catalog: AgentWorkflowCatalogResponse;
   spec: AgentWorkflowBuilderSpec;
@@ -50,6 +51,7 @@ export default function BuilderValidationPanel({
   previewResult: ThreadAgentConfigPreviewResponse | null;
   previewError: string | null;
   onSelectIssue: (selection: BuilderSelection) => void;
+  onApplyFix: (issue: BuilderValidationIssue) => void;
 }) {
   const [tab, setTab] = useState<'validation' | 'spec' | 'thread-preview'>('validation');
   const hasErrors = issues.some((issue) => issue.severity === 'error');
@@ -109,10 +111,14 @@ export default function BuilderValidationPanel({
                       <Typography variant="caption" sx={{ wordBreak: 'break-word' }}>
                         {issue.message}
                       </Typography>
-                      {issue.selection ? (
-                        <Button size="small" onClick={() => onSelectIssue(issue.selection)} sx={{ whiteSpace: 'nowrap' }}>
-                          Select
+                      {issue.fix ? (
+                        <Button size="small" onClick={() => onApplyFix(issue)} sx={{ whiteSpace: 'nowrap' }}>
+                          Fix
                         </Button>
+                      ) : issue.selection ? (
+                          <Button size="small" onClick={() => onSelectIssue(issue.selection)} sx={{ whiteSpace: 'nowrap' }}>
+                            Select
+                          </Button>
                       ) : (
                         <Chip size="small" variant="outlined" label="global" />
                       )}

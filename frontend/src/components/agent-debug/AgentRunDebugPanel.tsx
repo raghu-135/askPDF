@@ -11,7 +11,7 @@ import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, Hitl
 import AgentRunHeaderChips from './AgentRunHeaderChips';
 import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
 
-const AgentGraphCanvas = dynamic(() => import('../agent-graph/AgentGraphCanvas'), { ssr: false });
+const AgentDebugCanvas = dynamic(() => import('../agent-graph/AgentDebugCanvas'), { ssr: false });
 
 export default function AgentRunDebugPanel({
   runId,
@@ -276,10 +276,9 @@ export default function AgentRunDebugPanel({
               </>
             )}
           </Box>
-          <AgentGraphCanvas
+          <AgentDebugCanvas
             resolvedSpec={runDetails.resolved_spec_json}
             workflowId={runDetails.workflow_id}
-            mode="run-debug"
             traceView={traceView}
             focusedTraceRefs={traceRefs}
           />

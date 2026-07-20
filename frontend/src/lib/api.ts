@@ -234,6 +234,7 @@ export interface AgentWorkflowGraphSpec {
 
 export interface AgentWorkflowBuilderSpec {
   schema_version: 2;
+  workflow_id: string;
   workflow_type: 'custom_rag_agent' | string;
   config: {
     graph?: AgentWorkflowGraphSpec;
@@ -280,6 +281,20 @@ export interface AgentWorkflowNodeCatalogEntry {
   context_policy: AgentWorkflowContextPolicy;
   observability: AgentWorkflowObservability;
   max_instances: number;
+  ui?: {
+    summary?: string;
+    use_when?: string;
+    category_label?: string;
+    icon?: string;
+    keywords?: string[];
+    input_label?: string;
+    output_label?: string;
+    uses_llm?: boolean;
+    uses_tools?: boolean;
+    external_side_effect?: boolean;
+    field_guidance?: Record<string, string>;
+    [key: string]: any;
+  };
   [key: string]: any;
 }
 
@@ -291,6 +306,11 @@ export interface AgentWorkflowRouteFunctionMetadata {
   allowed_source_node_types?: string[];
   route_labels?: string[];
   routes?: string[];
+  route_options?: Record<string, {
+    display_name?: string;
+    description?: string;
+    order?: number;
+  }>;
   [key: string]: any;
 }
 
@@ -350,8 +370,20 @@ export interface AgentWorkflowValidationReport {
   valid: boolean;
   errors: string[];
   warnings: string[];
+  issues?: AgentWorkflowValidationIssue[];
   schema_version?: number | null;
   [key: string]: any;
+}
+
+export interface AgentWorkflowValidationIssue {
+  code: string;
+  severity: 'error' | 'warning';
+  message: string;
+  node_id?: string | null;
+  edge_index?: number | null;
+  route?: string | null;
+  allowed_alternatives?: string[];
+  fix?: { kind: string; [key: string]: any } | null;
 }
 
 export interface AgentWorkflowSpecResponse {
@@ -1075,6 +1107,106 @@ export async function resumeAgentRun(
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export interface BuilderTestRuntimeInput {
+  builder_session_id: string;
+  base_workflow_id: string;
+  spec: Record<string, any>;
+  thread_id: string;
+  question: string;
+  llm_model: string;
+  use_web_search?: boolean;
+  use_reranker?: boolean;
+  context_window?: number;
+  replans?: number;
+  allow_external_tools?: boolean;
+  client_timezone?: string;
+  client_locale?: string;
+  client_now_iso?: string;
+}
+
+export interface BuilderTestStreamEnvelope {
+  id: number | string;
+  event: string;
+  data: Record<string, any>;
+}
+
+async function consumeBuilderTestStream(
+  response: Response,
+  onEvent: (event: BuilderTestStreamEnvelope) => void,
+): Promise<void> {
+  if (!response.ok) throw new Error(await response.text());
+  if (!response.body) throw new Error('The test stream is unavailable.');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop() || '';
+    for (const block of blocks) {
+      const data = block.split(/\r?\n/).find((line) => line.startsWith('data:'));
+      if (!data) continue;
+      onEvent(JSON.parse(data.slice(5).trim()) as BuilderTestStreamEnvelope);
+    }
+    if (done) break;
+  }
+}
+
+export async function streamAgentWorkflowBuilderTest(
+  payload: BuilderTestRuntimeInput,
+  onEvent: (event: BuilderTestStreamEnvelope) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/internal/agent-workflows/test-runs/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  await consumeBuilderTestStream(response, onEvent);
+}
+
+export async function resumeAgentWorkflowBuilderTest(
+  runId: string,
+  payload: Omit<BuilderTestRuntimeInput, 'builder_session_id' | 'base_workflow_id' | 'spec' | 'question'> & {
+    action: AgentRunResumeAction;
+    interrupt_id: string;
+    selected_option_ids?: string[];
+    resume_token?: string;
+    resume_version?: number;
+  },
+  onEvent: (event: BuilderTestStreamEnvelope) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/internal/agent-workflows/test-runs/${encodeURIComponent(runId)}/resume/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  await consumeBuilderTestStream(response, onEvent);
+}
+
+export async function cancelAgentWorkflowBuilderTest(runId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/internal/agent-workflows/test-runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error(await response.text());
+}
+
+export async function getLatestAgentWorkflowBuilderTest(
+  builderSessionId: string,
+  baseWorkflowId?: string,
+): Promise<AgentRunDetails | null> {
+  const params = new URLSearchParams({ builder_session_id: builderSessionId });
+  if (baseWorkflowId) params.set('base_workflow_id', baseWorkflowId);
+  const response = await fetch(`${API_BASE}/api/internal/agent-workflows/test-runs/latest?${params.toString()}`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(await response.text());
+  return (await response.json()).agent_run;
 }
 
 export async function threadChat(

@@ -6,6 +6,9 @@ import {
   Box,
   Button,
   Chip,
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Divider,
   FormControl,
   InputLabel,
@@ -26,6 +29,7 @@ import {
   getRouteLabelsForFunction,
 } from '../../lib/agent-workflow-builder';
 import type { BuilderSelection } from './types';
+import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
 
 const asArrayValue = (value: unknown): string[] => (
   Array.isArray(value) ? value.map(String) : String(value || '').split(',').filter(Boolean)
@@ -88,15 +92,16 @@ function NodeInspector({
         </Typography>
       </Box>
       <Divider />
+      {entry?.ui?.summary ? (
+        <Box sx={{ p: 1, borderRadius: 1, bgcolor: 'action.hover' }}>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>{entry.display_name || node.type}</Typography>
+          <Typography variant="body2" sx={{ mt: 0.5 }}>{entry.ui.summary}</Typography>
+          {entry.ui.use_when ? <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{entry.ui.use_when}</Typography> : null}
+        </Box>
+      ) : null}
       <TextField
         size="small"
-        label="Node ID"
-        value={node.id}
-        slotProps={{ input: { readOnly: true } }}
-      />
-      <TextField
-        size="small"
-        label="Label"
+        label="Purpose"
         value={node.label || ''}
         disabled={disabled}
         onChange={(event) => onUpdateNode(node.id, { label: event.target.value })}
@@ -110,10 +115,17 @@ function NodeInspector({
         disabled={disabled}
         onChange={(event) => onUpdateNode(node.id, { description: event.target.value })}
       />
-      <Box>
-        <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mb: 0.5 }}>
-          Catalog Facts
-        </Typography>
+      <Accordion disableGutters elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 1 }}>
+        <AccordionSummary><Typography variant="caption" sx={{ fontWeight: 700 }}>Advanced catalog details</Typography></AccordionSummary>
+        <AccordionDetails>
+        <TextField
+          fullWidth
+          size="small"
+          label="Node ID"
+          value={node.id}
+          slotProps={{ input: { readOnly: true } }}
+          sx={{ mb: 1 }}
+        />
         <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
           <Chip size="small" variant="outlined" label={entry?.display_name || node.type} />
           {entry?.category ? <Chip size="small" variant="outlined" label={entry.category} /> : null}
@@ -132,7 +144,9 @@ function NodeInspector({
             Observability: {entry.observability.span_kind} / {entry.observability.event_prefix}
           </Typography>
         ) : null}
-      </Box>
+        <JsonPreview value={node} maxHeight={220} />
+        </AccordionDetails>
+      </Accordion>
       <FormControl size="small" disabled={disabled || allowedTools.length === 0}>
         <InputLabel id={`node-tools-${node.id}`}>Tool contracts</InputLabel>
         <Select<string[]>
@@ -493,6 +507,7 @@ export default function BuilderInspector({
   onRemoveNode,
   onRemoveEdge,
   onAddHitlGate,
+  onUpdateSettings,
 }: {
   catalog: AgentWorkflowCatalogResponse;
   state: AgentWorkflowBuilderState;
@@ -503,6 +518,7 @@ export default function BuilderInspector({
   onRemoveNode: (nodeId: string) => void;
   onRemoveEdge: (edgeIndex: number) => void;
   onAddHitlGate: (targetNodeId: string) => void;
+  onUpdateSettings: (patch: Record<string, any>) => void;
 }) {
   const selectedNode = selection?.kind === 'node'
     ? state.nodes.find((node) => node.id === selection.nodeId)
@@ -545,6 +561,16 @@ export default function BuilderInspector({
       <Typography variant="body2" color="text.secondary">
         Select a node or edge from the canvas or graph element list.
       </Typography>
+      <TextField
+        size="small"
+        type="number"
+        label="Maximum replan attempts"
+        value={state.extraConfig?.replans || 1}
+        disabled={disabled}
+        slotProps={{ htmlInput: { min: 1, max: 5 } }}
+        onChange={(event) => onUpdateSettings({ replans: Math.max(1, Math.min(5, Number(event.target.value) || 1)) })}
+        helperText="Bounds retry loops for workflows that support replanning."
+      />
     </Box>
   );
 }

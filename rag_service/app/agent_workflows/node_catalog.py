@@ -479,6 +479,154 @@ REQUIRED_NODE_CATALOG_KEYS = {
 }
 
 
+NODE_UI_METADATA: Dict[str, Dict[str, Any]] = {
+    NODE_CONTEXT_LOADER: {
+        "summary": "Loads recent conversation and relevant PDF context before the workflow decides what to do.",
+        "use_when": "Use this as the first step of every workflow.",
+        "category_label": "Start & context",
+        "icon": "context",
+        "keywords": ["start", "context", "thread", "pdf", "history"],
+        "input_label": "Request",
+        "output_label": "Loaded context",
+        "uses_llm": False,
+        "uses_tools": True,
+    },
+    NODE_ROUTER: {
+        "summary": "Chooses one answer path based on the user's question.",
+        "use_when": "Use for fast workflows that normally need one source.",
+        "category_label": "Decide",
+        "icon": "route",
+        "keywords": ["route", "branch", "choose", "intent"],
+        "input_label": "Loaded context",
+        "output_label": "Decision",
+        "uses_llm": True,
+        "uses_tools": False,
+    },
+    NODE_PLANNER: {
+        "summary": "Creates a retrieval plan when the answer may need several sources.",
+        "use_when": "Use for multi-step research workflows.",
+        "category_label": "Decide",
+        "icon": "plan",
+        "keywords": ["plan", "steps", "research", "multi-source"],
+        "input_label": "Loaded context",
+        "output_label": "Execution plan",
+        "uses_llm": True,
+        "uses_tools": False,
+    },
+    NODE_RETRIEVAL_WORKER: {
+        "summary": "Searches PDFs and other documents attached to the thread.",
+        "use_when": "Use when the answer should be grounded in uploaded documents.",
+        "category_label": "Retrieve",
+        "icon": "document",
+        "keywords": ["pdf", "document", "search", "evidence"],
+        "input_label": "Question or plan",
+        "output_label": "Document evidence",
+        "uses_llm": False,
+        "uses_tools": True,
+    },
+    NODE_MEMORY_WORKER: {
+        "summary": "Searches earlier questions and answers in this conversation.",
+        "use_when": "Use when prior discussion may contain relevant context.",
+        "category_label": "Retrieve",
+        "icon": "memory",
+        "keywords": ["memory", "conversation", "history", "previous"],
+        "input_label": "Question or plan",
+        "output_label": "Conversation evidence",
+        "uses_llm": False,
+        "uses_tools": True,
+    },
+    NODE_TIMELINE_WORKER: {
+        "summary": "Finds thread events and evidence in chronological order.",
+        "use_when": "Use for questions about what happened and when.",
+        "category_label": "Retrieve",
+        "icon": "timeline",
+        "keywords": ["timeline", "chronology", "events", "dates"],
+        "input_label": "Question or plan",
+        "output_label": "Timeline evidence",
+        "uses_llm": False,
+        "uses_tools": True,
+    },
+    NODE_WEB_WORKER: {
+        "summary": "Searches approved external sources for current information.",
+        "use_when": "Use when uploaded documents may not contain current facts.",
+        "category_label": "Retrieve",
+        "icon": "web",
+        "keywords": ["web", "internet", "current", "external", "research"],
+        "input_label": "Question or plan",
+        "output_label": "Web evidence",
+        "uses_llm": False,
+        "uses_tools": True,
+        "external_side_effect": True,
+    },
+    NODE_EVIDENCE_EVALUATOR: {
+        "summary": "Checks whether the collected evidence is sufficient to answer.",
+        "use_when": "Use before synthesis when weak evidence should trigger another search.",
+        "category_label": "Evaluate",
+        "icon": "evaluate",
+        "keywords": ["evaluate", "quality", "confidence", "evidence"],
+        "input_label": "Collected evidence",
+        "output_label": "Evidence decision",
+        "uses_llm": True,
+        "uses_tools": False,
+    },
+    NODE_REPLANNER: {
+        "summary": "Chooses another bounded search step when evidence is missing.",
+        "use_when": "Use after an evidence evaluator in a workflow that supports replanning.",
+        "category_label": "Decide",
+        "icon": "replan",
+        "keywords": ["replan", "retry", "gaps", "loop"],
+        "input_label": "Evidence gaps",
+        "output_label": "Revised plan",
+        "uses_llm": True,
+        "uses_tools": False,
+    },
+    NODE_DIRECT_ANSWER: {
+        "summary": "Answers without retrieving additional evidence.",
+        "use_when": "Use as the direct branch from a Router or Planner.",
+        "category_label": "Answer",
+        "icon": "answer",
+        "keywords": ["direct", "answer", "no retrieval"],
+        "input_label": "Question and context",
+        "output_label": "Draft answer",
+        "uses_llm": True,
+        "uses_tools": False,
+    },
+    NODE_SYNTHESIZER: {
+        "summary": "Combines gathered evidence into a grounded draft answer.",
+        "use_when": "Use after retrieval or evidence evaluation.",
+        "category_label": "Answer",
+        "icon": "synthesize",
+        "keywords": ["combine", "synthesize", "evidence", "draft"],
+        "input_label": "Evidence",
+        "output_label": "Draft answer",
+        "uses_llm": True,
+        "uses_tools": False,
+    },
+    NODE_FINALIZER: {
+        "summary": "Produces the final user-facing answer or clarification.",
+        "use_when": "Use as the last executable step before End.",
+        "category_label": "Answer",
+        "icon": "finish",
+        "keywords": ["final", "finish", "clarify", "response"],
+        "input_label": "Draft or decision",
+        "output_label": "Final response",
+        "uses_llm": False,
+        "uses_tools": False,
+    },
+    NODE_HITL_GATE: {
+        "summary": "Pauses the workflow so a person can approve, edit, choose, or reject.",
+        "use_when": "Use before or after a sensitive action.",
+        "category_label": "Human review",
+        "icon": "human",
+        "keywords": ["human", "approval", "review", "pause", "hitl"],
+        "input_label": "Proposed action",
+        "output_label": "Human decision",
+        "uses_llm": False,
+        "uses_tools": False,
+    },
+}
+
+
 def collect_node_catalog_errors(catalog: Dict[str, Dict[str, Any]] | None = None) -> list[str]:
     errors: list[str] = []
     source = catalog if isinstance(catalog, dict) else NODE_CATALOG
@@ -534,7 +682,16 @@ def collect_node_catalog_errors(catalog: Dict[str, Dict[str, Any]] | None = None
 
 
 def get_node_catalog() -> Dict[str, Dict[str, Any]]:
-    return deepcopy(NODE_CATALOG)
+    catalog = deepcopy(NODE_CATALOG)
+    for node_type, metadata in catalog.items():
+        ui = deepcopy(NODE_UI_METADATA.get(node_type, {}))
+        ui["field_guidance"] = {
+            "purpose": "Describe this step in language your team will recognize.",
+            "tools": "Choose only the capabilities this step is allowed to call.",
+            "branches": "Connect every named outcome before running the workflow.",
+        }
+        metadata["ui"] = ui
+    return catalog
 
 
 def get_node_type_metadata(node_type: str) -> Dict[str, Any]:

@@ -56,8 +56,9 @@ async def create_run(
     user_id: Optional[str] = None,
     checkpoint_thread_id: Optional[str] = None,
     running_status: str = "running",
+    run_metadata_json: Optional[Dict[str, Any]] = None,
 ) -> AgentRun:
-    run_metadata: Dict[str, Any] = {}
+    run_metadata: Dict[str, Any] = dict(run_metadata_json or {})
     if workflow_version_id is not None:
         run_metadata["workflow_version_id"] = workflow_version_id
     if workflow_version is not None:

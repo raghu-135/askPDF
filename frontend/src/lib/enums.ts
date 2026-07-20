@@ -56,6 +56,7 @@ export const AgentRunStatus = {
   Failed: 'failed',
   Rejected: 'rejected',
   Expired: 'expired',
+  Cancelled: 'cancelled',
 } as const;
 export type AgentRunStatus = typeof AgentRunStatus[keyof typeof AgentRunStatus];
 

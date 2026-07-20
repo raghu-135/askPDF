@@ -5804,7 +5804,7 @@ class TestAgentWorkflowApi:
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["schema_version"] == 1
+        assert payload["schema_version"] == 2
         assert payload["spec_schema_version"] == 2
         assert payload["graph_spec"]["requires_explicit_route_fn"] is True
         assert payload["graph_spec"]["reserved_node_ids"] == ["START", "END"]
@@ -5820,10 +5820,14 @@ class TestAgentWorkflowApi:
         assert node_catalog["retrieval_worker"]["max_instances"] >= 1
         assert "implementation" not in node_catalog["retrieval_worker"]
         assert "callable" not in node_catalog["retrieval_worker"]
+        assert node_catalog["retrieval_worker"]["ui"]["summary"]
+        assert node_catalog["retrieval_worker"]["ui"]["use_when"]
+        assert node_catalog["retrieval_worker"]["ui"]["field_guidance"]["tools"]
 
         route_functions = payload["route_functions"]
         assert route_functions["router_route"]["allowed_source_types"] == ["router"]
         assert "document" in route_functions["router_route"]["route_labels"]
+        assert route_functions["router_route"]["route_options"]["document"]["display_name"]
         assert route_functions["planner_route"]["route_labels"] == ["execute", "direct", "clarify"]
         assert route_functions["evaluator_route"]["allowed_source_types"] == ["evidence_evaluator"]
         assert route_functions["hitl_gate_route"]["route_labels"] is None
@@ -5837,6 +5841,33 @@ class TestAgentWorkflowApi:
         assert "allowed_caller_nodes" not in document_contract
         assert "default_prompt" not in document_contract
         assert "tool_name" not in document_contract
+
+    def test_builder_test_stream_requires_external_tool_confirmation(self, api_client, sample_thread):
+        api_client.get("/api/agent-workflows")
+        response = api_client.post(
+            "/api/internal/agent-workflows/test-runs/stream",
+            json={
+                "builder_session_id": "builder-session-confirmation",
+                "base_workflow_id": ROUTER_RAG_AGENT_ID,
+                "spec": builtin_router_rag_v2_spec(),
+                "thread_id": sample_thread.id,
+                "question": "What changed today?",
+                "llm_model": "test-model",
+                "use_web_search": True,
+                "allow_external_tools": False,
+            },
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "external_tool_confirmation_required"
+
+    def test_builder_latest_test_returns_not_found_for_new_session(self, api_client):
+        response = api_client.get(
+            "/api/internal/agent-workflows/test-runs/latest",
+            params={"builder_session_id": "builder-session-with-no-runs"},
+        )
+
+        assert response.status_code == 404
 
     def test_internal_thread_agent_workflow_selection_endpoint_is_removed(self, api_client, sample_thread):
         response = api_client.post(
@@ -5873,6 +5904,8 @@ class TestAgentWorkflowApi:
         assert invalid.status_code == 200
         invalid_payload = invalid.json()
         assert invalid_payload["valid"] is False
+        assert invalid_payload["issues"]
+        assert all({"code", "severity", "message"} <= set(issue) for issue in invalid_payload["issues"])
         assert invalid_payload["unknown_allowed_tool_ids"] == ["mystery_tool"]
         assert "document_evidence" in invalid_payload["missing_required_tool_ids"]
         assert stale.status_code == 200

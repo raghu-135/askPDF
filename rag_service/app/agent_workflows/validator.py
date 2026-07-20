@@ -86,10 +86,12 @@ class WorkflowValidator:
                     for item in error[len(prefix):].split(",")
                     if item.strip()
                 )
+        issues = [self._structured_issue(message, spec_obj) for message in errors]
         return {
             "valid": not errors,
             "errors": errors,
             "warnings": [],
+            "issues": issues,
             "schema_version": spec_obj.get("schema_version"),
             "workflow_id": spec_obj.get("workflow_id"),
             "runtime": normalize_runtime_for_validation(spec_obj.get("runtime")),
@@ -98,6 +100,42 @@ class WorkflowValidator:
             "required_tool_ids": sorted(required_tool_ids),
             "missing_required_tool_ids": sorted(missing_required_tool_ids),
             "unknown_allowed_tool_ids": sorted(set(allowed_tool_ids) - known_tool_ids),
+        }
+
+    @staticmethod
+    def _structured_issue(message: str, spec: Dict[str, Any]) -> Dict[str, Any]:
+        graph = ((spec.get("config") or {}).get("graph") or {}) if isinstance(spec, dict) else {}
+        node_ids = {
+            str(node.get("id"))
+            for node in graph.get("nodes", [])
+            if isinstance(node, dict) and node.get("id")
+        }
+        node_id = next((node_id for node_id in node_ids if node_id in message), None)
+        lowered = message.lower()
+        code = (
+            "missing_start" if "start" in lowered and ("missing" in lowered or "must" in lowered)
+            else "missing_end" if "end" in lowered and ("missing" in lowered or "must" in lowered)
+            else "incompatible_connection" if "cannot connect" in lowered
+            else "unreachable_node" if "unreachable" in lowered
+            else "missing_route" if "route" in lowered and "missing" in lowered
+            else "invalid_workflow"
+        )
+        fix = None
+        if code in {"missing_start", "missing_end", "unreachable_node", "incompatible_connection", "missing_route"}:
+            fix = {
+                "kind": code,
+                **({"node_id": node_id} if node_id else {}),
+                **({"requires_confirmation": True} if code in {"unreachable_node", "missing_route"} else {}),
+            }
+        return {
+            "code": code,
+            "severity": "error",
+            "message": message,
+            "node_id": node_id,
+            "edge_index": None,
+            "route": None,
+            "allowed_alternatives": [],
+            "fix": fix,
         }
 
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.agent.tool_registry import tool_contracts_by_id
@@ -26,7 +28,19 @@ from app.agent_workflows.workflow_runtime import (
     with_default_runtime,
     workflow_supports_replans,
 )
-from app.db import get_thread, get_thread_settings
+from app.agent_workflows.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
+from app.agent_workflows.compiler import WorkflowCompiler
+from app.agent_workflows.studio_runtime import (
+    RUN_KIND as BUILDER_TEST_RUN_KIND,
+    delete_previous_builder_tests,
+    latest_builder_test,
+    request_builder_test_cancel,
+    spec_fingerprint,
+    stream_builder_test,
+)
+from app.db import AgentRunStatus, get_thread, get_thread_settings
+from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
+from app.models.requests import ThreadChatRequest
 from app.time_utils import iso_utc_z
 
 
@@ -57,6 +71,27 @@ class AgentRunResumeRequest(BaseModel):
     resume_token: Optional[str] = None
     resume_version: Optional[int] = None
     thread_id: str = Field(..., min_length=1)
+
+
+class BuilderTestRunRequest(ThreadChatRequest):
+    builder_session_id: str = Field(..., min_length=1, max_length=200)
+    base_workflow_id: str = Field(..., min_length=1)
+    spec: Dict[str, Any] = Field(default_factory=dict)
+    allow_external_tools: bool = False
+
+
+class BuilderTestRunResumeRequest(AgentRunResumeRequest):
+    llm_model: str = Field(..., min_length=1)
+    use_web_search: bool = False
+    use_reranker: Optional[bool] = True
+    context_window: int = DEFAULT_TOKEN_BUDGET
+    replans: Optional[int] = None
+    system_role_override: Optional[str] = None
+    tool_instructions_override: Optional[Dict[str, str]] = None
+    custom_instructions_override: Optional[str] = None
+    client_timezone: Optional[str] = None
+    client_locale: Optional[str] = None
+    client_now_iso: Optional[str] = None
 
 
 def _workflow_payload(workflow) -> Dict[str, Any]:
@@ -155,8 +190,16 @@ def _run_payload(run, turns=None) -> Dict[str, Any]:
         "error_json": run.error_json,
         "metrics_json": run.metrics_json,
         "debug": _debug_payload_for_response(run),
+        "run_kind": (run.run_metadata_json or {}).get("run_kind"),
+        "builder_session_id": (run.run_metadata_json or {}).get("builder_session_id"),
     }
     return payload
+
+
+def _sse(event: Dict[str, Any], sequence: int) -> str:
+    name = str(event.get("event") or "message")
+    payload = {"id": sequence, "event": name, "data": event.get("data") or {}}
+    return f"id: {sequence}\nevent: {name}\ndata: {json.dumps(payload, default=str)}\n\n"
 
 
 def _run_summary_payload(run) -> Dict[str, Any]:
@@ -268,6 +311,149 @@ async def validate_agent_workflow(req: WorkflowValidationRequest):
     return validator.report(req.spec)
 
 
+@router.post("/internal/agent-workflows/test-runs/stream")
+async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
+    thread = await get_thread(req.thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    workflow = await AgentWorkflowRepository().get_workflow(req.base_workflow_id, include_custom=True)
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Base agent workflow not found")
+    if req.use_web_search and not req.allow_external_tools:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "external_tool_confirmation_required", "message": "Confirm external tool calls before testing with web search."},
+        )
+    try:
+        candidate = dict(req.spec)
+        WorkflowValidator().validate(candidate)
+        resolved = WorkflowCompiler().materialize_spec(candidate)
+    except WorkflowValidationError as exc:
+        raise HTTPException(status_code=400, detail={"code": "invalid_test_workflow", "message": str(exc)}) from exc
+
+    repo = AgentWorkflowRepository()
+    run = await repo.create_run(
+        thread_id=req.thread_id,
+        workflow_id=req.base_workflow_id,
+        resolved_spec_json=resolved,
+        run_metadata_json={
+            "run_kind": BUILDER_TEST_RUN_KIND,
+            "builder_session_id": req.builder_session_id,
+            "base_workflow_id": req.base_workflow_id,
+            "spec_fingerprint": spec_fingerprint(resolved),
+        },
+    )
+
+    async def events():
+        sequence = 0
+        async with open_agent_checkpointer() as checkpointer:
+            previous_checkpoint_ids = await delete_previous_builder_tests(req.builder_session_id, keep_run_id=run.id)
+            if previous_checkpoint_ids:
+                try:
+                    await delete_agent_checkpoints(previous_checkpoint_ids, checkpointer=checkpointer)
+                except Exception:
+                    pass
+            try:
+                async for event in stream_builder_test(
+                    run=run,
+                    request=req,
+                    embedding_model=thread.embedding_model,
+                    checkpointer=checkpointer,
+                ):
+                    sequence += 1
+                    yield _sse(event, sequence)
+            finally:
+                stored_run = await AgentWorkflowRepository().get_run(run.id)
+                if stored_run is not None and stored_run.status != AgentRunStatus.AWAITING_HUMAN.value:
+                    try:
+                        await delete_agent_checkpoints([str(stored_run.checkpoint_thread_id or stored_run.id)], checkpointer=checkpointer)
+                    except Exception:
+                        pass
+                latest = await latest_builder_test(req.builder_session_id)
+                if latest is not None and latest.id != run.id:
+                    stale_checkpoint_ids = await delete_previous_builder_tests(req.builder_session_id, keep_run_id=latest.id)
+                    if stale_checkpoint_ids:
+                        try:
+                            await delete_agent_checkpoints(stale_checkpoint_ids, checkpointer=checkpointer)
+                        except Exception:
+                            pass
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.get("/internal/agent-workflows/test-runs/latest")
+async def get_latest_internal_agent_workflow_test(
+    builder_session_id: str = Query(..., min_length=1),
+    base_workflow_id: Optional[str] = Query(None),
+):
+    run = await latest_builder_test(builder_session_id, base_workflow_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Builder test run not found")
+    turns = await AgentWorkflowRepository().list_chat_turns_for_run(run.id)
+    return {"agent_run": _run_payload(run, turns)}
+
+
+@router.post("/internal/agent-workflows/test-runs/{run_id}/cancel")
+async def cancel_internal_agent_workflow_test(run_id: str):
+    run = await request_builder_test_cancel(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Builder test run not found")
+    return {"status": "cancel_requested", "run_id": run.id}
+
+
+@router.post("/internal/agent-workflows/test-runs/{run_id}/resume/stream")
+async def resume_internal_agent_workflow_test(run_id: str, req: BuilderTestRunResumeRequest):
+    thread = await get_thread(req.thread_id)
+    if not thread:
+        raise HTTPException(status_code=404, detail="Builder test run not found")
+    repo = AgentWorkflowRepository()
+    run = await repo.get_run(run_id)
+    if run is None or run.thread_id != req.thread_id or (run.run_metadata_json or {}).get("run_kind") != BUILDER_TEST_RUN_KIND:
+        raise HTTPException(status_code=404, detail="Builder test run not found")
+    try:
+        resolution = await repo.resolve_pending_interrupt(
+            run_id,
+            interrupt_id=req.interrupt_id,
+            action=req.action,
+            edited_payload=req.edited_payload,
+            client_metadata=req.client_metadata,
+            selected_option_ids=req.selected_option_ids,
+            resume_token=req.resume_token,
+            resume_version=req.resume_version,
+            expected_thread_id=req.thread_id,
+        )
+    except AgentRunInterruptError as exc:
+        raise HTTPException(status_code=exc.http_status, detail={"code": exc.code, "message": str(exc)}) from exc
+    if resolution is None:
+        raise HTTPException(status_code=404, detail="Builder test run not found")
+    decision = (resolution.interrupt or {}).get("decision") if isinstance(resolution.interrupt, dict) else None
+    if not isinstance(decision, dict):
+        raise HTTPException(status_code=409, detail="Builder test interrupt cannot be resumed")
+
+    async def events():
+        sequence = 0
+        async with open_agent_checkpointer() as checkpointer:
+            try:
+                async for event in stream_builder_test(
+                    run=resolution.run,
+                    request=req,
+                    embedding_model=thread.embedding_model,
+                    checkpointer=checkpointer,
+                    resume_decision=decision,
+                ):
+                    sequence += 1
+                    yield _sse(event, sequence)
+            finally:
+                stored_run = await AgentWorkflowRepository().get_run(run_id)
+                if stored_run is not None and stored_run.status != AgentRunStatus.AWAITING_HUMAN.value:
+                    try:
+                        await delete_agent_checkpoints([str(stored_run.checkpoint_thread_id or stored_run.id)], checkpointer=checkpointer)
+                    except Exception:
+                        pass
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @router.get("/agent-workflows/{workflow_id}")
 async def get_agent_workflow(workflow_id: str):
     repo = AgentWorkflowRepository()
@@ -329,7 +515,7 @@ async def delete_internal_agent_workflow(workflow_id: str):
 @router.get("/internal/agent-workflows/catalog")
 async def get_internal_agent_workflow_catalog():
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "spec_schema_version": 2,
         "graph_spec": {
             "required_schema_version": 2,

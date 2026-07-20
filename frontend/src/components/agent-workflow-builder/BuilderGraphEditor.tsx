@@ -1,27 +1,20 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import AddIcon from '@mui/icons-material/Add';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import {
   Box,
-  Button,
   Chip,
-  Divider,
-  FormControl,
-  InputLabel,
-  MenuItem,
-  Select,
+  IconButton,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/material';
-import type { SelectChangeEvent } from '@mui/material/Select';
-import dynamic from 'next/dynamic';
 import type { AgentWorkflowCatalogResponse } from '../../lib/api';
-import type { AgentGraphSelection } from '../agent-graph/agent-graph-types';
 import type { AgentWorkflowBuilderState, BuilderEdgeState } from '../../lib/agent-workflow-builder';
-import { assembleAgentWorkflowSpec, canConnectNodes } from '../../lib/agent-workflow-builder';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
-
-const AgentGraphCanvas = dynamic(() => import('../agent-graph/AgentGraphCanvas'), { ssr: false });
+import WorkflowBuilderCanvas from './WorkflowBuilderCanvas';
+import BuilderResizeHandle from './BuilderResizeHandle';
 
 const edgeLabel = (edge: BuilderEdgeState) => {
   if (edge.conditional) {
@@ -33,13 +26,6 @@ const edgeLabel = (edge: BuilderEdgeState) => {
   return `${edge.from} -> ${edge.to}`;
 };
 
-const edgeMatches = (candidate: BuilderEdgeState, raw: Record<string, any>) => (
-  candidate.from === raw.from
-  && candidate.to === raw.to
-  && Boolean(candidate.conditional) === Boolean(raw.conditional)
-  && JSON.stringify(candidate.routes || {}) === JSON.stringify(raw.routes || {})
-);
-
 export default function BuilderGraphEditor({
   catalog,
   state,
@@ -47,8 +33,20 @@ export default function BuilderGraphEditor({
   validationIssues,
   disabled,
   onSelectionChange,
-  onAddEdge,
+  onConnectNodes,
+  onRemoveEdge,
+  onRemoveNode,
   onNodePositionChange,
+  onAddNodeAt,
+  onRequestAddPrevious,
+  onRequestAddNext,
+  onUpdateNote,
+  onRemoveNote,
+  onPositionsChange,
+  graphElementsHeight,
+  graphElementsCollapsed,
+  onGraphElementsHeightChange,
+  onGraphElementsCollapsedChange,
 }: {
   catalog: AgentWorkflowCatalogResponse;
   state: AgentWorkflowBuilderState;
@@ -56,13 +54,37 @@ export default function BuilderGraphEditor({
   validationIssues: BuilderValidationIssue[];
   disabled?: boolean;
   onSelectionChange: (selection: BuilderSelection) => void;
-  onAddEdge: (edge: BuilderEdgeState) => void;
+  onConnectNodes: (source: string, target: string, route?: string) => void;
+  onRemoveEdge: (index: number, route?: string) => void;
+  onRemoveNode: (id: string) => void;
   onNodePositionChange: (nodeId: string, position: { x: number; y: number }) => void;
+  onAddNodeAt: (nodeType: string, position: { x: number; y: number }) => void;
+  onRequestAddPrevious: (target: string) => void;
+  onRequestAddNext: (source: string, route?: string) => void;
+  onUpdateNote: (id: string, position: { x: number; y: number }) => void;
+  onRemoveNote: (id: string) => void;
+  onPositionsChange: (positions: Record<string, { x: number; y: number }>) => void;
+  graphElementsHeight: number;
+  graphElementsCollapsed: boolean;
+  onGraphElementsHeightChange: (height: number) => void;
+  onGraphElementsCollapsedChange: (collapsed: boolean) => void;
 }) {
-  const [source, setSource] = useState('START');
-  const [target, setTarget] = useState(state.nodes[0]?.id || 'END');
-  const spec = useMemo(() => assembleAgentWorkflowSpec(state), [state]);
-  const compatibility = canConnectNodes(catalog, state, source, target);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const [editorHeight, setEditorHeight] = useState(800);
+  const graphElementsMaxHeight = Math.max(72, Math.min(320, Math.floor(editorHeight * 0.38), editorHeight - 288));
+
+  useEffect(() => {
+    const element = editorRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => setEditorHeight(entry.contentRect.height));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (graphElementsHeight > graphElementsMaxHeight) onGraphElementsHeightChange(graphElementsMaxHeight);
+  }, [graphElementsHeight, graphElementsMaxHeight, onGraphElementsHeightChange]);
+
   const issueCountForSelection = useCallback((targetSelection: BuilderSelection) => (
     validationIssues.filter((issue) => {
       if (!issue.selection || !targetSelection || issue.selection.kind !== targetSelection.kind) return false;
@@ -76,53 +98,70 @@ export default function BuilderGraphEditor({
     }).length
   ), [validationIssues]);
 
-  const handleGraphSelection = useCallback((graphSelection: AgentGraphSelection) => {
-    if (!graphSelection) {
-      onSelectionChange(null);
-      return;
-    }
-    if (graphSelection.kind === 'node') {
-      onSelectionChange({ kind: 'node', nodeId: graphSelection.node.id });
-      return;
-    }
-    const raw = graphSelection.edge.raw || {};
-    const edgeIndex = (spec.config.graph?.edges || []).findIndex((edge) => edgeMatches(edge as BuilderEdgeState, raw));
-    if (edgeIndex >= 0) {
-      onSelectionChange({ kind: 'edge', edgeIndex });
-    }
-  }, [onSelectionChange, spec.config.graph?.edges]);
-
-  const handleAddEdge = () => {
-    if (!compatibility.ok) return;
-    onAddEdge({ from: source, to: target });
-  };
-
   return (
-    <Box sx={{ display: 'grid', gridTemplateRows: 'minmax(0, 1fr) auto', gap: 1, minHeight: 0 }}>
-      <Box sx={{ minHeight: 0 }}>
-        <AgentGraphCanvas
-          resolvedSpec={spec}
-          nodeCatalog={catalog.node_catalog}
-          mode="builder"
-          showInspector={false}
-          onSelectionChange={handleGraphSelection}
-          onNodePositionChange={disabled ? undefined : onNodePositionChange}
+    <Box
+      ref={editorRef}
+      sx={{
+        display: 'grid',
+        gridTemplateRows: `minmax(280px, 1fr) 8px ${graphElementsCollapsed ? 42 : graphElementsHeight}px`,
+        minHeight: 400,
+        height: '100%',
+        flex: '1 1 400px',
+        overflow: 'hidden',
+      }}
+    >
+      <Box sx={{ minHeight: 280, border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+        <WorkflowBuilderCanvas
+          catalog={catalog}
+          state={state}
+          selection={selection}
+          issues={validationIssues}
+          disabled={disabled}
+          onSelectionChange={onSelectionChange}
+          onConnectNodes={onConnectNodes}
+          onRemoveEdge={onRemoveEdge}
+          onRemoveNode={onRemoveNode}
+          onNodePositionChange={onNodePositionChange}
+          onAddNodeAt={onAddNodeAt}
+          onRequestAddPrevious={onRequestAddPrevious}
+          onRequestAddNext={onRequestAddNext}
+          onUpdateNote={onUpdateNote}
+          onRemoveNote={onRemoveNote}
+          onPositionsChange={onPositionsChange}
         />
       </Box>
-      <Box
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 1fr) minmax(280px, 360px)' },
-          gap: 1,
-          minHeight: 0,
+      <BuilderResizeHandle
+        orientation="horizontal"
+        value={graphElementsHeight}
+        min={72}
+        max={graphElementsMaxHeight}
+        defaultValue={104}
+        direction={-1}
+        label="Resize Graph Elements panel"
+        onChange={(height) => {
+          onGraphElementsCollapsedChange(false);
+          onGraphElementsHeightChange(height);
         }}
-      >
-        <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1, minWidth: 0 }}>
+      />
+      <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, minWidth: 0, overflow: 'hidden', bgcolor: 'background.paper' }}>
+        <Box sx={{ height: 40, px: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: graphElementsCollapsed ? 0 : 1, borderColor: 'divider' }}>
           <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontWeight: 700 }}>
             <AccountTreeIcon fontSize="small" /> Graph Elements
+            <Chip size="small" variant="outlined" label={`${state.nodes.length} nodes · ${state.edges.length} edges`} sx={{ height: 21 }} />
           </Typography>
-          <Divider sx={{ my: 1 }} />
-          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', rowGap: 0.75 }}>
+          <Tooltip title={graphElementsCollapsed ? 'Expand Graph Elements' : 'Collapse Graph Elements'}>
+            <IconButton
+              size="small"
+              aria-label={graphElementsCollapsed ? 'Expand Graph Elements' : 'Collapse Graph Elements'}
+              onClick={() => onGraphElementsCollapsedChange(!graphElementsCollapsed)}
+            >
+              {graphElementsCollapsed ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+            </IconButton>
+          </Tooltip>
+        </Box>
+        {!graphElementsCollapsed ? (
+          <Box sx={{ height: 'calc(100% - 40px)', overflow: 'auto', px: 1, py: 0.75 }}>
+          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'nowrap', alignItems: 'center', minWidth: 'max-content' }}>
             {state.nodes.map((node) => (
               <Box key={node.id} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35 }}>
                 <Chip
@@ -138,7 +177,7 @@ export default function BuilderGraphEditor({
               </Box>
             ))}
           </Stack>
-          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', rowGap: 0.75, mt: 1 }}>
+          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'nowrap', alignItems: 'center', minWidth: 'max-content', mt: 0.75 }}>
             {state.edges.map((edge, index) => (
               <Box key={`${edge.from}-${edge.to || 'routes'}-${index}`} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35 }}>
                 <Chip
@@ -154,61 +193,8 @@ export default function BuilderGraphEditor({
               </Box>
             ))}
           </Stack>
-        </Box>
-        <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}>
-          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-            Add Sequential Edge
-          </Typography>
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 1, mt: 1, alignItems: 'center' }}>
-            <FormControl size="small" disabled={disabled}>
-              <InputLabel id="builder-edge-source-label">Source</InputLabel>
-              <Select
-                labelId="builder-edge-source-label"
-                label="Source"
-                value={source}
-                onChange={(event: SelectChangeEvent) => setSource(event.target.value)}
-              >
-                <MenuItem value="START">START</MenuItem>
-                {state.nodes.map((node) => (
-                  <MenuItem key={node.id} value={node.id}>{node.id}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <FormControl size="small" disabled={disabled}>
-              <InputLabel id="builder-edge-target-label">Target</InputLabel>
-              <Select
-                labelId="builder-edge-target-label"
-                label="Target"
-                value={target}
-                onChange={(event: SelectChangeEvent) => setTarget(event.target.value)}
-              >
-                {state.nodes.map((node) => (
-                  <MenuItem key={node.id} value={node.id}>{node.id}</MenuItem>
-                ))}
-                <MenuItem value="END">END</MenuItem>
-              </Select>
-            </FormControl>
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={<AddIcon />}
-              disabled={disabled || !compatibility.ok}
-              onClick={handleAddEdge}
-              sx={{ borderRadius: 1, whiteSpace: 'nowrap' }}
-            >
-              Add
-            </Button>
           </Box>
-          {disabled ? (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
-              Authoring is disabled; graph edits are read-only.
-            </Typography>
-          ) : !compatibility.ok ? (
-            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.75 }}>
-              {compatibility.reason}
-            </Typography>
-          ) : null}
-        </Box>
+        ) : null}
       </Box>
     </Box>
   );

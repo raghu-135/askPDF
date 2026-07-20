@@ -3,6 +3,9 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import UndoIcon from '@mui/icons-material/Undo';
+import RedoIcon from '@mui/icons-material/Redo';
+import SaveIcon from '@mui/icons-material/Save';
 import {
   Box,
   Button,
@@ -27,6 +30,15 @@ export default function BuilderActionsBar({
   onValidate,
   validating,
   validation,
+  dirty,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+  onOpenSave,
+  saveBusy,
+  savedWorkflowId,
+  workflowName,
 }: {
   starter: string;
   customWorkflows?: AgentWorkflow[];
@@ -36,6 +48,15 @@ export default function BuilderActionsBar({
   onValidate: () => void;
   validating: boolean;
   validation: AgentWorkflowValidationReport | null;
+  dirty?: boolean;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onOpenSave: () => void;
+  saveBusy?: boolean;
+  savedWorkflowId?: string;
+  workflowName?: string;
 }) {
   const validationChip = validation ? (
     <Chip
@@ -67,7 +88,7 @@ export default function BuilderActionsBar({
           Agent Workflow Builder
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          Internal graph authoring surface
+          Build, connect, validate, and test an agent workflow {dirty ? '· Unsaved changes' : '· Saved'}
         </Typography>
       </Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
@@ -91,6 +112,8 @@ export default function BuilderActionsBar({
             ))}
           </Select>
         </FormControl>
+        <Button size="small" startIcon={<UndoIcon />} onClick={onUndo} disabled={disabled || !canUndo}>Undo</Button>
+        <Button size="small" startIcon={<RedoIcon />} onClick={onRedo} disabled={disabled || !canRedo}>Redo</Button>
         <Button
           size="small"
           variant="outlined"
@@ -103,13 +126,31 @@ export default function BuilderActionsBar({
         </Button>
         <Button
           size="small"
-          variant="contained"
+          variant="outlined"
           startIcon={<PlayArrowIcon />}
           onClick={onValidate}
           disabled={validating}
           sx={{ borderRadius: 1 }}
         >
           {validating ? 'Validating' : 'Validate'}
+        </Button>
+        <Box sx={{ minWidth: 0, display: { xs: 'none', sm: 'block' }, maxWidth: 180 }}>
+          <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }} noWrap>
+            {workflowName || 'Untitled workflow'}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }} noWrap>
+            {savedWorkflowId ? `Saved · ${savedWorkflowId}` : dirty ? 'Unsaved changes' : 'Not saved yet'}
+          </Typography>
+        </Box>
+        <Button
+          size="small"
+          variant="contained"
+          startIcon={<SaveIcon />}
+          onClick={onOpenSave}
+          disabled={disabled || saveBusy}
+          sx={{ borderRadius: 1 }}
+        >
+          {saveBusy ? 'Saving' : 'Save'}
         </Button>
       </Box>
     </Box>

@@ -144,10 +144,32 @@ class NodeRegistry:
                 capabilities=capabilities,
                 visit_index=visit_index,
             )
-            if node_type == WorkflowNodeType.HITL_GATE.value:
-                update = await self.hitl_gate(state, runtime_config, node_id=node_id)
-            else:
-                update = await node_impl(state, runtime_config)
+            queue = ((runtime_config.get("configurable") or {}).get("studio_event_queue"))
+            if queue is not None:
+                await queue.put({"event": "node.started", "data": {"node_id": node_id, "node_type": node_type, "visit_index": visit_index}})
+            try:
+                if node_type == WorkflowNodeType.HITL_GATE.value:
+                    update = await self.hitl_gate(state, runtime_config, node_id=node_id)
+                else:
+                    update = await node_impl(state, runtime_config)
+            except Exception as exc:
+                if queue is not None:
+                    await queue.put({"event": "node.failed", "data": {"node_id": node_id, "node_type": node_type, "visit_index": visit_index, "error": str(exc)}})
+                raise
+            if queue is not None:
+                latest_node_event = (update.get("node_events") or [{}])[-1] if isinstance(update.get("node_events"), list) and update.get("node_events") else {}
+                event_name = "node.skipped" if latest_node_event.get("status") == NodeEventStatus.SKIPPED.value else "node.completed"
+                await queue.put({
+                    "event": event_name,
+                    "data": {
+                        "node_id": node_id,
+                        "node_type": node_type,
+                        "visit_index": visit_index,
+                        "route": update.get("route"),
+                        "evaluator_route": update.get("evaluator_route"),
+                        "output_preview": latest_node_event.get("output_preview"),
+                    },
+                })
             return _with_visit_accounting(
                 update,
                 state,

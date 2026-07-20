@@ -266,6 +266,7 @@ class AgentWorkflowRepository:
         resolved_spec_json: Dict[str, Any],
         user_id: Optional[str] = None,
         checkpoint_thread_id: Optional[str] = None,
+        run_metadata_json: Optional[Dict[str, Any]] = None,
     ) -> AgentRun:
         session = await self._get_session()
         return await run_store_create_run(
@@ -278,6 +279,7 @@ class AgentWorkflowRepository:
             user_id=user_id,
             checkpoint_thread_id=checkpoint_thread_id,
             running_status=RUN_STATUS_RUNNING,
+            run_metadata_json=run_metadata_json,
         )
 
     async def mark_run_awaiting_human(

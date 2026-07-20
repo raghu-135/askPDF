@@ -41,6 +41,7 @@ export interface BuilderEdgeState {
 export interface AgentWorkflowBuilderState {
   name?: string;
   description?: string;
+  workflowId?: string;
   workflowType: string;
   nodes: BuilderNodeState[];
   edges: BuilderEdgeState[];
@@ -50,11 +51,24 @@ export interface AgentWorkflowBuilderState {
   hitl_policy?: Record<string, any>;
   runtime?: Record<string, any>;
   extraConfig?: Record<string, any>;
+  builder_ui?: {
+    notes?: { id: string; text: string; position: { x: number; y: number } }[];
+    groups?: { id: string; label: string; node_ids: string[]; position?: { x: number; y: number } }[];
+  };
 }
 
 export interface CompatibilityResult {
   ok: boolean;
   reason?: string;
+}
+
+export interface BuilderIncomingPath {
+  id: string;
+  edgeIndex: number;
+  source: string;
+  target: string;
+  route?: string;
+  conditional: boolean;
 }
 
 const ROUTE_FUNCTION_BY_NODE_TYPE: Record<string, string> = {
@@ -227,6 +241,165 @@ export function getCompatibleSourceNodes(
   return state.nodes.filter((node) => canConnectNodes(catalog, state, node.id, targetId).ok);
 }
 
+export function getIncomingPaths(
+  state: AgentWorkflowBuilderState,
+  targetId: string,
+): BuilderIncomingPath[] {
+  return state.edges.flatMap((edge, edgeIndex): BuilderIncomingPath[] => {
+    if (edge.conditional) {
+      return Object.entries(edge.routes || {})
+        .filter(([, target]) => target === targetId)
+        .map(([route]) => ({
+          id: `${edgeIndex}:${edge.from}:${route}:${targetId}`,
+          edgeIndex,
+          source: edge.from,
+          target: targetId,
+          route,
+          conditional: true,
+        }));
+    }
+    return edge.to === targetId ? [{
+      id: `${edgeIndex}:${edge.from}:${targetId}`,
+      edgeIndex,
+      source: edge.from,
+      target: targetId,
+      conditional: false,
+    }] : [];
+  });
+}
+
+export function isIsolatedBuilderNode(state: AgentWorkflowBuilderState, nodeId: string): boolean {
+  return !state.edges.some((edge) => (
+    edge.from === nodeId
+    || edge.to === nodeId
+    || Object.values(edge.routes || {}).includes(nodeId)
+  ));
+}
+
+export function wouldCreateBuilderCycle(
+  state: AgentWorkflowBuilderState,
+  sourceId: string,
+  targetId: string,
+): boolean {
+  const adjacency = new Map<string, Set<string>>();
+  state.edges.forEach((edge) => {
+    const targets = edge.conditional ? Object.values(edge.routes || {}) : edge.to ? [edge.to] : [];
+    targets.forEach((target) => {
+      adjacency.set(edge.from, new Set([...(adjacency.get(edge.from) || []), target]));
+    });
+  });
+  const pending = [targetId];
+  const seen = new Set<string>();
+  while (pending.length) {
+    const current = pending.pop()!;
+    if (current === sourceId) return true;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    pending.push(...(adjacency.get(current) || []));
+  }
+  return false;
+}
+
+const canConnectTypeToTarget = (
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  sourceType: string,
+  targetId: string,
+): CompatibilityResult => {
+  if (targetId === 'END') {
+    return (catalogEntry(catalog, sourceType)?.allowed_child_types || []).includes('END')
+      ? { ok: true }
+      : { ok: false, reason: `${sourceType} cannot end the graph.` };
+  }
+  return canConnectNodeTypes(catalog, sourceType, getNode(state, targetId)?.type);
+};
+
+const canConnectSourceToType = (
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  sourceId: string,
+  targetType: string,
+): CompatibilityResult => {
+  if (sourceId === 'START') {
+    return (catalogEntry(catalog, targetType)?.allowed_parent_types || []).includes('START')
+      ? { ok: true }
+      : { ok: false, reason: `${targetType} cannot start the graph.` };
+  }
+  return canConnectNodeTypes(catalog, getNode(state, sourceId)?.type, targetType);
+};
+
+export function canInsertNodeTypeBefore(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  targetId: string,
+  nodeType: string,
+  incomingPath?: BuilderIncomingPath,
+): CompatibilityResult {
+  const available = canAddNodeType(catalog, state, nodeType);
+  if (!available.ok) return available;
+  if (getAllowedRouteFunctionsForNode(catalog, nodeType).length > 0) {
+    return { ok: false, reason: `${nodeType} needs named outgoing routes and cannot be inserted as a simple previous step.` };
+  }
+  if (incomingPath) {
+    const before = canConnectSourceToType(catalog, state, incomingPath.source, nodeType);
+    if (!before.ok) return before;
+  }
+  return canConnectTypeToTarget(catalog, state, nodeType, targetId);
+}
+
+export function canInsertExistingNodeBefore(
+  catalog: AgentWorkflowCatalogResponse,
+  state: AgentWorkflowBuilderState,
+  targetId: string,
+  nodeId: string,
+  incomingPath?: BuilderIncomingPath,
+): CompatibilityResult {
+  const node = getNode(state, nodeId);
+  if (!node) return { ok: false, reason: `Unknown node: ${nodeId}` };
+  if (!isIsolatedBuilderNode(state, nodeId)) {
+    return { ok: false, reason: 'Only unconnected nodes can be inserted without changing other paths.' };
+  }
+  if (nodeId === targetId || nodeId === incomingPath?.source) {
+    return { ok: false, reason: 'A path cannot be inserted through itself.' };
+  }
+  if (wouldCreateBuilderCycle(state, nodeId, targetId)) {
+    return { ok: false, reason: 'This insertion would create a cycle.' };
+  }
+  if (getAllowedRouteFunctionsForNode(catalog, node.type).length > 0) {
+    return { ok: false, reason: `${node.type} needs named outgoing routes and cannot be inserted as a simple previous step.` };
+  }
+  if (incomingPath) {
+    const before = canConnectNodes(catalog, state, incomingPath.source, nodeId);
+    if (!before.ok) return before;
+  }
+  return canConnectNodes(catalog, state, nodeId, targetId);
+}
+
+export function insertNodeBefore(
+  state: AgentWorkflowBuilderState,
+  targetId: string,
+  node: BuilderNodeState,
+  incomingPath?: BuilderIncomingPath,
+  addNode = true,
+): AgentWorkflowBuilderState {
+  const edges = state.edges.map((edge, edgeIndex) => {
+    if (!incomingPath || edgeIndex !== incomingPath.edgeIndex) return edge;
+    if (incomingPath.conditional && incomingPath.route) {
+      return {
+        ...edge,
+        routes: { ...(edge.routes || {}), [incomingPath.route]: node.id },
+      };
+    }
+    return { ...edge, to: node.id };
+  });
+  const hasTail = edges.some((edge) => !edge.conditional && edge.from === node.id && edge.to === targetId);
+  return {
+    ...state,
+    nodes: addNode ? [...state.nodes, node] : state.nodes,
+    edges: hasTail ? edges : [...edges, { from: node.id, to: targetId }],
+  };
+}
+
 const nodeWithDefaultTools = (
   catalog: AgentWorkflowCatalogResponse,
   id: string,
@@ -247,15 +420,52 @@ const defaultContextPolicy = (catalog: AgentWorkflowCatalogResponse) => ({
   final_context_char_limit: 25536,
 });
 
-const createLoopPolicy = (nodes: BuilderNodeState[], maxTotalVisits?: number) => {
+const createLoopPolicy = (nodes: BuilderNodeState[]) => {
   const repeatableIds = nodes
     .filter((node) => REPEATABLE_NODE_TYPES.has(node.type))
     .map((node) => node.id)
     .sort();
+  const effectiveTotal = Math.max(nodes.length + repeatableIds.length, nodes.length);
   return {
-    max_total_visits: maxTotalVisits || Math.max(nodes.length + repeatableIds.length, nodes.length),
+    max_total_visits: effectiveTotal,
     default_max_node_visits: 1,
     node_visit_limits: Object.fromEntries(repeatableIds.map((nodeId) => [nodeId, 2])),
+  };
+};
+
+const normalizeLoopPolicy = (
+  nodes: BuilderNodeState[],
+  policy?: Record<string, any>,
+): Record<string, any> | undefined => {
+  if (!policy) return undefined;
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const parsedDefault = Number(policy.default_max_node_visits);
+  const defaultMax = Number.isInteger(parsedDefault) && parsedDefault > 0 ? parsedDefault : 1;
+  const nodeVisitLimits = Object.fromEntries(
+    Object.entries(
+      policy.node_visit_limits && typeof policy.node_visit_limits === 'object'
+        ? policy.node_visit_limits
+        : {},
+    ).flatMap(([nodeId, rawLimit]) => {
+      const limit = Number(rawLimit);
+      return nodeIds.has(nodeId) && Number.isInteger(limit) && limit > 0
+        ? [[nodeId, limit]]
+        : [];
+    }),
+  );
+  const effectiveTotal = nodes.reduce(
+    (total, node) => total + Number(nodeVisitLimits[node.id] || defaultMax),
+    0,
+  );
+  const parsedTotal = Number(policy.max_total_visits);
+  const requestedTotal = Number.isInteger(parsedTotal) && parsedTotal > 0
+    ? parsedTotal
+    : effectiveTotal;
+  return {
+    ...policy,
+    max_total_visits: Math.max(nodes.length, Math.min(requestedTotal, effectiveTotal)),
+    default_max_node_visits: defaultMax,
+    node_visit_limits: nodeVisitLimits,
   };
 };
 
@@ -330,7 +540,7 @@ export function createInitialBuilderState(
       ],
       allowed_tool_ids: collectAllowedToolIds(nodes),
       context_policy: defaultContextPolicy(catalog),
-      loop_policy: createLoopPolicy(nodes, 9),
+      loop_policy: createLoopPolicy(nodes),
       runtime: defaultRuntime(false, 'planner'),
     };
   }
@@ -370,7 +580,7 @@ export function createInitialBuilderState(
       ],
       allowed_tool_ids: collectAllowedToolIds(nodes),
       context_policy: defaultContextPolicy(catalog),
-      loop_policy: createLoopPolicy(nodes, 16),
+      loop_policy: createLoopPolicy(nodes),
       runtime: defaultRuntime(true, 'evaluator_replanner'),
     };
   }
@@ -400,7 +610,7 @@ export function createInitialBuilderState(
     ],
     allowed_tool_ids: collectAllowedToolIds(nodes),
     context_policy: defaultContextPolicy(catalog),
-    loop_policy: createLoopPolicy(nodes, 9),
+    loop_policy: createLoopPolicy(nodes),
     runtime: defaultRuntime(false, 'router'),
   };
 }
@@ -416,9 +626,13 @@ export function assembleAgentWorkflowSpec(
     ...(state.loop_policy ? { loop_policy: clone(state.loop_policy) } : {}),
     ...(hitlPolicy ? { hitl_policy: hitlPolicy } : {}),
     allowed_tool_ids: [...(state.allowed_tool_ids?.length ? state.allowed_tool_ids : collectAllowedToolIds(state.nodes))],
+    builder_ui: {
+      ...(state.builder_ui || {}),
+      positions: Object.fromEntries(state.nodes.filter((node) => node.position).map((node) => [node.id, node.position])),
+    },
     graph: {
       nodes: state.nodes.map((node) => {
-        const { hitl, ...rest } = node;
+        const { hitl, position, ...rest } = node;
         return clone(rest);
       }),
       edges: clone(state.edges),
@@ -427,6 +641,7 @@ export function assembleAgentWorkflowSpec(
   };
   return {
     schema_version: 2,
+    workflow_id: state.workflowId || 'custom_rag_agent',
     workflow_type: state.workflowType || 'custom_rag_agent',
     runtime: clone(state.runtime || defaultRuntime(false)),
     config,
@@ -438,13 +653,18 @@ export function loadBuilderStateFromSpec(spec: AgentWorkflowBuilderSpec | Record
   const graph = config.graph && typeof config.graph === 'object' ? config.graph as AgentWorkflowGraphSpec : {};
   const nodes = Array.isArray(graph.nodes) ? graph.nodes.map((node) => clone(node) as BuilderNodeState) : [];
   const edges = Array.isArray(graph.edges) ? graph.edges.map((edge) => clone(edge) as BuilderEdgeState) : [];
-  const knownConfigKeys = new Set(['graph', 'allowed_tool_ids', 'context_policy', 'loop_policy', 'hitl_policy']);
+  const knownConfigKeys = new Set(['graph', 'allowed_tool_ids', 'context_policy', 'loop_policy', 'hitl_policy', 'builder_ui']);
   const extraConfig = Object.fromEntries(
     Object.entries(config).filter(([key]) => !knownConfigKeys.has(key)),
   );
+  const builderUi = config.builder_ui && typeof config.builder_ui === 'object' ? clone(config.builder_ui) : {};
+  const positions = builderUi.positions && typeof builderUi.positions === 'object' ? builderUi.positions : {};
   return {
+    workflowId: typeof spec.workflow_id === 'string' && spec.workflow_id
+      ? spec.workflow_id
+      : 'custom_rag_agent',
     workflowType: typeof spec.workflow_type === 'string' ? spec.workflow_type : 'custom_rag_agent',
-    nodes,
+    nodes: nodes.map((node) => positions[node.id] ? { ...node, position: clone(positions[node.id]) } : node),
     edges,
     allowed_tool_ids: Array.isArray(config.allowed_tool_ids) ? [...config.allowed_tool_ids] : collectAllowedToolIds(nodes),
     context_policy: config.context_policy ? clone(config.context_policy) : undefined,
@@ -452,6 +672,10 @@ export function loadBuilderStateFromSpec(spec: AgentWorkflowBuilderSpec | Record
     hitl_policy: config.hitl_policy ? clone(config.hitl_policy) : undefined,
     runtime: spec.runtime && typeof spec.runtime === 'object' ? clone(spec.runtime) : defaultRuntime(false),
     extraConfig,
+    builder_ui: {
+      notes: Array.isArray(builderUi.notes) ? builderUi.notes : [],
+      groups: Array.isArray(builderUi.groups) ? builderUi.groups : [],
+    },
   };
 }
 
@@ -476,6 +700,7 @@ export function normalizeBuilderState(
   const normalized: AgentWorkflowBuilderState = {
     ...state,
     nodes,
+    loop_policy: normalizeLoopPolicy(nodes, state.loop_policy),
     edges: state.edges.filter((edge) => {
       if (edge.conditional) {
         return Boolean(edge.from && edge.route_fn && edge.routes && Object.keys(edge.routes).length > 0);

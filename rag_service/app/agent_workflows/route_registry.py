@@ -31,9 +31,33 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
 }
 
+ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
+    RouteFunctionId.ROUTER.value: {
+        RouterRoute.DOCUMENT.value: {"display_name": "Document question", "description": "Search uploaded documents.", "order": 0},
+        RouterRoute.MEMORY.value: {"display_name": "Previous conversation", "description": "Search conversation memory.", "order": 1},
+        RouterRoute.TIMELINE.value: {"display_name": "Timeline question", "description": "Search chronological thread events.", "order": 2},
+        RouterRoute.WEB.value: {"display_name": "Current information", "description": "Search approved external sources.", "order": 3},
+        RouterRoute.DIRECT.value: {"display_name": "Answer directly", "description": "Answer without retrieval.", "order": 4},
+        RouterRoute.CLARIFY.value: {"display_name": "Needs clarification", "description": "Ask the user for more detail.", "order": 5},
+    },
+    RouteFunctionId.PLANNER.value: {
+        PlannerRoute.EXECUTE.value: {"display_name": "Run the plan", "description": "Continue through planned retrieval.", "order": 0},
+        PlannerRoute.DIRECT.value: {"display_name": "Answer directly", "description": "No retrieval steps are needed.", "order": 1},
+        PlannerRoute.CLARIFY.value: {"display_name": "Needs clarification", "description": "Ask for missing information.", "order": 2},
+    },
+    RouteFunctionId.EVALUATOR.value: {
+        EvaluatorRoute.ANSWER.value: {"display_name": "Evidence is sufficient", "description": "Continue to synthesis.", "order": 0},
+        EvaluatorRoute.REPLAN.value: {"display_name": "Search again", "description": "Evidence gaps require another bounded search.", "order": 1},
+        EvaluatorRoute.ANSWER_BUDGET_EXHAUSTED.value: {"display_name": "Answer with available evidence", "description": "The replan budget is exhausted.", "order": 2},
+    },
+}
+
 
 def get_route_function_registry() -> Dict[str, Dict[str, Any]]:
-    return deepcopy(ROUTE_FUNCTION_REGISTRY)
+    registry = deepcopy(ROUTE_FUNCTION_REGISTRY)
+    for route_fn, metadata in registry.items():
+        metadata["route_options"] = deepcopy(ROUTE_UI_OPTIONS.get(route_fn, {}))
+    return registry
 
 
 def collect_route_function_registry_errors(registry: Dict[str, Dict[str, Any]] | None = None) -> list[str]:

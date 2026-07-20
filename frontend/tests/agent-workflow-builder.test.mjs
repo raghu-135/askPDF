@@ -5,14 +5,20 @@ import {
   assembleAgentWorkflowSpec,
   canAddNodeType,
   canConnectNodes,
+  canInsertExistingNodeBefore,
+  canInsertNodeTypeBefore,
   createHitlGateForTarget,
   createInitialBuilderState,
+  getIncomingPaths,
   getAllowedRouteFunctionsForNode,
   getAllowedToolContractsForNode,
   getCanonicalNodeId,
   getRouteLabelsForFunction,
+  insertNodeBefore,
+  isIsolatedBuilderNode,
   loadBuilderStateFromSpec,
   normalizeBuilderState,
+  wouldCreateBuilderCycle,
 } from '../src/lib/agent-workflow-builder.ts';
 
 const node = (overrides) => ({
@@ -197,6 +203,7 @@ test('creates a router starter spec with canonical node ids and route function m
     'finalizer',
   ]);
   assert.equal(spec.schema_version, 2);
+  assert.equal(spec.workflow_id, 'custom_rag_agent');
   assert.equal(spec.workflow_type, 'custom_rag_agent');
   assert.deepEqual(spec.config.allowed_tool_ids, ['clarify_intent', 'document_evidence', 'thread_shape']);
   assert.equal(spec.config.graph.edges.find((edge) => edge.from === 'router')?.route_fn, 'router_route');
@@ -235,7 +242,41 @@ test('loads a saved spec back into builder state and round-trips unchanged graph
 
   assert.deepEqual(roundTrip.config.graph, original.config.graph);
   assert.deepEqual(roundTrip.config.allowed_tool_ids, original.config.allowed_tool_ids);
+  assert.equal(roundTrip.workflow_id, original.workflow_id);
   assert.equal(roundTrip.config.graph.edges.find((edge) => edge.from === 'planner')?.route_fn, 'planner_route');
+});
+
+test('keeps every default starter loop budget within its per-node visit limits', () => {
+  for (const starter of ['router', 'plan_execute', 'evaluator_replanner']) {
+    const spec = assembleAgentWorkflowSpec(createInitialBuilderState(catalog, starter));
+    const nodes = spec.config.graph.nodes;
+    const policy = spec.config.loop_policy;
+    const effectiveTotal = nodes.reduce(
+      (total, item) => total + (policy.node_visit_limits[item.id] || policy.default_max_node_visits),
+      0,
+    );
+
+    assert.ok(spec.workflow_id);
+    assert.ok(policy.max_total_visits >= nodes.length);
+    assert.ok(policy.max_total_visits <= effectiveTotal);
+  }
+});
+
+test('stores canvas positions and notes as builder-only metadata', () => {
+  const state = createInitialBuilderState(catalog, 'router');
+  state.nodes[0].position = { x: 120, y: 80 };
+  state.builder_ui = {
+    notes: [{ id: 'note-1', text: 'Review this branch', position: { x: 20, y: 30 } }],
+  };
+  const spec = assembleAgentWorkflowSpec(state);
+
+  assert.equal('position' in spec.config.graph.nodes[0], false);
+  assert.deepEqual(spec.config.builder_ui.positions[state.nodes[0].id], { x: 120, y: 80 });
+  assert.equal(spec.config.graph.nodes.some((item) => item.id === 'note-1'), false);
+
+  const loaded = loadBuilderStateFromSpec(spec);
+  assert.deepEqual(loaded.nodes[0].position, { x: 120, y: 80 });
+  assert.equal(loaded.builder_ui.notes[0].text, 'Review this branch');
 });
 
 test('generates HITL gate nodes with matching conditional route and policy entries', () => {
@@ -276,4 +317,129 @@ test('normalizes unsupported node tools and over-limit node types from loaded st
   assert.equal(normalized.nodes.some((item) => item.id === 'router_2'), false);
   assert.equal(normalized.nodes.find((item) => item.id === 'retrieval_worker_2')?.tool_contract_ids, undefined);
   assert.deepEqual(normalized.allowed_tool_ids, ['clarify_intent', 'document_evidence', 'thread_shape']);
+});
+
+test('expands sequential and conditional incoming paths separately', () => {
+  const state = {
+    ...createInitialBuilderState(catalog, 'router'),
+    edges: [
+      { from: 'retrieval_worker', to: 'finalizer' },
+      {
+        from: 'router',
+        conditional: true,
+        route_fn: 'router_route',
+        routes: { document: 'finalizer', direct: 'finalizer', clarify: 'synthesizer' },
+      },
+    ],
+  };
+  const paths = getIncomingPaths(state, 'finalizer');
+
+  assert.deepEqual(paths.map((path) => [path.source, path.route]), [
+    ['retrieval_worker', undefined],
+    ['router', 'document'],
+    ['router', 'direct'],
+  ]);
+  assert.equal(new Set(paths.map((path) => path.id)).size, 3);
+});
+
+test('filters previous-step types using both sides and excludes route-producing nodes', () => {
+  const state = {
+    ...createInitialBuilderState(catalog, 'router'),
+    nodes: createInitialBuilderState(catalog, 'router').nodes.filter((item) => item.type !== 'synthesizer'),
+    edges: [{ from: 'retrieval_worker', to: 'finalizer' }],
+  };
+  const path = getIncomingPaths(state, 'finalizer')[0];
+
+  assert.equal(canInsertNodeTypeBefore(catalog, state, 'finalizer', 'synthesizer', path).ok, true);
+  assert.equal(canInsertNodeTypeBefore(catalog, state, 'finalizer', 'direct_answer', path).ok, false);
+  assert.match(canInsertNodeTypeBefore(catalog, state, 'finalizer', 'evidence_evaluator', path).reason, /named outgoing routes/);
+});
+
+test('inserts a node into one sequential path atomically', () => {
+  const state = {
+    ...createInitialBuilderState(catalog, 'router'),
+    edges: [{ from: 'retrieval_worker', to: 'finalizer' }],
+  };
+  const path = getIncomingPaths(state, 'finalizer')[0];
+  const inserted = insertNodeBefore(
+    state,
+    'finalizer',
+    { id: 'synthesizer_2', type: 'synthesizer', position: { x: 10, y: 20 } },
+    path,
+  );
+
+  assert.deepEqual(inserted.edges, [
+    { from: 'retrieval_worker', to: 'synthesizer_2' },
+    { from: 'synthesizer_2', to: 'finalizer' },
+  ]);
+  assert.deepEqual(inserted.nodes.at(-1)?.position, { x: 10, y: 20 });
+  assert.deepEqual(
+    loadBuilderStateFromSpec(assembleAgentWorkflowSpec(inserted)).edges,
+    inserted.edges,
+  );
+});
+
+test('rewires only the selected conditional route during insertion', () => {
+  const state = {
+    ...createInitialBuilderState(catalog, 'router'),
+    edges: [{
+      from: 'router',
+      conditional: true,
+      route_fn: 'router_route',
+      routes: { document: 'finalizer', direct: 'finalizer' },
+    }],
+  };
+  const path = getIncomingPaths(state, 'finalizer').find((candidate) => candidate.route === 'direct');
+  const inserted = insertNodeBefore(state, 'finalizer', { id: 'direct_answer_2', type: 'direct_answer' }, path);
+
+  assert.deepEqual(inserted.edges[0].routes, {
+    document: 'finalizer',
+    direct: 'direct_answer_2',
+  });
+  assert.deepEqual(inserted.edges[1], { from: 'direct_answer_2', to: 'finalizer' });
+});
+
+test('supports previous insertion with no incoming path and at START or END boundaries', () => {
+  const noIncoming = {
+    ...createInitialBuilderState(catalog, 'router'),
+    edges: [],
+  };
+  const detached = insertNodeBefore(noIncoming, 'router', { id: 'context_loader_2', type: 'context_loader' });
+  assert.deepEqual(detached.edges, [{ from: 'context_loader_2', to: 'router' }]);
+
+  const startState = {
+    ...noIncoming,
+    nodes: noIncoming.nodes.filter((item) => item.type !== 'context_loader'),
+    edges: [{ from: 'START', to: 'router' }],
+  };
+  const startPath = getIncomingPaths(startState, 'router')[0];
+  assert.equal(canInsertNodeTypeBefore(catalog, startState, 'router', 'context_loader', startPath).ok, true);
+
+  const endState = {
+    ...noIncoming,
+    nodes: noIncoming.nodes.filter((item) => item.type !== 'finalizer'),
+    edges: [{ from: 'retrieval_worker', to: 'END' }],
+  };
+  const endPath = getIncomingPaths(endState, 'END')[0];
+  assert.equal(canInsertNodeTypeBefore(catalog, endState, 'END', 'finalizer', endPath).ok, true);
+});
+
+test('offers only isolated existing nodes and detects paths that would form cycles', () => {
+  const base = createInitialBuilderState(catalog, 'router');
+  const state = {
+    ...base,
+    nodes: [...base.nodes, { id: 'synthesizer_2', type: 'synthesizer' }],
+    edges: [{ from: 'retrieval_worker', to: 'finalizer' }],
+  };
+  const path = getIncomingPaths(state, 'finalizer')[0];
+
+  assert.equal(isIsolatedBuilderNode(state, 'synthesizer_2'), true);
+  assert.equal(canInsertExistingNodeBefore(catalog, state, 'finalizer', 'synthesizer_2', path).ok, true);
+  assert.equal(canInsertExistingNodeBefore(catalog, state, 'finalizer', 'retrieval_worker', path).ok, false);
+
+  const cyclic = {
+    ...state,
+    edges: [{ from: 'retrieval_worker', to: 'synthesizer_2' }, { from: 'synthesizer_2', to: 'finalizer' }],
+  };
+  assert.equal(wouldCreateBuilderCycle(cyclic, 'finalizer', 'retrieval_worker'), true);
 });

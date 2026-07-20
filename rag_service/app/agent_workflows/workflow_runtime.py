@@ -39,6 +39,7 @@ ALLOWED_WORKFLOW_CONFIG_KEYS = {
     "graph",
     "context_policy",
     "loop_policy",
+    "builder_ui",
 }
 
 

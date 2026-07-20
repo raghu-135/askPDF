@@ -70,6 +70,7 @@ class AgentRunStatus(str, Enum):
     FAILED = "failed"
     REJECTED = "rejected"
     EXPIRED = "expired"
+    CANCELLED = "cancelled"
 
 
 class OperationResultStatus(str, Enum):

@@ -19,6 +19,7 @@ CHECKPOINT_PRUNABLE_RUN_STATUSES = {
     AgentRunStatus.FAILED.value,
     AgentRunStatus.REJECTED.value,
     AgentRunStatus.EXPIRED.value,
+    AgentRunStatus.CANCELLED.value,
 }
 
 
