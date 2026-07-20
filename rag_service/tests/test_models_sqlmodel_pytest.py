@@ -27,7 +27,6 @@ try:
     from app.db.enums import (
         EmbeddingReadinessStatus,
         FileStatusSection,
-        IndexingProgressStatus,
         OperationResultStatus,
         ReasoningFormat,
         ThreadCloneMode,
@@ -258,7 +257,6 @@ class TestProcessStatusEnum:
         assert EmbeddingReadinessStatus.NOT_READY.value == "not_ready"
         assert EmbeddingReadinessStatus.BLOCKED.value == "blocked"
         assert FileStatusSection.INDEXING.value == "indexing"
-        assert IndexingProgressStatus.IN_PROGRESS.value == "in_progress"
         assert ReasoningFormat.TAGGED_TEXT.value == "tagged_text"
         assert ThreadCloneMode.FROM_MESSAGE.value == "from_message"
         assert ThreadTimelineSource.WEB_CACHE.value == "web_cache"

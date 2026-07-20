@@ -102,12 +102,6 @@ class FileStatusSection(str, Enum):
     INDEXING = "indexing"
 
 
-class IndexingProgressStatus(str, Enum):
-    """High-level async indexing response statuses."""
-
-    IN_PROGRESS = "in_progress"
-
-
 class ReasoningFormat(str, Enum):
     """Stored reasoning trace formats."""
 

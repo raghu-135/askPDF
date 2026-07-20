@@ -30,7 +30,6 @@ from app.db import (
     EmbeddingReadinessStatus,
     FileSourceType,
     FileStatusSection,
-    IndexingProgressStatus,
     ProcessStatus,
     get_file,
     get_file_parsed_sentences,
@@ -58,6 +57,8 @@ from app.services.file_cleanup_service import cleanup_detached_file
 from app.time_utils import iso_utc_z, maybe_iso_utc_z
 
 router = APIRouter(tags=["files"])
+
+INDEXING_IN_PROGRESS = "in_progress"
 
 
 @router.post("/threads/{thread_id}/files/upload")
@@ -131,7 +132,7 @@ async def add_file_to_thread_endpoint(
             "thread_id": thread_id,
             "file_hash": req.file_hash,
             "file_name": req.file_name,
-            "indexing": IndexingProgressStatus.IN_PROGRESS.value,
+            "indexing": INDEXING_IN_PROGRESS,
         }
     except HTTPException:
         raise
@@ -514,7 +515,7 @@ async def capture_browser_page_endpoint(
             "file_hash": capture["file_hash"],
             "url": capture["url"],
             "title": capture["title"],
-            "indexing": IndexingProgressStatus.IN_PROGRESS.value,
+            "indexing": INDEXING_IN_PROGRESS,
             "ready": True,
         }
         

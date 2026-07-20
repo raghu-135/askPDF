@@ -23,7 +23,6 @@ from app.db.models_sqlmodel import (
 from app.db.enums import (
     EmbeddingReadinessStatus,
     FileStatusSection,
-    IndexingProgressStatus,
     OperationResultStatus,
     ReasoningFormat,
     ThreadCloneMode,
@@ -421,7 +420,6 @@ __all__ = [
     "AgentRunStatus",
     "EmbeddingReadinessStatus",
     "FileStatusSection",
-    "IndexingProgressStatus",
     "OperationResultStatus",
     "ReasoningFormat",
     "ThreadCloneMode",
