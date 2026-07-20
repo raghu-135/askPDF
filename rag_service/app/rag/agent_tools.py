@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
+from app.db import FileSourceType, ProcessStatus
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_embedding_model
 from app.models.retry import invoke_with_retry
@@ -18,10 +19,19 @@ from app.rag.retrieval import (
     group_document_chunks,
     rerank_document_chunks,
 )
+from app.rag.enums import (
+    ThreadTimelineOrder,
+    ThreadTimelineSource,
+    TimelineEventType,
+    TimelineSourceType,
+)
 from app.time_utils import parse_datetime_utc
 
 
 logger = logging.getLogger(__name__)
+
+THREAD_TIMELINE_SOURCES = {source.value for source in ThreadTimelineSource}
+THREAD_TIMELINE_ORDERS = {order.value for order in ThreadTimelineOrder}
 
 
 class ThreadTimelineSearchInput(BaseModel):
@@ -30,13 +40,15 @@ class ThreadTimelineSearchInput(BaseModel):
     query: str = Field(
         description="Topic, entity, or temporal question to locate on the thread timeline."
     )
-    sources: Literal["all", "conversation", "documents", "web_cache"] = Field(
-        default="all",
+    sources: str = Field(
+        default=ThreadTimelineSource.ALL.value,
         description="Timeline source to search: all, conversation, documents, or web_cache.",
+        json_schema_extra={"enum": [source.value for source in ThreadTimelineSource]},
     )
-    order: Literal["relevance", "oldest", "newest"] = Field(
-        default="relevance",
+    order: str = Field(
+        default=ThreadTimelineOrder.RELEVANCE.value,
         description="Sort mode. Use oldest/newest for first/latest/before/after questions.",
+        json_schema_extra={"enum": [order.value for order in ThreadTimelineOrder]},
     )
     max_results: int = Field(
         default=10,
@@ -56,9 +68,9 @@ def _short_excerpt(text: str, limit: int = 260) -> str:
 def _event_sort_key(event: Dict[str, Any], order: str) -> Any:
     parsed = parse_datetime_utc(event.get("timeline_event_at"))
     missing_time = parsed is None
-    if order == "oldest":
+    if order == ThreadTimelineOrder.OLDEST.value:
         return (missing_time, parsed or datetime.max.replace(tzinfo=timezone.utc))
-    if order == "newest":
+    if order == ThreadTimelineOrder.NEWEST.value:
         oldest = datetime.min.replace(tzinfo=timezone.utc)
         return (missing_time, -(parsed or oldest).timestamp())
     try:
@@ -88,7 +100,7 @@ def _document_timeline_event(file_hash: str, meta: Dict[str, Any]) -> Optional[D
     if not available_at:
         return None
     file_name = meta.get("file_name") or file_hash
-    source_type = meta.get("source_type") or "pdf"
+    source_type = meta.get("source_type") or FileSourceType.PDF.value
     details = []
     for label, field in (
         ("pages", "page_count"),
@@ -100,9 +112,9 @@ def _document_timeline_event(file_hash: str, meta: Dict[str, Any]) -> Optional[D
             details.append(f"{value} {label}")
     detail_text = f" ({', '.join(details)})" if details else ""
     return {
-        "source_type": "document",
+        "source_type": TimelineSourceType.DOCUMENT.value,
         "timeline_event_at": available_at,
-        "timeline_event_type": "document_added_to_thread",
+        "timeline_event_type": TimelineEventType.DOCUMENT_ADDED_TO_THREAD.value,
         "document_available_in_thread_at": available_at,
         "file_hash": file_hash,
         "file_name": file_name,
@@ -124,9 +136,9 @@ def _chat_timeline_event(mem: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     score = mem.get("rerank_score", mem.get("score"))
     event: Dict[str, Any] = {
-        "source_type": "conversation",
+        "source_type": TimelineSourceType.CONVERSATION.value,
         "timeline_event_at": message_created_at,
-        "timeline_event_type": "message_created",
+        "timeline_event_type": TimelineEventType.MESSAGE_CREATED.value,
         "message_created_at": message_created_at,
         "message_id": mem.get("message_id"),
         "label": "Conversation memory",
@@ -148,9 +160,9 @@ def _web_timeline_event(chunk: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         label += f" | {url}"
     score = chunk.get("rerank_score", chunk.get("score"))
     event: Dict[str, Any] = {
-        "source_type": "web_cache",
+        "source_type": TimelineSourceType.WEB_CACHE.value,
         "timeline_event_at": performed_at,
-        "timeline_event_type": "web_search_performed",
+        "timeline_event_type": TimelineEventType.WEB_SEARCH_PERFORMED.value,
         "web_search_performed_at": performed_at,
         "url": url,
         "title": title,
@@ -198,14 +210,14 @@ async def get_thread_shape(config: RunnableConfig = None) -> str:
         if docs:
             lines.append(f"Documents   : {len(docs)} source(s)")
             for i, (fh, meta) in enumerate(docs.items(), start=1):
-                status = meta.get("indexing_status", "unknown")
+                status = meta.get("indexing_status", ProcessStatus.UNKNOWN.value)
                 chunks = meta.get("chunk_count", 0)
                 chars = meta.get("total_chars", 0)
                 words = meta.get("word_count")
                 pages = meta.get("page_count")
                 sentences = meta.get("sentence_count")
                 name = meta.get("file_name", fh)
-                stype = meta.get("source_type", "pdf")
+                stype = meta.get("source_type", FileSourceType.PDF.value)
                 available_at = meta.get("document_available_in_thread_at")
                 doc_counts = []
                 if pages not in (None, ""):
@@ -478,8 +490,8 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
 @tool(args_schema=ThreadTimelineSearchInput)
 async def search_thread_timeline(
     query: str,
-    sources: Literal["all", "conversation", "documents", "web_cache"] = "all",
-    order: Literal["relevance", "oldest", "newest"] = "relevance",
+    sources: ThreadTimelineSource | str = ThreadTimelineSource.ALL.value,
+    order: ThreadTimelineOrder | str = ThreadTimelineOrder.RELEVANCE.value,
     max_results: int = 10,
     config: RunnableConfig = None,
 ) -> str:
@@ -507,18 +519,24 @@ async def search_thread_timeline(
             ).to_json()
 
         max_results = max(1, min(int(max_results or 10), 30))
-        requested_sources = sources if sources in {"all", "conversation", "documents", "web_cache"} else "all"
-        order = order if order in {"relevance", "oldest", "newest"} else "relevance"
+        source_value = sources.value if isinstance(sources, ThreadTimelineSource) else str(sources)
+        order_value = order.value if isinstance(order, ThreadTimelineOrder) else str(order)
+        requested_sources = source_value if source_value in THREAD_TIMELINE_SOURCES else ThreadTimelineSource.ALL.value
+        order_value = order_value if order_value in THREAD_TIMELINE_ORDERS else ThreadTimelineOrder.RELEVANCE.value
         db = get_vector_db()
         events: List[Dict[str, Any]] = []
 
-        needs_vector = requested_sources in {"all", "conversation", "web_cache"}
+        needs_vector = requested_sources in {
+            ThreadTimelineSource.ALL.value,
+            ThreadTimelineSource.CONVERSATION.value,
+            ThreadTimelineSource.WEB_CACHE.value,
+        }
         query_vector: Optional[List[float]] = None
         if needs_vector:
             embedding_client = get_embedding_model(embedding_model)
             query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
 
-        if requested_sources in {"all", "conversation"} and query_vector is not None:
+        if requested_sources in {ThreadTimelineSource.ALL.value, ThreadTimelineSource.CONVERSATION.value} and query_vector is not None:
             recalled = await db.search_chat_memory(
                 thread_id=thread_id,
                 query_vector=query_vector,
@@ -532,7 +550,7 @@ async def search_thread_timeline(
                 if event:
                     events.append(event)
 
-        if requested_sources in {"all", "documents"}:
+        if requested_sources in {ThreadTimelineSource.ALL.value, ThreadTimelineSource.DOCUMENTS.value}:
             document_lookup = await get_document_metadata_lookup(thread_id)
             for file_hash, meta in document_lookup.items():
                 if not isinstance(meta, dict):
@@ -541,7 +559,7 @@ async def search_thread_timeline(
                 if event:
                     events.append(event)
 
-        if requested_sources in {"all", "web_cache"} and query_vector is not None:
+        if requested_sources in {ThreadTimelineSource.ALL.value, ThreadTimelineSource.WEB_CACHE.value} and query_vector is not None:
             web_chunks = await db.search_web_chunks(
                 thread_id=thread_id,
                 query_vector=query_vector,
@@ -556,7 +574,7 @@ async def search_thread_timeline(
                 if event:
                     events.append(event)
 
-        events.sort(key=lambda event: _event_sort_key(event, order))
+        events.sort(key=lambda event: _event_sort_key(event, order_value))
         events = events[:max_results]
 
         return make_tool_result(

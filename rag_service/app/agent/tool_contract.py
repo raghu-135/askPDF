@@ -10,6 +10,8 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from app.agent_workflows.trace import artifact_summary, compact_preview, refs_from_artifacts
+from app.db import FileSourceType
+from app.rag.enums import TimelineSourceType
 from app.time_utils import iso_utc_z, utc_now
 
 
@@ -342,14 +344,14 @@ def collect_tool_sources(
         if not isinstance(event, dict):
             continue
         source_type = event.get("source_type")
-        if source_type == "conversation" and event.get("message_id"):
+        if source_type == TimelineSourceType.CONVERSATION.value and event.get("message_id"):
             used_chat_ids.append(event["message_id"])
-        elif source_type == "document":
+        elif source_type == TimelineSourceType.DOCUMENT.value:
             document_sources.append({
                 "text": event.get("excerpt", ""),
                 "file_hash": event.get("file_hash"),
                 "file_name": event.get("file_name"),
-                "source_type": event.get("document_source_type", "pdf"),
+                "source_type": event.get("document_source_type", FileSourceType.PDF.value),
                 "document_available_in_thread_at": event.get("document_available_in_thread_at"),
                 "timeline_event_at": event.get("timeline_event_at"),
                 "timeline_event_type": event.get("timeline_event_type"),
@@ -360,7 +362,7 @@ def collect_tool_sources(
                 "filetype": event.get("filetype"),
                 "element_types": event.get("element_types"),
             })
-        elif source_type == "web_cache":
+        elif source_type == TimelineSourceType.WEB_CACHE.value:
             web_sources.append({
                 "text": event.get("excerpt", ""),
                 "url": event.get("url"),

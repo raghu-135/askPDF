@@ -17,6 +17,7 @@ from langchain_core.tools import BaseTool, StructuredTool, tool
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
+from app.rag.enums import TimelineEventType
 from app.rag.retrieval import rerank_document_chunks
 from app.time_utils import iso_utc_z
 
@@ -90,7 +91,7 @@ def _format_web_context(
         if web_search_performed_at:
             entry["web_search_performed_at"] = web_search_performed_at
             entry["timeline_event_at"] = web_search_performed_at
-            entry["timeline_event_type"] = "web_search_performed"
+            entry["timeline_event_type"] = TimelineEventType.WEB_SEARCH_PERFORMED.value
         web_sources.append(entry)
 
     context_parts = []

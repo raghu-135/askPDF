@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import BackgroundTasks
 
-from app.db import FileSourceType, ProcessStatus
+from app.db import FileSourceType, OperationResultStatus, ProcessStatus
 
 # SQLModel repositories for atomic transactions
 from app.db.repositories.file_repo_sqlmodel import FileRepository
@@ -227,7 +227,7 @@ async def _background_index(
             metadata=metadata,
             markdown_content=markdown_content,
         )
-        if result.get("status") != "success":
+        if result.get("status") != OperationResultStatus.SUCCESS.value:
             raise Exception(result.get("message", "Indexing failed"))
         logger.info(f"Background indexing completed for %s in thread %s", file_hash, thread_id)
 

@@ -20,6 +20,7 @@ import weaviate
 import weaviate.classes as wvc
 from weaviate.exceptions import WeaviateBaseError, WeaviateConnectionError
 
+from app.db.enums import FileSourceType
 from app.db.vector.config import (
     CollectionNames,
     VectorDBError,
@@ -36,6 +37,7 @@ from app.db.vector.helpers import (
 )
 from app.db.vector.model_registry import get_embedding_model_registry
 from app.db.vector.collection_manager import ModelAwareCollectionManager
+from app.rag.enums import TimelineEventType
 
 logger = logging.getLogger(__name__)
 
@@ -383,7 +385,7 @@ class WeaviateAdapter:
                 for k, v in md.items()
                 if k not in _DOCUMENT_THREAD_TEMPORAL_FIELDS and k != "document_indexed_at"
             }
-            source_kind = md.get("source_kind", "pdf")
+            source_kind = md.get("source_kind", FileSourceType.PDF.value)
             url = md.get("url") or md.get("original_url") or ""
             title = md.get("title") or ""
             properties = {
@@ -782,7 +784,7 @@ class WeaviateAdapter:
             if message_created_at not in (None, ""):
                 result["message_created_at"] = message_created_at
                 result["timeline_event_at"] = message_created_at
-                result["timeline_event_type"] = "message_created"
+                result["timeline_event_type"] = TimelineEventType.MESSAGE_CREATED.value
             out.append(result)
         
         logger.debug(f"Found {len(out)} chat memory results")
@@ -865,7 +867,7 @@ class WeaviateAdapter:
             if web_search_performed_at not in (None, ""):
                 result["web_search_performed_at"] = web_search_performed_at
                 result["timeline_event_at"] = web_search_performed_at
-                result["timeline_event_type"] = "web_search_performed"
+                result["timeline_event_type"] = TimelineEventType.WEB_SEARCH_PERFORMED.value
             out.append(result)
         
         logger.debug(f"Found {len(out)} web chunk results")
@@ -1115,7 +1117,7 @@ class WeaviateAdapter:
                 doc_total = await asyncio.to_thread(doc_col.aggregate.over_all, filters=doc_filter)
                 pdf_count = await asyncio.to_thread(
                     doc_col.aggregate.over_all,
-                    filters=doc_filter & wvc.query.Filter.by_property("source_kind").equal("pdf"),
+                    filters=doc_filter & wvc.query.Filter.by_property("source_kind").equal(FileSourceType.PDF.value),
                 )
                 webpage_count = await asyncio.to_thread(
                     doc_col.aggregate.over_all,
@@ -1125,7 +1127,7 @@ class WeaviateAdapter:
                 doc_total = await asyncio.to_thread(doc_col.aggregate.over_all)
                 pdf_count = await asyncio.to_thread(
                     doc_col.aggregate.over_all,
-                    filters=wvc.query.Filter.by_property("source_kind").equal("pdf"),
+                    filters=wvc.query.Filter.by_property("source_kind").equal(FileSourceType.PDF.value),
                 )
                 webpage_count = await asyncio.to_thread(
                     doc_col.aggregate.over_all,

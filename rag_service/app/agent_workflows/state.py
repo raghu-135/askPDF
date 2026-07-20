@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
 from langchain_core.runnables import RunnableConfig
 
+from app.agent_workflows.enums import RouterRoute
 from app.agent_workflows.node_catalog import (
     node_type_default_max_visits,
     node_type_max_visits,
 )
 
 
-RouterRoute = Literal["document", "memory", "timeline", "web", "direct", "clarify"]
 NODE_RUNTIME_CONFIG_KEY = "agent_workflow_node_runtime"
 
 
@@ -30,7 +30,7 @@ class RouterRagState(TypedDict, total=False):
     client_locale: Optional[str]
     client_now_iso: Optional[str]
     pre_fetch_bundle: Dict[str, Any]
-    route: RouterRoute
+    route: RouterRoute | str
     route_reason: str
     clarification_options: Optional[List[str]]
     evidence: str

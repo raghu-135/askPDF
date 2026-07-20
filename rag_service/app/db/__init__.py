@@ -20,6 +20,11 @@ from app.db.models_sqlmodel import (
     AgentWorkflow,
     AgentRun,
 )
+from app.db.enums import (
+    EmbeddingReadinessStatus,
+    OperationResultStatus,
+    ThreadCloneMode,
+)
 
 # Connection management (SQLModel/PostgreSQL)
 from app.db.connection_sqlmodel import (
@@ -407,6 +412,9 @@ __all__ = [
     # Models
     "ProcessStatus",
     "MessageRole",
+    "EmbeddingReadinessStatus",
+    "OperationResultStatus",
+    "ThreadCloneMode",
     "Thread",
     "File",
     "ThreadFile",

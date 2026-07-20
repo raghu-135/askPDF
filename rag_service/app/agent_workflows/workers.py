@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableConfig
 
 from app.agent.external_research_tools import search_web
 from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
+from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from app.agent_workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
 from app.agent_workflows.trace import refs_from_timeline
 
@@ -57,8 +58,8 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
         tool=search_thread_timeline,
         tool_input=lambda current: {
             "query": current["question"],
-            "sources": "all",
-            "order": "relevance",
+            "sources": ThreadTimelineSource.ALL.value,
+            "order": ThreadTimelineOrder.RELEVANCE.value,
             "max_results": 10,
         },
         state_update=lambda _current, _payload, artifacts, _evidence, _packets: {

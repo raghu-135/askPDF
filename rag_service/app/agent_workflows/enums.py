@@ -200,6 +200,16 @@ class PromptProfile(str, Enum):
     EVALUATOR_REPLANNER = "evaluator_replanner"
 
 
+class AgentCheckpointerMode(str, Enum):
+    MEMORY = "memory"
+    POSTGRES = "postgres"
+
+
+class EvidenceCompressionMode(str, Enum):
+    NONE = "none"
+    COMPACT = "compact"
+
+
 class ToolContractId(str, Enum):
     THREAD_SHAPE = "thread_shape"
     DOCUMENT_EVIDENCE = "document_evidence"

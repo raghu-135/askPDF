@@ -32,6 +32,7 @@ from app.agent_workflows.builtin_workflows import builtin_workflow_keys
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key, workflow_supports_replans
 from app.time_utils import iso_utc_z
 from app.db import (
+    EmbeddingReadinessStatus,
     ProcessStatus,
     delete_thread,
     get_file_status,
@@ -483,7 +484,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
             if not file_status:
                 return {
                     "thread_id": thread_id,
-                    "status": "not_ready",
+                    "status": EmbeddingReadinessStatus.NOT_READY.value,
                     "stats": _empty_thread_stats(),
                     "embedding_model_ready": embedding_model_ready,
                 }
@@ -494,20 +495,20 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
             )
             indexing_status = scoped_indexing.get("status", ProcessStatus.UNKNOWN.value)
             if ProcessStatus.is_completed(indexing_status):
-                status = "ready"
+                status = EmbeddingReadinessStatus.READY.value
             elif ProcessStatus.is_failed(indexing_status):
-                status = "not_ready"
+                status = EmbeddingReadinessStatus.NOT_READY.value
             elif ProcessStatus.is_running(indexing_status):
-                status = "not_ready"
+                status = EmbeddingReadinessStatus.NOT_READY.value
             else:
                 # Fallback to vector DB check for backward compatibility
                 is_indexed = await db.has_file_indexed(thread_id, file_hash, thread.embedding_model)
-                status = "ready" if is_indexed else "not_ready"
+                status = EmbeddingReadinessStatus.READY.value if is_indexed else EmbeddingReadinessStatus.NOT_READY.value
         else:
             # Check all files in thread using file_status
             files = await get_thread_files(thread_id)
             if not files:
-                status = "ready"
+                status = EmbeddingReadinessStatus.READY.value
             else:
                 all_indexed = True
                 for f in files:
@@ -523,7 +524,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
                         if not await db.has_file_indexed(thread_id, f.file_hash, thread.embedding_model):
                             all_indexed = False
                             break
-                status = "ready" if all_indexed else "not_ready"
+                status = EmbeddingReadinessStatus.READY.value if all_indexed else EmbeddingReadinessStatus.NOT_READY.value
 
         # Build file hashes list for stats query
         file_hashes = [file_hash] if file_hash else ([f.file_hash for f in files] if files else [])

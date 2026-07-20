@@ -23,8 +23,11 @@ try:
         ProcessStatus,
         WorkflowVisibility,
     )
+    from app.db.enums import EmbeddingReadinessStatus, OperationResultStatus, ThreadCloneMode
     from app.agent_workflows.enums import (
+        AgentCheckpointerMode,
         AgentRunResumeAction,
+        EvidenceCompressionMode,
         EvaluatorRoute,
         HitlMode,
         HitlPhase,
@@ -34,6 +37,7 @@ try:
         RouteFunctionId,
         RouterRoute,
     )
+    from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource, TimelineEventType, TimelineSourceType
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:
@@ -231,6 +235,15 @@ class TestProcessStatusEnum:
         assert PlannerRoute.EXECUTE.value == "execute"
         assert EvaluatorRoute.ANSWER_BUDGET_EXHAUSTED.value == "answer_budget_exhausted"
         assert RouteFunctionId.HITL_GATE.value == "hitl_gate_route"
+        assert OperationResultStatus.SUCCESS.value == "success"
+        assert EmbeddingReadinessStatus.NOT_READY.value == "not_ready"
+        assert ThreadCloneMode.FROM_MESSAGE.value == "from_message"
+        assert ThreadTimelineSource.WEB_CACHE.value == "web_cache"
+        assert ThreadTimelineOrder.NEWEST.value == "newest"
+        assert TimelineSourceType.CONVERSATION.value == "conversation"
+        assert TimelineEventType.WEB_SEARCH_PERFORMED.value == "web_search_performed"
+        assert AgentCheckpointerMode.POSTGRES.value == "postgres"
+        assert EvidenceCompressionMode.COMPACT.value == "compact"
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")

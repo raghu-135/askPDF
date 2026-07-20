@@ -70,3 +70,24 @@ class AgentRunStatus(str, Enum):
     FAILED = "failed"
     REJECTED = "rejected"
     EXPIRED = "expired"
+
+
+class OperationResultStatus(str, Enum):
+    """Simple internal operation result statuses."""
+
+    SUCCESS = "success"
+    ERROR = "error"
+
+
+class EmbeddingReadinessStatus(str, Enum):
+    """Thread/file embedding readiness response statuses."""
+
+    READY = "ready"
+    NOT_READY = "not_ready"
+
+
+class ThreadCloneMode(str, Enum):
+    """Thread fork source modes."""
+
+    FULL_THREAD = "full_thread"
+    FROM_MESSAGE = "from_message"

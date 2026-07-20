@@ -3,9 +3,10 @@
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.db import get_thread_shape
+from app.db import FileSourceType, get_thread_shape
 from app.models.llm_server_client import get_reranker_model, LOCAL_RERANKER_MODEL
 from app.db.vector import get_vector_db
+from app.rag.enums import TimelineEventType
 
 logger = logging.getLogger(__name__)
 _DOCUMENT_VECTOR_TEMPORAL_FIELDS = {
@@ -63,7 +64,7 @@ def _merge_metadata(chunk: Dict[str, Any], thread_doc_meta: Dict[str, Any]) -> D
     if thread_doc_meta.get("document_available_in_thread_at"):
         merged["document_available_in_thread_at"] = thread_doc_meta["document_available_in_thread_at"]
         merged["timeline_event_at"] = thread_doc_meta["document_available_in_thread_at"]
-        merged["timeline_event_type"] = "document_added_to_thread"
+        merged["timeline_event_type"] = TimelineEventType.DOCUMENT_ADDED_TO_THREAD.value
     return merged
 
 
@@ -139,7 +140,7 @@ def group_document_chunks(
             break
 
         fh = chunk.get("file_hash") or ""
-        source_type = "pdf"
+        source_type = FileSourceType.PDF.value
         url = chunk.get("url") or ""
         title = chunk.get("title") or ""
         raw_lookup = doc_lookup.get(fh, fh or "document")
@@ -195,7 +196,7 @@ def group_document_chunks(
         combined_text = "\n".join(group["texts"])
         pages_label = _compact_page_ranges(group.get("pages", []))
         label = _format_document_label(
-            group.get("source_type", "pdf"),
+            group.get("source_type", FileSourceType.PDF.value),
             group.get("name", ""),
             group.get("url"),
             pages_label or None,

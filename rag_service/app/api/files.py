@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, Response
 
 from app.db import (
     DEFAULT_SENTENCES_JSON,
+    EmbeddingReadinessStatus,
     FileSourceType,
     ProcessStatus,
     get_file,
@@ -505,7 +506,7 @@ async def capture_browser_page_endpoint(
         )
         
         return {
-            "status": "ready",
+            "status": EmbeddingReadinessStatus.READY.value,
             "thread_id": thread_id,
             "file_hash": capture["file_hash"],
             "url": capture["url"],

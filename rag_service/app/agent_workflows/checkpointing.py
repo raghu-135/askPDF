@@ -7,6 +7,8 @@ from typing import Any, AsyncIterator, Sequence
 
 from langgraph.checkpoint.memory import InMemorySaver
 
+from app.agent_workflows.enums import AgentCheckpointerMode
+
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +42,11 @@ async def open_agent_checkpointer() -> AsyncIterator[Any]:
     ASKPDF_AGENT_CHECKPOINTER_ALLOW_MEMORY_FALLBACK=true is set.
     """
 
-    mode = os.environ.get("ASKPDF_AGENT_CHECKPOINTER", "memory").strip().lower()
-    if mode == "memory":
+    mode = os.environ.get("ASKPDF_AGENT_CHECKPOINTER", AgentCheckpointerMode.MEMORY.value).strip().lower()
+    if mode == AgentCheckpointerMode.MEMORY.value:
         yield _MEMORY_CHECKPOINTER
         return
-    if mode != "postgres":
+    if mode != AgentCheckpointerMode.POSTGRES.value:
         raise ValueError(f"Unsupported ASKPDF_AGENT_CHECKPOINTER value: {mode!r}")
 
     try:

@@ -15,6 +15,7 @@ from collections import Counter
 from typing import Dict, Any, List, Optional, Tuple
 from app.db import (
     FileSourceType,
+    OperationResultStatus,
     ProcessStatus,
     get_file,
     get_file_parsed_sentences,
@@ -756,7 +757,7 @@ async def index_document_for_thread(
                     indexed_at=finished_at,
                 )
                 return {
-                    "status": "success",
+                    "status": OperationResultStatus.SUCCESS.value,
                     "thread_id": thread_id,
                     "file_hash": file_hash,
                     "chunks_count": shared_chunks,
@@ -796,7 +797,7 @@ async def index_document_for_thread(
                     finished_at=iso_utc_z(),
                     error="No text extracted from document",
                 )
-                return {"status": "error", "message": "No text extracted from document"}
+                return {"status": OperationResultStatus.ERROR.value, "message": "No text extracted from document"}
 
             logger.info(f"Extracted {len(chunks)} chunks for thread {thread_id}, file {file_hash}")
 
@@ -872,7 +873,7 @@ async def index_document_for_thread(
             )
 
             return {
-                "status": "success",
+                "status": OperationResultStatus.SUCCESS.value,
                 "thread_id": thread_id,
                 "file_hash": file_hash,
                 "chunks_count": indexed_count
@@ -892,7 +893,7 @@ async def index_document_for_thread(
             )
         except Exception:
             pass
-        return {"status": "error", "message": str(e)}
+        return {"status": OperationResultStatus.ERROR.value, "message": str(e)}
 
 
 async def index_chat_memory_for_thread(
@@ -946,14 +947,14 @@ async def index_chat_memory_for_thread(
         )
         
         return {
-            "status": "success",
+            "status": OperationResultStatus.SUCCESS.value,
             "chunks_count": indexed_count,
             "memory_compact_text": compact_text,
             "memory_was_summarized": was_summarized,
         }
     except Exception as e:
         logger.error(f"Error indexing chat memory for thread {thread_id}: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        return {"status": OperationResultStatus.ERROR.value, "message": str(e)}
 
 
 def _extract_question_from_compact_text(compact_text: str) -> str:
@@ -998,7 +999,7 @@ async def index_chat_memory_from_compact_for_thread(
             embedding_model=embedding_model,
             message_created_at=message_created_at_iso,
         )
-        return {"status": "success", "chunks_count": indexed_count}
+        return {"status": OperationResultStatus.SUCCESS.value, "chunks_count": indexed_count}
     except Exception as e:
         logger.error(
             "Error re-indexing compact chat memory for thread %s message %s: %s",
@@ -1007,7 +1008,7 @@ async def index_chat_memory_from_compact_for_thread(
             e,
             exc_info=True,
         )
-        return {"status": "error", "message": str(e)}
+        return {"status": OperationResultStatus.ERROR.value, "message": str(e)}
 
 
 async def index_web_search_for_thread(
@@ -1053,10 +1054,10 @@ async def index_web_search_for_thread(
             titles=titles,
             web_search_performed_at=web_search_performed_at_iso,
         )
-        return {"status": "success", "chunks_count": indexed_count}
+        return {"status": OperationResultStatus.SUCCESS.value, "chunks_count": indexed_count}
     except Exception as e:
         logger.error(f"Error indexing web search for thread {thread_id}: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        return {"status": OperationResultStatus.ERROR.value, "message": str(e)}
 
 
 _reembed_locks: Dict[str, asyncio.Lock] = {}
@@ -1112,7 +1113,7 @@ async def trigger_reembed_for_missing_sources(
                     file_hash=f.file_hash,
                     embedding_model=embedding_model,
                 )
-                if result.get("status") == "success":
+                if result.get("status") == OperationResultStatus.SUCCESS.value:
                     reindexed_files.append({"file_hash": f.file_hash, "source_type": FileSourceType.PDF.value})
             except Exception as item_err:
                 logger.warning("Skipping re-embed for file %s: %s", f.file_hash, item_err)
@@ -1145,7 +1146,7 @@ async def trigger_reembed_for_missing_sources(
                     embedding_model=embedding_model,
                     message_created_at=turn.completed_at or turn.created_at,
                 )
-                if chat_result.get("status") == "success":
+                if chat_result.get("status") == OperationResultStatus.SUCCESS.value:
                     reindexed_chat_messages.append(turn.id)
         except Exception as chat_err:
             logger.warning("Skipping chat-memory backfill for thread %s: %s", thread_id, chat_err)

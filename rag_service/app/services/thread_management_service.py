@@ -10,6 +10,7 @@ from sqlalchemy.future import select
 from app.db import (
     ChatTurnStatus,
     ProcessStatus,
+    ThreadCloneMode,
     get_scoped_indexing_status,
     get_thread_shape,
     remove_document_from_stats,
@@ -65,9 +66,9 @@ async def fork_thread(
 
             source_turn = None
             turns_to_copy = source_turns
-            mode = "full_thread"
+            mode = ThreadCloneMode.FULL_THREAD.value
             if message_id:
-                mode = "from_message"
+                mode = ThreadCloneMode.FROM_MESSAGE.value
                 target_turn_id = turn_id_from_message_id(message_id)
                 for index, turn in enumerate(source_turns):
                     if turn.id == target_turn_id:

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.runnables import RunnableConfig
 
+from app.agent_workflows.enums import EvidenceCompressionMode
 from app.agent_workflows.trace import (
     available_document_refs,
     compact_preview,
@@ -114,8 +115,8 @@ def evidence_dedupe_enabled(state: Dict[str, Any]) -> bool:
 
 
 def evidence_compression_mode(state: Dict[str, Any]) -> str:
-    mode = context_policy(state).get("evidence_compression", "compact")
-    return str(mode or "compact")
+    mode = context_policy(state).get("evidence_compression", EvidenceCompressionMode.COMPACT.value)
+    return str(mode or EvidenceCompressionMode.COMPACT.value)
 
 
 def canonical_json(value: Any) -> str:
@@ -160,7 +161,7 @@ def compact_context_text(text: str, *, limit: int, mode: str) -> str:
     value = str(text or "").strip()
     if not value:
         return ""
-    if mode == "compact":
+    if mode == EvidenceCompressionMode.COMPACT.value:
         lines: List[str] = []
         seen_lines: set[str] = set()
         for raw_line in value.splitlines():

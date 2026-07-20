@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from app.agent_workflows.enums import EvidenceCompressionMode
 from app.agent_workflows.workflow_runtime import ALLOWED_WORKFLOW_CONFIG_KEYS
 from app.models.llm_server_client import (
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -11,7 +12,7 @@ from app.models.llm_server_client import (
 
 
 CONTEXT_FINAL_PROMPT_ASSEMBLIES = {"evidence_packets"}
-CONTEXT_EVIDENCE_COMPRESSION_MODES = {"none", "compact"}
+CONTEXT_EVIDENCE_COMPRESSION_MODES = {mode.value for mode in EvidenceCompressionMode}
 
 
 def collect_config_errors(config: Dict[str, Any], workflow_id: Any) -> list[str]:
