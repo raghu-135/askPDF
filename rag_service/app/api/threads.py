@@ -467,7 +467,7 @@ async def get_thread_index_status_endpoint(thread_id: str, file_hash: Optional[s
         if not embedding_model_ready:
             return {
                 "thread_id": thread_id,
-                "status": "blocked",
+                "status": EmbeddingReadinessStatus.BLOCKED.value,
                 "stats": _empty_thread_stats(),
                 "embedding_model_ready": False,
             }

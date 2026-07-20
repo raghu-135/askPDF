@@ -40,6 +40,7 @@ from app.models.llm_server_client import (
 )
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
+from app.rag.enums import ReembedSkipReason
 
 logger = logging.getLogger(__name__)
 
@@ -1081,11 +1082,17 @@ async def trigger_reembed_for_missing_sources(
     """
     from app.db import get_thread_files, get_thread_turns
     if not await embedding_model_check(thread_id, embedding_model):
-        return {"status": "skipped", "reason": "embedding_model_not_ready"}
+        return {
+            "status": OperationResultStatus.SKIPPED.value,
+            "reason": ReembedSkipReason.EMBEDDING_MODEL_NOT_READY.value,
+        }
 
     lock = _thread_reembed_lock(thread_id)
     if lock.locked():
-        return {"status": "skipped", "reason": "reembed_in_progress"}
+        return {
+            "status": OperationResultStatus.SKIPPED.value,
+            "reason": ReembedSkipReason.REEMBED_IN_PROGRESS.value,
+        }
 
     async with lock:
         files = await get_thread_files(thread_id)

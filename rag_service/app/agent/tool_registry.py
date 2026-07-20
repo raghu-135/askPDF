@@ -238,6 +238,11 @@ def get_tool_contract_metadata(tool_name: str) -> Dict[str, Any]:
     if not contract:
         return {}
     record = {"tool_name": tool_name, **contract}
+    record["warning_codes"] = [
+        item.value if isinstance(item, ToolWarningCode) else str(item)
+        for item in record.get("warning_codes", [])
+        if item
+    ]
     friendly = TOOL_FRIENDLY_CONFIG.get(tool_name) or {}
     for key in ("display_name", "description"):
         if key in friendly:

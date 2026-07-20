@@ -15,8 +15,10 @@ from app.agent_workflows.evidence import (
 from app.agent_workflows.enums import (
     AgentRunResumeAction,
     GraphSentinel,
+    HitlInterruptType,
     HitlMode,
     HitlPhase,
+    HitlRejectBehavior,
     HitlSelectionMode,
     HITL_ACTIONS,
     NodeEventStatus,
@@ -243,7 +245,12 @@ async def hitl_gate_node(
     target = gate_policy.get("target") if isinstance(gate_policy.get("target"), dict) else {}
     target_node_id = target.get("node_id")
     target_node_type = target.get("node_type")
-    interrupt_type = str(gate_policy.get("interrupt_type") or gate_policy.get("type") or ("option_review" if mode == HitlMode.CHOICE.value else "human_review"))
+    default_interrupt_type = (
+        HitlInterruptType.OPTION_REVIEW.value
+        if mode == HitlMode.CHOICE.value
+        else HitlInterruptType.HUMAN_REVIEW.value
+    )
+    interrupt_type = str(gate_policy.get("interrupt_type") or gate_policy.get("type") or default_interrupt_type)
     allowed_actions = normalize_hitl_actions(gate_policy)
     default_action = str(gate_policy.get("default_action") or AgentRunResumeAction.CONTINUE_WITHOUT.value)
     if default_action not in allowed_actions:
@@ -314,7 +321,7 @@ async def hitl_gate_node(
             "selection_mode": gate_policy.get("selection_mode") if mode == HitlMode.CHOICE.value else None,
             "options": options if mode == HitlMode.CHOICE.value else None,
             "checkpoint_resume": True,
-            "reject_behavior": "resume" if AgentRunResumeAction.REJECT.value in dict(gate_policy.get("routes") or {}) else gate_policy.get("reject_behavior"),
+            "reject_behavior": HitlRejectBehavior.RESUME.value if AgentRunResumeAction.REJECT.value in dict(gate_policy.get("routes") or {}) else gate_policy.get("reject_behavior"),
             "input_summary": input_summary,
             "proposed_tool": proposed_tool,
             "proposed_final_answer": compact_preview(state.get("final_answer"), limit=2000) if mode == HitlMode.REVIEW.value else None,

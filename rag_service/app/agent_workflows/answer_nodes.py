@@ -27,6 +27,7 @@ from app.agent_workflows.runtime_invocation import (
 )
 from app.agent_workflows.state import RouterRagState
 from app.agent_workflows.trace import compact_preview, prompt_summary
+from app.db.enums import ReasoningFormat
 from app.models.llm_server_client import get_llm as _default_get_llm
 
 
@@ -143,7 +144,7 @@ async def finalizer_node(state: RouterRagState, config: RunnableConfig) -> Dict[
             "final_answer": answer,
             "reasoning": "",
             "reasoning_available": False,
-            "reasoning_format": "none",
+            "reasoning_format": ReasoningFormat.NONE.value,
             "node_events": append_event(state, WorkflowNodeType.FINALIZER.value, data, started=started, config=config),
         }
     data = {

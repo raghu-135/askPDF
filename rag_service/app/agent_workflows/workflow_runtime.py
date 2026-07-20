@@ -4,11 +4,11 @@ import os
 from copy import deepcopy
 from typing import Any, Dict
 
-from app.agent_workflows.enums import WorkflowNodeType
+from app.agent_workflows.enums import WorkflowNodeType, WorkflowRuntimeKind
 
 DEFAULT_AGENT_WORKFLOW_KEY_ENV = "ASKPDF_DEFAULT_AGENT_WORKFLOW_KEY"
 DEFAULT_AGENT_WORKFLOW_KEY = "_".join((WorkflowNodeType.ROUTER.value, "rag", "agent"))
-SUPPORTED_RUNTIME_KINDS = {"compiled_rag"}
+SUPPORTED_RUNTIME_KINDS = {kind.value for kind in WorkflowRuntimeKind}
 RUNTIME_TEXT_FIELDS = {
     "label",
     "failure_code",
@@ -17,7 +17,7 @@ RUNTIME_TEXT_FIELDS = {
     "failure_context",
 }
 DEFAULT_COMPILED_RAG_RUNTIME = {
-    "kind": "compiled_rag",
+    "kind": WorkflowRuntimeKind.COMPILED_RAG.value,
     "label": "Compiled RAG",
     "failure_code": "compiled_rag_execution_failed",
     "failure_reason_prefix": "Exception during compiled RAG execution",

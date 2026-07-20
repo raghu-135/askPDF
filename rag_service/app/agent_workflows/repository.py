@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.agent_workflows.debug_trace import append_interrupt_event_to_debug_payload, append_runtime_event_to_debug_payload
-from app.agent_workflows.enums import AgentRunResumeAction
+from app.agent_workflows.enums import AgentRunResumeAction, HitlRejectBehavior
 from app.agent_workflows.interrupts import (
     INTERRUPT_STATUS_EXPIRED,
     INTERRUPT_STATUS_PENDING,
@@ -441,7 +441,7 @@ class AgentWorkflowRepository:
                     },
                 )
                 outcome = INTERRUPT_STATUS_EXPIRED
-            elif action == AgentRunResumeAction.REJECT.value and interrupt.get("reject_behavior") == "resume":
+            elif action == AgentRunResumeAction.REJECT.value and interrupt.get("reject_behavior") == HitlRejectBehavior.RESUME.value:
                 interrupt["status"] = INTERRUPT_STATUS_RESUMED
                 interrupt["decision"] = decision
                 run.status = RUN_STATUS_RUNNING

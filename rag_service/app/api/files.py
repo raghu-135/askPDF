@@ -29,6 +29,8 @@ from app.db import (
     DEFAULT_SENTENCES_JSON,
     EmbeddingReadinessStatus,
     FileSourceType,
+    FileStatusSection,
+    IndexingProgressStatus,
     ProcessStatus,
     get_file,
     get_file_parsed_sentences,
@@ -129,7 +131,7 @@ async def add_file_to_thread_endpoint(
             "thread_id": thread_id,
             "file_hash": req.file_hash,
             "file_name": req.file_name,
-            "indexing": "in_progress",
+            "indexing": IndexingProgressStatus.IN_PROGRESS.value,
         }
     except HTTPException:
         raise
@@ -346,7 +348,8 @@ async def get_file_status_endpoint(
 
         # Filter by section if specified
         if section:
-            if section not in {"parsing", "indexing"}:
+            allowed_sections = {item.value for item in FileStatusSection}
+            if section not in allowed_sections:
                 raise HTTPException(status_code=400, detail=f"Invalid section: {section}")
             return {section: status[section]}
 
@@ -511,7 +514,7 @@ async def capture_browser_page_endpoint(
             "file_hash": capture["file_hash"],
             "url": capture["url"],
             "title": capture["title"],
-            "indexing": "in_progress",
+            "indexing": IndexingProgressStatus.IN_PROGRESS.value,
             "ready": True,
         }
         

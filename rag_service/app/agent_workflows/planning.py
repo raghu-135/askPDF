@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
-from app.agent_workflows.enums import PlannerRoute, PLANNER_ROUTES, ToolContractId, WorkflowNodeType
+from app.agent_workflows.enums import PlannerRiskLevel, PlannerRoute, PLANNER_ROUTES, ToolContractId, WorkflowNodeType
 from app.agent_workflows.trace import compact_preview
 
 
@@ -124,7 +124,8 @@ def normalize_execution_plan(
 
 def risk_level(value: Any) -> str:
     text = str(value or "").strip().lower()
-    return text if text in {"low", "medium", "high"} else "medium"
+    allowed = {level.value for level in PlannerRiskLevel}
+    return text if text in allowed else PlannerRiskLevel.MEDIUM.value
 
 
 def bounded_string_list(value: Any, *, limit: int = 5, chars: int = 240) -> List[str]:

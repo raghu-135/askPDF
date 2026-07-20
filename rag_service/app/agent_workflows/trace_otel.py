@@ -9,7 +9,7 @@ from opentelemetry.trace import Status, StatusCode
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 
 from app.agent.tool_registry import get_tool_contract_metadata
-from app.agent_workflows.enums import NodeEventStatus, TraceStatus
+from app.agent_workflows.enums import NodeEventStatus, TraceSpanKind, TraceStatus
 from app.agent_workflows.node_catalog import get_node_type_metadata
 from app.agent_workflows.trace_sanitization import (
     _as_dict,
@@ -101,9 +101,9 @@ def _catalog_display_name(node: str) -> str:
 def _node_kind(node: str, node_type: Optional[str] = None) -> str:
     observability = _observability_metadata(node_type or node)
     span_kind = str(observability.get("span_kind") or "")
-    if span_kind in {"control", "human_review"}:
+    if span_kind in {TraceSpanKind.CONTROL.value, TraceSpanKind.HUMAN_REVIEW.value}:
         return OpenInferenceSpanKindValues.AGENT.value
-    if span_kind == "tool_worker":
+    if span_kind == TraceSpanKind.TOOL_WORKER.value:
         return OpenInferenceSpanKindValues.RETRIEVER.value
     return OpenInferenceSpanKindValues.CHAIN.value
 

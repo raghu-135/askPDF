@@ -36,6 +36,15 @@ class HitlSelectionMode(str, Enum):
     SINGLE_OR_MULTI = "single_or_multi"
 
 
+class HitlInterruptType(str, Enum):
+    HUMAN_REVIEW = "human_review"
+    OPTION_REVIEW = "option_review"
+
+
+class HitlRejectBehavior(str, Enum):
+    RESUME = "resume"
+
+
 class RouterRoute(str, Enum):
     DOCUMENT = "document"
     MEMORY = "memory"
@@ -205,9 +214,19 @@ class AgentCheckpointerMode(str, Enum):
     POSTGRES = "postgres"
 
 
+class WorkflowRuntimeKind(str, Enum):
+    COMPILED_RAG = "compiled_rag"
+
+
 class EvidenceCompressionMode(str, Enum):
     NONE = "none"
     COMPACT = "compact"
+
+
+class PlannerRiskLevel(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
 
 
 class ToolContractId(str, Enum):

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
+from app.db.enums import ReasoningFormat
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import ChatTurn, ChatTurnStatus, MessageRole
 from app.time_utils import utc_now
@@ -42,7 +43,7 @@ class ExpandedMessage:
     context_compact: Optional[str] = None
     reasoning: Optional[str] = None
     reasoning_available: bool = False
-    reasoning_format: str = "none"
+    reasoning_format: str = ReasoningFormat.NONE.value
     web_sources: Optional[List[Dict[str, Any]]] = None
     metadata: Optional[Dict[str, Any]] = None
     agent_run_id: Optional[str] = None
@@ -85,7 +86,7 @@ def _normalize_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     data.setdefault("answer", None)
     data.setdefault("reasoning", "")
     data.setdefault("reasoning_available", False)
-    data.setdefault("reasoning_format", "none")
+    data.setdefault("reasoning_format", ReasoningFormat.NONE.value)
     data.setdefault("web_sources", [])
     data.setdefault("document_sources", [])
     data.setdefault("used_chat_ids", [])
@@ -137,7 +138,7 @@ def _expand_turn(turn: ChatTurn) -> List[ExpandedMessage]:
                 context_compact=(payload.get("metadata") or {}).get("context_compact"),
                 reasoning=payload.get("reasoning") or "",
                 reasoning_available=bool(payload.get("reasoning_available")),
-                reasoning_format=payload.get("reasoning_format") or "none",
+                reasoning_format=payload.get("reasoning_format") or ReasoningFormat.NONE.value,
                 web_sources=payload.get("web_sources") or None,
                 metadata=payload.get("metadata") or {},
                 agent_run_id=turn.agent_run_id,
@@ -173,7 +174,7 @@ class MessageRepository:
         status: str = ChatTurnStatus.COMPLETED.value,
         reasoning: Optional[str] = "",
         reasoning_available: bool = False,
-        reasoning_format: str = "none",
+        reasoning_format: str = ReasoningFormat.NONE.value,
         web_sources: Optional[List[Dict[str, Any]]] = None,
         document_sources: Optional[List[Dict[str, Any]]] = None,
         used_chat_ids: Optional[List[str]] = None,
@@ -198,7 +199,7 @@ class MessageRepository:
                 "answer": answer,
                 "reasoning": reasoning or "",
                 "reasoning_available": reasoning_available,
-                "reasoning_format": reasoning_format or "none",
+                "reasoning_format": reasoning_format or ReasoningFormat.NONE.value,
                 "web_sources": web_sources or [],
                 "document_sources": document_sources or [],
                 "used_chat_ids": used_chat_ids or [],
@@ -235,7 +236,7 @@ class MessageRepository:
         context_compact: Optional[str] = None,
         reasoning: Optional[str] = None,
         reasoning_available: bool = False,
-        reasoning_format: str = "none",
+        reasoning_format: str = ReasoningFormat.NONE.value,
         web_sources: Optional[List[Dict[str, Any]]] = None,
     ) -> ExpandedMessage:
         """
@@ -359,7 +360,7 @@ class MessageRepository:
         self,
         message_id: str,
         reasoning: str,
-        reasoning_format: str = "raw",
+        reasoning_format: str = ReasoningFormat.RAW.value,
     ) -> bool:
         session = await self._get_session()
         async with session.begin():

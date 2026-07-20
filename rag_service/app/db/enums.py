@@ -77,6 +77,7 @@ class OperationResultStatus(str, Enum):
 
     SUCCESS = "success"
     ERROR = "error"
+    SKIPPED = "skipped"
 
 
 class EmbeddingReadinessStatus(str, Enum):
@@ -84,6 +85,7 @@ class EmbeddingReadinessStatus(str, Enum):
 
     READY = "ready"
     NOT_READY = "not_ready"
+    BLOCKED = "blocked"
 
 
 class ThreadCloneMode(str, Enum):
@@ -91,3 +93,26 @@ class ThreadCloneMode(str, Enum):
 
     FULL_THREAD = "full_thread"
     FROM_MESSAGE = "from_message"
+
+
+class FileStatusSection(str, Enum):
+    """Top-level file processing status sections."""
+
+    PARSING = "parsing"
+    INDEXING = "indexing"
+
+
+class IndexingProgressStatus(str, Enum):
+    """High-level async indexing response statuses."""
+
+    IN_PROGRESS = "in_progress"
+
+
+class ReasoningFormat(str, Enum):
+    """Stored reasoning trace formats."""
+
+    NONE = "none"
+    STRUCTURED = "structured"
+    TAGGED_TEXT = "tagged_text"
+    MARKDOWN = "markdown"
+    RAW = "raw"

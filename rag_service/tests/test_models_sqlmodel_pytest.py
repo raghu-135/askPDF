@@ -23,21 +23,39 @@ try:
         ProcessStatus,
         WorkflowVisibility,
     )
-    from app.db.enums import EmbeddingReadinessStatus, OperationResultStatus, ThreadCloneMode
+    from app.agent.tool_contract import ToolErrorCode, ToolWarningCode
+    from app.db.enums import (
+        EmbeddingReadinessStatus,
+        FileStatusSection,
+        IndexingProgressStatus,
+        OperationResultStatus,
+        ReasoningFormat,
+        ThreadCloneMode,
+    )
     from app.agent_workflows.enums import (
         AgentCheckpointerMode,
         AgentRunResumeAction,
         EvidenceCompressionMode,
         EvaluatorRoute,
+        HitlInterruptType,
         HitlMode,
         HitlPhase,
+        HitlRejectBehavior,
         HitlSelectionMode,
         InterruptStatus,
+        PlannerRiskLevel,
         PlannerRoute,
         RouteFunctionId,
         RouterRoute,
+        WorkflowRuntimeKind,
     )
-    from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource, TimelineEventType, TimelineSourceType
+    from app.rag.enums import (
+        ReembedSkipReason,
+        ThreadTimelineOrder,
+        ThreadTimelineSource,
+        TimelineEventType,
+        TimelineSourceType,
+    )
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
 except ImportError:
@@ -236,14 +254,26 @@ class TestProcessStatusEnum:
         assert EvaluatorRoute.ANSWER_BUDGET_EXHAUSTED.value == "answer_budget_exhausted"
         assert RouteFunctionId.HITL_GATE.value == "hitl_gate_route"
         assert OperationResultStatus.SUCCESS.value == "success"
+        assert OperationResultStatus.SKIPPED.value == "skipped"
         assert EmbeddingReadinessStatus.NOT_READY.value == "not_ready"
+        assert EmbeddingReadinessStatus.BLOCKED.value == "blocked"
+        assert FileStatusSection.INDEXING.value == "indexing"
+        assert IndexingProgressStatus.IN_PROGRESS.value == "in_progress"
+        assert ReasoningFormat.TAGGED_TEXT.value == "tagged_text"
         assert ThreadCloneMode.FROM_MESSAGE.value == "from_message"
         assert ThreadTimelineSource.WEB_CACHE.value == "web_cache"
         assert ThreadTimelineOrder.NEWEST.value == "newest"
         assert TimelineSourceType.CONVERSATION.value == "conversation"
         assert TimelineEventType.WEB_SEARCH_PERFORMED.value == "web_search_performed"
+        assert ReembedSkipReason.REEMBED_IN_PROGRESS.value == "reembed_in_progress"
         assert AgentCheckpointerMode.POSTGRES.value == "postgres"
         assert EvidenceCompressionMode.COMPACT.value == "compact"
+        assert HitlInterruptType.OPTION_REVIEW.value == "option_review"
+        assert HitlRejectBehavior.RESUME.value == "resume"
+        assert WorkflowRuntimeKind.COMPILED_RAG.value == "compiled_rag"
+        assert PlannerRiskLevel.HIGH.value == "high"
+        assert ToolWarningCode.WEB_SEARCH_DISABLED.value == "web_search_disabled"
+        assert ToolErrorCode.failed("search_web") == "search_web_failed"
 
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel not available - migration not complete")

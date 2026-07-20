@@ -22,7 +22,10 @@ from app.db.models_sqlmodel import (
 )
 from app.db.enums import (
     EmbeddingReadinessStatus,
+    FileStatusSection,
+    IndexingProgressStatus,
     OperationResultStatus,
+    ReasoningFormat,
     ThreadCloneMode,
 )
 
@@ -284,7 +287,7 @@ async def create_message(
     context_compact: str = None,
     reasoning: str = None,
     reasoning_available: bool = False,
-    reasoning_format: str = "none",
+    reasoning_format: str = ReasoningFormat.NONE.value,
     web_sources: list = None,
 ):
     """Create a new message in a thread."""
@@ -302,7 +305,7 @@ async def create_chat_turn(
     status: str = ChatTurnStatus.COMPLETED.value,
     reasoning: str = "",
     reasoning_available: bool = False,
-    reasoning_format: str = "none",
+    reasoning_format: str = ReasoningFormat.NONE.value,
     web_sources: list = None,
     document_sources: list = None,
     used_chat_ids: list = None,
@@ -412,8 +415,15 @@ __all__ = [
     # Models
     "ProcessStatus",
     "MessageRole",
+    "FileSourceType",
+    "ChatTurnStatus",
+    "WorkflowVisibility",
+    "AgentRunStatus",
     "EmbeddingReadinessStatus",
+    "FileStatusSection",
+    "IndexingProgressStatus",
     "OperationResultStatus",
+    "ReasoningFormat",
     "ThreadCloneMode",
     "Thread",
     "File",

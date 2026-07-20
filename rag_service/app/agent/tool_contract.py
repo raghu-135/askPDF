@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from datetime import timedelta
+from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
 from langchain_core.runnables import RunnableConfig
@@ -27,7 +28,7 @@ class AskPdfTool(Protocol):
         ...
 
 
-class ToolWarningCode:
+class ToolWarningCode(str, Enum):
     EMPTY_EXTERNAL_TOOL_RESULT = "empty_external_tool_result"
     MISSING_DOCUMENT_VECTORS = "missing_document_vectors"
     MISSING_THREAD_CONTEXT = "missing_thread_context"
@@ -43,12 +44,16 @@ class ToolWarningCode:
     WEB_SEARCH_DISABLED = "web_search_disabled"
 
 
-class ToolErrorCode:
+class ToolErrorCode(str, Enum):
     TOOL_FAILED_SUFFIX = "failed"
 
     @staticmethod
     def failed(tool_name: str) -> str:
-        return f"{tool_name}_{ToolErrorCode.TOOL_FAILED_SUFFIX}"
+        return f"{tool_name}_{ToolErrorCode.TOOL_FAILED_SUFFIX.value}"
+
+
+def _wire_string(value: Any) -> str:
+    return value.value if isinstance(value, Enum) else str(value)
 
 
 class ToolError(BaseModel):
@@ -127,7 +132,7 @@ def make_tool_result(
     error: Optional[ToolError] = None,
 ) -> ToolResult:
     source_items = [item for item in (sources or []) if isinstance(item, dict)]
-    warning_items = [str(item) for item in (warnings or []) if item]
+    warning_items = [_wire_string(item) for item in (warnings or []) if item]
     elapsed_ms = (time.perf_counter() - started) * 1000 if started is not None else 0.0
     completed_at = utc_now()
     trace = tool_trace(tool_name, config)
@@ -235,14 +240,14 @@ def normalize_tool_result(raw: Any, *, tool_name: str = "unknown_tool", config: 
     else:
         payload = {"content": str(raw or "")}
 
-    warnings = list(payload.get("warnings") or [])
+    warnings = [_wire_string(item) for item in list(payload.get("warnings") or []) if item]
     content = payload.get("content")
     if content is None:
         content = ""
-        warnings.append(ToolWarningCode.TOOL_OUTPUT_MISSING_CONTENT)
+        warnings.append(ToolWarningCode.TOOL_OUTPUT_MISSING_CONTENT.value)
     if not isinstance(content, str):
         content = str(content)
-        warnings.append(ToolWarningCode.TOOL_OUTPUT_CONTENT_COERCED)
+        warnings.append(ToolWarningCode.TOOL_OUTPUT_CONTENT_COERCED.value)
 
     artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
     legacy_artifacts = {
@@ -262,7 +267,7 @@ def normalize_tool_result(raw: Any, *, tool_name: str = "unknown_tool", config: 
         sources = raw_sources
     else:
         sources = []
-        warnings.append(ToolWarningCode.TOOL_OUTPUT_SOURCES_INVALID)
+        warnings.append(ToolWarningCode.TOOL_OUTPUT_SOURCES_INVALID.value)
 
     trace = payload.get("trace") if isinstance(payload.get("trace"), dict) else tool_trace(tool_name, config).model_dump(mode="json")
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
