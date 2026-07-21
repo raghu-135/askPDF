@@ -1,4 +1,4 @@
-import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails } from '../../lib/api';
+import type { AgentDebugTrace, AgentRunDebug, AgentRunDetails, AgentRunFinalOutput, AgentRunNodeDetailManifest, BuilderTestStreamEnvelope } from '../../lib/api';
 import {
   formatNodeInstanceLabel,
   formatNodeLabel,
@@ -62,6 +62,8 @@ export interface TraceRunView {
   warningCount: number;
   errorCount: number;
   errors: Record<string, any>[];
+  finalOutput?: AgentRunFinalOutput;
+  detailManifest: AgentRunNodeDetailManifest[];
 }
 
 const asObject = (value: any): Record<string, any> => (
@@ -233,6 +235,8 @@ export const buildRunTraceView = (
       warningCount: asNumber(summary.warningCount) ?? Number(metrics.tool_warning_count ?? 0),
       errorCount: asNumber(summary.errorCount) ?? Number(metrics.error_count ?? metrics.tool_error_count ?? 0),
       errors: asArray(summary.errors),
+      finalOutput: runDetails.final_output || debug.final_output,
+      detailManifest: Array.isArray(debug.detail_manifest) ? debug.detail_manifest : [],
     };
   } catch (err) {
     if (typeof console !== 'undefined') {
@@ -240,6 +244,84 @@ export const buildRunTraceView = (
     }
     return undefined;
   }
+};
+
+export const buildLiveTraceView = (
+  events: BuilderTestStreamEnvelope[],
+): TraceRunView => {
+  const nodes: TraceNodeView[] = [];
+  const nodeIndex = new Map<string, number>();
+  const tools: TraceToolView[] = [];
+  let finalOutput: AgentRunFinalOutput | undefined;
+  let route: string | undefined;
+  let routeReason: string | undefined;
+
+  events.forEach((envelope) => {
+    const data = asObject(envelope.data);
+    if (envelope.event.startsWith('node.') && typeof data.node_id === 'string') {
+      const visitIndex = asNumber(data.visit_index) || 1;
+      const key = `${data.node_id}:${visitIndex}`;
+      const status = envelope.event === 'node.started' ? 'active'
+        : envelope.event === 'node.failed' ? 'error'
+          : envelope.event === 'node.skipped' ? 'skipped'
+            : 'completed';
+      const rawError = data.detail?.error ?? data.error;
+      const row: TraceNodeView = {
+        id: data.node_id,
+        type: asNonEmptyString(data.node_type),
+        label: formatNodeLabel(data.node_id, asNonEmptyString(data.node_type)),
+        instanceLabel: formatNodeInstanceLabel(data.node_id, asNonEmptyString(data.node_type)),
+        visitIndex,
+        status,
+        skipped: status === 'skipped',
+        route: asNonEmptyString(data.route),
+        routeReason: asNonEmptyString(data.route_reason),
+        warningCodes: asStringArray(data.warnings),
+        error: typeof rawError === 'object' && rawError !== null
+          ? asObject(rawError)
+          : rawError ? { raw_message: String(rawError) } : {},
+        raw: data,
+      };
+      const existing = nodeIndex.get(key);
+      if (existing === undefined) {
+        nodeIndex.set(key, nodes.length);
+        nodes.push(row);
+      } else {
+        nodes[existing] = { ...nodes[existing], ...row, raw: { ...nodes[existing].raw, ...data } };
+      }
+      route = row.route || route;
+      routeReason = row.routeReason || routeReason;
+    }
+    if (envelope.event === 'tool.completed') tools.push(toolViewFromSummary(data));
+    if (envelope.event === 'run.completed') {
+      finalOutput = asObject(data.final_output) as AgentRunFinalOutput;
+      if (!finalOutput.answer && typeof data.answer === 'string') finalOutput.answer = data.answer;
+      route = asNonEmptyString(data.route) || route;
+      routeReason = asNonEmptyString(data.route_reason) || routeReason;
+    }
+  });
+
+  return {
+    route,
+    routeReason,
+    metrics: {},
+    nodes,
+    tools,
+    usedNodeCount: new Set(nodes.filter((node) => !node.skipped).map((node) => node.id)).size,
+    usedToolCount: tools.length,
+    warningCount: nodes.reduce((count, node) => count + node.warningCodes.length, 0) + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
+    errorCount: nodes.filter((node) => node.status === 'error').length + tools.filter((tool) => !tool.ok).length,
+    errors: nodes.map((node) => node.error).filter((error): error is Record<string, any> => Boolean(error && Object.keys(error).length)),
+    finalOutput,
+    detailManifest: nodes.filter((node) => node.raw.detail).map((node) => ({
+      node_id: node.id,
+      node_type: node.type,
+      visit_index: node.visitIndex || 1,
+      status: node.status,
+      available: true,
+      truncated: Boolean(node.raw.detail?.safety?.truncated),
+    })),
+  };
 };
 
 export const buildTraceExportJson = (view?: TraceRunView): string => (

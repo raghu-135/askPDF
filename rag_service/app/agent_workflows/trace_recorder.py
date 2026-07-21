@@ -46,6 +46,14 @@ from app.agent_workflows.trace_sanitization import (
     _set_attributes,
 )
 from app.agent_workflows.trace_summary import _build_summary_from_trace, build_debug_graph
+from app.agent_workflows.trace_details import (
+    TRACE_DETAIL_RUN_LIMIT,
+    final_output_from_result,
+    sanitize_trace_detail,
+    state_changes,
+    trace_detail_size,
+)
+from app.agent.reasoning import normalize_ai_response
 from app.time_utils import iso_utc_z
 
 
@@ -73,6 +81,10 @@ class AgentTraceRecorder:
         }
         self._node_index = 0
         self._tool_index = 0
+        self._node_details: Dict[str, Dict[str, Any]] = {}
+        self._tool_details: List[Dict[str, Any]] = []
+        self._detail_bytes = 0
+        self._detail_limit_reached = False
         self._finalized = False
         self._root_span = self._start_span(
             span_id=self.run_span_id,
@@ -90,6 +102,169 @@ class AgentTraceRecorder:
             order=0,
             end_immediately=False,
         )
+
+    @staticmethod
+    def _detail_key(node_id: str, visit_index: Any) -> str:
+        try:
+            visit = max(1, int(visit_index))
+        except (TypeError, ValueError):
+            visit = 1
+        return f"{node_id}:{visit}"
+
+    def _store_detail(self, key: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+        previous = self._node_details.get(key)
+        previous_safety = _as_dict((previous or {}).get("safety"))
+        sanitized, current_safety = sanitize_trace_detail({name: value for name, value in detail.items() if name != "safety"})
+        safety = {
+            "redacted_fields": list(dict.fromkeys([*_as_list(previous_safety.get("redacted_fields")), *_as_list(current_safety.get("redacted_fields"))])),
+            "truncated_fields": list(dict.fromkeys([*_as_list(previous_safety.get("truncated_fields")), *_as_list(current_safety.get("truncated_fields"))])),
+            "omitted_fields": list(dict.fromkeys([*_as_list(previous_safety.get("omitted_fields")), *_as_list(current_safety.get("omitted_fields"))])),
+            "truncated": bool(previous_safety.get("truncated") or current_safety.get("truncated")),
+        }
+        if previous_safety.get("run_limit_reached"):
+            safety["run_limit_reached"] = True
+        payload = {**sanitized, "safety": safety}
+        size = trace_detail_size(payload)
+        previous_size = trace_detail_size(previous) if previous else 0
+        if self._detail_bytes - previous_size + size > TRACE_DETAIL_RUN_LIMIT:
+            self._detail_limit_reached = True
+            payload = {
+                "node_id": detail.get("node_id"),
+                "node_type": detail.get("node_type"),
+                "visit_index": detail.get("visit_index"),
+                "status": detail.get("status"),
+                "safety": {
+                    "truncated": True,
+                    "run_limit_reached": True,
+                    "redacted_fields": safety["redacted_fields"],
+                    "truncated_fields": list(dict.fromkeys([*safety["truncated_fields"], "detail"])),
+                    "omitted_fields": safety["omitted_fields"],
+                },
+            }
+            size = trace_detail_size(payload)
+        self._detail_bytes = self._detail_bytes - previous_size + size
+        self._node_details[key] = payload
+        return payload
+
+    def record_node_started(self, *, node_id: str, node_type: str, visit_index: int, state: Mapping[str, Any]) -> Dict[str, Any]:
+        key = self._detail_key(node_id, visit_index)
+        existing = self._node_details.get(key) or {}
+        return self._store_detail(
+            key,
+            {
+                **existing,
+                "node_id": node_id,
+                "node_type": node_type,
+                "visit_index": visit_index,
+                "status": "running",
+                "checkpoint_before": dict(state),
+            },
+        )
+
+    def record_llm_detail(
+        self,
+        *,
+        node_id: str,
+        node_type: str,
+        visit_index: int,
+        messages: List[Any],
+        response: Any,
+    ) -> Dict[str, Any]:
+        key = self._detail_key(node_id, visit_index)
+        existing = self._node_details.get(key) or {
+            "node_id": node_id,
+            "node_type": node_type,
+            "visit_index": visit_index,
+        }
+        normalized = normalize_ai_response(response)
+        prompt = []
+        for message in messages:
+            prompt.append({
+                "role": getattr(message, "type", None) or message.__class__.__name__.replace("Message", "").lower(),
+                "content": getattr(message, "content", ""),
+            })
+        llm = {
+            "prompt": prompt,
+            "response": normalized.get("answer"),
+            "reasoning": normalized.get("reasoning"),
+            "reasoning_available": bool(normalized.get("reasoning_available")),
+            "reasoning_format": normalized.get("reasoning_format"),
+        }
+        return self._store_detail(key, {**existing, "llm": llm})
+
+    def record_tool_detail(self, *, payload: Mapping[str, Any], tool_input: Any = None) -> Dict[str, Any]:
+        caller = str(payload.get("caller_node") or "")
+        visit_index = payload.get("caller_visit_index")
+        detail, safety = sanitize_trace_detail({"tool_input": tool_input, "result": dict(payload)})
+        row = {**detail, "safety": safety}
+        self._tool_details.append(row)
+        key = self._detail_key(caller, visit_index)
+        existing = self._node_details.get(key)
+        if existing is not None:
+            self._store_detail(key, {**existing, "tools": [*(existing.get("tools") or []), row]})
+        return row
+
+    def record_node_completed(
+        self,
+        *,
+        node_id: str,
+        node_type: str,
+        visit_index: int,
+        state: Mapping[str, Any],
+        update: Mapping[str, Any],
+        status: str,
+        error: Any = None,
+        event: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        key = self._detail_key(node_id, visit_index)
+        existing = self._node_details.get(key) or {}
+        after = {**dict(state), **dict(update)} if error is None else None
+        before_safe, _ = sanitize_trace_detail(dict(state))
+        after_safe, _ = sanitize_trace_detail(after) if after is not None else (None, {})
+        changes = state_changes(before_safe, after_safe) if isinstance(after_safe, dict) else {}
+        return self._store_detail(
+            key,
+            {
+                **existing,
+                "node_id": node_id,
+                "node_type": node_type,
+                "visit_index": visit_index,
+                "status": status,
+                "checkpoint_before": dict(state),
+                "changes": changes,
+                "checkpoint_after": after,
+                "output": dict(update),
+                "event": dict(event or {}),
+                "error": str(error) if error is not None else None,
+            },
+        )
+
+    def get_node_detail(self, node_id: str, visit_index: int) -> Optional[Dict[str, Any]]:
+        return self._node_details.get(self._detail_key(node_id, visit_index))
+
+    def record_interrupted_snapshot(self, *, interrupt: Mapping[str, Any], state: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+        node_id = str(interrupt.get("node_id") or interrupt.get("gate_id") or "")
+        if not node_id:
+            return None
+        existing_visits = [
+            int(detail.get("visit_index") or 1)
+            for detail in self._node_details.values()
+            if detail.get("node_id") == node_id
+        ]
+        visit_index = max(existing_visits) if existing_visits else int((state.get("node_visit_counts") or {}).get(node_id, 0)) + 1
+        node_type = str(_as_dict(self._node_spec_by_id.get(node_id)).get("type") or node_id)
+        return self.record_node_completed(
+            node_id=node_id,
+            node_type=node_type,
+            visit_index=visit_index,
+            state=state,
+            update={},
+            status=NodeEventStatus.INTERRUPTED.value,
+            event={"interrupt": dict(interrupt)},
+        )
+
+    def tool_details(self) -> List[Dict[str, Any]]:
+        return list(self._tool_details)
 
     def _node_display_name(self, node: str, node_type: Optional[str] = None) -> str:
         spec = _as_dict(self._node_spec_by_id.get(node))
@@ -481,6 +656,7 @@ class AgentTraceRecorder:
         route: Any = None,
         route_reason: Any = None,
         error: Any = None,
+        result: Any = None,
     ) -> Dict[str, Any]:
         if not self._finalized:
             self.run = run
@@ -507,11 +683,20 @@ class AgentTraceRecorder:
             self._finalized = True
         trace = self._build_trace(run=run, chat_turn_id=chat_turn_id, metrics=metrics)
         summary = self._build_summary(trace)
+        final_output = final_output_from_result(result)
         payload = {
             "version": DEBUG_PAYLOAD_VERSION,
             "trace": trace,
             "summary": summary,
+            "details": list(self._node_details.values()),
+            "detail_safety": {
+                "size_bytes": self._detail_bytes,
+                "run_limit_bytes": TRACE_DETAIL_RUN_LIMIT,
+                "truncated": self._detail_limit_reached,
+            },
         }
+        if final_output:
+            payload["final_output"] = final_output
         graph_spec = _as_dict(_as_dict(self.resolved_spec.get("config")).get("graph"))
         if _as_list(graph_spec.get("nodes")):
             payload["graph"] = build_debug_graph(resolved_spec=self.resolved_spec, summary=summary)
@@ -566,8 +751,7 @@ class AgentTraceRecorder:
             "thread_id": getattr(run, "thread_id", None),
             "chat_turn_id": chat_turn_id,
             "user_id": getattr(run, "user_id", None),
-            "workflow_id": getattr(run, "workflow_id", None),
-            "workflow_id": self.resolved_spec.get("workflow_id"),
+            "workflow_id": self.resolved_spec.get("workflow_id") or getattr(run, "workflow_id", None),
             "status": getattr(run, "status", None),
             "started_at": iso_utc_z(run.started_at) if getattr(run, "started_at", None) else None,
             "completed_at": iso_utc_z(run.completed_at) if getattr(run, "completed_at", None) else None,

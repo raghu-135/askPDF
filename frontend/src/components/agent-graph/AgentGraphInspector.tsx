@@ -10,6 +10,8 @@ import {
   JsonPreview,
   TraceObject,
 } from './AgentGraphInspectorPrimitives';
+import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
+import type { AgentRunNodeDetail } from '../../lib/api';
 
 const sectionBg = 'rgba(0,0,0,0.03)';
 
@@ -30,7 +32,7 @@ const visitDisplayLabel = (visitIndex?: number) => (
   Number.isFinite(Number(visitIndex)) ? `Visit ${Number(visitIndex)}` : 'Visit'
 );
 
-export default function AgentGraphInspector({ selection }: { selection: AgentGraphSelection }) {
+export default function AgentGraphInspector({ selection, executionDetail }: { selection: AgentGraphSelection; executionDetail?: AgentRunNodeDetail }) {
   const [tab, setTab] = useState<'details' | 'raw'>('details');
 
   if (!selection) {
@@ -126,6 +128,7 @@ export default function AgentGraphInspector({ selection }: { selection: AgentGra
       </Tabs>
       {tab === 'details' ? (
         <>
+          {executionDetail && <AgentNodeExecutionDetails detail={executionDetail} />}
           <DetailLine label="Instance" value={node.id} />
           <DetailLine label="Type" value={node.type} />
           {(node.category || capabilities.length > 0 || hasValue(observability)) && (

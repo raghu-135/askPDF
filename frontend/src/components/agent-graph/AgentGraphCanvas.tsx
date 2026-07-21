@@ -1,4 +1,4 @@
-import React, { Component, ReactNode, useEffect, useMemo, useState } from 'react';
+import React, { Component, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Chip, Typography, useTheme } from '@mui/material';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import {
@@ -20,6 +20,7 @@ import AgentGraphInspector from './AgentGraphInspector';
 import AgentGraphNode from './AgentGraphNode';
 import { applyTraceFocusToGraph, buildAgentGraph, getAgentGraphSpec } from './agent-graph-mapper';
 import type { TraceRunView } from '../agent-debug/agent-trace-projection';
+import type { AgentRunNodeDetail } from '../../lib/api';
 import type {
   AgentGraphEdge,
   AgentGraphMode,
@@ -143,6 +144,8 @@ function AgentGraphCanvasInner({
   showInspector,
   onSelectionChange,
   onNodePositionChange,
+  selectedNodeId,
+  selectedNodeDetail,
 }: {
   resolvedSpec?: Record<string, any>;
   workflowId?: string;
@@ -153,6 +156,8 @@ function AgentGraphCanvasInner({
   showInspector: boolean;
   onSelectionChange?: (selection: AgentGraphSelection) => void;
   onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
+  selectedNodeId?: string;
+  selectedNodeDetail?: AgentRunNodeDetail;
 }) {
   const theme = useTheme();
   const { fitView } = useReactFlow();
@@ -188,6 +193,11 @@ function AgentGraphCanvasInner({
     span_ids: focusedTraceRefs?.span_ids || [],
   }), [focusedTraceRefs]);
   const layoutDirection = mode === 'run-debug' ? 'DOWN' : 'RIGHT';
+  const onSelectionChangeRef = useRef(onSelectionChange);
+
+  useEffect(() => {
+    onSelectionChangeRef.current = onSelectionChange;
+  }, [onSelectionChange]);
 
   const flowEdges = useMemo((): Edge[] => graph.edges.map((edge: AgentGraphEdge) => {
     const color = getStatusEdgeColor(edge);
@@ -252,10 +262,6 @@ function AgentGraphCanvasInner({
   }, [graph.edges, graph.nodes, selection]);
 
   useEffect(() => {
-    onSelectionChange?.(selection);
-  }, [onSelectionChange, selection]);
-
-  useEffect(() => {
     const hasFocusRefs = Boolean(focusedTraceRefs?.node_ids?.length || focusedTraceRefs?.span_ids?.length);
     if (!hasFocusRefs) {
       setSelection(null);
@@ -266,6 +272,12 @@ function AgentGraphCanvasInner({
       setSelection({ kind: 'node', node: focusedNode });
     }
   }, [focusedTraceRefs, focusSignature, graph.nodes]);
+
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    const selectedNode = graph.nodes.find((node) => node.id === selectedNodeId);
+    if (selectedNode) setSelection({ kind: 'node', node: selectedNode });
+  }, [graph.nodes, selectedNodeId]);
 
   if (graph.nodes.length === 0) {
     return (
@@ -286,6 +298,10 @@ function AgentGraphCanvasInner({
   };
   const handleNodesChange: OnNodesChange<Node<AgentGraphNodeModel>> = (changes) => {
     setFlowNodes((current) => applyNodeChanges(changes, current));
+  };
+  const selectFromCanvas = (nextSelection: AgentGraphSelection) => {
+    setSelection(nextSelection);
+    onSelectionChangeRef.current?.(nextSelection);
   };
 
   return (
@@ -342,10 +358,10 @@ function AgentGraphCanvasInner({
             zoomOnScroll={false}
             zoomOnPinch
             preventScrolling={false}
-            onNodeClick={(_, node) => setSelection({ kind: 'node', node: node.data as AgentGraphNodeModel })}
+            onNodeClick={(_, node) => selectFromCanvas({ kind: 'node', node: node.data as AgentGraphNodeModel })}
             onNodeDragStop={handleNodeDragStop}
-            onEdgeClick={(_, edge) => setSelection({ kind: 'edge', edge: edge.data as any })}
-            onPaneClick={() => setSelection(null)}
+            onEdgeClick={(_, edge) => selectFromCanvas({ kind: 'edge', edge: edge.data as any })}
+            onPaneClick={() => selectFromCanvas(null)}
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={24} size={1} />
@@ -353,7 +369,7 @@ function AgentGraphCanvasInner({
           </ReactFlow>
         </AgentGraphErrorBoundary>
       </Box>
-      {showInspector ? <AgentGraphInspector selection={selection} /> : null}
+      {showInspector ? <AgentGraphInspector selection={selection} executionDetail={selectedNodeDetail} /> : null}
       {graph.executionPlan.length > 0 && (
         <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', gridColumn: '1 / -1' }}>
           Execution plan: {graph.executionPlan.join(' -> ')}
@@ -373,6 +389,8 @@ export default function AgentGraphCanvas(props: {
   showInspector?: boolean;
   onSelectionChange?: (selection: AgentGraphSelection) => void;
   onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
+  selectedNodeId?: string;
+  selectedNodeDetail?: AgentRunNodeDetail;
 }) {
   return (
     <ReactFlowProvider>

@@ -199,6 +199,11 @@ class AgentRunService:
                 )
             metrics = build_run_metrics(result, duration_ms=duration_ms)
             if status == AgentRunStatus.AWAITING_HUMAN.value:
+                if hasattr(trace_recorder, "record_interrupted_snapshot"):
+                    trace_recorder.record_interrupted_snapshot(
+                        interrupt=result.get("pending_interrupt") or {},
+                        state=result,
+                    )
                 if hasattr(trace_recorder, "record_runtime_event"):
                     trace_recorder.record_runtime_event(
                         "checkpoint.created",
@@ -220,6 +225,7 @@ class AgentRunService:
                     route=result.get("route"),
                     route_reason=result.get("route_reason"),
                     error=error_json,
+                    result=result,
                 )
                 paused_run = await self.repository.mark_run_awaiting_human(
                     run.id,
@@ -245,6 +251,7 @@ class AgentRunService:
                     route=result.get("route"),
                     route_reason=result.get("route_reason"),
                     error=error_json,
+                    result=result,
                 )
                 await self.repository.set_run_debug_trace(run.id, debug_payload)
             result.update(context)
@@ -269,6 +276,7 @@ class AgentRunService:
                     chat_turn_id=None,
                     metrics=metrics,
                     error=error_json,
+                    result={"agent_error": error_json},
                 )
                 await self.repository.set_run_debug_trace(run.id, debug_payload)
             raise
@@ -327,6 +335,11 @@ class AgentRunService:
             status = result.get("status") if isinstance(result.get("status"), str) else AgentRunStatus.COMPLETED.value
             if status == AgentRunStatus.AWAITING_HUMAN.value:
                 pending_interrupt = result.get("pending_interrupt") or {}
+                if hasattr(resume_trace_recorder, "record_interrupted_snapshot"):
+                    resume_trace_recorder.record_interrupted_snapshot(
+                        interrupt=pending_interrupt,
+                        state=result,
+                    )
                 if hasattr(resume_trace_recorder, "record_runtime_event"):
                     resume_trace_recorder.record_runtime_event(
                         "checkpoint.created",
@@ -348,6 +361,7 @@ class AgentRunService:
                     route=result.get("route"),
                     route_reason=result.get("route_reason"),
                     error=error_json,
+                    result=result,
                 )
                 debug_payload = resume_debug_payload
                 if isinstance(resolution.run.debug_trace_json, dict):
@@ -390,6 +404,7 @@ class AgentRunService:
                 route=result.get("route"),
                 route_reason=result.get("route_reason"),
                 error=error_json,
+                result=result,
             )
             if isinstance(completed_run.debug_trace_json, dict):
                 debug_payload = merge_debug_payloads(

@@ -108,7 +108,17 @@ async def invoke_llm_for_node(
     failure_data: Optional[Dict[str, Any]] = None,
 ) -> Any:
     try:
-        return await invoke_with_retry(func, messages, retry_observer=retry_observer)
+        response = await invoke_with_retry(func, messages, retry_observer=retry_observer)
+        trace_recorder = ((config or {}).get("configurable") or {}).get("trace_recorder")
+        if trace_recorder is not None and hasattr(trace_recorder, "record_llm_detail"):
+            trace_recorder.record_llm_detail(
+                node_id=runtime_node_id(config, node),
+                node_type=runtime_node_type(config, node),
+                visit_index=runtime_visit_index(config) or 1,
+                messages=messages,
+                response=response,
+            )
+        return response
     except Exception as exc:
         llm_failure = {
             "llm_result_summary": {

@@ -19,6 +19,7 @@ from app.agent_workflows.router_runtime import (
     _without_runtime_keys,
 )
 from app.agent_workflows.trace_sanitization import _bounded_value
+from app.agent_workflows.trace_details import final_output_from_result
 from app.agent_workflows.validator import WorkflowValidator
 from app.agent_workflows.repository import AgentWorkflowRepository
 from app.db import AgentRunStatus
@@ -129,9 +130,17 @@ async def persist_terminal_run(
                 route=result.get("route"),
                 route_reason=result.get("route_reason"),
                 error=error,
+                result=result,
             )
             if isinstance(run.debug_trace_json, dict):
-                debug = merge_debug_payloads(run.debug_trace_json, debug)
+                debug = merge_debug_payloads(
+                    run.debug_trace_json,
+                    debug,
+                    resolved_spec=run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {},
+                    run_status=run.status,
+                    completed_at=run.completed_at,
+                    metrics=metrics,
+                )
             replace_jsonb_field(run, "debug_trace_json", debug)
             await session.flush()
             await session.refresh(run)
@@ -247,8 +256,9 @@ async def stream_builder_test(
             event = item["event"]
             if event == "__done__":
                 current_tools = telemetry.get("tool_events") if isinstance(telemetry.get("tool_events"), list) else []
-                for tool_event in current_tools[seen_tool_events:]:
-                    yield {"event": "tool.completed", "data": _bounded_value(tool_event)}
+                full_tools = recorder.tool_details()
+                for index, tool_event in enumerate(current_tools[seen_tool_events:], start=seen_tool_events):
+                    yield {"event": "tool.completed", "data": {**_bounded_value(tool_event), "detail": full_tools[index] if index < len(full_tools) else None}}
                 seen_tool_events = len(current_tools)
                 break
             if event == "__failed__":
@@ -256,10 +266,16 @@ async def stream_builder_test(
             if event == "__cancelled__":
                 cancel_pending = True
                 break
-            yield {"event": event, "data": _bounded_value(item.get("data") or {})}
+            event_data = item.get("data") or {}
+            detail = event_data.get("detail") if isinstance(event_data, dict) else None
+            bounded_event_data = _bounded_value({key: value for key, value in event_data.items() if key != "detail"})
+            if detail is not None:
+                bounded_event_data["detail"] = detail
+            yield {"event": event, "data": bounded_event_data}
             current_tools = telemetry.get("tool_events") if isinstance(telemetry.get("tool_events"), list) else []
-            for tool_event in current_tools[seen_tool_events:]:
-                yield {"event": "tool.completed", "data": _bounded_value(tool_event)}
+            full_tools = recorder.tool_details()
+            for index, tool_event in enumerate(current_tools[seen_tool_events:], start=seen_tool_events):
+                yield {"event": "tool.completed", "data": {**_bounded_value(tool_event), "detail": full_tools[index] if index < len(full_tools) else None}}
             seen_tool_events = len(current_tools)
             if await cancel_requested(run.id):
                 cancel_pending = True
@@ -284,10 +300,18 @@ async def stream_builder_test(
         pending = _pending_interrupt_from_result(latest, checkpoint_thread_id=str(run.checkpoint_thread_id or run.id))
         result = _without_runtime_keys(latest)
         if pending:
+            recorder.record_interrupted_snapshot(interrupt=pending, state=result)
             metrics = build_run_metrics(result, duration_ms=duration_ms)
-            debug = recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, route=result.get("route"), route_reason=result.get("route_reason"))
+            debug = recorder.finalize(run=run, chat_turn_id=None, metrics=metrics, route=result.get("route"), route_reason=result.get("route_reason"), result=result)
             if isinstance(run.debug_trace_json, dict):
-                debug = merge_debug_payloads(run.debug_trace_json, debug)
+                debug = merge_debug_payloads(
+                    run.debug_trace_json,
+                    debug,
+                    resolved_spec=run.resolved_spec_json if isinstance(run.resolved_spec_json, dict) else {},
+                    run_status=run.status,
+                    completed_at=run.completed_at,
+                    metrics=metrics,
+                )
             stored = await AgentWorkflowRepository().mark_run_awaiting_human(
                 run.id,
                 pending,
@@ -304,14 +328,15 @@ async def stream_builder_test(
         finalized = True
         yield {
             "event": "run.completed",
-            "data": _bounded_value({
+            "data": {
                 "run_id": run.id,
                 "duration_ms": duration_ms,
                 "status": status,
-                "answer": result.get("final_answer"),
+                "answer": final_output_from_result(result).get("answer"),
+                "final_output": final_output_from_result(result),
                 "route": result.get("route"),
                 "route_reason": result.get("route_reason"),
-            }),
+            },
         }
     except Exception as exc:
         task.cancel()

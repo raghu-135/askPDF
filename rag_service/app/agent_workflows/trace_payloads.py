@@ -400,8 +400,66 @@ def merge_debug_payloads(
     from app.agent_workflows.trace_summary import _build_summary_from_trace, build_debug_graph
     summary = _build_summary_from_trace(base_trace, resolved_spec)
     payload = {**base_payload, "trace": base_trace, "summary": summary}
+    detail_by_visit: Dict[tuple[str, int], Dict[str, Any]] = {}
+    for detail in [*_as_list(base_payload.get("details")), *_as_list(incoming_payload.get("details"))]:
+        if not isinstance(detail, dict):
+            continue
+        try:
+            visit_index = max(1, int(detail.get("visit_index") or 1))
+        except (TypeError, ValueError):
+            visit_index = 1
+        detail_by_visit[(str(detail.get("node_id") or ""), visit_index)] = dict(detail)
+    if detail_by_visit:
+        from app.agent_workflows.trace_details import TRACE_DETAIL_RUN_LIMIT, trace_detail_size
+
+        retained_details: List[Dict[str, Any]] = []
+        retained_size = 0
+        omitted_visit_count = 0
+        merge_limit_reached = False
+        for detail in detail_by_visit.values():
+            retained = detail
+            detail_size = trace_detail_size(retained)
+            if retained_size + detail_size > TRACE_DETAIL_RUN_LIMIT:
+                merge_limit_reached = True
+                retained = {
+                    "node_id": detail.get("node_id"),
+                    "node_type": detail.get("node_type"),
+                    "visit_index": detail.get("visit_index"),
+                    "status": detail.get("status"),
+                    "safety": {
+                        "truncated": True,
+                        "run_limit_reached": True,
+                        "redacted_fields": _as_list(_as_dict(detail.get("safety")).get("redacted_fields")),
+                        "truncated_fields": [*_as_list(_as_dict(detail.get("safety")).get("truncated_fields")), "detail"],
+                        "omitted_fields": _as_list(_as_dict(detail.get("safety")).get("omitted_fields")),
+                    },
+                }
+                detail_size = trace_detail_size(retained)
+            if retained_size + detail_size > TRACE_DETAIL_RUN_LIMIT:
+                omitted_visit_count += 1
+                continue
+            retained_details.append(retained)
+            retained_size += detail_size
+        payload["details"] = retained_details
+    incoming_final = _as_dict(incoming_payload.get("final_output"))
+    if incoming_final:
+        payload["final_output"] = incoming_final
+    elif isinstance(base_payload.get("final_output"), dict):
+        payload["final_output"] = base_payload["final_output"]
+    detail_safety = {
+        **_as_dict(base_payload.get("detail_safety")),
+        **_as_dict(incoming_payload.get("detail_safety")),
+    }
+    if detail_by_visit:
+        detail_safety.update({
+            "size_bytes": retained_size,
+            "run_limit_bytes": TRACE_DETAIL_RUN_LIMIT,
+            "truncated": bool(detail_safety.get("truncated") or merge_limit_reached),
+            "omitted_visit_count": omitted_visit_count,
+        })
+    if detail_safety:
+        payload["detail_safety"] = detail_safety
     graph_spec = _as_dict(_as_dict(resolved_spec.get("config")).get("graph"))
     if _as_list(graph_spec.get("nodes")):
         payload["graph"] = build_debug_graph(resolved_spec=resolved_spec, summary=summary)
     return payload
-

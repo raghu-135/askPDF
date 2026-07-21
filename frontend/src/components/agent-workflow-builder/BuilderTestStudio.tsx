@@ -6,7 +6,6 @@ import {
   Box,
   Button,
   Checkbox,
-  Chip,
   CircularProgress,
   FormControlLabel,
   Paper,
@@ -14,7 +13,6 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import dynamic from 'next/dynamic';
 import {
   cancelAgentWorkflowBuilderTest,
   getLatestAgentWorkflowBuilderTest,
@@ -24,14 +22,13 @@ import {
   type BuilderTestStreamEnvelope,
 } from '../../lib/api';
 import { AgentRunResumeAction, AgentRunStatus, InterruptStatus } from '../../lib/enums';
-import { buildRunTraceView } from '../agent-debug/agent-trace-projection';
+import { buildLiveTraceView, buildRunTraceView } from '../agent-debug/agent-trace-projection';
+import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import {
   BuilderLlmModelPicker,
   BuilderThreadPicker,
   type BuilderModelHealth,
 } from './BuilderTestPickers';
-
-const AgentDebugCanvas = dynamic(() => import('../agent-graph/AgentDebugCanvas'), { ssr: false });
 
 const getSessionId = () => {
   if (typeof window === 'undefined') return 'server';
@@ -64,51 +61,37 @@ export default function BuilderTestStudio({
   const [error, setError] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
   const sessionId = useMemo(getSessionId, []);
-  const traceView = latest ? buildRunTraceView(latest) : undefined;
-  const liveTraceView = useMemo(() => {
-    const nodeMap = new Map<string, any>();
-    const tools: any[] = [];
-    events.forEach((event) => {
-      const nodeId = event.data?.node_id;
-      if (nodeId && event.event.startsWith('node.')) {
-        const status = event.event === 'node.started' ? 'active'
-          : event.event === 'node.failed' ? 'error'
-            : event.event === 'node.skipped' ? 'skipped'
-              : 'completed';
-        nodeMap.set(String(nodeId), {
-          id: String(nodeId),
-          type: event.data?.node_type,
-          label: String(nodeId).replace(/_/g, ' '),
-          instanceLabel: String(nodeId),
-          visitIndex: event.data?.visit_index,
-          status,
-          skipped: status === 'skipped',
-          raw: event.data,
-        });
-      }
-      if (event.event === 'tool.completed') {
-        tools.push({
-          name: event.data?.tool_name || event.data?.name || 'tool',
-          callerNode: event.data?.caller_node,
-          ok: event.data?.ok !== false,
-          warningCodes: event.data?.warnings || [],
-          raw: event.data,
-        });
-      }
-    });
+  const retainedTraceView = useMemo(() => latest ? buildRunTraceView(latest) : undefined, [latest]);
+  const liveTraceView = useMemo(() => buildLiveTraceView(events), [events]);
+  const executionTraceView = useMemo(() => {
+    if (!running || events.length === 0) return retainedTraceView || liveTraceView;
+    if (!retainedTraceView) return liveTraceView;
+    const liveVisits = new Set(liveTraceView.nodes.map((node) => `${node.id}:${node.visitIndex || 1}`));
+    const missingRetainedNodes = retainedTraceView.nodes.filter((node) => !liveVisits.has(`${node.id}:${node.visitIndex || 1}`));
+    if (missingRetainedNodes.length === 0) return liveTraceView;
+    const nodes = [...missingRetainedNodes, ...liveTraceView.nodes];
+    const tools = [...retainedTraceView.tools, ...liveTraceView.tools];
+    const detailManifest = new Map(
+      [...retainedTraceView.detailManifest, ...liveTraceView.detailManifest]
+        .map((row) => [`${row.node_id}:${row.visit_index}`, row] as const),
+    );
     return {
-      metrics: {},
-      nodes: Array.from(nodeMap.values()),
+      ...retainedTraceView,
+      ...liveTraceView,
+      nodes,
       tools,
-      usedNodeCount: nodeMap.size,
+      usedNodeCount: new Set(nodes.filter((node) => !node.skipped).map((node) => node.id)).size,
       usedToolCount: tools.length,
-      warningCount: 0,
-      errorCount: 0,
-      errors: [],
+      warningCount: nodes.reduce((count, node) => count + node.warningCodes.length, 0)
+        + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
+      errorCount: nodes.filter((node) => node.status === 'error').length
+        + tools.filter((tool) => !tool.ok).length,
+      errors: nodes.map((node) => node.error).filter((nodeError) => Boolean(nodeError && Object.keys(nodeError).length)),
+      finalOutput: liveTraceView.finalOutput || retainedTraceView.finalOutput,
+      detailManifest: [...detailManifest.values()],
     };
-  }, [events]);
+  }, [events.length, liveTraceView, retainedTraceView, running]);
   const terminal = [...events].reverse().find((event) => event.event.startsWith('run.') && event.event !== 'run.started');
-  const activeNode = [...events].reverse().find((event) => event.event === 'node.started')?.data?.node_id;
   const pending = latest?.pending_interrupt;
   const hasPendingInterrupt = Boolean(pending && String(pending.status || InterruptStatus.Pending) === InterruptStatus.Pending);
   const controlsLocked = running || hasPendingInterrupt;
@@ -131,7 +114,7 @@ export default function BuilderTestStudio({
   }, [baseWorkflowId, sessionId]);
 
   const acceptEvent = (event: BuilderTestStreamEnvelope) => {
-    setEvents((current) => [...current.slice(-199), event]);
+    if (event.event !== 'heartbeat') setEvents((current) => [...current, event]);
     if (event.data?.run_id) setRunId(String(event.data.run_id));
   };
 
@@ -151,6 +134,7 @@ export default function BuilderTestStudio({
     setError(null);
     setLatest(null);
     setEvents([]);
+    setRunId(null);
     setRunning(true);
     controller.current = new AbortController();
     try {
@@ -200,6 +184,7 @@ export default function BuilderTestStudio({
       if (err?.name !== 'AbortError') setError(err?.message || 'Unable to resume the test.');
     } finally {
       setRunning(false);
+      setStopping(false);
       controller.current = null;
     }
   };
@@ -245,41 +230,26 @@ export default function BuilderTestStudio({
         {error && <Alert severity="error" sx={{ mt: 1.5 }}>{error}</Alert>}
       </Paper>
       <Stack spacing={1.5} sx={{ minWidth: 0 }}>
-        <Paper variant="outlined" sx={{ p: 1.5 }}>
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-            <Typography variant="h6">Live progress</Typography>
-            <Chip size="small" label={latest?.status || terminal?.event || (running ? 'running' : 'not run')} color={running ? 'primary' : 'default'} />
-            {activeNode && running && <Chip size="small" variant="outlined" label={`Active: ${activeNode}`} />}
-          </Stack>
-          {events.length === 0 && !latest ? (
-            <Typography variant="body2" color="text.secondary">Start a test to see nodes, routes, and tools as they execute.</Typography>
-          ) : (
-            <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', rowGap: 0.75 }}>
-              {events.filter((event) => event.event !== 'heartbeat').slice(-14).map((event, index) => (
-                <Chip key={`${event.id}-${index}`} size="small" variant="outlined" label={`${event.event}${event.data?.node_id ? ` · ${event.data.node_id}` : ''}`} />
-              ))}
-            </Stack>
-          )}
-          {terminal?.data?.answer && <Typography sx={{ mt: 1.5, whiteSpace: 'pre-wrap' }}>{terminal.data.answer}</Typography>}
-        </Paper>
         {pending && String(pending.status || InterruptStatus.Pending) === InterruptStatus.Pending && (
           <Alert severity="info" action={
             <Stack direction="row" spacing={0.5}>
-              <Button size="small" onClick={() => void resume(AgentRunResumeAction.Approve)}>Approve</Button>
-              <Button size="small" color="error" onClick={() => void resume(AgentRunResumeAction.Reject)}>Reject</Button>
+              <Button size="small" disabled={running} onClick={() => void resume(AgentRunResumeAction.Approve)}>Approve</Button>
+              <Button size="small" color="error" disabled={running} onClick={() => void resume(AgentRunResumeAction.Reject)}>Reject</Button>
             </Stack>
           }>
             {pending.title || pending.prompt || 'This step needs human approval.'}
           </Alert>
         )}
         {(latest || events.length > 0) && (
-          <Box sx={{ minHeight: 520 }}>
-            <AgentDebugCanvas
-              resolvedSpec={latest?.resolved_spec_json || spec}
-              workflowId={latest?.workflow_id || baseWorkflowId}
-              traceView={traceView || liveTraceView}
-            />
-          </Box>
+          <AgentExecutionView
+            runId={runId}
+            threadId={latest?.thread_id || threadId}
+            resolvedSpec={latest?.resolved_spec_json || spec}
+            workflowId={latest?.workflow_id || baseWorkflowId}
+            traceView={executionTraceView}
+            status={latest?.status || terminal?.event || (running ? 'running' : 'not run')}
+            running={running}
+          />
         )}
         {latest?.status === AgentRunStatus.Cancelled && <Alert severity="warning">The test stopped after the active node finished. Its partial trace is shown above.</Alert>}
       </Stack>

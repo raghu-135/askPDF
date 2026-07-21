@@ -598,6 +598,53 @@ export interface AgentRunDebug {
     selectedRoute?: string;
     [key: string]: any;
   };
+  detail_manifest?: AgentRunNodeDetailManifest[];
+  detail_safety?: Record<string, any>;
+  final_output?: AgentRunFinalOutput;
+}
+
+export interface AgentRunNodeDetailManifest {
+  node_id: string;
+  node_type?: string;
+  visit_index: number;
+  status?: string;
+  available: boolean;
+  size_bytes?: number;
+  truncated?: boolean;
+}
+
+export interface AgentRunFinalOutput {
+  answer?: string;
+  clarification_options?: string[];
+  route?: string;
+  route_reason?: string;
+  reasoning?: string;
+  reasoning_available?: boolean;
+  reasoning_format?: string;
+  safety?: Record<string, any>;
+}
+
+export interface AgentRunNodeDetail {
+  node_id: string;
+  node_type?: string;
+  visit_index: number;
+  status?: string;
+  checkpoint_before?: Record<string, any>;
+  changes?: Record<string, any>;
+  checkpoint_after?: Record<string, any>;
+  output?: Record<string, any>;
+  event?: Record<string, any>;
+  llm?: {
+    prompt?: { role?: string; content?: unknown }[];
+    response?: unknown;
+    reasoning?: string;
+    reasoning_available?: boolean;
+    reasoning_format?: string;
+  };
+  tools?: Record<string, any>[];
+  error?: unknown;
+  safety?: Record<string, any>;
+  [key: string]: any;
 }
 
 export type AgentRunResumeAction = AgentRunResumeActionValue;
@@ -648,6 +695,7 @@ export interface AgentRunDetails {
   completed_at?: string | null;
   pending_interrupt?: AgentRunPendingInterrupt | null;
   debug?: AgentRunDebug | null;
+  final_output?: AgentRunFinalOutput | null;
   turns?: {
     id: string;
     kind?: string | null;
@@ -655,6 +703,18 @@ export interface AgentRunDetails {
     trace_refs?: AgentTraceRefs | null;
   }[];
   [key: string]: any;
+}
+
+export async function getAgentRunNodeDetails(
+  runId: string,
+  threadId: string,
+  nodeId: string,
+  visitIndex: number,
+): Promise<AgentRunNodeDetail> {
+  const params = new URLSearchParams({ thread_id: threadId, node_id: nodeId, visit_index: String(visitIndex) });
+  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/details?${params.toString()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()).detail;
 }
 
 export interface AgentRunSummary {

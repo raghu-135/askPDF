@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildTraceExportJson,
+  buildLiveTraceView,
   buildRunTraceView,
 } from '../src/components/agent-debug/agent-trace-projection.ts';
 
@@ -379,4 +380,40 @@ test('trace export returns full backend debug json', () => {
   assert.equal(exported.graph.selectedRoute, 'execute');
   assert.equal(exported.node_events, undefined);
   assert.equal(exported.tool_events, undefined);
+});
+
+test('live trace projection keeps loop visits, full details, tools, and final output', () => {
+  const detail = (visit) => ({
+    node_id: 'evidence_evaluator',
+    node_type: 'evidence_evaluator',
+    visit_index: visit,
+    status: 'completed',
+    checkpoint_before: { replan_count: visit - 1 },
+    checkpoint_after: { replan_count: visit },
+  });
+  const view = buildLiveTraceView([
+    { id: 1, event: 'node.started', data: { node_id: 'evidence_evaluator', node_type: 'evidence_evaluator', visit_index: 1 } },
+    { id: 2, event: 'node.completed', data: { node_id: 'evidence_evaluator', node_type: 'evidence_evaluator', visit_index: 1, evaluator_route: 'replan', detail: detail(1) } },
+    { id: 3, event: 'tool.completed', data: { tool_name: 'search_documents', caller_node: 'evidence_evaluator', caller_visit_index: 1, ok: true } },
+    { id: 4, event: 'node.started', data: { node_id: 'evidence_evaluator', node_type: 'evidence_evaluator', visit_index: 2 } },
+    { id: 5, event: 'node.completed', data: { node_id: 'evidence_evaluator', node_type: 'evidence_evaluator', visit_index: 2, evaluator_route: 'answer', detail: detail(2) } },
+    { id: 6, event: 'run.completed', data: { final_output: { answer: 'Complete final answer', route: 'document' } } },
+  ]);
+
+  assert.deepEqual(view.nodes.map((node) => node.visitIndex), [1, 2]);
+  assert.equal(view.nodes[0].raw.detail.checkpoint_after.replan_count, 1);
+  assert.equal(view.nodes[1].raw.detail.checkpoint_after.replan_count, 2);
+  assert.equal(view.tools[0].callerVisitIndex, 1);
+  assert.equal(view.finalOutput.answer, 'Complete final answer');
+  assert.deepEqual(view.detailManifest.map((row) => row.visit_index), [1, 2]);
+});
+
+test('live trace projection preserves string node failures', () => {
+  const view = buildLiveTraceView([
+    { id: 1, event: 'node.failed', data: { node_id: 'router', node_type: 'router', visit_index: 1, error: 'Model connection failed' } },
+  ]);
+
+  assert.equal(view.nodes[0].status, 'error');
+  assert.equal(view.nodes[0].error.raw_message, 'Model connection failed');
+  assert.equal(view.errors[0].raw_message, 'Model connection failed');
 });

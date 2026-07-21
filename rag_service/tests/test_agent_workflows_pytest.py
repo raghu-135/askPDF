@@ -33,6 +33,8 @@ from app.agent_workflows.graph import (
     normalize_evaluator_report,
 )
 from app.agent_workflows.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace, build_runtime_trace_event
+from app.agent_workflows.trace_details import TRACE_DETAIL_SCALAR_LIMIT, sanitize_trace_detail
+from app.agent_workflows.trace_payloads import merge_debug_payloads
 from app.agent_workflows.metrics import build_run_metrics
 from app.agent_workflows.node_catalog import collect_node_catalog_errors, get_node_catalog
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
@@ -116,6 +118,116 @@ def make_trace_recorder(run_id: str, thread_id: str, spec: dict, workflow_id: st
             completed_at=None,
         )
     )
+
+
+def test_trace_details_keep_loop_visits_full_reasoning_checkpoints_and_final_answer():
+    run = SimpleNamespace(
+        id="run-full-details",
+        thread_id="thread-full-details",
+        user_id=None,
+        workflow_id=ROUTER_RAG_AGENT_ID,
+        resolved_spec_json=builtin_router_rag_v2_spec(),
+        status="completed",
+        started_at=utc_now(),
+        completed_at=utc_now(),
+    )
+    recorder = AgentTraceRecorder(run)
+    long_answer = "First line.\n" + ("Complete answer content. " * 80)
+    reasoning = "Inspect evidence.\nChoose the document route."
+    response = SimpleNamespace(
+        content=long_answer,
+        additional_kwargs={"reasoning_content": reasoning},
+        response_metadata={},
+        usage_metadata={},
+    )
+
+    for visit_index in (1, 2):
+        before = {
+            "question": "What changed?",
+            "authorization": "Bearer secret",
+            "evidence": f"evidence before visit {visit_index}",
+            "node_events": [{"old": True}],
+        }
+        recorder.record_node_started(
+            node_id="evidence_evaluator",
+            node_type="evidence_evaluator",
+            visit_index=visit_index,
+            state=before,
+        )
+        recorder.record_llm_detail(
+            node_id="evidence_evaluator",
+            node_type="evidence_evaluator",
+            visit_index=visit_index,
+            messages=[SimpleNamespace(type="system", content="Evaluate all evidence."), SimpleNamespace(type="human", content="Full prompt")],
+            response=response,
+        )
+        recorder.record_node_completed(
+            node_id="evidence_evaluator",
+            node_type="evidence_evaluator",
+            visit_index=visit_index,
+            state=before,
+            update={"evaluator_route": "answer", "final_answer": long_answer},
+            status="completed",
+            event={"evaluator_route": "answer"},
+        )
+
+    payload = recorder.finalize(
+        run=run,
+        chat_turn_id=None,
+        metrics={},
+        route="document",
+        result={"final_answer": long_answer, "route": "document", "reasoning": reasoning, "reasoning_available": True},
+    )
+
+    assert [(detail["node_id"], detail["visit_index"]) for detail in payload["details"]] == [
+        ("evidence_evaluator", 1),
+        ("evidence_evaluator", 2),
+    ]
+    assert payload["details"][0]["checkpoint_before"]["authorization"] == "[redacted]"
+    assert "checkpoint_before.authorization" in payload["details"][0]["safety"]["redacted_fields"]
+    assert "node_events" not in payload["details"][0]["checkpoint_before"]
+    assert payload["details"][0]["llm"]["reasoning"] == reasoning
+    assert payload["details"][0]["changes"]["added"]["final_answer"] == long_answer
+    assert payload["final_output"]["answer"] == long_answer
+    assert len(payload["final_output"]["answer"]) > 900
+
+
+def test_resumed_trace_details_share_one_run_size_limit(monkeypatch):
+    import app.agent_workflows.trace_details as trace_details
+
+    monkeypatch.setattr(trace_details, "TRACE_DETAIL_RUN_LIMIT", 900)
+    trace = {"schema_version": 1, "spans": [], "metrics": {}}
+    base = {
+        "version": 1,
+        "trace": dict(trace),
+        "summary": {},
+        "details": [{"node_id": "first", "visit_index": 1, "status": "completed", "output": {"text": "a" * 500}}],
+    }
+    incoming = {
+        "version": 1,
+        "trace": dict(trace),
+        "summary": {},
+        "details": [{"node_id": "second", "visit_index": 1, "status": "completed", "output": {"text": "b" * 500}}],
+    }
+
+    merged = merge_debug_payloads(base, incoming, resolved_spec={})
+
+    assert merged["detail_safety"]["size_bytes"] <= 900
+    assert merged["detail_safety"]["truncated"] is True
+    assert any(detail.get("safety", {}).get("run_limit_reached") for detail in merged["details"])
+
+
+def test_trace_detail_scalar_limit_is_explicit_and_preserves_normal_whitespace():
+    normal = "line one\nline two"
+    oversized = "x" * (TRACE_DETAIL_SCALAR_LIMIT + 25)
+    value, safety = sanitize_trace_detail({"normal": normal, "oversized": oversized, "api_key": "secret"})
+
+    assert value["normal"] == normal
+    assert value["api_key"] == "[redacted]"
+    assert value["oversized"].endswith("[truncated]")
+    assert safety["truncated"] is True
+    assert "oversized" in safety["truncated_fields"]
+    assert "api_key" in safety["redacted_fields"]
 
 
 async def create_agent_run_record(
@@ -5638,6 +5750,36 @@ async def test_builder_test_run_uses_resolved_workflow_row_id(monkeypatch):
     assert captured["resolved_spec_json"]["workflow_id"] == ROUTER_RAG_AGENT_ID
 
 
+@pytest.mark.asyncio
+async def test_agent_run_detail_endpoint_returns_one_loop_visit(monkeypatch):
+    import app.api.agent_workflows as agent_workflows_api
+
+    details = [
+        {"node_id": "evidence_evaluator", "node_type": "evidence_evaluator", "visit_index": 1, "status": "completed", "checkpoint_after": {"replan_count": 0}},
+        {"node_id": "evidence_evaluator", "node_type": "evidence_evaluator", "visit_index": 2, "status": "completed", "checkpoint_after": {"replan_count": 1}},
+    ]
+
+    async def fake_get_run(_self, run_id):
+        assert run_id == "run-loop-details"
+        return SimpleNamespace(id=run_id, thread_id="thread-loop-details", debug_trace_json={"version": 1, "details": details})
+
+    async def fake_get_thread(thread_id):
+        return SimpleNamespace(id=thread_id) if thread_id == "thread-loop-details" else None
+
+    monkeypatch.setattr(AgentWorkflowRepository, "get_run", fake_get_run)
+    monkeypatch.setattr(agent_workflows_api, "get_thread", fake_get_thread)
+
+    response = await agent_workflows_api.get_agent_run_node_details(
+        "run-loop-details",
+        node_id="evidence_evaluator",
+        visit_index=2,
+        thread_id="thread-loop-details",
+    )
+
+    assert response["detail"]["visit_index"] == 2
+    assert response["detail"]["checkpoint_after"]["replan_count"] == 1
+
+
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestAgentWorkflowApi:
     def test_list_and_get_builtin_agent_workflow(self, api_client):
@@ -6309,7 +6451,8 @@ class TestAgentWorkflowApi:
             }
         ]
         assert payload["metrics_json"]["tool_event_count"] == 1
-        assert set(payload["debug"]) == {"version", "trace", "summary", "graph"}
+        assert set(payload["debug"]) == {"version", "trace", "summary", "graph", "detail_manifest", "detail_safety"}
+        assert payload["debug"]["detail_manifest"] == []
         assert "node_events" not in payload["debug"]
         assert "tool_events" not in payload["debug"]
         assert payload["debug"]["version"] == 1

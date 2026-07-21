@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -10,8 +9,7 @@ import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type A
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
 import AgentRunHeaderChips from './AgentRunHeaderChips';
 import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
-
-const AgentDebugCanvas = dynamic(() => import('../agent-graph/AgentDebugCanvas'), { ssr: false });
+import AgentExecutionView from '../agent-graph/AgentExecutionView';
 
 export default function AgentRunDebugPanel({
   runId,
@@ -276,10 +274,13 @@ export default function AgentRunDebugPanel({
               </>
             )}
           </Box>
-          <AgentDebugCanvas
+          <AgentExecutionView
+            runId={runId}
+            threadId={runDetails.thread_id}
             resolvedSpec={runDetails.resolved_spec_json}
             workflowId={runDetails.workflow_id}
             traceView={traceView}
+            status={runDetails.status}
             focusedTraceRefs={traceRefs}
           />
         </>

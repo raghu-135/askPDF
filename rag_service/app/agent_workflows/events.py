@@ -61,10 +61,21 @@ def append_tool_event(
     visit_index = runtime_visit_index(config)
     if visit_index is not None:
         event["caller_visit_index"] = visit_index
+    trace_recorder = ((config or {}).get("configurable") or {}).get("trace_recorder")
+    if trace_recorder is not None and hasattr(trace_recorder, "record_tool_detail"):
+        trace_recorder.record_tool_detail(
+            payload={
+                **dict(payload),
+                "caller_node": event.get("caller_node"),
+                "caller_node_type": event.get("caller_node_type"),
+                "caller_visit_index": event.get("caller_visit_index"),
+                "tool_name": event.get("tool_name"),
+            },
+            tool_input=tool_input,
+        )
     telemetry_sink = ((config or {}).get("configurable") or {}).get("telemetry_sink")
     if isinstance(telemetry_sink, dict):
         telemetry_sink.setdefault("tool_events", []).append(dict(event))
-    trace_recorder = ((config or {}).get("configurable") or {}).get("trace_recorder")
     if trace_recorder is not None and hasattr(trace_recorder, "record_tool_event"):
         trace_recorder.record_tool_event(dict(event))
     return [*state.get("tool_events", []), event]

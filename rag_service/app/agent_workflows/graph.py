@@ -145,6 +145,14 @@ class NodeRegistry:
                 visit_index=visit_index,
             )
             queue = ((runtime_config.get("configurable") or {}).get("studio_event_queue"))
+            trace_recorder = ((runtime_config.get("configurable") or {}).get("trace_recorder"))
+            if trace_recorder is not None and hasattr(trace_recorder, "record_node_started"):
+                trace_recorder.record_node_started(
+                    node_id=node_id,
+                    node_type=node_type,
+                    visit_index=visit_index,
+                    state=state,
+                )
             if queue is not None:
                 await queue.put({"event": "node.started", "data": {"node_id": node_id, "node_type": node_type, "visit_index": visit_index}})
             try:
@@ -153,12 +161,41 @@ class NodeRegistry:
                 else:
                     update = await node_impl(state, runtime_config)
             except Exception as exc:
+                detail = None
+                if trace_recorder is not None and hasattr(trace_recorder, "record_node_completed"):
+                    detail = trace_recorder.record_node_completed(
+                        node_id=node_id,
+                        node_type=node_type,
+                        visit_index=visit_index,
+                        state=state,
+                        update={},
+                        status=NodeEventStatus.FAILED.value,
+                        error=exc,
+                    )
                 if queue is not None:
-                    await queue.put({"event": "node.failed", "data": {"node_id": node_id, "node_type": node_type, "visit_index": visit_index, "error": str(exc)}})
+                    await queue.put({"event": "node.failed", "data": {"node_id": node_id, "node_type": node_type, "visit_index": visit_index, "error": str(exc), "detail": detail}})
                 raise
+            accounted_update = _with_visit_accounting(
+                update,
+                state,
+                node_id=node_id,
+                node_type=node_type,
+                visit_index=visit_index,
+            )
+            latest_node_event = (update.get("node_events") or [{}])[-1] if isinstance(update.get("node_events"), list) and update.get("node_events") else {}
+            event_name = "node.skipped" if latest_node_event.get("status") == NodeEventStatus.SKIPPED.value else "node.completed"
+            detail = None
+            if trace_recorder is not None and hasattr(trace_recorder, "record_node_completed"):
+                detail = trace_recorder.record_node_completed(
+                    node_id=node_id,
+                    node_type=node_type,
+                    visit_index=visit_index,
+                    state=state,
+                    update=accounted_update,
+                    status=latest_node_event.get("status") or NodeEventStatus.COMPLETED.value,
+                    event=latest_node_event,
+                )
             if queue is not None:
-                latest_node_event = (update.get("node_events") or [{}])[-1] if isinstance(update.get("node_events"), list) and update.get("node_events") else {}
-                event_name = "node.skipped" if latest_node_event.get("status") == NodeEventStatus.SKIPPED.value else "node.completed"
                 await queue.put({
                     "event": event_name,
                     "data": {
@@ -168,15 +205,10 @@ class NodeRegistry:
                         "route": update.get("route"),
                         "evaluator_route": update.get("evaluator_route"),
                         "output_preview": latest_node_event.get("output_preview"),
+                        "detail": detail,
                     },
                 })
-            return _with_visit_accounting(
-                update,
-                state,
-                node_id=node_id,
-                node_type=node_type,
-                visit_index=visit_index,
-            )
+            return accounted_update
 
         return _bound_node
 
