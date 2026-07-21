@@ -13,14 +13,17 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  IconButton,
   List,
   ListItemButton,
   ListItemText,
   Tab,
   Tabs,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../../theme';
 import {
@@ -29,12 +32,10 @@ import {
   getInternalAgentWorkflow,
   getInternalAgentWorkflowCatalog,
   listAgentWorkflows,
-  previewThreadAgentConfig,
   validateAgentWorkflowSpec,
   type AgentWorkflow,
   type AgentWorkflowCatalogResponse,
   type AgentWorkflowValidationReport,
-  type ThreadAgentConfigPreviewResponse,
 } from '../../lib/api';
 import {
   assembleAgentWorkflowSpec,
@@ -89,6 +90,7 @@ const DEFAULT_BUILDER_LAYOUT = {
   palettePercent: 40,
   graphElementsHeight: 104,
   graphElementsCollapsed: false,
+  inspectorCollapsed: false,
 };
 
 const readBuilderLayout = () => {
@@ -100,6 +102,7 @@ const readBuilderLayout = () => {
       palettePercent: Math.min(65, Math.max(25, Number(stored.palettePercent) || 40)),
       graphElementsHeight: Math.min(320, Math.max(72, Number(stored.graphElementsHeight) || 104)),
       graphElementsCollapsed: Boolean(stored.graphElementsCollapsed),
+      inspectorCollapsed: Boolean(stored.inspectorCollapsed),
     };
   } catch {
     return DEFAULT_BUILDER_LAYOUT;
@@ -272,10 +275,6 @@ export default function AgentWorkflowBuilderPage() {
   const [selection, setSelection] = useState<BuilderSelection>(null);
   const [validation, setValidation] = useState<AgentWorkflowValidationReport | null>(null);
   const [validating, setValidating] = useState(false);
-  const [threadPreviewId, setThreadPreviewId] = useState('');
-  const [threadPreview, setThreadPreview] = useState<ThreadAgentConfigPreviewResponse | null>(null);
-  const [threadPreviewError, setThreadPreviewError] = useState<string | null>(null);
-  const [previewingThread, setPreviewingThread] = useState(false);
   const [persistenceForm, setPersistenceForm] = useState<BuilderPersistenceState>({
     workflowId: '',
     name: 'Internal Custom Agent',
@@ -362,8 +361,6 @@ export default function AgentWorkflowBuilderPage() {
     setValidation(null);
     setHistoryVersion((value) => value + 1);
     setIsDirty(true);
-    setThreadPreview(null);
-    setThreadPreviewError(null);
     setPersistenceStatus(null);
   }, [authoringDisabled, catalog]);
 
@@ -415,8 +412,6 @@ export default function AgentWorkflowBuilderPage() {
     setStarter(nextStarter);
     setSelection(null);
     setValidation(null);
-    setThreadPreview(null);
-    setThreadPreviewError(null);
     setPersistedWorkflow(null);
     setPersistenceStatus(null);
     setPersistenceError(null);
@@ -445,8 +440,6 @@ export default function AgentWorkflowBuilderPage() {
       setPersistedWorkflow({ workflow: response.agent_workflow, spec: response.spec });
       setSelection(null);
       setValidation(null);
-      setThreadPreview(null);
-      setThreadPreviewError(null);
       setPersistenceStatus(`Loaded ${response.agent_workflow.name || response.agent_workflow.id}.`);
       setPersistenceError(null);
       undoStack.current = [];
@@ -731,20 +724,6 @@ export default function AgentWorkflowBuilderPage() {
     evaluator_replanner: 'evaluator_replanner_rag_agent',
   } as Record<string, string>)[starter] || String(spec?.workflow_id || 'router_rag_agent');
 
-  const handleThreadPreview = async () => {
-    if (!threadPreviewId.trim()) return;
-    try {
-      setPreviewingThread(true);
-      setThreadPreviewError(null);
-      setThreadPreview(await previewThreadAgentConfig(threadPreviewId.trim()));
-    } catch (err) {
-      setThreadPreview(null);
-      setThreadPreviewError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setPreviewingThread(false);
-    }
-  };
-
   const updatePersistenceForm = (patch: Partial<BuilderPersistenceState>) => {
     setPersistenceForm((previous) => ({ ...previous, ...patch }));
     setPersistenceStatus(null);
@@ -869,16 +848,9 @@ export default function AgentWorkflowBuilderPage() {
               </Tabs>
               {workspace === 'build' && spec ? (
                 <BuilderValidationPanel
-                  catalog={catalog}
                   spec={spec}
                   validation={validation}
                   issues={validationIssues}
-                  threadPreviewId={threadPreviewId}
-                  onThreadPreviewIdChange={setThreadPreviewId}
-                  onPreviewThread={handleThreadPreview}
-                  previewing={previewingThread}
-                  previewResult={threadPreview}
-                  previewError={threadPreviewError}
                   onSelectIssue={setSelection}
                   onApplyFix={handleApplyFix}
                 />
@@ -929,40 +901,57 @@ export default function AgentWorkflowBuilderPage() {
                   sx={{
                     display: { xs: 'none', lg: 'grid' },
                     height: '100%',
-                    gridTemplateRows: `minmax(180px, ${builderLayout.palettePercent}fr) 8px minmax(240px, ${100 - builderLayout.palettePercent}fr)`,
+                    gridTemplateRows: builderLayout.inspectorCollapsed
+                      ? '44px minmax(180px, 1fr)'
+                      : `minmax(240px, ${100 - builderLayout.palettePercent}fr) 8px minmax(180px, ${builderLayout.palettePercent}fr)`,
                     minHeight: 0,
                   }}
                 >
+                  <Box sx={{ minHeight: 0, overflow: 'hidden', borderBottom: builderLayout.inspectorCollapsed ? 1 : 0, borderColor: 'divider' }}>
+                    <Box sx={{ height: 44, px: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: builderLayout.inspectorCollapsed ? 0 : 1, borderColor: 'divider' }}>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Inspector</Typography>
+                      <Tooltip title={builderLayout.inspectorCollapsed ? 'Expand Inspector' : 'Collapse Inspector'}>
+                        <IconButton
+                          size="small"
+                          aria-label={builderLayout.inspectorCollapsed ? 'Expand Inspector' : 'Collapse Inspector'}
+                          onClick={() => setBuilderLayout((previous) => ({ ...previous, inspectorCollapsed: !previous.inspectorCollapsed }))}
+                        >
+                          {builderLayout.inspectorCollapsed ? <ExpandMoreIcon /> : <ExpandLessIcon />}
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                    {!builderLayout.inspectorCollapsed ? (
+                      <Box sx={{ height: 'calc(100% - 44px)', minHeight: 0, overflow: 'auto', p: 1.5 }}>
+                        <BuilderInspector
+                          catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
+                          onUpdateNode={handleUpdateNode} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
+                          onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
+                          onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
+                        />
+                        <Divider sx={{ my: 1.5 }} />
+                        <Typography variant="caption" color="text.secondary">Nodes: {builderState.nodes.length} · Edges: {builderState.edges.length} · Tools: {builderState.allowed_tool_ids.length}</Typography>
+                      </Box>
+                    ) : null}
+                  </Box>
+                  {!builderLayout.inspectorCollapsed ? (
+                    <BuilderResizeHandle
+                      orientation="horizontal"
+                      value={builderLayout.palettePercent}
+                      min={25}
+                      max={65}
+                      defaultValue={40}
+                      step={2}
+                      direction={-1}
+                      label="Resize Inspector and Node Palette"
+                      getDragScale={() => 100 / Math.max(1, utilityRailRef.current?.clientHeight || 700)}
+                      onChange={(palettePercent) => setBuilderLayout((previous) => ({ ...previous, palettePercent }))}
+                    />
+                  ) : null}
                   <Box sx={{ minHeight: 0, overflow: 'auto', p: 1.5 }}>
                     <BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} />
                   </Box>
-                  <BuilderResizeHandle
-                    orientation="horizontal"
-                    value={builderLayout.palettePercent}
-                    min={25}
-                    max={65}
-                    defaultValue={40}
-                    step={2}
-                    label="Resize Node Palette and Inspector"
-                    getDragScale={() => 100 / Math.max(1, utilityRailRef.current?.clientHeight || 700)}
-                    onChange={(palettePercent) => setBuilderLayout((previous) => ({ ...previous, palettePercent }))}
-                  />
-                  <Box sx={{ minHeight: 0, overflow: 'auto', p: 1.5 }}>
-                    <BuilderInspector
-                      catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
-                      onUpdateNode={handleUpdateNode} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
-                      onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
-                      onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
-                    />
-                    <Divider sx={{ my: 1.5 }} />
-                    <Typography variant="caption" color="text.secondary">Nodes: {builderState.nodes.length} · Edges: {builderState.edges.length} · Tools: {builderState.allowed_tool_ids.length}</Typography>
-                  </Box>
                 </Box>
                 <Box sx={{ display: { xs: 'block', lg: 'none' }, p: 1 }}>
-                  <Accordion defaultExpanded disableGutters>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="subtitle2">Node Palette</Typography></AccordionSummary>
-                    <AccordionDetails><BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} /></AccordionDetails>
-                  </Accordion>
                   <Accordion defaultExpanded disableGutters>
                     <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="subtitle2">Inspector</Typography></AccordionSummary>
                     <AccordionDetails>
@@ -973,6 +962,10 @@ export default function AgentWorkflowBuilderPage() {
                         onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
                       />
                     </AccordionDetails>
+                  </Accordion>
+                  <Accordion defaultExpanded disableGutters>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="subtitle2">Node Palette</Typography></AccordionSummary>
+                    <AccordionDetails><BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} /></AccordionDetails>
                   </Accordion>
                 </Box>
               </Box>

@@ -425,25 +425,6 @@ export interface ThreadAgentConfigValidationResponse {
   resolved_spec_json: AgentWorkflowBuilderSpec | Record<string, any>;
 }
 
-export interface AgentWorkflowGraphPreview {
-  nodes?: Record<string, any>[];
-  edges?: Record<string, any>[];
-  executionPlan?: string[];
-  selectedRoute?: string;
-  [key: string]: any;
-}
-
-export interface ThreadAgentConfigPreviewResponse {
-  thread_id?: string;
-  workflow_id?: string;
-  validation?: AgentWorkflowValidationReport;
-  resolved_spec_json?: AgentWorkflowBuilderSpec | Record<string, any>;
-  graph?: AgentWorkflowGraphPreview;
-  prompt?: string;
-  prompt_preview?: string;
-  [key: string]: any;
-}
-
 const readApiError = async (res: Response): Promise<string> => {
   const text = await res.text();
   if (!text) return `${res.status} ${res.statusText}`.trim();
@@ -854,19 +835,6 @@ export async function validateThreadAgentConfig(
   overrides: Record<string, any> = {}
 ): Promise<ThreadAgentConfigValidationResponse> {
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/agent-config/validate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ overrides }),
-  });
-  if (!res.ok) throw new Error(await readApiError(res));
-  return res.json();
-}
-
-export async function previewThreadAgentConfig(
-  threadId: string,
-  overrides: Record<string, any> = {}
-): Promise<ThreadAgentConfigPreviewResponse> {
-  const res = await fetch(`${API_BASE}/api/threads/${threadId}/agent-config/preview`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ overrides }),

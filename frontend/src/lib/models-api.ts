@@ -54,6 +54,22 @@ export const fetchAvailableLlmModels = async (): Promise<string[]> => {
 };
 
 /**
+ * Fetches available LLM candidates while preserving discovery failures for
+ * controls that need distinct loading, empty, and error states.
+ */
+export const fetchAvailableLlmModelsStrict = async (): Promise<string[]> => {
+  const res = await fetch(`${API_BASE}/api/models`);
+  if (!res.ok) throw new Error(`Unable to load models (${res.status}).`);
+  const data = await res.json();
+  const candidates = data.llm_models || data.not_llm_models
+    ? [...(data.llm_models || []), ...(data.not_llm_models || [])]
+    : Array.isArray(data.all_models)
+      ? data.all_models.map((model: any) => model?.id || model).filter(Boolean)
+      : [];
+  return Array.from(new Set(candidates.map(String)));
+};
+
+/**
  * Checks if the specified embedding model is ready on the backend.
  * @param model - The embedding model name to check.
  * @returns A promise resolving to true if the model is ready, false otherwise.

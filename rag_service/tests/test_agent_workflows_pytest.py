@@ -5599,6 +5599,45 @@ class TestRouterRagRuntime:
         assert turn.payload["metadata"]["agent_error"]["raw_message"] == "document tool exploded"
 
 
+@pytest.mark.asyncio
+async def test_builder_test_run_uses_resolved_workflow_row_id(monkeypatch):
+    import app.api.agent_workflows as agent_workflows_api
+
+    captured = {}
+
+    async def fake_get_thread(_thread_id):
+        return SimpleNamespace(embedding_model="test-embedding")
+
+    async def fake_get_workflow(_self, workflow_id, *, include_custom=False):
+        assert workflow_id == ROUTER_RAG_AGENT_ID
+        assert include_custom is True
+        return SimpleNamespace(id="legacy-persisted-router-row")
+
+    async def fake_create_run(_self, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(id="builder-test-run")
+
+    monkeypatch.setattr(agent_workflows_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(AgentWorkflowRepository, "get_workflow", fake_get_workflow)
+    monkeypatch.setattr(AgentWorkflowRepository, "create_run", fake_create_run)
+
+    response = await agent_workflows_api.stream_internal_agent_workflow_test(
+        SimpleNamespace(
+            builder_session_id="builder-session-unsaved",
+            base_workflow_id=ROUTER_RAG_AGENT_ID,
+            spec=builtin_router_rag_v2_spec(),
+            thread_id="thread-1",
+            use_web_search=False,
+            allow_external_tools=False,
+        )
+    )
+
+    assert response.media_type == "text/event-stream"
+    assert captured["workflow_id"] == "legacy-persisted-router-row"
+    assert captured["run_metadata_json"]["base_workflow_id"] == ROUTER_RAG_AGENT_ID
+    assert captured["resolved_spec_json"]["workflow_id"] == ROUTER_RAG_AGENT_ID
+
+
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestAgentWorkflowApi:
     def test_list_and_get_builtin_agent_workflow(self, api_client):

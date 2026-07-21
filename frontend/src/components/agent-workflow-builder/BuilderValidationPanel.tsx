@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import PreviewIcon from '@mui/icons-material/Preview';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import {
   Alert,
@@ -11,53 +10,31 @@ import {
   Divider,
   Tab,
   Tabs,
-  TextField,
   Typography,
 } from '@mui/material';
-import dynamic from 'next/dynamic';
 import type {
-  AgentWorkflowCatalogResponse,
   AgentWorkflowValidationReport,
-  ThreadAgentConfigPreviewResponse,
 } from '../../lib/api';
 import type { AgentWorkflowBuilderSpec } from '../../lib/api';
 import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
 
-const AgentGraphCanvas = dynamic(() => import('../agent-graph/AgentGraphCanvas'), { ssr: false });
-
 export default function BuilderValidationPanel({
-  catalog,
   spec,
   validation,
   issues,
-  threadPreviewId,
-  onThreadPreviewIdChange,
-  onPreviewThread,
-  previewing,
-  previewResult,
-  previewError,
   onSelectIssue,
   onApplyFix,
 }: {
-  catalog: AgentWorkflowCatalogResponse;
   spec: AgentWorkflowBuilderSpec;
   validation: AgentWorkflowValidationReport | null;
   issues: BuilderValidationIssue[];
-  threadPreviewId: string;
-  onThreadPreviewIdChange: (threadId: string) => void;
-  onPreviewThread: () => void;
-  previewing: boolean;
-  previewResult: ThreadAgentConfigPreviewResponse | null;
-  previewError: string | null;
   onSelectIssue: (selection: BuilderSelection) => void;
   onApplyFix: (issue: BuilderValidationIssue) => void;
 }) {
-  const [tab, setTab] = useState<'validation' | 'spec' | 'thread-preview'>('validation');
+  const [tab, setTab] = useState<'validation' | 'spec'>('validation');
   const hasErrors = issues.some((issue) => issue.severity === 'error');
   const hasWarnings = issues.some((issue) => issue.severity === 'warning');
-  const previewSpec = previewResult?.resolved_spec_json || spec;
-  const previewPrompt = previewResult?.prompt_preview || previewResult?.prompt;
 
   return (
     <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, mb: 1, bgcolor: 'background.paper' }}>
@@ -77,7 +54,6 @@ export default function BuilderValidationPanel({
             }
           />
           <Tab value="spec" label="Spec Preview" />
-          <Tab value="thread-preview" label="Thread Preview" />
         </Tabs>
       </Box>
       <Box sx={{ p: 1 }}>
@@ -135,67 +111,6 @@ export default function BuilderValidationPanel({
               Assembled schema v2 custom workflow spec sent to validation/save endpoints.
             </Typography>
             <JsonPreview value={spec} maxHeight={360} />
-          </Box>
-        ) : null}
-        {tab === 'thread-preview' ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'minmax(0, 1fr) auto' }, gap: 1 }}>
-              <TextField
-                size="small"
-                label="Thread ID"
-                value={threadPreviewId}
-                onChange={(event) => onThreadPreviewIdChange(event.target.value)}
-              />
-              <Button
-                size="small"
-                variant="outlined"
-                startIcon={<PreviewIcon />}
-                disabled={!threadPreviewId.trim() || previewing}
-                onClick={onPreviewThread}
-                sx={{ borderRadius: 1, whiteSpace: 'nowrap' }}
-              >
-                {previewing ? 'Previewing' : 'Preview Thread'}
-              </Button>
-            </Box>
-            {previewError ? <Alert severity="error">{previewError}</Alert> : null}
-            {previewResult ? (
-              <Alert severity={previewResult.validation?.valid === false ? 'warning' : 'success'}>
-                Thread preview returned {previewResult.workflow_id || 'a workflow'}.
-              </Alert>
-            ) : (
-              <Alert severity="info">
-                Thread preview uses the thread-specific backend endpoint. If that endpoint is not available in this checkout, the error is shown here.
-              </Alert>
-            )}
-            {previewResult?.validation?.errors?.length ? (
-              <Box>
-                {previewResult.validation.errors.map((message, index) => (
-                  <Typography key={`${message}-${index}`} variant="caption" color="error" sx={{ display: 'block' }}>
-                    {message}
-                  </Typography>
-                ))}
-              </Box>
-            ) : null}
-            <Divider />
-            <Typography variant="caption" sx={{ fontWeight: 700 }}>
-              Graph Preview
-            </Typography>
-            <AgentGraphCanvas
-              resolvedSpec={previewSpec}
-              nodeCatalog={catalog.node_catalog}
-              mode="builder"
-              showInspector={false}
-            />
-            {previewPrompt ? (
-              <TextField
-                label="Prompt Preview"
-                value={previewPrompt}
-                multiline
-                minRows={8}
-                maxRows={16}
-                slotProps={{ input: { readOnly: true } }}
-              />
-            ) : null}
           </Box>
         ) : null}
       </Box>

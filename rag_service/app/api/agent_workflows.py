@@ -334,7 +334,7 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
     repo = AgentWorkflowRepository()
     run = await repo.create_run(
         thread_id=req.thread_id,
-        workflow_id=req.base_workflow_id,
+        workflow_id=workflow.id,
         resolved_spec_json=resolved,
         run_metadata_json={
             "run_kind": BUILDER_TEST_RUN_KIND,

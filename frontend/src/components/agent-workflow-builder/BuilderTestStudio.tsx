@@ -25,6 +25,11 @@ import {
 } from '../../lib/api';
 import { AgentRunResumeAction, AgentRunStatus, InterruptStatus } from '../../lib/enums';
 import { buildRunTraceView } from '../agent-debug/agent-trace-projection';
+import {
+  BuilderLlmModelPicker,
+  BuilderThreadPicker,
+  type BuilderModelHealth,
+} from './BuilderTestPickers';
 
 const AgentDebugCanvas = dynamic(() => import('../agent-graph/AgentDebugCanvas'), { ssr: false });
 
@@ -48,6 +53,7 @@ export default function BuilderTestStudio({
   const [threadId, setThreadId] = useState('');
   const [question, setQuestion] = useState('');
   const [llmModel, setLlmModel] = useState('');
+  const [modelHealth, setModelHealth] = useState<BuilderModelHealth>({ checking: false, ready: null, supportsTools: null });
   const [useWeb, setUseWeb] = useState(false);
   const [externalConfirmed, setExternalConfirmed] = useState(false);
   const [running, setRunning] = useState(false);
@@ -104,11 +110,20 @@ export default function BuilderTestStudio({
   const terminal = [...events].reverse().find((event) => event.event.startsWith('run.') && event.event !== 'run.started');
   const activeNode = [...events].reverse().find((event) => event.event === 'node.started')?.data?.node_id;
   const pending = latest?.pending_interrupt;
+  const hasPendingInterrupt = Boolean(pending && String(pending.status || InterruptStatus.Pending) === InterruptStatus.Pending);
+  const controlsLocked = running || hasPendingInterrupt;
+  const lockedThreadId = hasPendingInterrupt ? latest?.thread_id || null : null;
 
   const refreshLatest = async () => {
     const result = await getLatestAgentWorkflowBuilderTest(sessionId, baseWorkflowId);
     setLatest(result);
-    if (result) setRunId(result.id);
+    if (result) {
+      setRunId(result.id);
+      const resultPending = result.pending_interrupt;
+      if (result.thread_id && resultPending && String(resultPending.status || InterruptStatus.Pending) === InterruptStatus.Pending) {
+        setThreadId(result.thread_id);
+      }
+    }
   };
 
   useEffect(() => {
@@ -197,13 +212,21 @@ export default function BuilderTestStudio({
           Uses this unsaved graph and the thread&apos;s context. It does not add chat messages, memory, statistics, or change thread settings.
         </Typography>
         <Stack spacing={1.25}>
-          <TextField label="Thread ID" size="small" value={threadId} onChange={(event) => setThreadId(event.target.value)} required />
-          <TextField label="Model" size="small" value={llmModel} onChange={(event) => setLlmModel(event.target.value)} placeholder="Configured model name" required />
-          <TextField label="Test question" multiline minRows={3} value={question} onChange={(event) => setQuestion(event.target.value)} required />
-          <FormControlLabel control={<Checkbox checked={useWeb} onChange={(event) => setUseWeb(event.target.checked)} />} label="Allow web search" />
+          <BuilderThreadPicker value={threadId} onChange={setThreadId} disabled={controlsLocked} lockedThreadId={lockedThreadId} />
+          <BuilderLlmModelPicker
+            value={llmModel}
+            onChange={(model) => {
+              setLlmModel(model);
+              setModelHealth({ checking: Boolean(model), ready: null, supportsTools: null });
+            }}
+            onHealthChange={setModelHealth}
+            disabled={controlsLocked}
+          />
+          <TextField label="Test question" multiline minRows={3} value={question} onChange={(event) => setQuestion(event.target.value)} required disabled={controlsLocked} />
+          <FormControlLabel control={<Checkbox checked={useWeb} disabled={controlsLocked} onChange={(event) => setUseWeb(event.target.checked)} />} label="Allow web search" />
           {useWeb && (
             <FormControlLabel
-              control={<Checkbox checked={externalConfirmed} onChange={(event) => setExternalConfirmed(event.target.checked)} />}
+              control={<Checkbox checked={externalConfirmed} disabled={controlsLocked} onChange={(event) => setExternalConfirmed(event.target.checked)} />}
               label="I confirm this test may call external tools"
             />
           )}
@@ -211,7 +234,7 @@ export default function BuilderTestStudio({
             <Button
               variant="contained"
               startIcon={running ? <CircularProgress size={15} color="inherit" /> : <PlayArrowIcon />}
-              disabled={running || !threadId.trim() || !llmModel.trim() || !question.trim() || (useWeb && !externalConfirmed)}
+              disabled={controlsLocked || !threadId.trim() || !llmModel.trim() || modelHealth.checking || modelHealth.ready !== true || !question.trim() || (useWeb && !externalConfirmed)}
               onClick={() => void run()}
             >
               Run unsaved graph

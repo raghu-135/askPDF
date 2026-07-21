@@ -5,6 +5,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import {
   Box,
   Chip,
+  Divider,
   IconButton,
   Stack,
   Tooltip,
@@ -160,16 +161,20 @@ export default function BuilderGraphEditor({
           </Tooltip>
         </Box>
         {!graphElementsCollapsed ? (
-          <Box sx={{ height: 'calc(100% - 40px)', overflow: 'auto', px: 1, py: 0.75 }}>
-          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'nowrap', alignItems: 'center', minWidth: 'max-content' }}>
+          <Box sx={{ height: 'calc(100% - 40px)', overflowY: 'auto', overflowX: 'hidden', px: 1, py: 0.75 }}>
+          <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>
+            Nodes
+          </Typography>
+          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', alignItems: 'center', rowGap: 0.75 }}>
             {state.nodes.map((node) => (
-              <Box key={node.id} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35 }}>
+              <Box key={node.id} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35, maxWidth: '100%' }}>
                 <Chip
                   clickable
                   color={selection?.kind === 'node' && selection.nodeId === node.id ? 'primary' : 'default'}
                   variant={selection?.kind === 'node' && selection.nodeId === node.id ? 'filled' : 'outlined'}
                   label={`${node.id} · ${node.type}`}
                   onClick={() => onSelectionChange({ kind: 'node', nodeId: node.id })}
+                  sx={{ maxWidth: '100%' }}
                 />
                 {issueCountForSelection({ kind: 'node', nodeId: node.id }) > 0 ? (
                   <Chip size="small" color="error" label={issueCountForSelection({ kind: 'node', nodeId: node.id })} />
@@ -177,15 +182,20 @@ export default function BuilderGraphEditor({
               </Box>
             ))}
           </Stack>
-          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'nowrap', alignItems: 'center', minWidth: 'max-content', mt: 0.75 }}>
+          <Divider sx={{ my: 1 }} />
+          <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>
+            Edges
+          </Typography>
+          <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap', alignItems: 'center', rowGap: 0.75 }}>
             {state.edges.map((edge, index) => (
-              <Box key={`${edge.from}-${edge.to || 'routes'}-${index}`} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35 }}>
+              <Box key={`${edge.from}-${edge.to || 'routes'}-${index}`} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.35, maxWidth: '100%' }}>
                 <Chip
                   clickable
                   color={selection?.kind === 'edge' && selection.edgeIndex === index ? 'primary' : 'default'}
                   variant={selection?.kind === 'edge' && selection.edgeIndex === index ? 'filled' : 'outlined'}
                   label={edgeLabel(edge)}
                   onClick={() => onSelectionChange({ kind: 'edge', edgeIndex: index })}
+                  sx={{ maxWidth: '100%' }}
                 />
                 {issueCountForSelection({ kind: 'edge', edgeIndex: index }) > 0 ? (
                   <Chip size="small" color="error" label={issueCountForSelection({ kind: 'edge', edgeIndex: index })} />
