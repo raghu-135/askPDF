@@ -137,7 +137,7 @@ test('router graph maps conditional route edges and highlights selected route', 
   assert.equal(selectedEdge?.selected, true);
   assert.equal(selectedEdge?.target, 'retrieval_worker');
   assert.equal(memoryEdge?.selected, false);
-  assert.equal(retrievalNode?.status, 'active');
+  assert.equal(retrievalNode?.status, 'completed');
   assert.equal(retrievalNode?.toolSummaries.length, 1);
 });
 
@@ -165,7 +165,7 @@ test('plan execute graph marks planner plan and skipped workers', () => {
 
   assert.deepEqual(graph.executionPlan, ['retrieval_worker']);
   assert.deepEqual(planner?.executionPlan, ['retrieval_worker']);
-  assert.equal(retrieval?.status, 'active');
+  assert.equal(retrieval?.status, 'completed');
   assert.equal(memory?.status, 'skipped');
   assert.equal(executeEdge?.selected, true);
 });
@@ -198,8 +198,8 @@ test('evaluator replanner graph marks evaluator branch and replan plan', () => {
   const replanEdge = graph.edges.find((edge) => edge.source === 'evidence_evaluator' && edge.route === 'replan');
 
   assert.equal(evaluator?.label, 'Evidence Evaluator');
-  assert.equal(evaluator?.status, 'active');
-  assert.equal(replanner?.status, 'active');
+  assert.equal(evaluator?.status, 'completed');
+  assert.equal(replanner?.status, 'completed');
   assert.deepEqual(replanner?.executionPlan, ['timeline_worker']);
   assert.equal(replanEdge?.selected, true);
 });
@@ -233,7 +233,7 @@ test('graph mapper accepts trace-native graph rows', () => {
   const retrievalNode = graph.nodes.find((node) => node.id === 'retrieval_worker');
 
   assert.equal(selectedEdge?.selected, true);
-  assert.equal(retrievalNode?.status, 'active');
+  assert.equal(retrievalNode?.status, 'completed');
   assert.equal(retrievalNode?.sourceCount, 2);
   assert.equal(retrievalNode?.toolSummaries.length, 1);
   assert.equal(graph.nodes.find((node) => node.id === 'router')?.llmSummary?.model_name, 'gpt-test');

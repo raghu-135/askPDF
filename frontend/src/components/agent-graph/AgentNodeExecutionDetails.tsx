@@ -3,10 +3,10 @@ import { Alert, Box, Divider, Stack, Typography } from '@mui/material';
 import type { AgentRunNodeDetail } from '../../lib/api';
 import { JsonPreview } from './AgentGraphInspectorPrimitives';
 
-const Section = ({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) => (
-  <Box component="details" open={defaultOpen} sx={{ mt: 1 }}>
-    <Box component="summary" sx={{ cursor: 'pointer', fontSize: '0.75rem', fontWeight: 700 }}>{title}</Box>
-    <Box sx={{ mt: 0.5 }}>{children}</Box>
+const Section = ({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) => (
+  <Box component="details" open={defaultOpen} sx={{ mt: 0.35 }}>
+    <Box component="summary" sx={{ cursor: 'pointer', py: 0.15, fontSize: '0.75rem', fontWeight: 700 }}>{title}</Box>
+    <Box sx={{ mt: 0.35 }}>{children}</Box>
   </Box>
 );
 

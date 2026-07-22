@@ -156,16 +156,17 @@ const deriveStatus = (
   toolSummaries: AgentGraphToolSummary[],
   executionPlan: string[],
 ): AgentGraphNodeStatus => {
-  if (events.some((event) => event.error || event.ok === false) || toolSummaries.some((tool) => !tool.ok)) return AgentGraphNodeStatusValue.Error;
-  if (events.some((event) => event.skipped === true)) return AgentGraphNodeStatusValue.Skipped;
-  if (events.length > 0) return AgentGraphNodeStatusValue.Active;
+  if (events.some((event) => event.status === 'failed' || event.status === 'error' || event.error || event.ok === false) || toolSummaries.some((tool) => !tool.ok)) return AgentGraphNodeStatusValue.Error;
+  if (events.some((event) => event.status === 'skipped' || event.skipped === true)) return AgentGraphNodeStatusValue.Skipped;
+  if (events.some((event) => event.status === 'active' || event.status === 'running' || event.status === 'started')) return AgentGraphNodeStatusValue.Active;
+  if (events.length > 0) return AgentGraphNodeStatusValue.Completed;
   if (executionPlan.includes(nodeId)) return AgentGraphNodeStatusValue.Planned;
   return AgentGraphNodeStatusValue.Inactive;
 };
 
 const hasActiveNode = (nodeId: string, nodesById: Map<string, AgentGraphNode>) => {
   const status = nodesById.get(nodeId)?.status;
-  return status === AgentGraphNodeStatusValue.Active || status === AgentGraphNodeStatusValue.Planned || status === AgentGraphNodeStatusValue.Skipped || status === AgentGraphNodeStatusValue.Error;
+  return status === AgentGraphNodeStatusValue.Active || status === AgentGraphNodeStatusValue.Completed || status === AgentGraphNodeStatusValue.Planned || status === AgentGraphNodeStatusValue.Skipped || status === AgentGraphNodeStatusValue.Error;
 };
 
 const selectedConditionalRoute = (

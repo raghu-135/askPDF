@@ -1,6 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
+import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import TimerOutlinedIcon from '@mui/icons-material/TimerOutlined';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Chip, CircularProgress, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import dynamic from 'next/dynamic';
 import ReactMarkdown from 'react-markdown';
@@ -9,6 +16,9 @@ import { getAgentRunNodeDetails, type AgentRunNodeDetail } from '../../lib/api';
 import type { TraceNodeView, TraceRunView } from '../agent-debug/agent-trace-projection';
 import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from './agent-graph-types';
 import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
+import AgentExecutionStatusIcon from './AgentExecutionStatusIcon';
+import { formatDurationMs } from '../../lib/formatDuration';
+import { TraceLlmUsageTooltip, TraceNodesTooltip, TraceToolsTooltip } from '../agent-debug/AgentRunTraceTooltips';
 import {
   agentNodeVisitKey,
   getChronologicalNodeVisits,
@@ -34,6 +44,14 @@ const nodeSummary = (node: TraceNodeView) => {
   if (event.document_source_count || event.web_source_count) return `Retrieved ${Number(event.document_source_count || 0) + Number(event.web_source_count || 0)} source${Number(event.document_source_count || 0) + Number(event.web_source_count || 0) === 1 ? '' : 's'}.`;
   if (event.answer_chars) return `Generated an answer (${event.answer_chars} characters).`;
   return node.status === 'active' ? 'Running…' : 'Completed this step.';
+};
+
+const formatTokenCount = (value: unknown) => {
+  const count = Number(value);
+  if (!Number.isFinite(count) || count <= 0) return undefined;
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(count >= 10_000_000 ? 0 : 1)}m`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(count >= 10_000 ? 0 : 1)}k`;
+  return count.toLocaleString();
 };
 
 export default function AgentExecutionView({
@@ -166,18 +184,47 @@ export default function AgentExecutionView({
   }, [detailContextKey, selectedVisit, traceView.nodes]);
 
   const finalOutput = traceView.finalOutput;
+  const runDuration = formatDurationMs(Number(traceView.metrics.duration_ms));
+  const tokenCount = formatTokenCount(traceView.metrics.llm_token_count_total);
   const copyAnswer = async () => {
     if (finalOutput?.answer && navigator.clipboard) await navigator.clipboard.writeText(finalOutput.answer);
   };
 
   return (
-    <Stack spacing={1.5} sx={{ minWidth: 0 }}>
-      <Paper variant="outlined" sx={{ p: 1.5 }}>
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1, flexWrap: 'wrap', rowGap: 0.5 }}>
-          <Typography variant="h6">Execution progress</Typography>
-          <Chip size="small" label={status || (running ? 'running' : 'completed')} color={running ? 'primary' : 'default'} />
-          {traceView.route && <Chip size="small" variant="outlined" label={`Route: ${traceView.route}`} />}
-          <Chip size="small" variant="outlined" label={`${traceView.nodes.length} visits`} />
+    <Stack spacing={1} sx={{ minWidth: 0 }}>
+      <Paper variant="outlined" sx={{ p: 1 }}>
+        <Stack direction="row" spacing={0.6} alignItems="center" sx={{ mb: 0.75, flexWrap: 'wrap', rowGap: 0.45 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, mr: 0.25 }}>Execution progress</Typography>
+          <AgentExecutionStatusIcon status={status || (running ? 'running' : 'completed')} size={17} />
+          {traceView.route && (
+            <Tooltip title={traceView.routeReason || `Selected route: ${traceView.route}`} arrow>
+              <Chip size="small" variant="outlined" label={traceView.route} sx={{ height: 22 }} />
+            </Tooltip>
+          )}
+          {runDuration && <Chip size="small" variant="outlined" icon={<TimerOutlinedIcon />} label={runDuration} sx={{ height: 22 }} />}
+          <Tooltip title={<TraceNodesTooltip nodes={traceView.nodes} usedCount={traceView.usedNodeCount} availableCount={traceView.availableNodeCount} />} arrow>
+            <Chip aria-label={`${traceView.usedNodeCount} nodes, ${traceView.nodes.length} visits`} size="small" variant="outlined" icon={<AccountTreeOutlinedIcon />} label={`${traceView.usedNodeCount}n${traceView.nodes.length !== traceView.usedNodeCount ? ` · ${traceView.nodes.length}v` : ''}`} sx={{ height: 22 }} />
+          </Tooltip>
+          {traceView.tools.length > 0 && (
+            <Tooltip title={<TraceToolsTooltip tools={traceView.tools} />} arrow>
+              <Chip aria-label={`${traceView.tools.length} tool calls`} size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={traceView.tools.length} sx={{ height: 22 }} />
+            </Tooltip>
+          )}
+          {tokenCount && (
+            <Tooltip title={<TraceLlmUsageTooltip metrics={traceView.metrics} />} arrow>
+              <Chip size="small" variant="outlined" label={`${tokenCount} tokens`} sx={{ height: 22 }} />
+            </Tooltip>
+          )}
+          {traceView.warningCount > 0 && (
+            <Tooltip title={`${traceView.warningCount} warnings`} arrow>
+              <Chip size="small" color="warning" variant="outlined" icon={<WarningAmberIcon />} label={traceView.warningCount} sx={{ height: 22 }} />
+            </Tooltip>
+          )}
+          {traceView.errorCount > 0 && (
+            <Tooltip title={`${traceView.errorCount} errors`} arrow>
+              <Chip size="small" color="error" variant="outlined" icon={<ErrorOutlineIcon />} label={traceView.errorCount} sx={{ height: 22 }} />
+            </Tooltip>
+          )}
         </Stack>
         {traceView.nodes.length === 0 ? (
           <Typography variant="body2" color="text.secondary">Start a run to see each node invocation.</Typography>
@@ -190,6 +237,7 @@ export default function AgentExecutionView({
           const previousVisit = getPreviousNodeVisit(traceView.nodes, visitRef);
           const nextVisit = getNextNodeVisit(traceView.nodes, visitRef);
           const route = getNodeVisitRoute(node);
+          const hasNodeError = Boolean(node.error && Object.keys(node.error).length > 0);
           const visitTools = traceView.tools.filter((tool) => (
             tool.callerNode === node.id && Number(tool.callerVisitIndex || 1) === visitRef.visitIndex
           ));
@@ -208,43 +256,66 @@ export default function AgentExecutionView({
                 ...(selectedVisit && agentNodeVisitKey(selectedVisit) === key ? { borderColor: 'primary.main' } : {}),
               }}
             >
-              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ width: '100%', alignItems: { sm: 'center' }, minWidth: 0 }}>
-                  <Typography variant="body2" sx={{ fontWeight: 700, minWidth: 150 }}>{node.label} · Visit {node.visitIndex || 1}</Typography>
-                  <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>{nodeSummary(node)}</Typography>
-                  <Chip size="small" variant="outlined" color={node.status === 'error' ? 'error' : node.status === 'active' ? 'primary' : 'default'} label={node.status || 'completed'} />
+              <AccordionSummary
+                expandIcon={<ExpandMoreIcon titleAccess="Expand or collapse invocation details" sx={{ fontSize: 19 }} />}
+                sx={{ minHeight: 38, px: 0.75, '&.Mui-expanded': { minHeight: 38 }, '& .MuiAccordionSummary-content': { my: 0.45 }, '& .MuiAccordionSummary-content.Mui-expanded': { my: 0.45 } }}
+              >
+                <Stack direction="row" spacing={0.65} sx={{ width: '100%', alignItems: 'center', minWidth: 0 }}>
+                  <AgentExecutionStatusIcon status={node.status || (node.skipped ? 'skipped' : 'completed')} size={16} />
+                  <Typography variant="body2" noWrap sx={{ fontWeight: 700, minWidth: 105, maxWidth: 190 }}>{node.label}</Typography>
+                  {nodeVisits.length > 1 && (
+                    <Stack direction="row" spacing={0.1} alignItems="center" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                      <Tooltip title={previousVisit ? `Previous ${node.label} invocation` : 'First invocation'} arrow>
+                        <span>
+                          <IconButton
+                            size="small"
+                            aria-label={`Previous invocation of ${node.label}`}
+                            disabled={!previousVisit}
+                            onClick={() => previousVisit && selectVisit(previousVisit, true)}
+                            sx={{ width: 23, height: 23, border: 1, borderColor: 'divider' }}
+                          >
+                            <ChevronLeftIcon sx={{ fontSize: 17 }} />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                      <Typography variant="caption" sx={{ minWidth: 30, textAlign: 'center', fontWeight: 700 }}>{visitPosition + 1}/{nodeVisits.length}</Typography>
+                      <Tooltip title={nextVisit ? `Next ${node.label} invocation` : 'Latest invocation'} arrow>
+                        <span>
+                          <IconButton
+                            size="small"
+                            aria-label={`Next invocation of ${node.label}`}
+                            disabled={!nextVisit}
+                            onClick={() => nextVisit && selectVisit(nextVisit, true)}
+                            sx={{ width: 23, height: 23, border: 1, borderColor: 'divider' }}
+                          >
+                            <ChevronRightIcon sx={{ fontSize: 17 }} />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </Stack>
+                  )}
+                  <Tooltip title={nodeSummary(node)} placement="top" arrow>
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>{nodeSummary(node)}</Typography>
+                  </Tooltip>
                 </Stack>
               </AccordionSummary>
-              <AccordionDetails>
-                <Stack spacing={1} sx={{ mb: 1.25 }}>
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }} justifyContent="space-between">
+              <AccordionDetails sx={{ px: 1, pt: 0.25, pb: 1 }}>
+                <Stack spacing={0.6} sx={{ mb: 0.75 }}>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.6} alignItems={{ sm: 'center' }} justifyContent="space-between">
                     <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-                      <Chip size="small" variant="outlined" label={node.type || node.id} />
-                      {node.durationMs !== undefined && <Chip size="small" variant="outlined" label={`${Math.max(0, Math.round(node.durationMs))} ms`} />}
-                      {route && <Chip size="small" color="primary" variant="outlined" label={`Route: ${route}`} />}
-                      {visitTools.length > 0 && <Chip size="small" variant="outlined" label={`${visitTools.length} tool${visitTools.length === 1 ? '' : 's'}`} />}
-                      {node.warningCodes.length > 0 && <Chip size="small" color="warning" label={`${node.warningCodes.length} warning${node.warningCodes.length === 1 ? '' : 's'}`} />}
+                      <Chip size="small" variant="outlined" label={node.type || node.id} sx={{ height: 21 }} />
+                      {node.durationMs !== undefined && <Chip size="small" variant="outlined" label={formatDurationMs(node.durationMs)} sx={{ height: 21 }} />}
+                      {route && <Tooltip title={node.routeReason || `Selected route: ${route}`} arrow><Chip size="small" color="primary" variant="outlined" label={route} sx={{ height: 21 }} /></Tooltip>}
+                      {visitTools.length > 0 && <Chip size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={visitTools.length} sx={{ height: 21 }} />}
+                      {node.warningCodes.length > 0 && <Chip size="small" color="warning" variant="outlined" icon={<WarningAmberIcon />} label={node.warningCodes.length} sx={{ height: 21 }} />}
+                      {hasNodeError && <Chip size="small" color="error" variant="outlined" icon={<ErrorOutlineIcon />} label="1" sx={{ height: 21 }} />}
                     </Stack>
-                    {nodeVisits.length > 1 && (
-                      <Stack direction="row" spacing={0.5} alignItems="center">
-                        <Button size="small" variant="outlined" disabled={!previousVisit} onClick={() => previousVisit && selectVisit(previousVisit, true)}>
-                          Previous
-                        </Button>
-                        <Typography variant="caption" sx={{ minWidth: 72, textAlign: 'center', fontWeight: 700 }}>
-                          Visit {visitPosition + 1} of {nodeVisits.length}
-                        </Typography>
-                        <Button size="small" variant="outlined" disabled={!nextVisit} onClick={() => nextVisit && selectVisit(nextVisit, true)}>
-                          Next
-                        </Button>
-                      </Stack>
-                    )}
                   </Stack>
                   {node.routeReason && (
                     <Typography variant="body2" color="text.secondary">
                       <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>Route reason: </Box>{node.routeReason}
                     </Typography>
                   )}
-                  <Divider />
                 </Stack>
                 {loadingKey === key && <Stack direction="row" spacing={1}><CircularProgress size={16} /><Typography variant="caption">Loading full details…</Typography></Stack>}
                 {detailErrors[key] && <Alert severity="info">Older trace—full invocation details are unavailable.</Alert>}
@@ -254,9 +325,9 @@ export default function AgentExecutionView({
           );
         })}
         {finalOutput?.answer && (
-          <Box sx={{ mt: 2, p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}>
+          <Box sx={{ mt: 1, p: 1, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between">
-              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Final answer</Typography>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Final answer</Typography>
               <Tooltip title="Copy answer"><IconButton size="small" onClick={() => void copyAnswer()}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
             </Stack>
             <Box sx={{ mt: 1, '& pre': { overflowX: 'auto' }, '& table': { display: 'block', overflowX: 'auto' } }}>

@@ -37,8 +37,10 @@ const nodeTypes = {
   agentGraphNode: AgentGraphNode,
 };
 
-const NODE_WIDTH = 230;
-const NODE_HEIGHT = 118;
+const AUTHORING_NODE_WIDTH = 230;
+const AUTHORING_NODE_HEIGHT = 118;
+const RUNTIME_NODE_WIDTH = 190;
+const RUNTIME_NODE_HEIGHT = 86;
 
 const getStatusEdgeColor = (edge: { selected?: boolean; active?: boolean }) => {
   if (edge.selected) return '#1976d2';
@@ -89,7 +91,7 @@ function AgentGraphFallback({ graph }: { graph: ReturnType<typeof buildAgentGrap
           <Chip
             key={node.id}
             size="small"
-            color={node.status === 'error' ? 'error' : node.status === 'active' ? 'success' : node.status === 'planned' ? 'primary' : 'default'}
+            color={node.status === 'error' ? 'error' : node.status === 'active' || node.status === 'completed' ? 'success' : node.status === 'planned' ? 'primary' : 'default'}
             variant={node.status === 'inactive' ? 'outlined' : 'filled'}
             label={`${node.label}: ${node.status}`}
           />
@@ -104,6 +106,7 @@ const layoutGraph = async (
   edges: ReturnType<typeof buildAgentGraph>['edges'],
   direction: 'RIGHT' | 'DOWN',
 ) => {
+  const runtimeLayout = direction === 'DOWN';
   const graph = {
     id: 'agent-run-graph',
     layoutOptions: {
@@ -115,8 +118,8 @@ const layoutGraph = async (
     },
     children: nodes.map((node) => ({
       id: node.id,
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
+      width: runtimeLayout ? RUNTIME_NODE_WIDTH : AUTHORING_NODE_WIDTH,
+      height: runtimeLayout ? RUNTIME_NODE_HEIGHT : AUTHORING_NODE_HEIGHT,
     })),
     edges: edges.map((edge) => ({
       id: edge.id,
@@ -171,7 +174,14 @@ function AgentGraphCanvasInner({
         route: traceView.route,
         metrics: traceView.metrics,
         nodeCatalog,
-        nodeRows: traceView.nodes.map((node) => ({ ...node.raw, node: node.id, node_type: node.type, visit_index: node.visitIndex })),
+        nodeRows: traceView.nodes.map((node) => ({
+          ...node.raw,
+          node: node.id,
+          node_type: node.type,
+          visit_index: node.visitIndex,
+          status: node.status,
+          skipped: node.skipped,
+        })),
         toolRows: traceView.tools.map((tool) => ({
           ...tool.raw,
           tool_name: tool.name,

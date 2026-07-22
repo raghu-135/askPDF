@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import StopIcon from '@mui/icons-material/Stop';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import {
   Alert,
   Box,
@@ -11,6 +12,7 @@ import {
   Paper,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import {
@@ -226,12 +228,14 @@ export default function BuilderTestStudio({
 
   return (
     <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', xl: '340px minmax(0, 1fr)' }, gap: 1.5 }}>
-      <Paper variant="outlined" sx={{ p: 1.5, alignSelf: 'start' }}>
-        <Typography variant="h6">Isolated test</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Uses this unsaved graph and the thread&apos;s context. It does not add chat messages, memory, statistics, or change thread settings.
-        </Typography>
-        <Stack spacing={1.25}>
+      <Paper variant="outlined" sx={{ p: 1.25, alignSelf: 'start' }}>
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mb: 1 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Isolated test</Typography>
+          <Tooltip title="Uses this unsaved graph and the selected thread context. It does not add chat messages or memory, update statistics, or change thread settings." arrow>
+            <InfoOutlinedIcon color="action" sx={{ fontSize: 17 }} />
+          </Tooltip>
+        </Stack>
+        <Stack spacing={1}>
           <BuilderThreadPicker value={threadId} onChange={setThreadId} disabled={controlsLocked} lockedThreadId={lockedThreadId} />
           <BuilderLlmModelPicker
             value={llmModel}
@@ -242,7 +246,7 @@ export default function BuilderTestStudio({
             onHealthChange={setModelHealth}
             disabled={controlsLocked}
           />
-          <TextField label="Test question" multiline minRows={3} value={question} onChange={(event) => setQuestion(event.target.value)} required disabled={controlsLocked} />
+          <TextField label="Test question" multiline minRows={2} value={question} onChange={(event) => setQuestion(event.target.value)} required disabled={controlsLocked} />
           <FormControlLabel control={<Checkbox checked={useWeb} disabled={controlsLocked} onChange={(event) => setUseWeb(event.target.checked)} />} label="Allow web search" />
           {useWeb && (
             <FormControlLabel
@@ -252,6 +256,7 @@ export default function BuilderTestStudio({
           )}
           <Stack direction="row" spacing={1}>
             <Button
+              size="small"
               variant="contained"
               startIcon={running ? <CircularProgress size={15} color="inherit" /> : <PlayArrowIcon />}
               disabled={controlsLocked || !threadId.trim() || !llmModel.trim() || modelHealth.checking || modelHealth.ready !== true || !question.trim() || (useWeb && !externalConfirmed)}
@@ -259,13 +264,15 @@ export default function BuilderTestStudio({
             >
               Run unsaved graph
             </Button>
-            {running && <Button color="error" startIcon={<StopIcon />} disabled={!runId || stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Stop'}</Button>}
+            {running && <Button size="small" color="error" startIcon={<StopIcon />} disabled={!runId || stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Stop'}</Button>}
           </Stack>
           {running && activeStep && (
-            <Alert severity="info" icon={<CircularProgress size={16} />}>
-              {activeStep.nodeId} · Visit {activeStep.visitIndex} is still running ({Math.max(0, Math.floor((activityClock - activeStep.startedAt) / 1000))}s).
-              Model calls may take a little while; Stop remains available.
-            </Alert>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.65, color: 'text.secondary' }}>
+              <CircularProgress size={14} />
+              <Typography variant="caption" noWrap title={`${activeStep.nodeId} visit ${activeStep.visitIndex} is running`}>
+                {activeStep.nodeId} · {activeStep.visitIndex} · {Math.max(0, Math.floor((activityClock - activeStep.startedAt) / 1000))}s
+              </Typography>
+            </Box>
           )}
         </Stack>
         {error && <Alert severity="error" sx={{ mt: 1.5 }}>{error}</Alert>}

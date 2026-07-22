@@ -2,24 +2,29 @@ import React from 'react';
 import AddIcon from '@mui/icons-material/Add';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Box, Button, Chip, Tooltip, Typography } from '@mui/material';
 import { Handle, NodeToolbar, Position } from '@xyflow/react';
 import { formatSkipReason } from '../../lib/agentDebugLabels';
 import { formatDurationMs } from '../../lib/formatDuration';
 import type { AgentGraphNode as AgentGraphNodeModel } from './agent-graph-types';
+import AgentExecutionStatusIcon from './AgentExecutionStatusIcon';
 
 const statusColor: Record<string, string> = {
   active: '#2e7d32',
+  completed: '#2e7d32',
   planned: '#1565c0',
-  skipped: '#757575',
+  skipped: '#ed6c02',
   inactive: '#9e9e9e',
   error: '#c62828',
 };
 
 const statusBg: Record<string, string> = {
   active: 'rgba(46, 125, 50, 0.12)',
+  completed: 'rgba(46, 125, 50, 0.08)',
   planned: 'rgba(21, 101, 192, 0.12)',
-  skipped: 'rgba(117, 117, 117, 0.12)',
+  skipped: 'rgba(237, 108, 2, 0.10)',
   inactive: 'rgba(158, 158, 158, 0.08)',
   error: 'rgba(198, 40, 40, 0.12)',
 };
@@ -78,10 +83,10 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
     <Tooltip title={<Box component="pre" sx={{ m: 0, whiteSpace: 'pre-wrap' }}>{tooltip}</Box>} arrow>
       <Box
         sx={{
-          minWidth: 205,
-          maxWidth: 230,
-          px: 1.25,
-          py: 1,
+          minWidth: data.authoring ? 205 : 170,
+          maxWidth: data.authoring ? 230 : 190,
+          px: data.authoring ? 1.25 : 0.9,
+          py: data.authoring ? 1 : 0.7,
           borderRadius: 1,
           border: isFocused ? 2 : 1,
           borderColor: data.compatible === false ? 'action.disabled' : selected || isFocused ? 'primary.main' : data.authoring ? categoryColor : statusColor[data.status] || 'divider',
@@ -148,34 +153,52 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
             {String(data.category).replace(/_/g, ' ')}
           </Typography>
         ) : null}
-        <Typography variant="body2" sx={{ display: 'block', fontWeight: 700, lineHeight: 1.25 }}>
-          {data.label}
-        </Typography>
-        <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', lineHeight: 1.3, mt: 0.1 }}>
-          {instanceLabel}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.75 }}>
+          <Typography variant="body2" sx={{ display: 'block', fontWeight: 700, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {data.label}
+          </Typography>
+          {!data.authoring && <AgentExecutionStatusIcon status={data.status} size={15} showTooltip={false} />}
+        </Box>
+        {data.authoring && (
+          <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', lineHeight: 1.3, mt: 0.1 }}>
+            {instanceLabel}
+          </Typography>
+        )}
         {(data.authoring || data.type === 'canvas_note') && data.description ? (
           <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', mt: 0.5, lineHeight: 1.25 }}>
             {data.description}
           </Typography>
         ) : null}
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, mt: 0.8 }}>
-          {data.authoring && data.usesLlm ? <Chip size="small" label="LLM" variant="outlined" sx={{ height: 22 }} /> : null}
-          {data.authoring && data.usesTools ? <Chip size="small" label="Tool" variant="outlined" sx={{ height: 22 }} /> : null}
-          {data.authoring && data.issueCount ? <Chip size="small" color="error" label={`${data.issueCount} issue${data.issueCount === 1 ? '' : 's'}`} sx={{ height: 22 }} /> : null}
-          <Chip size="small" label={statusLabel} sx={{ height: 22, fontSize: '0.72rem' }} />
-          {isFocused ? <Chip size="small" color="primary" label="focused" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
-          {selectedVisitLabel ? (
-            <Chip size="small" color="primary" label={selectedVisitLabel} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />
-          ) : visitCount > 1 ? (
-            <Chip size="small" label={`visits ${visitCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />
-          ) : null}
-          {elapsed && <Chip size="small" label={elapsed} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />}
-          {data.executionPlan?.length ? <Chip size="small" label={`plan ${data.executionPlan.length}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
-          {toolCount ? <Chip size="small" label={`tools ${toolCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
-          {data.warningCount ? <Chip size="small" color="warning" label={`warn ${data.warningCount}`} sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
-          {data.errorCount ? <Chip size="small" color="error" label={`err ${data.errorCount}`} sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
-        </Box>
+        {data.authoring ? (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.4, mt: 0.8 }}>
+            {data.usesLlm ? <Chip size="small" label="LLM" variant="outlined" sx={{ height: 22 }} /> : null}
+            {data.usesTools ? <Chip size="small" label="Tool" variant="outlined" sx={{ height: 22 }} /> : null}
+            {data.issueCount ? <Chip size="small" color="error" label={`${data.issueCount} issue${data.issueCount === 1 ? '' : 's'}`} sx={{ height: 22 }} /> : null}
+            <Chip size="small" label={statusLabel} sx={{ height: 22, fontSize: '0.72rem' }} />
+            {isFocused ? <Chip size="small" color="primary" label="focused" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
+            {selectedVisitLabel ? <Chip size="small" color="primary" label={selectedVisitLabel} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : visitCount > 1 ? <Chip size="small" label={`visits ${visitCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
+            {elapsed && <Chip size="small" label={elapsed} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />}
+            {data.executionPlan?.length ? <Chip size="small" label={`plan ${data.executionPlan.length}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
+            {toolCount ? <Chip size="small" label={`tools ${toolCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
+            {data.warningCount ? <Chip size="small" color="warning" label={`warn ${data.warningCount}`} sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
+            {data.errorCount ? <Chip size="small" color="error" label={`err ${data.errorCount}`} sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
+          </Box>
+        ) : (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.55, minHeight: 19, mt: 0.45 }}>
+            {selectedVisitLabel && <Chip size="small" color="primary" label={`${selectedVisitPosition}/${visitCount}`} variant="outlined" sx={{ height: 19, fontSize: '0.68rem' }} />}
+            {isFocused && <Chip size="small" color="primary" label="focused" sx={{ height: 19, fontSize: '0.68rem' }} />}
+            {data.warningCount > 0 && (
+              <Box component="span" role="img" aria-label={`${data.warningCount} warnings`} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, color: 'warning.main', fontSize: '0.68rem' }}>
+                <WarningAmberIcon sx={{ fontSize: 14 }} />{data.warningCount}
+              </Box>
+            )}
+            {data.errorCount > 0 && (
+              <Box component="span" role="img" aria-label={`${data.errorCount} errors`} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.2, color: 'error.main', fontSize: '0.68rem' }}>
+                <ErrorOutlineIcon sx={{ fontSize: 14 }} />{data.errorCount}
+              </Box>
+            )}
+          </Box>
+        )}
         {data.authoring ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.45, mt: 1, pr: 0.5 }}>
             {outputPorts.map((port, index) => (

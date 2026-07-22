@@ -7,7 +7,6 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, Checkbox, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
 import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
-import AgentRunHeaderChips from './AgentRunHeaderChips';
 import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 
@@ -158,10 +157,32 @@ export default function AgentRunDebugPanel({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-      <Typography variant="caption" sx={{ display: 'block', wordBreak: 'break-all' }}>
-        Run ID: {runId}
-      </Typography>
-      {routeReason && (
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5 }}>
+        <Tooltip title={runId} arrow>
+          <Typography variant="caption" color="text.secondary">
+            Run …{runId.slice(-8)}
+          </Typography>
+        </Tooltip>
+        {trace && (
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Tooltip title={copyStatus === 'copied' ? 'Copied trace JSON' : copyStatus === 'failed' ? 'Copy failed' : 'Copy trace JSON'} arrow>
+              <span>
+                <IconButton size="small" onClick={copyTrace} disabled={!traceJson} aria-label="Copy trace JSON">
+                  <ContentCopyIcon fontSize="inherit" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Download trace JSON" arrow>
+              <span>
+                <IconButton size="small" onClick={downloadTrace} disabled={!traceJson} aria-label="Download trace JSON">
+                  <DownloadIcon fontSize="inherit" />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
+        )}
+      </Box>
+      {routeReason && !traceView && (
         <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
           Route reason: {routeReason}
         </Typography>
@@ -253,27 +274,6 @@ export default function AgentRunDebugPanel({
       )}
       {debug && runDetails && traceView && (
         <>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, alignItems: 'center' }}>
-            <AgentRunHeaderChips runDetails={runDetails} traceView={traceView} />
-            {trace && (
-              <>
-                <Tooltip title={copyStatus === 'copied' ? 'Copied trace JSON' : copyStatus === 'failed' ? 'Copy failed' : 'Copy trace JSON'} arrow>
-                  <span>
-                    <IconButton size="small" onClick={copyTrace} disabled={!traceJson} aria-label="Copy trace JSON">
-                      <ContentCopyIcon fontSize="inherit" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-                <Tooltip title="Download trace JSON" arrow>
-                  <span>
-                    <IconButton size="small" onClick={downloadTrace} disabled={!traceJson} aria-label="Download trace JSON">
-                      <DownloadIcon fontSize="inherit" />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              </>
-            )}
-          </Box>
           <AgentExecutionView
             runId={runId}
             threadId={runDetails.thread_id}

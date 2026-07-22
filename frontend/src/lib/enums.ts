@@ -120,6 +120,7 @@ export type AgentGraphMode = typeof AgentGraphMode[keyof typeof AgentGraphMode];
 
 export const AgentGraphNodeStatus = {
   Active: 'active',
+  Completed: 'completed',
   Planned: 'planned',
   Skipped: 'skipped',
   Inactive: 'inactive',
