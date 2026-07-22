@@ -43,6 +43,7 @@ def _runtime_config(
     use_reranker: Any = None,
     telemetry_sink: Dict[str, Any],
     trace_recorder: Any = None,
+    execution_event_sink: Any = None,
 ) -> Dict[str, Any]:
     configurable = {
         "thread_id": checkpoint_thread_id,
@@ -51,6 +52,8 @@ def _runtime_config(
         "telemetry_sink": telemetry_sink,
         "trace_recorder": trace_recorder,
     }
+    if execution_event_sink is not None:
+        configurable["execution_event_sink"] = execution_event_sink
     if embedding_model is not None:
         configurable["embedding_model"] = embedding_model
     if context_window is not None:
@@ -246,6 +249,7 @@ async def execute_compiled_rag_chat(
     agent_run_context: Dict[str, Any],
     trace_recorder: Any,
     checkpointer: Any = None,
+    execution_event_sink: Any = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG workflow using runtime metadata from the stored spec."""
     runtime_options = runtime_execution_options(resolved_spec)
@@ -257,6 +261,7 @@ async def execute_compiled_rag_chat(
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
+        execution_event_sink=execution_event_sink,
         runtime_label=runtime_options["label"],
         failure_code=runtime_options["failure_code"],
         failure_reason_prefix=runtime_options["failure_reason_prefix"],
@@ -286,6 +291,7 @@ async def handle_router_rag_chat(
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
+        execution_event_sink=_kwargs.get("execution_event_sink"),
     )
 
 
@@ -310,6 +316,7 @@ async def handle_plan_execute_rag_chat(
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
+        execution_event_sink=_kwargs.get("execution_event_sink"),
     )
 
 
@@ -334,6 +341,7 @@ async def handle_evaluator_replanner_rag_chat(
         agent_run_context=agent_run_context,
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
+        execution_event_sink=_kwargs.get("execution_event_sink"),
     )
 
 
@@ -351,6 +359,7 @@ async def _handle_compiled_rag_chat(
     failure_reason_prefix: str,
     success_context: str,
     failure_context: str,
+    execution_event_sink: Any = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG graph and persist a chat turn."""
 
@@ -392,6 +401,7 @@ async def _handle_compiled_rag_chat(
         use_reranker=use_reranker,
         telemetry_sink=telemetry_sink,
         trace_recorder=trace_recorder,
+        execution_event_sink=execution_event_sink,
     )
     state = {
         "agent_run_id": agent_run_id,
@@ -608,6 +618,7 @@ async def resume_compiled_rag_chat(
     interrupt: Dict[str, Any],
     checkpointer: Any,
     trace_recorder: Any = None,
+    execution_event_sink: Any = None,
 ) -> Dict[str, Any]:
     """Resume a checkpointed compiled RAG graph and persist the final chat turn."""
 
@@ -635,6 +646,7 @@ async def resume_compiled_rag_chat(
         use_reranker=snapshot_values.get("use_reranker"),
         telemetry_sink=telemetry_sink,
         trace_recorder=trace_recorder,
+        execution_event_sink=execution_event_sink,
     )
     decision = interrupt.get("decision") if isinstance(interrupt.get("decision"), dict) else {}
     agent_run_context = {

@@ -40,6 +40,7 @@ from app.agent_workflows.node_catalog import collect_node_catalog_errors, get_no
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
 from app.agent_workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_workflows.service import AgentRunService
+from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError, WorkflowValidator
 from app.db import get_thread_settings
@@ -5785,6 +5786,137 @@ async def test_builder_test_run_uses_resolved_workflow_row_id(monkeypatch):
     assert captured["workflow_id"] == "legacy-persisted-router-row"
     assert captured["run_metadata_json"]["base_workflow_id"] == ROUTER_RAG_AGENT_ID
     assert captured["resolved_spec_json"]["workflow_id"] == ROUTER_RAG_AGENT_ID
+
+
+@pytest.mark.asyncio
+async def test_thread_chat_content_negotiation_streams_compact_progress(monkeypatch):
+    import app.api.messages as messages_api
+
+    class FakeService:
+        async def run_thread_chat(self, thread_id, req, embedding_model, *, execution_event_sink=None):
+            assert thread_id == "thread-stream"
+            assert embedding_model == "embed-test"
+            if execution_event_sink is not None:
+                await execution_event_sink.emit("run.started", {"run_id": "run-stream", "workflow_id": "router_rag_agent"})
+                await execution_event_sink.emit("node.completed", {
+                    "node_id": "router",
+                    "visit_index": 1,
+                    "route": "document",
+                    "detail": {"checkpoint_before": {"secret": "must-not-stream"}},
+                    "reasoning": "must-not-stream",
+                })
+            return {
+                "answer": "done",
+                "status": "completed",
+                "agent_run_id": "run-stream",
+                "user_message_id": "turn:user",
+                "assistant_message_id": "turn:assistant",
+                "used_chat_ids": [],
+                "document_sources": [],
+            }
+
+    async def fake_get_thread(_thread_id):
+        return SimpleNamespace(embedding_model="embed-test")
+
+    async def fake_get_settings(_thread_id):
+        return {}
+
+    async def fake_supports_replans(_settings):
+        return False
+
+    monkeypatch.setattr(messages_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(messages_api, "get_thread_settings", fake_get_settings)
+    monkeypatch.setattr(messages_api, "_settings_workflow_supports_replans", fake_supports_replans)
+    monkeypatch.setattr(messages_api, "AgentRunService", FakeService)
+    request = SimpleNamespace(
+        thread_id="thread-stream",
+        question="question",
+        llm_model="model",
+        replans=None,
+        system_role_override="",
+        tool_instructions_override={},
+        custom_instructions_override="",
+    )
+
+    response = await messages_api.thread_chat_endpoint("thread-stream", request, accept="text/event-stream")
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    payload = "".join(chunks)
+
+    assert response.media_type == "text/event-stream"
+    assert "event: run.started" in payload
+    assert "event: node.completed" in payload
+    assert "event: run.completed" in payload
+    assert '"answer": "done"' in payload
+    assert "must-not-stream" not in payload
+
+
+@pytest.mark.asyncio
+async def test_compact_execution_sink_omits_full_invocation_fields():
+    sink = AgentExecutionEventSink(include_details=False)
+    await sink.emit("node.completed", {
+        "node_id": "router",
+        "visit_index": 1,
+        "detail": {"checkpoint_after": {"answer": "large"}},
+        "prompt": "private prompt",
+        "reasoning": "private reasoning",
+        "output_preview": {"route": "document"},
+    })
+    event = await sink.queue.get()
+    assert event["data"] == {
+        "node_id": "router",
+        "visit_index": 1,
+        "output_preview": {"route": "document"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_run_resume_content_negotiation_streams_progress(monkeypatch):
+    import app.api.agent_workflows as agent_workflows_api
+
+    run = SimpleNamespace(
+        id="run-resume-stream",
+        thread_id="thread-resume-stream",
+        workflow_id="router_rag_agent",
+        status="completed",
+        pending_interrupt_json=None,
+    )
+
+    class FakeService:
+        async def resume_agent_run(self, run_id, **kwargs):
+            sink = kwargs.get("execution_event_sink")
+            await sink.emit("run.started", {"run_id": run_id, "resumed": True})
+            await sink.emit("node.completed", {"node_id": "finalizer", "visit_index": 2, "detail": {"prompt": "hidden"}})
+            return SimpleNamespace(run=run, interrupt={"interrupt_id": "interrupt-1"}, outcome="resumed", duplicate=False)
+
+    async def fake_get_thread(_thread_id):
+        return SimpleNamespace(id="thread-resume-stream")
+
+    monkeypatch.setattr(agent_workflows_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(agent_workflows_api, "AgentRunService", FakeService)
+    request = SimpleNamespace(
+        thread_id="thread-resume-stream",
+        interrupt_id="interrupt-1",
+        action="approve",
+        edited_payload=None,
+        client_metadata={},
+        selected_option_ids=None,
+        resume_token="token",
+        resume_version=1,
+    )
+
+    response = await agent_workflows_api.resume_agent_run("run-resume-stream", request, accept="text/event-stream")
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    payload = "".join(chunks)
+
+    assert "event: run.started" in payload
+    assert "event: node.completed" in payload
+    assert "event: run.completed" in payload
+    assert '"outcome": "resumed"' in payload
+    assert "hidden" not in payload
 
 
 @pytest.mark.asyncio

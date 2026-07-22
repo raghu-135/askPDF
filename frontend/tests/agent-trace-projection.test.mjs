@@ -5,6 +5,7 @@ import {
   buildTraceExportJson,
   buildLiveTraceView,
   buildRunTraceView,
+  mergeLiveAndRetainedTraceViews,
 } from '../src/components/agent-debug/agent-trace-projection.ts';
 
 const backendDebug = {
@@ -428,4 +429,21 @@ test('live trace projection surfaces terminal run failures without a node failur
   assert.equal(view.errorCount, 1);
   assert.equal(view.errors[0].code, 'workflow_failed');
   assert.equal(view.errors[0].raw_message, 'No destination for route memory');
+});
+
+test('live and retained projections merge repeated visits without duplicating identities', () => {
+  const retained = buildLiveTraceView([
+    { id: 1, event: 'node.completed', data: { node_id: 'router', node_type: 'router', visit_index: 1, route: 'execute' } },
+    { id: 2, event: 'node.completed', data: { node_id: 'worker', node_type: 'document_retrieval', visit_index: 1 } },
+  ]);
+  const live = buildLiveTraceView([
+    { id: 3, event: 'node.started', data: { node_id: 'worker', node_type: 'document_retrieval', visit_index: 1 } },
+    { id: 4, event: 'node.completed', data: { node_id: 'worker', node_type: 'document_retrieval', visit_index: 1 } },
+    { id: 5, event: 'node.completed', data: { node_id: 'worker', node_type: 'document_retrieval', visit_index: 2 } },
+  ]);
+
+  const merged = mergeLiveAndRetainedTraceViews(live, retained);
+
+  assert.deepEqual(merged.nodes.map((node) => `${node.id}:${node.visitIndex}`), ['router:1', 'worker:1', 'worker:2']);
+  assert.equal(merged.nodes[1].status, 'completed');
 });

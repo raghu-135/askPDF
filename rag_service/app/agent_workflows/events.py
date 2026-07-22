@@ -78,4 +78,7 @@ def append_tool_event(
         telemetry_sink.setdefault("tool_events", []).append(dict(event))
     if trace_recorder is not None and hasattr(trace_recorder, "record_tool_event"):
         trace_recorder.record_tool_event(dict(event))
+    execution_event_sink = ((config or {}).get("configurable") or {}).get("execution_event_sink")
+    if execution_event_sink is not None and hasattr(execution_event_sink, "emit_nowait"):
+        execution_event_sink.emit_nowait("tool.completed", event)
     return [*state.get("tool_events", []), event]

@@ -4,6 +4,7 @@ import {
   type AnnotationTransferItem,
 } from "./annotation-utils";
 import { getBrowserRuntimeContext } from "./date-utils";
+import { consumeAgentExecutionStream, type AgentExecutionStreamEnvelope } from "./agent-execution-stream";
 import {
   ProcessStatus as ProcessStatusEnum,
   ThreadFileSourceType,
@@ -1110,24 +1111,28 @@ export async function getAgentRun(runId: string, threadId: string): Promise<Agen
   return data.agent_run;
 }
 
-export async function resumeAgentRun(
-  runId: string,
-  payload: {
-    action: AgentRunResumeAction;
-    interrupt_id: string;
-    edited_payload?: Record<string, any>;
-    client_metadata?: Record<string, any>;
-    selected_option_ids?: string[];
-    resume_token?: string;
-    resume_version?: number;
-    thread_id?: string;
-  }
-): Promise<{
+export interface AgentRunResumePayload {
+  action: AgentRunResumeAction;
+  interrupt_id: string;
+  edited_payload?: Record<string, any>;
+  client_metadata?: Record<string, any>;
+  selected_option_ids?: string[];
+  resume_token?: string;
+  resume_version?: number;
+  thread_id?: string;
+}
+
+export interface AgentRunResumeResponse {
   agent_run: AgentRunDetails;
   interrupt: AgentRunPendingInterrupt;
   outcome: string;
   duplicate: boolean;
-}> {
+}
+
+export async function resumeAgentRun(
+  runId: string,
+  payload: AgentRunResumePayload,
+): Promise<AgentRunResumeResponse> {
   const res = await fetch(`${API_BASE}/api/agent-runs/${runId}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1135,6 +1140,21 @@ export async function resumeAgentRun(
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export async function streamResumeAgentRun(
+  runId: string,
+  payload: AgentRunResumePayload,
+  onEvent: (event: AgentExecutionStreamEnvelope) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  await consumeAgentExecutionStream(res, onEvent);
 }
 
 export interface BuilderTestRuntimeInput {
@@ -1154,34 +1174,7 @@ export interface BuilderTestRuntimeInput {
   client_now_iso?: string;
 }
 
-export interface BuilderTestStreamEnvelope {
-  id: number | string;
-  event: string;
-  data: Record<string, any>;
-}
-
-async function consumeBuilderTestStream(
-  response: Response,
-  onEvent: (event: BuilderTestStreamEnvelope) => void,
-): Promise<void> {
-  if (!response.ok) throw new Error(await response.text());
-  if (!response.body) throw new Error('The test stream is unavailable.');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const blocks = buffer.split(/\r?\n\r?\n/);
-    buffer = blocks.pop() || '';
-    for (const block of blocks) {
-      const data = block.split(/\r?\n/).find((line) => line.startsWith('data:'));
-      if (!data) continue;
-      onEvent(JSON.parse(data.slice(5).trim()) as BuilderTestStreamEnvelope);
-    }
-    if (done) break;
-  }
-}
+export type BuilderTestStreamEnvelope = AgentExecutionStreamEnvelope;
 
 export async function streamAgentWorkflowBuilderTest(
   payload: BuilderTestRuntimeInput,
@@ -1194,7 +1187,7 @@ export async function streamAgentWorkflowBuilderTest(
     body: JSON.stringify(payload),
     signal,
   });
-  await consumeBuilderTestStream(response, onEvent);
+  await consumeAgentExecutionStream(response, onEvent);
 }
 
 export async function resumeAgentWorkflowBuilderTest(
@@ -1215,7 +1208,7 @@ export async function resumeAgentWorkflowBuilderTest(
     body: JSON.stringify(payload),
     signal,
   });
-  await consumeBuilderTestStream(response, onEvent);
+  await consumeAgentExecutionStream(response, onEvent);
 }
 
 export async function cancelAgentWorkflowBuilderTest(runId: string): Promise<void> {
@@ -1237,18 +1230,7 @@ export async function getLatestAgentWorkflowBuilderTest(
   return (await response.json()).agent_run;
 }
 
-export async function threadChat(
-  threadId: string,
-  question: string,
-  llmModel: string,
-  useWebSearch: boolean = false,
-  useReranker: boolean = true,
-  contextWindowSize: number = 4096,
-  replans?: number,
-  systemRoleOverride?: string,
-  toolInstructionsOverride?: Record<string, string>,
-  customInstructionsOverride?: string
-): Promise<{
+export interface ThreadChatResponse {
   answer: string;
   status?: string;
   user_message_id: string | null;
@@ -1270,7 +1252,20 @@ export async function threadChat(
   route?: string;
   agent_route?: string;
   agent_route_reason?: string;
-}> {
+}
+
+const threadChatPayload = (
+  threadId: string,
+  question: string,
+  llmModel: string,
+  useWebSearch: boolean = false,
+  useReranker: boolean = true,
+  contextWindowSize: number = 4096,
+  replans?: number,
+  systemRoleOverride?: string,
+  toolInstructionsOverride?: Record<string, string>,
+  customInstructionsOverride?: string
+): Record<string, any> => {
   const payload: any = {
     thread_id: threadId,
     question,
@@ -1292,6 +1287,22 @@ export async function threadChat(
   if (typeof customInstructionsOverride === "string") {
     payload.custom_instructions_override = customInstructionsOverride;
   }
+  return payload;
+};
+
+export async function threadChat(
+  threadId: string,
+  question: string,
+  llmModel: string,
+  useWebSearch: boolean = false,
+  useReranker: boolean = true,
+  contextWindowSize: number = 4096,
+  replans?: number,
+  systemRoleOverride?: string,
+  toolInstructionsOverride?: Record<string, string>,
+  customInstructionsOverride?: string
+): Promise<ThreadChatResponse> {
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride);
   const maxRetries = 2;
   let attempt = 0;
 
@@ -1322,6 +1333,30 @@ export async function threadChat(
       throw err;
     }
   }
+}
+
+export async function streamThreadChat(
+  threadId: string,
+  question: string,
+  llmModel: string,
+  useWebSearch: boolean,
+  useReranker: boolean,
+  contextWindowSize: number,
+  replans: number | undefined,
+  systemRoleOverride: string | undefined,
+  toolInstructionsOverride: Record<string, string> | undefined,
+  customInstructionsOverride: string | undefined,
+  onEvent: (event: AgentExecutionStreamEnvelope) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride);
+  const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  await consumeAgentExecutionStream(response, onEvent);
 }
 
 export async function getThreadIndexStatus(threadId: string): Promise<{

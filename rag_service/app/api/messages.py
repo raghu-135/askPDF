@@ -7,14 +7,18 @@ Endpoints:
 - POST /api/threads/{thread_id}/chat - Thread chat
 """
 
+import asyncio
+import json
 import traceback
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.agent.prompting import normalize_tool_instructions
 from app.agent_workflows.repository import AgentWorkflowRepository
 from app.agent_workflows.service import AgentRunService
+from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
 from app.agent_workflows.workflow_runtime import workflow_supports_replans
 from app.db import (
     MessageRole,
@@ -188,7 +192,11 @@ async def delete_message_endpoint(message_id: str):
 
 
 @router.post("/threads/{thread_id}/chat")
-async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
+async def thread_chat_endpoint(
+    thread_id: str,
+    req: ThreadChatRequest,
+    accept: Optional[str] = Header(default=None),
+):
     """
     Thread-based chat with semantic memory.
     Returns answer, used_chat_ids (recollected messages), and document_sources.
@@ -212,10 +220,76 @@ async def thread_chat_endpoint(thread_id: str, req: ThreadChatRequest):
             )
         if req.custom_instructions_override is None:
             req.custom_instructions_override = thread_settings["custom_instructions"]
-        result = await AgentRunService().run_thread_chat(thread_id, req, thread.embedding_model)
-        return result
+        service = AgentRunService()
+        if "text/event-stream" not in str(accept or "").lower():
+            return await service.run_thread_chat(thread_id, req, thread.embedding_model)
+
+        sink = AgentExecutionEventSink(include_details=False)
+
+        async def run_chat() -> None:
+            try:
+                result = await service.run_thread_chat(
+                    thread_id,
+                    req,
+                    thread.embedding_model,
+                    execution_event_sink=sink,
+                )
+                await sink.queue.put({"event": "__result__", "data": result})
+            except Exception as exc:
+                traceback.print_exc()
+                await sink.queue.put({
+                    "event": "__error__",
+                    "data": {"error": {"code": "chat_stream_failed", "raw_message": str(exc), "retryable": True}},
+                })
+
+        async def events():
+            sequence = 0
+            task = asyncio.create_task(run_chat())
+            retain_background_task(task)
+            try:
+                while True:
+                    try:
+                        item = await asyncio.wait_for(sink.queue.get(), timeout=12)
+                    except asyncio.TimeoutError:
+                        sequence += 1
+                        yield _chat_sse({"event": "heartbeat", "data": {}}, sequence)
+                        continue
+                    event = str(item.get("event") or "message")
+                    data = item.get("data") or {}
+                    if event == "__result__":
+                        status = str(data.get("status") or "completed")
+                        terminal_event = (
+                            "interrupt.created"
+                            if status == "awaiting_human"
+                            else "run.failed"
+                            if status in {"failed", "error"} or data.get("agent_error")
+                            else "run.completed"
+                        )
+                        sequence += 1
+                        yield _chat_sse({"event": terminal_event, "data": {"run_id": data.get("agent_run_id"), "status": status, "response": data}}, sequence)
+                        break
+                    if event == "__error__":
+                        sequence += 1
+                        yield _chat_sse({"event": "run.failed", "data": data}, sequence)
+                        break
+                    sequence += 1
+                    yield _chat_sse(item, sequence)
+            finally:
+                sink.close()
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
     except HTTPException:
         raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _chat_sse(event: dict[str, Any], sequence: int) -> str:
+    name = str(event.get("event") or "message")
+    payload = {"id": sequence, "event": name, "data": event.get("data") or {}}
+    return f"id: {sequence}\nevent: {name}\ndata: {json.dumps(payload, default=str)}\n\n"

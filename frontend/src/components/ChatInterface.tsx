@@ -41,7 +41,7 @@ import {
     Message,
     WebSource,
     PromptToolDefinition,
-    threadChat,
+    streamThreadChat,
     getThreadMessages,
     deleteMessage,
     forkThread,
@@ -59,8 +59,10 @@ import {
     AgentRunPendingInterrupt,
     AgentRunResumeAction,
     AgentWorkflow,
-    resumeAgentRun,
+    streamResumeAgentRun,
+    type ThreadChatResponse,
 } from '../lib/api';
+import type { AgentExecutionStreamEnvelope } from '../lib/agent-execution-stream';
 import { withPollingRetry, withRetry } from '../lib/retry-utils';
 import { isRetryableError } from '../lib/error-utils';
 import { fetchAvailableLlmModels, checkLlmModelReady, checkEmbeddingModelReady } from '../lib/models-api';
@@ -77,6 +79,8 @@ import {
 import ChatSettingsDialog from './ChatSettingsDialog';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 import AgentRunDebugPanel from './agent-debug/AgentRunDebugPanel';
+import { buildLiveTraceView } from './agent-debug/agent-trace-projection';
+import useBatchedExecutionEvents from './agent-graph/useBatchedExecutionEvents';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -94,6 +98,13 @@ interface ChatMessage extends Message {
     agent_route_reason?: string;
     pending_human_review?: boolean;
 }
+
+type LiveChatExecution = {
+    messageId: string;
+    runId?: string;
+    running: boolean;
+    error?: string;
+};
 
 type ClarificationChoice = {
     text: string;
@@ -217,6 +228,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [agentRunLoading, setAgentRunLoading] = useState<Record<string, boolean>>({});
     const [agentRunErrors, setAgentRunErrors] = useState<Record<string, string>>({});
     const [openAgentRunIds, setOpenAgentRunIds] = useState<Set<string>>(new Set());
+    const [liveExecution, setLiveExecution] = useState<LiveChatExecution | null>(null);
+    const { events: liveExecutionEvents, append: appendLiveExecutionEvent, reset: resetLiveExecutionEvents } = useBatchedExecutionEvents();
+    const liveTraceView = useMemo(() => buildLiveTraceView(liveExecutionEvents), [liveExecutionEvents]);
     const [pendingHumanReview, setPendingHumanReview] = useState<PendingHumanReview | null>(null);
     const [humanReviewSubmitting, setHumanReviewSubmitting] = useState<AgentRunResumeAction | null>(null);
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
@@ -227,6 +241,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const lastClarificationIdsRef = useRef<{ userId: string | null; assistantId: string | null } | null>(null);
     const chatRootRef = useRef<HTMLDivElement | null>(null);
     const humanReviewSubmissionKeyRef = useRef<string | null>(null);
+    const manuallyToggledAgentRunsRef = useRef(new Set<string>());
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
     activeThreadIdRef.current = activeThread?.id ?? null;
     const clarificationResizeRef = useRef({
@@ -346,12 +361,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setAgentRunLoading({});
             setAgentRunErrors({});
             setOpenAgentRunIds(new Set());
+            manuallyToggledAgentRunsRef.current.clear();
+            setLiveExecution(null);
+            resetLiveExecutionEvents();
             setPendingHumanReview(null);
             setHumanReviewSubmitting(null);
             setHumanReviewError(null);
             setHumanReviewEditText('');
         }
-    }, [activeThread?.id]);
+    }, [activeThread?.id, resetLiveExecutionEvents]);
 
     useEffect(() => {
         const parentThreadId = activeThread?.thread_metadata?.fork?.parent_thread_id;
@@ -885,27 +903,46 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setClarificationOptions(null);
     };
 
-    const handleHumanReviewAction = async (action: AgentRunResumeAction) => {
-        if (!pendingHumanReview || !activeThread) return;
+    const handleHumanReviewAction = async (action: AgentRunResumeAction, selectedOptionIds?: string[]): Promise<boolean> => {
+        if (!pendingHumanReview || !activeThread) return false;
         const interrupt = pendingHumanReview.interrupt;
-        if (!interrupt.interrupt_id) return;
+        if (!interrupt.interrupt_id) return false;
         const submissionKey = `${pendingHumanReview.runId}:${interrupt.interrupt_id}:${interrupt.resume_version ?? 1}:${action}`;
-        if (humanReviewSubmissionKeyRef.current) return;
+        if (humanReviewSubmissionKeyRef.current) return false;
 
         humanReviewSubmissionKeyRef.current = submissionKey;
         setHumanReviewSubmitting(action);
         setHumanReviewError(null);
+        const liveMessageId = pendingHumanReview.localAssistantMessageId;
+        resetLiveExecutionEvents();
+        setLiveExecution({ messageId: liveMessageId, runId: pendingHumanReview.runId, running: true });
+        setOpenAgentRunIds((current) => new Set(current).add(liveMessageId));
         try {
-            const response = await resumeAgentRun(pendingHumanReview.runId, {
+            let response: any;
+            let terminalError: string | undefined;
+            await streamResumeAgentRun(pendingHumanReview.runId, {
                 action,
                 interrupt_id: interrupt.interrupt_id,
                 resume_token: interrupt.resume_token || undefined,
                 resume_version: interrupt.resume_version || undefined,
+                selected_option_ids: selectedOptionIds,
                 thread_id: activeThread.id,
                 edited_payload: action === AgentRunResumeActionValue.Edit ? { final_answer: humanReviewEditText } : undefined,
                 client_metadata: { source: 'chat_pending_review_panel' },
+            }, (event) => {
+                if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
+                if (['run.completed', 'run.failed', 'interrupt.created'].includes(event.event)) {
+                    response = event.data?.response;
+                    const rawError = event.data?.error;
+                    terminalError = event.event === 'run.failed' && !response
+                        ? String(rawError?.raw_message || rawError?.message || rawError || 'Unable to resume the agent run.')
+                        : undefined;
+                    setLiveExecution((current) => current?.messageId === liveMessageId
+                        ? { ...current, running: false, error: terminalError }
+                        : current);
+                }
             });
-            setAgentRunDetails(prev => ({ ...prev, [response.agent_run.id]: response.agent_run }));
+            if (!response) throw new Error(terminalError || 'The resume stream ended before returning a result.');
 
             if (response.agent_run.status === 'awaiting_human' && response.agent_run.pending_interrupt) {
                 setPendingHumanReview(prev => prev ? {
@@ -913,19 +950,27 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     interrupt: response.agent_run.pending_interrupt as AgentRunPendingInterrupt,
                 } : prev);
                 setHumanReviewEditText(response.agent_run.pending_interrupt.proposed_final_answer || humanReviewEditText);
-                return;
+                return true;
             }
 
             setPendingHumanReview(null);
             setHumanReviewEditText('');
             await loadMessages();
             onThreadUpdate?.();
+            return true;
         } catch (err: any) {
             setHumanReviewError(err?.message || 'Unable to submit review decision.');
+            return false;
         } finally {
             if (humanReviewSubmissionKeyRef.current === submissionKey) {
                 humanReviewSubmissionKeyRef.current = null;
             }
+            setOpenAgentRunIds((current) => {
+                const next = new Set(current);
+                if (!manuallyToggledAgentRunsRef.current.has(liveMessageId)) next.delete(liveMessageId);
+                return next;
+            });
+            setLiveExecution((current) => current?.messageId === liveMessageId ? null : current);
             setHumanReviewSubmitting(null);
         }
     };
@@ -959,12 +1004,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setClarificationOptions(null);
         setLoading(true);
 
+        const optimisticStamp = Date.now();
         const tempUserMsg: ChatMessage = {
-            id: 'temp-user-' + Date.now(),
+            id: 'temp-user-' + optimisticStamp,
             role: MessageRole.User,
             content: textToSend,
             created_at: new Date().toISOString()
         };
+        const tempAssistantMsg: ChatMessage = {
+            id: 'temp-assistant-' + optimisticStamp,
+            role: MessageRole.Assistant,
+            content: '',
+            created_at: new Date().toISOString(),
+        };
+
+        resetLiveExecutionEvents();
+        setLiveExecution({ messageId: tempAssistantMsg.id, running: true });
+        setOpenAgentRunIds((current) => new Set(current).add(tempAssistantMsg.id));
 
         let editDeletionCompleted = false;
         try {
@@ -988,11 +1044,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         return true;
                     });
                 }
-                return [...updated, tempUserMsg];
+                return [...updated, tempUserMsg, tempAssistantMsg];
             });
 
-            // Call thread chat endpoint directly without explicit warming probe, retries are handled in api.ts.
-            const response = await threadChat(
+            let response: ThreadChatResponse | undefined;
+            let terminalStreamError: string | undefined;
+            await streamThreadChat(
                 activeThread.id,
                 textToSend,
                 llmModel,
@@ -1002,8 +1059,32 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 workflowSupportsReplans(agentWorkflows, agentWorkflowId) ? replans : undefined,
                 systemRole,
                 effectiveToolInstructions,
-                customInstructions
+                customInstructions,
+                (event: AgentExecutionStreamEnvelope) => {
+                    if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
+                    if (event.event === 'run.started' && event.data?.run_id) {
+                        setLiveExecution((current) => current?.messageId === tempAssistantMsg.id
+                            ? { ...current, runId: String(event.data.run_id) }
+                            : current);
+                    }
+                    if (['run.completed', 'run.failed', 'interrupt.created'].includes(event.event)) {
+                        if (event.data?.response) response = event.data.response as ThreadChatResponse;
+                        const rawError = event.data?.error;
+                        terminalStreamError = event.event === 'run.failed' && !event.data?.response
+                            ? String(rawError?.raw_message || rawError?.message || rawError || 'Chat workflow failed.')
+                            : undefined;
+                        setLiveExecution((current) => current?.messageId === tempAssistantMsg.id
+                            ? { ...current, running: false, error: terminalStreamError }
+                            : current);
+                        setOpenAgentRunIds((current) => {
+                            const next = new Set(current);
+                            if (!manuallyToggledAgentRunsRef.current.has(tempAssistantMsg.id)) next.delete(tempAssistantMsg.id);
+                            return next;
+                        });
+                    }
+                },
             );
+            if (!response) throw new Error(terminalStreamError || 'The chat stream ended before returning a response.');
 
             if (response.status === 'awaiting_human' && response.agent_run_id && response.pending_interrupt) {
                 const localUserMessageId = response.user_message_id || ('review-user-' + Date.now());
@@ -1020,7 +1101,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 setHumanReviewEditText(response.pending_interrupt.proposed_final_answer || response.answer || '');
 
                 setMessages(prev => {
-                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id && m.id !== tempAssistantMsg.id);
                     return [
                         ...updated,
                         {
@@ -1090,12 +1171,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 };
                 lastClarificationIdsRef.current = clarificationIds;
 
-                setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id));
+                setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id && m.id !== tempAssistantMsg.id));
                 cleanupClarificationTurn(clarificationIds);
             } else {
                 // Normal flow: update messages with real IDs and add assistant response
                 setMessages(prev => {
-                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id && m.id !== tempAssistantMsg.id);
                     const finalMessages = [...updated];
 
                     finalMessages.push({
@@ -1177,7 +1258,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             } else {
                 // Remove optimistic message and show error
                 setMessages(prev => {
-                    const updated = prev.filter(m => m.id !== tempUserMsg.id);
+                    const updated = prev.filter(m => m.id !== tempUserMsg.id && m.id !== tempAssistantMsg.id);
                     return [
                         ...updated,
                         tempUserMsg,
@@ -1186,6 +1267,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 });
             }
         } finally {
+            setLiveExecution((current) => current?.messageId === tempAssistantMsg.id ? null : current);
             setLoading(false);
         }
     };
@@ -1343,14 +1425,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleAgentRunToggle = async (msg: ChatMessage, event: React.SyntheticEvent<HTMLDetailsElement>) => {
         const details = event.currentTarget;
         const runId = msg.agent_run_id;
-        if (!runId) return;
+        if ((event.nativeEvent as Event).isTrusted) manuallyToggledAgentRunsRef.current.add(msg.id);
         setOpenAgentRunIds(prev => {
             const next = new Set(prev);
-            if (details.open) next.add(runId);
-            else next.delete(runId);
+            if (details.open) next.add(msg.id);
+            else next.delete(msg.id);
             return next;
         });
-        if (!activeThread || !details.open || agentRunDetails[runId] || agentRunLoading[runId]) return;
+        if (!runId || !activeThread || !details.open || agentRunDetails[runId] || agentRunLoading[runId]) return;
 
         setAgentRunLoading(prev => ({ ...prev, [runId]: true }));
         setAgentRunErrors(prev => {
@@ -1575,7 +1657,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 {messages.map((msg, idx) => {
                     const isRecollected = recollectedIds.has(msg.id);
                     const isUser = msg.role === MessageRole.User;
-                    const showAgentRunDebug = msg.role === MessageRole.Assistant && Boolean(msg.agent_run_id);
+                    const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
+                    const showAgentRunDebug = msg.role === MessageRole.Assistant && Boolean(msg.agent_run_id || liveForMessage);
                     const isEditingThisMessage = editingMessageId === msg.id;
                     const isOlderQuestion = isUser && latestUserMessageId !== null && msg.id !== latestUserMessageId;
                     const editTooltip = isEditingThisMessage
@@ -1753,6 +1836,59 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     </Tooltip>
                                 </Box>
 
+                                {showAgentRunDebug && (
+                                    <Box sx={{ mb: 1, width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
+                                        <details style={{ width: '100%', maxWidth: '100%', overflow: 'hidden' }} open={openAgentRunIds.has(msg.id)} onToggle={(event) => handleAgentRunToggle(msg, event)}>
+                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                                {liveForMessage?.running ? 'Live progress' : 'Debug Trace'}
+                                                {!liveForMessage && `: ${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` - ${msg.agent_route}` : ''}`}
+                                            </summary>
+                                            {openAgentRunIds.has(msg.id) && <Box
+                                                sx={{
+                                                    mt: 0.75,
+                                                    p: 0.75,
+                                                    borderRadius: 1,
+                                                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                                                    width: '100%',
+                                                    minWidth: 0,
+                                                    maxWidth: '100%',
+                                                    overflowX: 'hidden',
+                                                }}
+                                            >
+                                                <AgentRunDebugPanel
+                                                    runId={msg.agent_run_id || liveForMessage?.runId || msg.id}
+                                                    routeReason={msg.agent_route_reason}
+                                                    traceRefs={msg.agent_trace_refs}
+                                                    runDetails={msg.agent_run_id ? agentRunDetails[msg.agent_run_id] : undefined}
+                                                    loading={msg.agent_run_id ? agentRunLoading[msg.agent_run_id] : false}
+                                                    error={liveForMessage?.error || (msg.agent_run_id ? agentRunErrors[msg.agent_run_id] : undefined)}
+                                                    liveTraceView={liveForMessage ? liveTraceView : undefined}
+                                                    running={Boolean(liveForMessage?.running)}
+                                                    suspendHeavyContent={isPanelResizing}
+                                                    onRunDetailsChange={handleAgentRunDetailsChange}
+                                                    onResumeAction={pendingHumanReview?.runId === (msg.agent_run_id || liveForMessage?.runId)
+                                                        ? handleHumanReviewAction
+                                                        : undefined}
+                                                />
+                                            </Box>}
+                                        </details>
+                                    </Box>
+                                )}
+                                {msg.role === MessageRole.Assistant && msg.reasoning_available && msg.reasoning && (
+                                    <Box sx={{ mb: 1 }}>
+                                        <details>
+                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>Reasoning</summary>
+                                            <Typography
+                                                variant="caption"
+                                                component="pre"
+                                                sx={{ mt: 0.75, mb: 0, p: 1, borderRadius: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word', bgcolor: 'rgba(0,0,0,0.04)' }}
+                                            >
+                                                {msg.reasoning}
+                                            </Typography>
+                                        </details>
+                                    </Box>
+                                )}
+
                                 <Typography variant="body2" component="div" sx={{
                                     cursor: 'text',
                                     pr: 2, // Add some padding to avoid immediate overlap with icons if possible
@@ -1806,66 +1942,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             >
                                                 {msg.rewritten_query}
                                             </Typography>
-                                        </details>
-                                    </Box>
-                                )}
-                                {msg.role === MessageRole.Assistant && msg.reasoning_available && msg.reasoning && (
-                                    <Box sx={{ mt: 1 }}>
-                                        <details>
-                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                View reasoning trace
-                                            </summary>
-                                            <Typography
-                                                variant="caption"
-                                                component="pre"
-                                                sx={{
-                                                    mt: 1,
-                                                    mb: 0,
-                                                    p: 1,
-                                                    borderRadius: 1,
-                                                    whiteSpace: 'pre-wrap',
-                                                    wordBreak: 'break-word',
-                                                    bgcolor: 'rgba(0,0,0,0.04)'
-                                                }}
-                                            >
-                                                {msg.reasoning}
-                                            </Typography>
-                                        </details>
-                                    </Box>
-                                )}
-                                {showAgentRunDebug && msg.agent_run_id && (
-                                    <Box sx={{ mt: 1, width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
-                                        <details style={{ width: '100%', maxWidth: '100%', overflow: 'hidden' }} onToggle={(event) => handleAgentRunToggle(msg, event)}>
-                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                Agent run: {formatAgentWorkflowLabel(msg)}
-                                                {msg.agent_route ? ` - ${msg.agent_route}` : ''}
-                                            </summary>
-                                            {openAgentRunIds.has(msg.agent_run_id) && <Box
-                                                sx={{
-                                                    mt: 1,
-                                                    p: 1,
-                                                    borderRadius: 1,
-                                                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                                                    display: 'flex',
-                                                    flexDirection: 'column',
-                                                    width: '100%',
-                                                    minWidth: 0,
-                                                    maxWidth: '100%',
-                                                    overflowX: 'hidden',
-                                                    gap: 0.75,
-                                                }}
-                                            >
-                                                <AgentRunDebugPanel
-                                                    runId={msg.agent_run_id}
-                                                    routeReason={msg.agent_route_reason}
-                                                    traceRefs={msg.agent_trace_refs}
-                                                    runDetails={agentRunDetails[msg.agent_run_id]}
-                                                    loading={agentRunLoading[msg.agent_run_id]}
-                                                    error={agentRunErrors[msg.agent_run_id]}
-                                                    suspendHeavyContent={isPanelResizing}
-                                                    onRunDetailsChange={handleAgentRunDetailsChange}
-                                                />
-                                            </Box>}
                                         </details>
                                     </Box>
                                 )}

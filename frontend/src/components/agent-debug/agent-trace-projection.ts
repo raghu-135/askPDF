@@ -336,6 +336,43 @@ export const buildLiveTraceView = (
   };
 };
 
+export const mergeLiveAndRetainedTraceViews = (
+  live: TraceRunView,
+  retained?: TraceRunView,
+): TraceRunView => {
+  if (!retained) return live;
+  const liveVisits = new Set(live.nodes.map((node) => `${node.id}:${node.visitIndex || 1}`));
+  const nodes = [
+    ...retained.nodes.filter((node) => !liveVisits.has(`${node.id}:${node.visitIndex || 1}`)),
+    ...live.nodes,
+  ];
+  const toolKeys = new Set(live.tools.map((tool, index) => `${tool.id || tool.name}:${tool.callerNode || ''}:${tool.callerVisitIndex || 1}:${index}`));
+  const retainedTools = retained.tools.filter((tool, index) => !toolKeys.has(`${tool.id || tool.name}:${tool.callerNode || ''}:${tool.callerVisitIndex || 1}:${index}`));
+  const tools = [...retainedTools, ...live.tools];
+  const detailManifest = new Map(
+    [...retained.detailManifest, ...live.detailManifest]
+      .map((row) => [`${row.node_id}:${row.visit_index}`, row] as const),
+  );
+  return {
+    ...retained,
+    ...live,
+    graph: retained.graph || live.graph,
+    route: live.route || retained.route,
+    routeReason: live.routeReason || retained.routeReason,
+    nodes,
+    tools,
+    usedNodeCount: new Set(nodes.filter((node) => !node.skipped).map((node) => node.id)).size,
+    usedToolCount: tools.length,
+    warningCount: nodes.reduce((count, node) => count + node.warningCodes.length, 0)
+      + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
+    errorCount: nodes.filter((node) => node.status === 'error').length
+      + tools.filter((tool) => !tool.ok).length,
+    errors: nodes.map((node) => node.error).filter((nodeError): nodeError is Record<string, any> => Boolean(nodeError && Object.keys(nodeError).length)),
+    finalOutput: live.finalOutput || retained.finalOutput,
+    detailManifest: [...detailManifest.values()],
+  };
+};
+
 export const buildTraceExportJson = (view?: TraceRunView): string => (
   view?.debug ? JSON.stringify(view.debug, null, 2) : ''
 );

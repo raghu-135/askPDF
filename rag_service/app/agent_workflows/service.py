@@ -49,7 +49,14 @@ class AgentRunService:
             else os.getenv("ASKPDF_CUSTOM_AGENT_WORKFLOWS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
         )
 
-    async def run_thread_chat(self, thread_id: str, req: Any, embedding_model: str) -> Dict[str, Any]:
+    async def run_thread_chat(
+        self,
+        thread_id: str,
+        req: Any,
+        embedding_model: str,
+        *,
+        execution_event_sink: Any = None,
+    ) -> Dict[str, Any]:
         thread_settings = await get_thread_settings(thread_id)
         agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
@@ -165,6 +172,11 @@ class AgentRunService:
             "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
             "checkpoint_thread_id": run.checkpoint_thread_id,
         }
+        if execution_event_sink is not None:
+            await execution_event_sink.emit(
+                "run.started",
+                {"run_id": run.id, "workflow_id": workflow.id, "status": run.status},
+            )
 
         try:
             logger.info("Invoking compiled agent workflow for thread %s | workflow=%s", thread_id, workflow.id)
@@ -177,6 +189,7 @@ class AgentRunService:
             }
             handler = handler_by_workflow_id.get(workflow.id, router_runtime.handle_router_rag_chat)
             async with open_agent_checkpointer() as checkpointer:
+                stream_kwargs = {"execution_event_sink": execution_event_sink} if execution_event_sink is not None else {}
                 result = await handler(
                     thread_id,
                     req,
@@ -185,6 +198,7 @@ class AgentRunService:
                     agent_run_context=context,
                     trace_recorder=trace_recorder,
                     checkpointer=checkpointer,
+                    **stream_kwargs,
                 )
             duration_ms = round((time.perf_counter() - started) * 1000, 2)
             error_json = result.get("agent_error") if isinstance(result, dict) else None
@@ -293,6 +307,7 @@ class AgentRunService:
         resume_token: Optional[str] = None,
         resume_version: Optional[int] = None,
         expected_thread_id: Optional[str] = None,
+        execution_event_sink: Any = None,
     ) -> Optional[InterruptResolutionResult]:
         resolution = await self.repository.resolve_pending_interrupt(
             run_id,
@@ -307,6 +322,16 @@ class AgentRunService:
         )
         if resolution is None:
             return None
+        if execution_event_sink is not None:
+            await execution_event_sink.emit(
+                "run.started",
+                {
+                    "run_id": resolution.run.id,
+                    "workflow_id": resolution.run.workflow_id,
+                    "status": resolution.run.status,
+                    "resumed": True,
+                },
+            )
         if (
             resolution.duplicate
             or resolution.outcome != InterruptStatus.RESUMED.value
@@ -320,11 +345,13 @@ class AgentRunService:
 
             resume_trace_recorder = AgentTraceRecorder(resolution.run)
             async with open_agent_checkpointer() as checkpointer:
+                stream_kwargs = {"execution_event_sink": execution_event_sink} if execution_event_sink is not None else {}
                 result = await resume_compiled_rag_chat(
                     resolution.run,
                     interrupt=resolution.interrupt,
                     checkpointer=checkpointer,
                     trace_recorder=resume_trace_recorder,
+                    **stream_kwargs,
                 )
             prior_metrics = dict(resolution.run.metrics_json or {})
             metrics = {

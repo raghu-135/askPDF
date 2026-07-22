@@ -24,8 +24,9 @@ import {
   type BuilderTestStreamEnvelope,
 } from '../../lib/api';
 import { AgentRunResumeAction, AgentRunStatus, InterruptStatus } from '../../lib/enums';
-import { buildLiveTraceView, buildRunTraceView } from '../agent-debug/agent-trace-projection';
+import { buildLiveTraceView, buildRunTraceView, mergeLiveAndRetainedTraceViews } from '../agent-debug/agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
+import useBatchedExecutionEvents from '../agent-graph/useBatchedExecutionEvents';
 import {
   BuilderLlmModelPicker,
   BuilderThreadPicker,
@@ -59,7 +60,7 @@ export default function BuilderTestStudio({
   const [stopping, setStopping] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [latest, setLatest] = useState<AgentRunDetails | null>(null);
-  const [events, setEvents] = useState<BuilderTestStreamEnvelope[]>([]);
+  const { events, append: appendEvent, reset: resetEvents } = useBatchedExecutionEvents();
   const [error, setError] = useState<string | null>(null);
   const [activeStep, setActiveStep] = useState<{ nodeId: string; visitIndex: number; startedAt: number } | null>(null);
   const [activityClock, setActivityClock] = useState(Date.now());
@@ -69,31 +70,7 @@ export default function BuilderTestStudio({
   const liveTraceView = useMemo(() => buildLiveTraceView(events), [events]);
   const executionTraceView = useMemo(() => {
     if (!running || events.length === 0) return retainedTraceView || liveTraceView;
-    if (!retainedTraceView) return liveTraceView;
-    const liveVisits = new Set(liveTraceView.nodes.map((node) => `${node.id}:${node.visitIndex || 1}`));
-    const missingRetainedNodes = retainedTraceView.nodes.filter((node) => !liveVisits.has(`${node.id}:${node.visitIndex || 1}`));
-    if (missingRetainedNodes.length === 0) return liveTraceView;
-    const nodes = [...missingRetainedNodes, ...liveTraceView.nodes];
-    const tools = [...retainedTraceView.tools, ...liveTraceView.tools];
-    const detailManifest = new Map(
-      [...retainedTraceView.detailManifest, ...liveTraceView.detailManifest]
-        .map((row) => [`${row.node_id}:${row.visit_index}`, row] as const),
-    );
-    return {
-      ...retainedTraceView,
-      ...liveTraceView,
-      nodes,
-      tools,
-      usedNodeCount: new Set(nodes.filter((node) => !node.skipped).map((node) => node.id)).size,
-      usedToolCount: tools.length,
-      warningCount: nodes.reduce((count, node) => count + node.warningCodes.length, 0)
-        + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
-      errorCount: nodes.filter((node) => node.status === 'error').length
-        + tools.filter((tool) => !tool.ok).length,
-      errors: nodes.map((node) => node.error).filter((nodeError) => Boolean(nodeError && Object.keys(nodeError).length)),
-      finalOutput: liveTraceView.finalOutput || retainedTraceView.finalOutput,
-      detailManifest: [...detailManifest.values()],
-    };
+    return mergeLiveAndRetainedTraceViews(liveTraceView, retainedTraceView);
   }, [events.length, liveTraceView, retainedTraceView, running]);
   const terminal = [...events].reverse().find((event) => event.event.startsWith('run.') && event.event !== 'run.started');
   const pending = latest?.pending_interrupt;
@@ -125,7 +102,7 @@ export default function BuilderTestStudio({
 
   const acceptEvent = (event: BuilderTestStreamEnvelope) => {
     setActivityClock(Date.now());
-    if (event.event !== 'heartbeat') setEvents((current) => [...current, event]);
+    if (event.event !== 'heartbeat') appendEvent(event);
     if (event.data?.run_id) setRunId(String(event.data.run_id));
     if (event.event === 'node.started' && event.data?.node_id) {
       setActiveStep({
@@ -169,7 +146,7 @@ export default function BuilderTestStudio({
   const run = async () => {
     setError(null);
     setLatest(null);
-    setEvents([]);
+    resetEvents();
     setRunId(null);
     setActiveStep(null);
     setRunning(true);

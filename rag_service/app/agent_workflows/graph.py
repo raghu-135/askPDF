@@ -146,7 +146,9 @@ class NodeRegistry:
                 visit_index=visit_index,
                 route_labels=route_labels,
             )
-            queue = ((runtime_config.get("configurable") or {}).get("studio_event_queue"))
+            configurable = runtime_config.get("configurable") or {}
+            queue = configurable.get("studio_event_queue")
+            execution_event_sink = configurable.get("execution_event_sink")
             trace_recorder = ((runtime_config.get("configurable") or {}).get("trace_recorder"))
             if trace_recorder is not None and hasattr(trace_recorder, "record_node_started"):
                 trace_recorder.record_node_started(
@@ -155,7 +157,9 @@ class NodeRegistry:
                     visit_index=visit_index,
                     state=state,
                 )
-            if queue is not None:
+            if execution_event_sink is not None:
+                await execution_event_sink.emit("node.started", {"node_id": node_id, "node_type": node_type, "visit_index": visit_index})
+            elif queue is not None:
                 await queue.put({"event": "node.started", "data": {"node_id": node_id, "node_type": node_type, "visit_index": visit_index}})
             try:
                 if node_type == WorkflowNodeType.HITL_GATE.value:
@@ -174,8 +178,11 @@ class NodeRegistry:
                         status=NodeEventStatus.FAILED.value,
                         error=exc,
                     )
-                if queue is not None:
-                    await queue.put({"event": "node.failed", "data": {"node_id": node_id, "node_type": node_type, "visit_index": visit_index, "error": str(exc), "detail": detail}})
+                failure_data = {"node_id": node_id, "node_type": node_type, "visit_index": visit_index, "error": str(exc), "detail": detail}
+                if execution_event_sink is not None:
+                    await execution_event_sink.emit("node.failed", failure_data)
+                elif queue is not None:
+                    await queue.put({"event": "node.failed", "data": failure_data})
                 raise
             accounted_update = _with_visit_accounting(
                 update,
@@ -197,19 +204,22 @@ class NodeRegistry:
                     status=latest_node_event.get("status") or NodeEventStatus.COMPLETED.value,
                     event=latest_node_event,
                 )
-            if queue is not None:
-                await queue.put({
-                    "event": event_name,
-                    "data": {
-                        "node_id": node_id,
-                        "node_type": node_type,
-                        "visit_index": visit_index,
-                        "route": update.get("route"),
-                        "evaluator_route": update.get("evaluator_route"),
-                        "output_preview": latest_node_event.get("output_preview"),
-                        "detail": detail,
-                    },
-                })
+            completion_data = {
+                "node_id": node_id,
+                "node_type": node_type,
+                "visit_index": visit_index,
+                "route": update.get("route"),
+                "route_reason": update.get("route_reason"),
+                "evaluator_route": update.get("evaluator_route"),
+                "output_preview": latest_node_event.get("output_preview"),
+                "elapsed_ms": latest_node_event.get("elapsed_ms"),
+                "warnings": latest_node_event.get("warnings") or latest_node_event.get("warning_codes"),
+                "detail": detail,
+            }
+            if execution_event_sink is not None:
+                await execution_event_sink.emit(event_name, completion_data)
+            elif queue is not None:
+                await queue.put({"event": event_name, "data": completion_data})
             return accounted_update
 
         return _bound_node

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -14,6 +15,7 @@ from app.agent_workflows.node_catalog import get_node_catalog
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
 from app.agent_workflows.route_registry import get_route_function_registry
 from app.agent_workflows.service import AgentRunService
+from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
 from app.agent_workflows.builtin_workflows import builtin_workflow_keys
 from app.agent_workflows.validator import (
     WorkflowResolver,
@@ -684,14 +686,19 @@ async def get_agent_run_node_details(
 
 
 @router.post("/agent-runs/{run_id}/resume")
-async def resume_agent_run(run_id: str, req: AgentRunResumeRequest):
+async def resume_agent_run(
+    run_id: str,
+    req: AgentRunResumeRequest,
+    accept: Optional[str] = Header(default=None),
+):
     thread = await get_thread(req.thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Agent run not found")
 
     service = AgentRunService()
-    try:
-        result = await service.resume_agent_run(
+
+    async def execute_resume(*, event_sink: Any = None):
+        return await service.resume_agent_run(
             run_id,
             interrupt_id=req.interrupt_id,
             action=req.action,
@@ -701,7 +708,76 @@ async def resume_agent_run(run_id: str, req: AgentRunResumeRequest):
             resume_token=req.resume_token,
             resume_version=req.resume_version,
             expected_thread_id=req.thread_id,
+            execution_event_sink=event_sink,
         )
+
+    if "text/event-stream" in str(accept or "").lower():
+        sink = AgentExecutionEventSink(include_details=False)
+
+        async def run_resume() -> None:
+            try:
+                result = await execute_resume(event_sink=sink)
+                if result is None:
+                    await sink.queue.put({"event": "__missing__", "data": {}})
+                    return
+                compact_run = {
+                    "id": result.run.id,
+                    "thread_id": result.run.thread_id,
+                    "workflow_id": result.run.workflow_id,
+                    "status": result.run.status,
+                    "pending_interrupt": _pending_interrupt_payload(result.run),
+                }
+                await sink.queue.put({
+                    "event": "__result__",
+                    "data": {
+                        "agent_run": compact_run,
+                        "interrupt": result.interrupt,
+                        "outcome": result.outcome,
+                        "duplicate": result.duplicate,
+                    },
+                })
+            except AgentRunInterruptError as exc:
+                await sink.queue.put({"event": "__error__", "data": {"error": {"code": exc.code, "raw_message": str(exc), "retryable": False}}})
+            except Exception as exc:
+                await sink.queue.put({"event": "__error__", "data": {"error": {"code": "agent_run_resume_failed", "raw_message": str(exc), "retryable": True}}})
+
+        async def events():
+            sequence = 0
+            task = asyncio.create_task(run_resume())
+            retain_background_task(task)
+            try:
+                while True:
+                    try:
+                        item = await asyncio.wait_for(sink.queue.get(), timeout=12)
+                    except asyncio.TimeoutError:
+                        sequence += 1
+                        yield _sse({"event": "heartbeat", "data": {"run_id": run_id}}, sequence)
+                        continue
+                    event = str(item.get("event") or "message")
+                    data = item.get("data") or {}
+                    if event == "__missing__":
+                        sequence += 1
+                        yield _sse({"event": "run.failed", "data": {"run_id": run_id, "error": {"code": "agent_run_not_found", "raw_message": "Agent run not found", "retryable": False}}}, sequence)
+                        break
+                    if event == "__error__":
+                        sequence += 1
+                        yield _sse({"event": "run.failed", "data": {"run_id": run_id, **data}}, sequence)
+                        break
+                    if event == "__result__":
+                        status = str((data.get("agent_run") or {}).get("status") or "completed")
+                        terminal_event = "interrupt.created" if status == AgentRunStatus.AWAITING_HUMAN.value else "run.failed" if status == AgentRunStatus.FAILED.value else "run.completed"
+                        sequence += 1
+                        yield _sse({"event": terminal_event, "data": {"run_id": run_id, "status": status, "response": data}}, sequence)
+                        break
+                    sequence += 1
+                    yield _sse(item, sequence)
+            finally:
+                sink.close()
+
+        return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    try:
+        result = await execute_resume()
     except AgentRunInterruptError as exc:
         raise HTTPException(
             status_code=exc.http_status,

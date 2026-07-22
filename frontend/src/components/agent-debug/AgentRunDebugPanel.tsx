@@ -7,7 +7,7 @@ import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Box, Button, Checkbox, CircularProgress, FormControlLabel, IconButton, Tooltip, Typography } from '@mui/material';
 import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type AgentTraceRefs } from '../../lib/api';
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
-import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
+import { buildRunTraceView, buildTraceExportJson, mergeLiveAndRetainedTraceViews, type TraceRunView } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 
@@ -20,6 +20,9 @@ function AgentRunDebugPanel({
   error,
   onRunDetailsChange,
   suspendHeavyContent = false,
+  liveTraceView,
+  running = false,
+  onResumeAction,
 }: {
   runId: string;
   routeReason?: string;
@@ -29,6 +32,9 @@ function AgentRunDebugPanel({
   error?: string;
   onRunDetailsChange?: (runDetails: AgentRunDetails) => void;
   suspendHeavyContent?: boolean;
+  liveTraceView?: TraceRunView;
+  running?: boolean;
+  onResumeAction?: (action: AgentRunResumeAction, selectedOptionIds?: string[]) => Promise<boolean>;
 }) {
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [resumeSubmitting, setResumeSubmitting] = useState<AgentRunResumeAction | null>(null);
@@ -43,6 +49,10 @@ function AgentRunDebugPanel({
     ? pendingInterrupt.allowed_actions.map(String)
     : [];
   const traceView = useMemo(() => runDetails ? buildRunTraceView(runDetails) : undefined, [runDetails]);
+  const executionTraceView = useMemo(
+    () => liveTraceView ? mergeLiveAndRetainedTraceViews(liveTraceView, traceView) : traceView,
+    [liveTraceView, traceView],
+  );
   const trace = traceView?.trace;
   const traceJson = useMemo(() => buildTraceExportJson(traceView), [traceView]);
   const interruptOptions = Array.isArray(pendingInterrupt?.options)
@@ -95,6 +105,12 @@ function AgentRunDebugPanel({
     setResumeError(null);
     setResumeMessage(null);
     try {
+      if (onResumeAction) {
+        const resumed = await onResumeAction(action, action === AgentRunResumeActionValue.ApproveSelected ? selectedOptionIds : undefined);
+        if (!resumed) throw new Error('Unable to submit decision.');
+        setResumeMessage('Decision applied.');
+        return;
+      }
       const response = await resumeAgentRun(runId, {
         action,
         interrupt_id: pendingInterrupt.interrupt_id,
@@ -275,18 +291,21 @@ function AgentRunDebugPanel({
           Trace payload is incomplete.
         </Typography>
       )}
-      {debug && runDetails && traceView && (
+      {executionTraceView && (
         <>
           <AgentExecutionView
             runId={runId}
-            threadId={runDetails.thread_id}
-            resolvedSpec={runDetails.resolved_spec_json}
-            workflowId={runDetails.workflow_id}
-            traceView={traceView}
-            status={runDetails.status}
+            threadId={runDetails?.thread_id}
+            resolvedSpec={runDetails?.resolved_spec_json}
+            workflowId={runDetails?.workflow_id}
+            traceView={executionTraceView}
+            status={runDetails?.status || (running ? 'running' : undefined)}
+            running={running}
             focusedTraceRefs={traceRefs}
             suspended={suspendHeavyContent}
             defaultFinalAnswerOpen={false}
+            chatMode
+            detailsAvailable={Boolean(runDetails && !running)}
           />
         </>
       )}

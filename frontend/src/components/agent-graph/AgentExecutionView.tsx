@@ -69,6 +69,8 @@ function AgentExecutionView({
   defaultGraphOpen = false,
   defaultFinalAnswerOpen = false,
   suspended = false,
+  chatMode = false,
+  detailsAvailable = true,
 }: {
   runId?: string | null;
   threadId?: string | null;
@@ -81,6 +83,8 @@ function AgentExecutionView({
   defaultGraphOpen?: boolean;
   defaultFinalAnswerOpen?: boolean;
   suspended?: boolean;
+  chatMode?: boolean;
+  detailsAvailable?: boolean;
 }) {
   const initialDetails = useMemo(() => {
     const result: Record<string, AgentRunNodeDetail> = {};
@@ -127,7 +131,7 @@ function AgentExecutionView({
   const loadDetail = useCallback(async (node: TraceNodeView) => {
     const key = visitKey(node);
     const requestKey = `${detailContextKey}:${key}`;
-    if (details[key] || inFlightDetailKeys.current.has(requestKey) || !runId || !threadId || node.status === 'active') return;
+    if (!detailsAvailable || details[key] || inFlightDetailKeys.current.has(requestKey) || !runId || !threadId || node.status === 'active') return;
     inFlightDetailKeys.current.add(requestKey);
     setLoadingKey(key);
     setDetailErrors((current) => ({ ...current, [key]: '' }));
@@ -146,7 +150,7 @@ function AgentExecutionView({
         setLoadingKey((current) => current === key ? null : current);
       }
     }
-  }, [detailContextKey, details, runId, threadId]);
+  }, [detailContextKey, details, detailsAvailable, runId, threadId]);
 
   const selectVisit = useCallback((node: TraceNodeView, open: boolean) => {
     const key = visitKey(node);
@@ -221,7 +225,7 @@ function AgentExecutionView({
     <Stack spacing={1} sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
       <Paper variant="outlined" sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', p: 1 }}>
         <Stack direction="row" spacing={0.6} alignItems="center" sx={{ mb: 0.75, flexWrap: 'wrap', rowGap: 0.45 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 700, mr: 0.25 }}>Execution progress</Typography>
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, mr: 0.25 }}>{running ? 'Live progress' : 'Execution progress'}</Typography>
           <AgentExecutionStatusIcon status={status || (running ? 'running' : 'completed')} size={17} />
           {traceView.route && (
             <Chip size="small" variant="outlined" label={traceView.route} aria-label={`Route: ${traceView.route}`} sx={{ height: 22 }} />
@@ -369,7 +373,7 @@ function AgentExecutionView({
             </Accordion>
           );
         })}
-        {finalOutput?.answer && (
+        {!chatMode && finalOutput?.answer && (
           <Box
             component="details"
             open={finalAnswerOpen}
@@ -392,7 +396,7 @@ function AgentExecutionView({
           </Box>
         )}
       </Paper>
-      <Paper variant="outlined" sx={{ px: 1, py: 0.4 }}>
+      {!(chatMode && running) && <Paper variant="outlined" sx={{ px: 1, py: 0.4 }}>
         <Box component="details" open={graphOpen} onToggle={(event) => setGraphOpen(event.currentTarget.open)}>
           <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
             Execution graph
@@ -410,7 +414,7 @@ function AgentExecutionView({
             </Box>
           )}
         </Box>
-      </Paper>
+      </Paper>}
     </Stack>
   );
 }
