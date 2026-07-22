@@ -948,6 +948,7 @@ export default function Home() {
                     hideInlineLineage
                     darkMode={pdfDarkMode}
                     autoScroll={autoScroll}
+                    isPanelResizing={isResizing}
                   />
                 ) : (
                   <Box sx={{

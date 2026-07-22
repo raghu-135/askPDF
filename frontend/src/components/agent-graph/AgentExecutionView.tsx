@@ -67,6 +67,8 @@ function AgentExecutionView({
   running = false,
   focusedTraceRefs,
   defaultGraphOpen = false,
+  defaultFinalAnswerOpen = false,
+  suspended = false,
 }: {
   runId?: string | null;
   threadId?: string | null;
@@ -77,6 +79,8 @@ function AgentExecutionView({
   running?: boolean;
   focusedTraceRefs?: AgentTraceRefs | null;
   defaultGraphOpen?: boolean;
+  defaultFinalAnswerOpen?: boolean;
+  suspended?: boolean;
 }) {
   const initialDetails = useMemo(() => {
     const result: Record<string, AgentRunNodeDetail> = {};
@@ -92,6 +96,7 @@ function AgentExecutionView({
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
   const [revealRequest, setRevealRequest] = useState<{ key: string; token: number } | null>(null);
   const [graphOpen, setGraphOpen] = useState(defaultGraphOpen);
+  const [finalAnswerOpen, setFinalAnswerOpen] = useState(defaultFinalAnswerOpen);
   const inFlightDetailKeys = useRef(new Set<string>());
   const timelineRows = useRef(new Map<string, HTMLElement>());
   const detailContextKey = `${runId || 'live'}:${threadId || ''}`;
@@ -110,13 +115,14 @@ function AgentExecutionView({
       setLoadingKey(null);
       setDetailErrors({});
       setGraphOpen(defaultGraphOpen);
+      setFinalAnswerOpen(defaultFinalAnswerOpen);
       return;
     }
     setDetails((current) => {
       const changed = Object.entries(initialDetails).some(([key, detail]) => current[key] !== detail);
       return changed ? { ...current, ...initialDetails } : current;
     });
-  }, [defaultGraphOpen, detailContextKey, initialDetails]);
+  }, [defaultFinalAnswerOpen, defaultGraphOpen, detailContextKey, initialDetails]);
 
   const loadDetail = useCallback(async (node: TraceNodeView) => {
     const key = visitKey(node);
@@ -196,9 +202,20 @@ function AgentExecutionView({
   const finalOutput = traceView.finalOutput;
   const runDuration = formatDurationMs(Number(traceView.metrics.duration_ms));
   const tokenCount = formatTokenCount(traceView.metrics.llm_token_count_total);
-  const copyAnswer = async () => {
+  const copyAnswer = useCallback(async () => {
     if (finalOutput?.answer && navigator.clipboard) await navigator.clipboard.writeText(finalOutput.answer);
-  };
+  }, [finalOutput?.answer]);
+
+  if (suspended) {
+    return (
+      <Paper variant="outlined" sx={{ width: '100%', minWidth: 0, p: 0.8 }}>
+        <Stack direction="row" spacing={0.75} alignItems="center">
+          <CircularProgress size={14} />
+          <Typography variant="caption" color="text.secondary">Trace preview resumes after resizing.</Typography>
+        </Stack>
+      </Paper>
+    );
+  }
 
   return (
     <Stack spacing={1} sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
@@ -207,9 +224,7 @@ function AgentExecutionView({
           <Typography variant="subtitle1" sx={{ fontWeight: 700, mr: 0.25 }}>Execution progress</Typography>
           <AgentExecutionStatusIcon status={status || (running ? 'running' : 'completed')} size={17} />
           {traceView.route && (
-            <Tooltip title={compactExecutionText(traceView.routeReason || `Selected route: ${traceView.route}`, 320)} arrow>
-              <Chip size="small" variant="outlined" label={traceView.route} sx={{ height: 22 }} />
-            </Tooltip>
+            <Chip size="small" variant="outlined" label={traceView.route} aria-label={`Route: ${traceView.route}`} sx={{ height: 22 }} />
           )}
           {runDuration && <Chip size="small" variant="outlined" icon={<TimerOutlinedIcon />} label={runDuration} sx={{ height: 22 }} />}
           <Tooltip title={<TraceNodesTooltip nodes={traceView.nodes} usedCount={traceView.usedNodeCount} availableCount={traceView.availableNodeCount} />} arrow>
@@ -269,6 +284,9 @@ function AgentExecutionView({
                 maxWidth: '100%',
                 overflow: 'hidden',
                 scrollMarginTop: 16,
+                contentVisibility: 'auto',
+                contain: 'layout paint style',
+                containIntrinsicSize: '38px',
                 ...(selectedVisit && agentNodeVisitKey(selectedVisit) === key ? { borderColor: 'primary.main' } : {}),
               }}
             >
@@ -326,13 +344,13 @@ function AgentExecutionView({
                   </Tooltip>
                 </Stack>
               </AccordionSummary>
-              <AccordionDetails sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', px: 1, pt: 0.25, pb: 1 }}>
+              {expanded === key && <AccordionDetails sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', px: 1, pt: 0.25, pb: 1 }}>
                 <Stack spacing={0.6} sx={{ mb: 0.75 }}>
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.6} alignItems={{ sm: 'center' }} justifyContent="space-between">
                     <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
                       <Chip size="small" variant="outlined" label={node.type || node.id} sx={{ height: 21 }} />
                       {node.durationMs !== undefined && <Chip size="small" variant="outlined" label={formatDurationMs(node.durationMs)} sx={{ height: 21 }} />}
-                      {route && <Tooltip title={routeReason || `Selected route: ${route}`} arrow><Chip size="small" color="primary" variant="outlined" label={route} sx={{ height: 21 }} /></Tooltip>}
+                      {route && <Chip size="small" color="primary" variant="outlined" label={route} aria-label={`Route: ${route}`} sx={{ height: 21 }} />}
                       {visitTools.length > 0 && <Chip size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={visitTools.length} sx={{ height: 21 }} />}
                       {node.warningCodes.length > 0 && <Chip size="small" color="warning" variant="outlined" icon={<WarningAmberIcon />} label={node.warningCodes.length} sx={{ height: 21 }} />}
                       {hasNodeError && <Chip size="small" color="error" variant="outlined" icon={<ErrorOutlineIcon />} label="1" sx={{ height: 21 }} />}
@@ -347,19 +365,30 @@ function AgentExecutionView({
                 {loadingKey === key && <Stack direction="row" spacing={1}><CircularProgress size={16} /><Typography variant="caption">Loading full details…</Typography></Stack>}
                 {detailErrors[key] && <Alert severity="info">Older trace—full invocation details are unavailable.</Alert>}
                 {detail && <AgentNodeExecutionDetails detail={detail} />}
-              </AccordionDetails>
+              </AccordionDetails>}
             </Accordion>
           );
         })}
         {finalOutput?.answer && (
-          <Box sx={{ mt: 1, p: 1, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between">
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Final answer</Typography>
-              <Tooltip title="Copy answer"><IconButton size="small" onClick={() => void copyAnswer()}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
-            </Stack>
-            <Box sx={{ mt: 1, minWidth: 0, maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', '& pre': { maxWidth: '100%', overflowX: 'auto' }, '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto' }, '& a': { overflowWrap: 'anywhere' } }}>
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalOutput.answer}</ReactMarkdown>
+          <Box
+            component="details"
+            open={finalAnswerOpen}
+            onToggle={(event) => setFinalAnswerOpen(event.currentTarget.open)}
+            sx={{ mt: 1, border: 1, borderColor: 'divider', borderRadius: 1, bgcolor: 'background.paper' }}
+          >
+            <Box component="summary" sx={{ cursor: 'pointer', px: 1, py: 0.65, fontSize: '0.82rem', fontWeight: 700 }}>
+              Final answer
             </Box>
+            {finalAnswerOpen && (
+              <Box sx={{ px: 1, pb: 1, minWidth: 0 }}>
+                <Stack direction="row" justifyContent="flex-end">
+                  <Tooltip title="Copy answer"><IconButton size="small" onClick={() => void copyAnswer()}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
+                </Stack>
+                <Box sx={{ minWidth: 0, maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', '& pre': { maxWidth: '100%', overflowX: 'auto' }, '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto' }, '& a': { overflowWrap: 'anywhere' } }}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalOutput.answer}</ReactMarkdown>
+                </Box>
+              </Box>
+            )}
           </Box>
         )}
       </Paper>

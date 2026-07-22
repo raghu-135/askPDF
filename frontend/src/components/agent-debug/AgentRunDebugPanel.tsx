@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
@@ -11,7 +11,7 @@ import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projectio
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
 import { compactExecutionText } from '../agent-graph/agent-execution-display';
 
-export default function AgentRunDebugPanel({
+function AgentRunDebugPanel({
   runId,
   routeReason,
   traceRefs,
@@ -19,6 +19,7 @@ export default function AgentRunDebugPanel({
   loading,
   error,
   onRunDetailsChange,
+  suspendHeavyContent = false,
 }: {
   runId: string;
   routeReason?: string;
@@ -27,6 +28,7 @@ export default function AgentRunDebugPanel({
   loading?: boolean;
   error?: string;
   onRunDetailsChange?: (runDetails: AgentRunDetails) => void;
+  suspendHeavyContent?: boolean;
 }) {
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [resumeSubmitting, setResumeSubmitting] = useState<AgentRunResumeAction | null>(null);
@@ -40,9 +42,9 @@ export default function AgentRunDebugPanel({
   const allowedActions = Array.isArray(pendingInterrupt?.allowed_actions)
     ? pendingInterrupt.allowed_actions.map(String)
     : [];
-  const traceView = runDetails ? buildRunTraceView(runDetails) : undefined;
+  const traceView = useMemo(() => runDetails ? buildRunTraceView(runDetails) : undefined, [runDetails]);
   const trace = traceView?.trace;
-  const traceJson = buildTraceExportJson(traceView);
+  const traceJson = useMemo(() => buildTraceExportJson(traceView), [traceView]);
   const interruptOptions = Array.isArray(pendingInterrupt?.options)
     ? pendingInterrupt.options.filter((option) => option && typeof option.id === 'string')
     : [];
@@ -283,9 +285,13 @@ export default function AgentRunDebugPanel({
             traceView={traceView}
             status={runDetails.status}
             focusedTraceRefs={traceRefs}
+            suspended={suspendHeavyContent}
+            defaultFinalAnswerOpen={false}
           />
         </>
       )}
     </Box>
   );
 }
+
+export default React.memo(AgentRunDebugPanel);

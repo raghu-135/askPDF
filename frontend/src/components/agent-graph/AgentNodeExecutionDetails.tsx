@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Alert, Box, Divider, Stack, Typography } from '@mui/material';
 import type { AgentRunNodeDetail } from '../../lib/api';
 import { JsonPreview } from './AgentGraphInspectorPrimitives';
@@ -31,10 +33,18 @@ function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
 
   return (
     <Stack spacing={0.75} sx={{ minWidth: 0 }}>
-      {safety.truncated && <Alert severity="warning">Some invocation data was truncated by trace safety limits.</Alert>}
+      {safety.truncated && (
+        <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ color: 'warning.main', minWidth: 0 }}>
+          <WarningAmberIcon sx={{ fontSize: 15, mt: '1px', flexShrink: 0 }} />
+          <Typography variant="caption" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>Some invocation data was truncated by trace safety limits.</Typography>
+        </Stack>
+      )}
       {errorText && <Alert severity="error" sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{errorText}</Alert>}
       {(safety.redacted_fields?.length || safety.omitted_fields?.length) && (
-        <Alert severity="info">Sensitive or internal fields were removed from this trace.</Alert>
+        <Stack direction="row" spacing={0.5} alignItems="flex-start" sx={{ color: 'info.main', minWidth: 0 }}>
+          <InfoOutlinedIcon sx={{ fontSize: 15, mt: '1px', flexShrink: 0 }} />
+          <Typography variant="caption" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>Sensitive or internal fields were removed from this trace.</Typography>
+        </Stack>
       )}
       {hasData(detail.changes) && <Section title="State changes"><JsonPreview value={detail.changes} maxHeight={320} /></Section>}
       {hasData(detail.checkpoint_before) && <Section title="Checkpoint before" defaultOpen={false}><JsonPreview value={detail.checkpoint_before} maxHeight={440} /></Section>}

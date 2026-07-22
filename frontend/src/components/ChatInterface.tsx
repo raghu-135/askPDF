@@ -145,6 +145,7 @@ interface ChatInterfaceProps {
     hideInlineLineage?: boolean;
     darkMode?: boolean;
     autoScroll?: boolean;
+    isPanelResizing?: boolean;
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -161,7 +162,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     hideInlineLineage = false,
     onResetChatId,
     darkMode = false,
-    autoScroll = true
+    autoScroll = true,
+    isPanelResizing = false,
 }) => {
     const ragApiUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!ragApiUrl) {
@@ -214,6 +216,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [agentRunDetails, setAgentRunDetails] = useState<Record<string, AgentRunDetails>>({});
     const [agentRunLoading, setAgentRunLoading] = useState<Record<string, boolean>>({});
     const [agentRunErrors, setAgentRunErrors] = useState<Record<string, string>>({});
+    const [openAgentRunIds, setOpenAgentRunIds] = useState<Set<string>>(new Set());
     const [pendingHumanReview, setPendingHumanReview] = useState<PendingHumanReview | null>(null);
     const [humanReviewSubmitting, setHumanReviewSubmitting] = useState<AgentRunResumeAction | null>(null);
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
@@ -342,6 +345,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setAgentRunDetails({});
             setAgentRunLoading({});
             setAgentRunErrors({});
+            setOpenAgentRunIds(new Set());
             setPendingHumanReview(null);
             setHumanReviewSubmitting(null);
             setHumanReviewError(null);
@@ -1339,7 +1343,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleAgentRunToggle = async (msg: ChatMessage, event: React.SyntheticEvent<HTMLDetailsElement>) => {
         const details = event.currentTarget;
         const runId = msg.agent_run_id;
-        if (!activeThread || !details.open || !runId || agentRunDetails[runId] || agentRunLoading[runId]) return;
+        if (!runId) return;
+        setOpenAgentRunIds(prev => {
+            const next = new Set(prev);
+            if (details.open) next.add(runId);
+            else next.delete(runId);
+            return next;
+        });
+        if (!activeThread || !details.open || agentRunDetails[runId] || agentRunLoading[runId]) return;
 
         setAgentRunLoading(prev => ({ ...prev, [runId]: true }));
         setAgentRunErrors(prev => {
@@ -1359,6 +1370,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setAgentRunLoading(prev => ({ ...prev, [runId]: false }));
         }
     };
+
+    const handleAgentRunDetailsChange = useCallback((run: AgentRunDetails) => {
+        setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
+    }, []);
 
     const formatAgentWorkflowLabel = (msg: ChatMessage) => {
         return msg.agent_workflow_id || 'agent';
@@ -1825,7 +1840,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                 Agent run: {formatAgentWorkflowLabel(msg)}
                                                 {msg.agent_route ? ` - ${msg.agent_route}` : ''}
                                             </summary>
-                                            <Box
+                                            {openAgentRunIds.has(msg.agent_run_id) && <Box
                                                 sx={{
                                                     mt: 1,
                                                     p: 1,
@@ -1847,11 +1862,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     runDetails={agentRunDetails[msg.agent_run_id]}
                                                     loading={agentRunLoading[msg.agent_run_id]}
                                                     error={agentRunErrors[msg.agent_run_id]}
-                                                    onRunDetailsChange={(run) => {
-                                                        setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
-                                                    }}
+                                                    suspendHeavyContent={isPanelResizing}
+                                                    onRunDetailsChange={handleAgentRunDetailsChange}
                                                 />
-                                            </Box>
+                                            </Box>}
                                         </details>
                                     </Box>
                                 )}
