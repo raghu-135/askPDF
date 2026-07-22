@@ -35,12 +35,20 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
   const isFocused = data.focused === true;
   const instanceLabel = data.instanceLabel || data.id;
   const visitCount = Number(data.visitCount || 0);
+  const selectedVisitPosition = Number(data.selectedVisitPosition);
+  const selectedVisitLabel = !data.authoring
+    && Number.isInteger(selectedVisitPosition)
+    && selectedVisitPosition > 0
+    && visitCount > 0
+    ? `Visit ${selectedVisitPosition} of ${visitCount}`
+    : null;
   const tooltip = [
     data.label,
     data.description,
     instanceLabel !== data.label ? instanceLabel : null,
     isFocused ? 'focused by message' : null,
     visitCount > 1 ? `visits: ${visitCount}` : null,
+    selectedVisitLabel ? `selected: ${selectedVisitLabel.toLowerCase()}` : null,
     data.route ? `route: ${data.route}` : null,
     elapsed ? `elapsed: ${elapsed}` : null,
     data.skipped ? skipReason || 'Skipped' : null,
@@ -157,7 +165,11 @@ export default function AgentGraphNode({ data, selected }: { data: AgentGraphNod
           {data.authoring && data.issueCount ? <Chip size="small" color="error" label={`${data.issueCount} issue${data.issueCount === 1 ? '' : 's'}`} sx={{ height: 22 }} /> : null}
           <Chip size="small" label={statusLabel} sx={{ height: 22, fontSize: '0.72rem' }} />
           {isFocused ? <Chip size="small" color="primary" label="focused" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
-          {visitCount > 1 ? <Chip size="small" label={`visits ${visitCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
+          {selectedVisitLabel ? (
+            <Chip size="small" color="primary" label={selectedVisitLabel} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />
+          ) : visitCount > 1 ? (
+            <Chip size="small" label={`visits ${visitCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />
+          ) : null}
           {elapsed && <Chip size="small" label={elapsed} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} />}
           {data.executionPlan?.length ? <Chip size="small" label={`plan ${data.executionPlan.length}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}
           {toolCount ? <Chip size="small" label={`tools ${toolCount}`} variant="outlined" sx={{ height: 22, fontSize: '0.72rem' }} /> : null}

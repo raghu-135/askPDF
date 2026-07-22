@@ -1,38 +1,39 @@
 import React, { useState } from 'react';
-import { Box, Chip, Tab, Tabs, Typography } from '@mui/material';
+import { Box, Button, Chip, Tab, Tabs, Typography } from '@mui/material';
 import { formatSkipReason } from '../../lib/agentDebugLabels';
 import { formatDurationMs } from '../../lib/formatDuration';
-import type { AgentGraphSelection } from './agent-graph-types';
+import type { TraceNodeView } from '../agent-debug/agent-trace-projection';
+import type { AgentGraphSelection, AgentNodeVisitRef } from './agent-graph-types';
+import { agentNodeVisitKey, getNodeVisitRoute, normalizeVisitIndex } from './agent-node-visits';
 import {
   DetailLine,
   hasValue,
   InspectorSection,
   JsonPreview,
-  TraceObject,
 } from './AgentGraphInspectorPrimitives';
-import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
-import type { AgentRunNodeDetail } from '../../lib/api';
 
 const sectionBg = 'rgba(0,0,0,0.03)';
+
+interface AgentGraphInspectorProps {
+  selection: AgentGraphSelection;
+  selectedVisitRef?: AgentNodeVisitRef | null;
+  visits?: TraceNodeView[];
+  onSelectVisit?: (visit: AgentNodeVisitRef) => void;
+  onViewVisit?: (visit: AgentNodeVisitRef) => void;
+}
 
 const withoutInternalTraceFields = (value: Record<string, any>) => {
   const { __trace_span, ...rest } = value;
   return rest;
 };
 
-const tokenValue = (value: unknown) => (
-  typeof value === 'number' || typeof value === 'string' ? String(value) : undefined
-);
-
-const booleanLabel = (value: unknown) => (
-  typeof value === 'boolean' ? (value ? 'yes' : 'no') : undefined
-);
-
-const visitDisplayLabel = (visitIndex?: number) => (
-  Number.isFinite(Number(visitIndex)) ? `Visit ${Number(visitIndex)}` : 'Visit'
-);
-
-export default function AgentGraphInspector({ selection, executionDetail }: { selection: AgentGraphSelection; executionDetail?: AgentRunNodeDetail }) {
+export default function AgentGraphInspector({
+  selection,
+  selectedVisitRef,
+  visits = [],
+  onSelectVisit,
+  onViewVisit,
+}: AgentGraphInspectorProps) {
   const [tab, setTab] = useState<'details' | 'raw'>('details');
 
   if (!selection) {
@@ -71,19 +72,30 @@ export default function AgentGraphInspector({ selection, executionDetail }: { se
   const skipReason = formatSkipReason(node.skipReason);
   const statusLabel = node.status === 'skipped' ? skipReason || 'Skipped' : node.status;
   const instanceLabel = node.instanceLabel || node.id;
-  const llmSummary = node.llmSummary || {};
   const observability = node.observability && typeof node.observability === 'object'
     ? node.observability as Record<string, unknown>
     : {};
   const capabilities = Array.isArray(node.capabilities)
     ? node.capabilities.filter((item): item is string => typeof item === 'string' && item.length > 0)
     : [];
-  const tokenCounts = llmSummary.token_counts && typeof llmSummary.token_counts === 'object'
-    ? llmSummary.token_counts as Record<string, unknown>
-    : {};
-  const retryAttempts = Array.isArray(llmSummary.retry_attempts)
-    ? llmSummary.retry_attempts.filter((attempt): attempt is Record<string, any> => attempt && typeof attempt === 'object')
-    : [];
+  const nodeVisits = visits
+    .map((visit) => ({ visit, visitIndex: normalizeVisitIndex(visit.visitIndex) }))
+    .filter(({ visit }) => visit.id === node.id || visit.id === node.instanceId);
+  const selectedPosition = selectedVisitRef && (selectedVisitRef.nodeId === node.id || selectedVisitRef.nodeId === node.instanceId)
+    ? nodeVisits.findIndex(({ visit }) => agentNodeVisitKey(visit) === agentNodeVisitKey(selectedVisitRef))
+    : -1;
+  const effectivePosition = selectedPosition >= 0 ? selectedPosition : nodeVisits.length - 1;
+  const selectedVisit = effectivePosition >= 0 ? nodeVisits[effectivePosition] : undefined;
+  const selectedGraphVisit = selectedVisit
+    ? node.visits?.find((visit) => normalizeVisitIndex(visit.visitIndex) === selectedVisit.visitIndex)
+    : undefined;
+  const selectedVisitRefValue = selectedVisit
+    ? { nodeId: selectedVisit.visit.id, visitIndex: selectedVisit.visitIndex }
+    : undefined;
+  const selectedVisitElapsed = formatDurationMs(selectedVisit?.visit.durationMs ?? selectedGraphVisit?.elapsedMs);
+  const selectedVisitRoute = getNodeVisitRoute(selectedVisit?.visit) || selectedGraphVisit?.evaluatorRoute || selectedGraphVisit?.route;
+  const selectedWarningCount = Math.max(selectedVisit?.visit.warningCodes.length || 0, selectedGraphVisit?.warningCount || 0);
+  const selectedErrorCount = Math.max(selectedVisit?.visit.error ? 1 : 0, selectedGraphVisit?.errorCount || 0);
   const toolTraceSpans = node.toolSummaries
     .map((tool) => tool.traceSpan)
     .filter((span): span is Record<string, any> => Boolean(span));
@@ -96,6 +108,12 @@ export default function AgentGraphInspector({ selection, executionDetail }: { se
     node_rows: node.rawEvents.map(withoutInternalTraceFields),
     tool_rows: node.toolSummaries.map((tool) => withoutInternalTraceFields(tool.raw)),
   };
+
+  const selectPosition = (position: number) => {
+    const target = nodeVisits[position];
+    if (target) onSelectVisit?.({ nodeId: target.visit.id, visitIndex: target.visitIndex });
+  };
+
   return (
     <Box sx={{ p: 1, borderRadius: 1, bgcolor: sectionBg }}>
       <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
@@ -109,8 +127,7 @@ export default function AgentGraphInspector({ selection, executionDetail }: { se
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
         <Chip size="small" label={statusLabel} variant="outlined" />
         {nodeElapsed && <Chip size="small" label={nodeElapsed} variant="outlined" />}
-        {Number(node.visitCount || 0) > 1 && <Chip size="small" label={`visits ${node.visitCount}`} variant="outlined" />}
-        {node.route && <Chip size="small" label={`route ${node.route}`} variant="outlined" />}
+        {nodeVisits.length > 1 && <Chip size="small" label={`${nodeVisits.length} visits`} variant="outlined" />}
         {node.category && <Chip size="small" label={node.category} variant="outlined" />}
         {node.sourceCount > 0 && <Chip size="small" label={`${node.sourceCount} sources`} variant="outlined" />}
         {node.artifactCount > 0 && <Chip size="small" label={`${node.artifactCount} artifacts`} variant="outlined" />}
@@ -118,6 +135,7 @@ export default function AgentGraphInspector({ selection, executionDetail }: { se
         {node.errorCount > 0 && <Chip size="small" color="error" label={`${node.errorCount} errors`} />}
         {node.focused && <Chip size="small" color="primary" label="focused" />}
       </Box>
+
       <Tabs
         value={tab}
         onChange={(_, value) => setTab(value)}
@@ -126,9 +144,43 @@ export default function AgentGraphInspector({ selection, executionDetail }: { se
         <Tab value="details" label="Details" />
         <Tab value="raw" label="Raw JSON" />
       </Tabs>
+
       {tab === 'details' ? (
         <>
-          {executionDetail && <AgentNodeExecutionDetails detail={executionDetail} />}
+          {selectedVisit && selectedVisitRefValue && (
+            <InspectorSection title="Selected invocation">
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
+                <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                  Visit {effectivePosition + 1} of {nodeVisits.length}
+                </Typography>
+                {nodeVisits.length > 1 && (
+                  <Box sx={{ display: 'flex', gap: 0.5 }}>
+                    <Button aria-label={`Previous invocation of ${node.label}`} size="small" variant="outlined" disabled={effectivePosition <= 0} onClick={() => selectPosition(effectivePosition - 1)}>
+                      Previous
+                    </Button>
+                    <Button aria-label={`Next invocation of ${node.label}`} size="small" variant="outlined" disabled={effectivePosition >= nodeVisits.length - 1} onClick={() => selectPosition(effectivePosition + 1)}>
+                      Next
+                    </Button>
+                  </Box>
+                )}
+              </Box>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
+                {selectedVisit.visit.status && <Chip size="small" label={selectedVisit.visit.status} variant="outlined" />}
+                {selectedVisitElapsed && <Chip size="small" label={selectedVisitElapsed} variant="outlined" />}
+                {selectedVisitRoute && <Chip size="small" label={`route ${selectedVisitRoute}`} variant="outlined" />}
+                {Boolean(selectedGraphVisit?.toolCount) && <Chip size="small" label={`${selectedGraphVisit?.toolCount} tools`} variant="outlined" />}
+                {selectedWarningCount > 0 && <Chip size="small" color="warning" label={`${selectedWarningCount} warnings`} />}
+                {selectedErrorCount > 0 && <Chip size="small" color="error" label={`${selectedErrorCount} errors`} />}
+              </Box>
+              {(selectedVisit.visit.routeReason || selectedGraphVisit?.routeReason) && (
+                <DetailLine label="Route reason" value={selectedVisit.visit.routeReason || selectedGraphVisit?.routeReason} />
+              )}
+              <Button aria-label={`View ${node.label} invocation details in Execution Progress`} size="small" sx={{ mt: 0.75 }} onClick={() => onViewVisit?.(selectedVisitRefValue)}>
+                View details in Execution Progress
+              </Button>
+            </InspectorSection>
+          )}
+
           <DetailLine label="Instance" value={node.id} />
           <DetailLine label="Type" value={node.type} />
           {(node.category || capabilities.length > 0 || hasValue(observability)) && (
@@ -139,144 +191,21 @@ export default function AgentGraphInspector({ selection, executionDetail }: { se
               <DetailLine label="Event prefix" value={typeof observability.event_prefix === 'string' ? observability.event_prefix : undefined} />
             </InspectorSection>
           )}
-          <DetailLine label="Route reason" value={node.routeReason} />
-          {node.status !== 'skipped' && <DetailLine label="Skip reason" value={skipReason} />}
-          <DetailLine label="Execution plan" value={node.executionPlan?.length ? node.executionPlan.join(' -> ') : undefined} />
-          {(node.route || node.routeReason || node.executionPlan?.length || hasValue(node.llmResultSummary)) && (
-            <InspectorSection title="Decision">
-              <DetailLine label="Route" value={node.route} />
-              <DetailLine label="Reason" value={node.routeReason} />
+          {(node.route || node.routeReason || node.executionPlan?.length) && (
+            <InspectorSection title="Decision summary">
+              <DetailLine label="Latest route" value={node.route} />
+              <DetailLine label="Latest reason" value={node.routeReason} />
               <DetailLine label="Execution plan" value={node.executionPlan?.length ? node.executionPlan.join(' -> ') : undefined} />
-              <TraceObject value={node.llmResultSummary} />
-            </InspectorSection>
-          )}
-          {Array.isArray(node.visits) && node.visits.length > 1 && (
-            <InspectorSection title="Visits">
-              {node.visits.map((visit, index) => {
-                const visitElapsed = formatDurationMs(visit.elapsedMs);
-                const visitRoute = visit.evaluatorRoute || visit.route;
-                return (
-                  <Box key={`${visit.visitIndex ?? 'default'}-${index}`} sx={{ mt: index ? 0.75 : 0 }}>
-                    <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
-                      {visitDisplayLabel(visit.visitIndex)}
-                    </Typography>
-                    <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                      {[
-                        visit.status,
-                        visitElapsed,
-                        visitRoute ? `route ${visitRoute}` : null,
-                        Number.isFinite(Number(visit.replanCount)) ? `replans ${visit.replanCount}` : null,
-                        visit.toolCount ? `tools ${visit.toolCount}` : null,
-                        visit.warningCount ? `warnings ${visit.warningCount}` : null,
-                        visit.errorCount ? `errors ${visit.errorCount}` : null,
-                      ].filter(Boolean).join(' · ')}
-                    </Typography>
-                    {visit.routeReason && (
-                      <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                        {visit.routeReason}
-                      </Typography>
-                    )}
-                  </Box>
-                );
-              })}
-            </InspectorSection>
-          )}
-          {hasValue(node.focusedTraceSpans) && (
-            <InspectorSection title="Focused Spans">
-              <TraceObject value={node.focusedTraceSpans} />
-            </InspectorSection>
-          )}
-          {(hasValue(node.inputPreview) || hasValue(node.inputRefs)) && (
-            <InspectorSection title="Input">
-              <TraceObject value={node.inputPreview} />
-              <TraceObject value={node.inputRefs} />
-            </InspectorSection>
-          )}
-          {hasValue(node.promptSummary) && (
-            <InspectorSection title="Prompt">
-              <DetailLine label="Section" value={typeof node.promptSummary?.section === 'string' ? node.promptSummary.section : undefined} />
-              <DetailLine label="Prompt chars" value={typeof node.promptSummary?.prompt_chars === 'number' ? node.promptSummary.prompt_chars : undefined} />
-              <TraceObject value={node.promptSummary} />
-            </InspectorSection>
-          )}
-          {hasValue(node.llmSummary) && (
-            <InspectorSection title="LLM">
-              <DetailLine label="Model" value={typeof llmSummary.model_name === 'string' ? llmSummary.model_name : undefined} />
-              <DetailLine label="Response chars" value={tokenValue(llmSummary.response_chars)} />
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
-                {tokenValue(tokenCounts.prompt) && <Chip size="small" variant="outlined" label={`prompt ${tokenValue(tokenCounts.prompt)}`} />}
-                {tokenValue(tokenCounts.completion) && <Chip size="small" variant="outlined" label={`completion ${tokenValue(tokenCounts.completion)}`} />}
-                {tokenValue(tokenCounts.total) && <Chip size="small" color="primary" variant="outlined" label={`total ${tokenValue(tokenCounts.total)}`} />}
-                {tokenValue(tokenCounts.reasoning) && <Chip size="small" variant="outlined" label={`reasoning ${tokenValue(tokenCounts.reasoning)}`} />}
-                {tokenValue(tokenCounts.cached) && <Chip size="small" variant="outlined" label={`cached ${tokenValue(tokenCounts.cached)}`} />}
-                {tokenValue(llmSummary.retry_count) && <Chip size="small" color={Number(llmSummary.retry_count) > 0 ? 'warning' : 'default'} variant="outlined" label={`retries ${tokenValue(llmSummary.retry_count)}`} />}
-              </Box>
-              <DetailLine label="Reasoning available" value={booleanLabel(llmSummary.reasoning_available)} />
-              <DetailLine label="Reasoning format" value={typeof llmSummary.reasoning_format === 'string' ? llmSummary.reasoning_format : undefined} />
-              <DetailLine label="Reasoning chars" value={tokenValue(llmSummary.reasoning_chars)} />
-              {typeof llmSummary.reasoning_preview === 'string' && (
-                <DetailLine
-                  label="Reasoning preview"
-                  value={(
-                    <Box
-                      component="span"
-                      sx={{
-                        display: 'block',
-                        mt: 0.5,
-                        p: 0.75,
-                        borderRadius: 1,
-                        bgcolor: 'rgba(0,0,0,0.04)',
-                        color: 'text.primary',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {llmSummary.reasoning_preview}
-                    </Box>
-                  )}
-                />
-              )}
-              {retryAttempts.length > 0 && (
-                <Box sx={{ mt: 0.75 }}>
-                  {retryAttempts.map((attempt, index) => (
-                    <Typography key={`llm-retry-${index}`} variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                      Retry {attempt.attempt ?? index + 1}
-                      {attempt.delay_ms ? `, delay ${attempt.delay_ms}ms` : ''}
-                      {attempt.http_status_code ? `, HTTP ${attempt.http_status_code}` : ''}
-                      {attempt.reason ? `, ${attempt.reason}` : ''}
-                      {attempt.exception_type ? `, ${attempt.exception_type}` : ''}
-                    </Typography>
-                  ))}
-                </Box>
-              )}
             </InspectorSection>
           )}
           {node.toolSummaries.length > 0 && (
-            <InspectorSection title="Tools">
-              {node.toolSummaries.map((tool, index) => {
-                const toolElapsed = formatDurationMs(tool.elapsedMs);
-                return (
-                  <Box key={`${tool.toolName}-${index}`} sx={{ mt: 0.75 }}>
-                    <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                      {tool.displayName || tool.toolName}: {tool.ok ? 'ok' : 'failed'}
-                      {toolElapsed ? `, ${toolElapsed}` : ''}
-                      {tool.sourceCount ? `, sources ${tool.sourceCount}` : ''}
-                      {tool.artifactKeys.length ? `, artifacts ${tool.artifactKeys.length}` : ''}
-                      {tool.warnings.length ? `, warnings ${tool.warnings.join(', ')}` : ''}
-                    </Typography>
-                    {hasValue(tool.toolInput) && <DetailLine label="Input" value={<JsonPreview value={tool.toolInput} />} />}
-                    {tool.resultPreview && <DetailLine label="Result preview" value={tool.resultPreview} />}
-                    {hasValue(tool.artifactSummary) && <DetailLine label="Artifacts" value={<JsonPreview value={tool.artifactSummary} />} />}
-                    {hasValue(tool.artifactRefs) && <TraceObject value={tool.artifactRefs} />}
-                  </Box>
-                );
-              })}
-            </InspectorSection>
-          )}
-          {(hasValue(node.outputPreview) || hasValue(node.outputRefs)) && (
-            <InspectorSection title="Output">
-              <TraceObject value={node.outputPreview} />
-              <TraceObject value={node.outputRefs} />
+            <InspectorSection title="Tool summary">
+              {node.toolSummaries.map((tool, index) => (
+                <Typography key={`${tool.toolName}-${index}`} variant="caption" sx={{ display: 'block', color: 'text.secondary', mt: index ? 0.5 : 0 }}>
+                  {tool.displayName || tool.toolName}: {tool.ok ? 'ok' : 'failed'}
+                  {formatDurationMs(tool.elapsedMs) ? `, ${formatDurationMs(tool.elapsedMs)}` : ''}
+                </Typography>
+              ))}
             </InspectorSection>
           )}
           {(node.warnings?.length || node.toolSummaries.some((tool) => tool.warnings.length > 0)) && (
@@ -293,7 +222,7 @@ export default function AgentGraphInspector({ selection, executionDetail }: { se
           )}
         </>
       ) : (
-        <InspectorSection title="Raw JSON">
+        <InspectorSection title="Raw graph data">
           <JsonPreview value={rawPayload} maxHeight={360} />
         </InspectorSection>
       )}

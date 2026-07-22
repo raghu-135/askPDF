@@ -13,6 +13,12 @@ export interface AgentNodeCatalogEntry {
 
 export type AgentNodeCatalog = Record<string, AgentNodeCatalogEntry>;
 
+/** Identifies one invocation of a workflow node within a run. */
+export interface AgentNodeVisitRef {
+  nodeId: string;
+  visitIndex: number;
+}
+
 export interface AgentWorkflowGraphNodeSpec {
   id: string;
   type: string;
@@ -101,6 +107,8 @@ export interface AgentGraphNode {
   visitCount?: number;
   visits?: AgentGraphNodeVisit[];
   latestVisitIndex?: number;
+  selectedVisitIndex?: number;
+  selectedVisitPosition?: number;
   inputRefs?: Record<string, any>;
   outputRefs?: Record<string, any>;
   inputPreview?: unknown;

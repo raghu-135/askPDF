@@ -20,15 +20,16 @@ import AgentGraphInspector from './AgentGraphInspector';
 import AgentGraphNode from './AgentGraphNode';
 import { applyTraceFocusToGraph, buildAgentGraph, getAgentGraphSpec } from './agent-graph-mapper';
 import type { TraceRunView } from '../agent-debug/agent-trace-projection';
-import type { AgentRunNodeDetail } from '../../lib/api';
 import type {
   AgentGraphEdge,
   AgentGraphMode,
   AgentGraphNode as AgentGraphNodeModel,
   AgentNodeCatalog,
   AgentGraphSelection,
+  AgentNodeVisitRef,
   AgentTraceRefs,
 } from './agent-graph-types';
+import { applySelectedVisitOverlay } from './agent-node-visits';
 
 const elk = new ELK();
 
@@ -144,8 +145,9 @@ function AgentGraphCanvasInner({
   showInspector,
   onSelectionChange,
   onNodePositionChange,
-  selectedNodeId,
-  selectedNodeDetail,
+  selectedVisitRef,
+  onSelectVisit,
+  onViewVisit,
 }: {
   resolvedSpec?: Record<string, any>;
   workflowId?: string;
@@ -156,8 +158,9 @@ function AgentGraphCanvasInner({
   showInspector: boolean;
   onSelectionChange?: (selection: AgentGraphSelection) => void;
   onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
-  selectedNodeId?: string;
-  selectedNodeDetail?: AgentRunNodeDetail;
+  selectedVisitRef?: AgentNodeVisitRef | null;
+  onSelectVisit?: (visit: AgentNodeVisitRef) => void;
+  onViewVisit?: (visit: AgentNodeVisitRef) => void;
 }) {
   const theme = useTheme();
   const { fitView } = useReactFlow();
@@ -186,12 +189,17 @@ function AgentGraphCanvasInner({
     } else {
       baseGraph = buildAgentGraph(graphSpec, { nodeCatalog });
     }
-    return applyTraceFocusToGraph(baseGraph, focusedTraceRefs);
-  }, [focusedTraceRefs, mode, nodeCatalog, resolvedSpec, workflowId, traceView]);
+    const focusedGraph = applyTraceFocusToGraph(baseGraph, focusedTraceRefs);
+    return traceView ? applySelectedVisitOverlay(focusedGraph, traceView.nodes, selectedVisitRef) : focusedGraph;
+  }, [focusedTraceRefs, mode, nodeCatalog, resolvedSpec, selectedVisitRef, workflowId, traceView]);
   const focusSignature = useMemo(() => JSON.stringify({
     node_ids: focusedTraceRefs?.node_ids || [],
     span_ids: focusedTraceRefs?.span_ids || [],
   }), [focusedTraceRefs]);
+  const topologySignature = useMemo(() => JSON.stringify({
+    nodes: graph.nodes.map((node) => ({ id: node.id, position: node.position })),
+    edges: graph.edges.map((edge) => ({ id: edge.id, source: edge.source, target: edge.target })),
+  }), [graph.edges, graph.nodes]);
   const layoutDirection = mode === 'run-debug' ? 'DOWN' : 'RIGHT';
   const onSelectionChangeRef = useRef(onSelectionChange);
 
@@ -249,7 +257,20 @@ function AgentGraphCanvasInner({
     return () => {
       cancelled = true;
     };
-  }, [fitView, graph.edges, graph.nodes, layoutDirection]);
+  }, [fitView, layoutDirection, topologySignature]);
+
+  useEffect(() => {
+    const graphNodesById = new Map(graph.nodes.map((node) => [node.id, node]));
+    setFlowNodes((current) => current.map((node) => {
+      const graphNode = graphNodesById.get(node.id);
+      if (!graphNode) return node;
+      return {
+        ...node,
+        selected: selectedVisitRef?.nodeId === node.id,
+        data: { ...graphNode, layoutDirection },
+      };
+    }));
+  }, [graph.nodes, layoutDirection, selectedVisitRef]);
 
   useEffect(() => {
     if (!selection) return;
@@ -274,10 +295,10 @@ function AgentGraphCanvasInner({
   }, [focusedTraceRefs, focusSignature, graph.nodes]);
 
   useEffect(() => {
-    if (!selectedNodeId) return;
-    const selectedNode = graph.nodes.find((node) => node.id === selectedNodeId);
+    if (!selectedVisitRef) return;
+    const selectedNode = graph.nodes.find((node) => node.id === selectedVisitRef.nodeId);
     if (selectedNode) setSelection({ kind: 'node', node: selectedNode });
-  }, [graph.nodes, selectedNodeId]);
+  }, [graph.nodes, selectedVisitRef]);
 
   if (graph.nodes.length === 0) {
     return (
@@ -369,7 +390,15 @@ function AgentGraphCanvasInner({
           </ReactFlow>
         </AgentGraphErrorBoundary>
       </Box>
-      {showInspector ? <AgentGraphInspector selection={selection} executionDetail={selectedNodeDetail} /> : null}
+      {showInspector ? (
+        <AgentGraphInspector
+          selection={selection}
+          selectedVisitRef={selectedVisitRef}
+          visits={selection?.kind === 'node' && traceView ? traceView.nodes.filter((visit) => visit.id === selection.node.id) : []}
+          onSelectVisit={onSelectVisit}
+          onViewVisit={onViewVisit}
+        />
+      ) : null}
       {graph.executionPlan.length > 0 && (
         <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', gridColumn: '1 / -1' }}>
           Execution plan: {graph.executionPlan.join(' -> ')}
@@ -389,8 +418,9 @@ export default function AgentGraphCanvas(props: {
   showInspector?: boolean;
   onSelectionChange?: (selection: AgentGraphSelection) => void;
   onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
-  selectedNodeId?: string;
-  selectedNodeDetail?: AgentRunNodeDetail;
+  selectedVisitRef?: AgentNodeVisitRef | null;
+  onSelectVisit?: (visit: AgentNodeVisitRef) => void;
+  onViewVisit?: (visit: AgentNodeVisitRef) => void;
 }) {
   return (
     <ReactFlowProvider>

@@ -7,12 +7,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { getAgentRunNodeDetails, type AgentRunNodeDetail } from '../../lib/api';
 import type { TraceNodeView, TraceRunView } from '../agent-debug/agent-trace-projection';
-import type { AgentGraphSelection, AgentTraceRefs } from './agent-graph-types';
+import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from './agent-graph-types';
 import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
+import { agentNodeVisitKey, toAgentNodeVisitRef } from './agent-node-visits';
 
 const AgentDebugCanvas = dynamic(() => import('./AgentDebugCanvas'), { ssr: false });
 
-const visitKey = (node: Pick<TraceNodeView, 'id' | 'visitIndex'>) => `${node.id}:${node.visitIndex || 1}`;
+const visitKey = (node: Pick<TraceNodeView, 'id' | 'visitIndex'>) => agentNodeVisitKey(node);
 
 const nodeSummary = (node: TraceNodeView) => {
   const raw = node.raw || {};
@@ -56,20 +57,23 @@ export default function AgentExecutionView({
   }, [traceView.nodes]);
   const [details, setDetails] = useState<Record<string, AgentRunNodeDetail>>(initialDetails);
   const [expanded, setExpanded] = useState<string | false>(false);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>();
+  const [selectedVisit, setSelectedVisit] = useState<AgentNodeVisitRef | null>(null);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
   const inFlightDetailKeys = useRef(new Set<string>());
+  const timelineRows = useRef(new Map<string, HTMLElement>());
   const detailContextKey = `${runId || 'live'}:${threadId || ''}`;
   const detailContextRef = useRef(detailContextKey);
+  const selectionContextRef = useRef(detailContextKey);
 
   useEffect(() => {
     if (detailContextRef.current !== detailContextKey) {
       detailContextRef.current = detailContextKey;
+      selectionContextRef.current = '';
       inFlightDetailKeys.current.clear();
       setDetails(initialDetails);
       setExpanded(false);
-      setSelectedNodeId(undefined);
+      setSelectedVisit(null);
       setLoadingKey(null);
       setDetailErrors({});
       return;
@@ -103,18 +107,50 @@ export default function AgentExecutionView({
 
   const selectVisit = useCallback((node: TraceNodeView, open: boolean) => {
     const key = visitKey(node);
+    selectionContextRef.current = detailContextKey;
     setExpanded(open ? key : false);
+    setSelectedVisit(toAgentNodeVisitRef(node));
     if (open) {
-      setSelectedNodeId(node.id);
       void loadDetail(node);
     }
-  }, [loadDetail]);
+  }, [detailContextKey, loadDetail]);
 
-  const handleGraphSelection = useCallback((selection: AgentGraphSelection) => {
-    if (!selection || selection.kind !== 'node') return;
-    const node = [...traceView.nodes].reverse().find((row) => row.id === selection.node.id);
+  const selectVisitRef = useCallback((visit: AgentNodeVisitRef) => {
+    const node = traceView.nodes.find((row) => visitKey(row) === agentNodeVisitKey(visit));
     if (node) selectVisit(node, true);
   }, [selectVisit, traceView.nodes]);
+
+  const viewVisit = useCallback((visit: AgentNodeVisitRef) => {
+    const node = traceView.nodes.find((row) => visitKey(row) === agentNodeVisitKey(visit));
+    if (!node) return;
+    selectVisit(node, true);
+    window.requestAnimationFrame(() => {
+      timelineRows.current.get(agentNodeVisitKey(visit))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, [selectVisit, traceView.nodes]);
+
+  const handleGraphSelection = useCallback((selection: AgentGraphSelection) => {
+    if (!selection || selection.kind !== 'node') {
+      setSelectedVisit(null);
+      return;
+    }
+    const node = [...traceView.nodes].reverse().find((row) => row.id === selection.node.id);
+    if (node) selectVisit(node, true);
+    else setSelectedVisit(null);
+  }, [selectVisit, traceView.nodes]);
+
+  useEffect(() => {
+    if (!selectedVisit) return;
+    if (selectionContextRef.current !== detailContextKey) return;
+    const selectedKey = agentNodeVisitKey(selectedVisit);
+    if (traceView.nodes.some((node) => visitKey(node) === selectedKey)) return;
+    const fallback = [...traceView.nodes].reverse().find((node) => node.id === selectedVisit.nodeId);
+    if (fallback) {
+      setSelectedVisit(toAgentNodeVisitRef(fallback));
+    } else {
+      setSelectedVisit(null);
+    }
+  }, [detailContextKey, selectedVisit, traceView.nodes]);
 
   const finalOutput = traceView.finalOutput;
   const copyAnswer = async () => {
@@ -136,7 +172,17 @@ export default function AgentExecutionView({
           const key = visitKey(node);
           const detail = details[key];
           return (
-            <Accordion key={`${key}:${index}`} expanded={expanded === key} onChange={(_, open) => selectVisit(node, open)} disableGutters>
+            <Accordion
+              key={`${key}:${index}`}
+              ref={(element) => {
+                if (element) timelineRows.current.set(key, element);
+                else timelineRows.current.delete(key);
+              }}
+              expanded={expanded === key}
+              onChange={(_, open) => selectVisit(node, open)}
+              disableGutters
+              sx={selectedVisit && agentNodeVisitKey(selectedVisit) === key ? { borderColor: 'primary.main' } : undefined}
+            >
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ width: '100%', alignItems: { sm: 'center' }, minWidth: 0 }}>
                   <Typography variant="body2" sx={{ fontWeight: 700, minWidth: 150 }}>{node.label} · Visit {node.visitIndex || 1}</Typography>
@@ -146,7 +192,7 @@ export default function AgentExecutionView({
               </AccordionSummary>
               <AccordionDetails>
                 {loadingKey === key && <Stack direction="row" spacing={1}><CircularProgress size={16} /><Typography variant="caption">Loading full details…</Typography></Stack>}
-                {detailErrors[key] && <Alert severity="info">Older trace—full details unavailable. Existing previews remain available in the graph inspector.</Alert>}
+                {detailErrors[key] && <Alert severity="info">Older trace—full invocation details are unavailable.</Alert>}
                 {detail && <AgentNodeExecutionDetails detail={detail} />}
               </AccordionDetails>
             </Accordion>
@@ -170,8 +216,9 @@ export default function AgentExecutionView({
           workflowId={workflowId}
           traceView={traceView}
           focusedTraceRefs={focusedTraceRefs}
-          selectedNodeId={selectedNodeId}
-          selectedNodeDetail={expanded ? details[expanded] : undefined}
+          selectedVisitRef={selectedVisit}
+          onSelectVisit={selectVisitRef}
+          onViewVisit={viewVisit}
           onSelectionChange={handleGraphSelection}
         />
       </Box>

@@ -2,6 +2,8 @@ services:
   frontend:
     build:
       target: dev
+    command: >
+      sh -lc "[ -x node_modules/.bin/next ] || npm ci --no-audit --no-fund; npm run dev"
     volumes:
       - ./frontend:/app
       - /app/node_modules
