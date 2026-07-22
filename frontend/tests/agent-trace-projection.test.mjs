@@ -417,3 +417,15 @@ test('live trace projection preserves string node failures', () => {
   assert.equal(view.nodes[0].error.raw_message, 'Model connection failed');
   assert.equal(view.errors[0].raw_message, 'Model connection failed');
 });
+
+test('live trace projection surfaces terminal run failures without a node failure', () => {
+  const view = buildLiveTraceView([
+    { id: 1, event: 'node.completed', data: { node_id: 'router', node_type: 'router', visit_index: 1, route: 'memory' } },
+    { id: 2, event: 'run.failed', data: { error: { code: 'workflow_failed', raw_message: 'No destination for route memory' } } },
+  ]);
+
+  assert.equal(view.nodes[0].status, 'completed');
+  assert.equal(view.errorCount, 1);
+  assert.equal(view.errors[0].code, 'workflow_failed');
+  assert.equal(view.errors[0].raw_message, 'No destination for route memory');
+});

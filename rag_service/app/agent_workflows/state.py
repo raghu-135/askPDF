@@ -102,6 +102,12 @@ def runtime_visit_index(config: Optional[RunnableConfig]) -> Optional[int]:
     return value if value >= 1 else None
 
 
+def runtime_route_labels(config: Optional[RunnableConfig]) -> List[str]:
+    runtime = node_runtime(config)
+    labels = runtime.get("route_labels")
+    return [str(item) for item in labels if isinstance(item, str) and item] if isinstance(labels, list) else []
+
+
 def with_node_runtime_config(
     config: Optional[RunnableConfig],
     *,
@@ -109,6 +115,7 @@ def with_node_runtime_config(
     node_type: str,
     capabilities: List[str],
     visit_index: int,
+    route_labels: Optional[List[str]] = None,
 ) -> RunnableConfig:
     updated = dict(config or {})
     configurable = dict(updated.get("configurable") or {})
@@ -117,6 +124,7 @@ def with_node_runtime_config(
         "node_type": node_type,
         "capabilities": list(capabilities),
         "visit_index": visit_index,
+        "route_labels": list(route_labels or []),
     }
     updated["configurable"] = configurable
     metadata = dict(updated.get("metadata") or {})

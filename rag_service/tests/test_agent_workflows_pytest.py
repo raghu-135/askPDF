@@ -2235,6 +2235,43 @@ class TestRouterRagGraphToolConsumers:
         assert "tool_events" not in update
 
     @pytest.mark.asyncio
+    async def test_router_uses_only_routes_configured_for_its_graph_instance(self, monkeypatch):
+        captured_messages = []
+
+        class FakeLlm:
+            async def ainvoke(self, messages):
+                captured_messages.extend(messages)
+                return SimpleNamespace(content=json.dumps({"route": "memory", "reason": "Use memory."}))
+
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
+
+        update = await NodeRegistry().router(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "What did the document say?",
+                "llm_model": "test-llm",
+                "use_web_search": False,
+                "context_window": 8192,
+                "pre_fetch_bundle": {},
+                "node_events": [],
+                "tool_events": [],
+            },
+            {
+                "configurable": {
+                    "thread_id": "thread-1",
+                    "agent_workflow_node_runtime": {
+                        "route_labels": ["document", "clarify"],
+                    },
+                },
+            },
+        )
+
+        assert update["route"] == "document"
+        assert "configured fallback 'document'" in update["route_reason"]
+        assert "document, clarify" in captured_messages[-1].content
+
+    @pytest.mark.asyncio
     async def test_evidence_evaluator_routes_to_answer_when_sufficient(self, monkeypatch):
         class FakeLlm:
             async def ainvoke(self, _messages):

@@ -255,6 +255,7 @@ export const buildLiveTraceView = (
   let finalOutput: AgentRunFinalOutput | undefined;
   let route: string | undefined;
   let routeReason: string | undefined;
+  const runErrors: Record<string, any>[] = [];
 
   events.forEach((envelope) => {
     const data = asObject(envelope.data);
@@ -299,6 +300,14 @@ export const buildLiveTraceView = (
       route = asNonEmptyString(data.route) || route;
       routeReason = asNonEmptyString(data.route_reason) || routeReason;
     }
+    if (envelope.event === 'run.failed') {
+      const rawError = data.error;
+      runErrors.push(
+        rawError && typeof rawError === 'object'
+          ? asObject(rawError)
+          : { raw_message: String(rawError || data.message || 'Workflow test failed.') },
+      );
+    }
   });
 
   return {
@@ -310,8 +319,11 @@ export const buildLiveTraceView = (
     usedNodeCount: new Set(nodes.filter((node) => !node.skipped).map((node) => node.id)).size,
     usedToolCount: tools.length,
     warningCount: nodes.reduce((count, node) => count + node.warningCodes.length, 0) + tools.reduce((count, tool) => count + tool.warningCodes.length, 0),
-    errorCount: nodes.filter((node) => node.status === 'error').length + tools.filter((tool) => !tool.ok).length,
-    errors: nodes.map((node) => node.error).filter((error): error is Record<string, any> => Boolean(error && Object.keys(error).length)),
+    errorCount: nodes.filter((node) => node.status === 'error').length + tools.filter((tool) => !tool.ok).length + runErrors.length,
+    errors: [
+      ...nodes.map((node) => node.error).filter((error): error is Record<string, any> => Boolean(error && Object.keys(error).length)),
+      ...runErrors,
+    ],
     finalOutput,
     detailManifest: nodes.filter((node) => node.raw.detail).map((node) => ({
       node_id: node.id,

@@ -81,6 +81,27 @@ const catalog = {
       allowed_child_types: ['evidence_evaluator', 'synthesizer', 'finalizer', 'hitl_gate'],
       max_instances: 4,
     }),
+    memory_worker: node({
+      type: 'memory_worker',
+      display_name: 'Memory Retrieval',
+      allowed_tool_contract_ids: ['deep_memory'],
+      allowed_parent_types: ['router'],
+      allowed_child_types: ['synthesizer'],
+    }),
+    timeline_worker: node({
+      type: 'timeline_worker',
+      display_name: 'Timeline Retrieval',
+      allowed_tool_contract_ids: ['thread_timeline'],
+      allowed_parent_types: ['router'],
+      allowed_child_types: ['synthesizer'],
+    }),
+    web_worker: node({
+      type: 'web_worker',
+      display_name: 'Web Retrieval',
+      allowed_tool_contract_ids: ['live_web_recon'],
+      allowed_parent_types: ['router'],
+      allowed_child_types: ['synthesizer'],
+    }),
     evidence_evaluator: node({
       type: 'evidence_evaluator',
       display_name: 'Evidence Evaluator',
@@ -106,7 +127,7 @@ const catalog = {
     synthesizer: node({
       type: 'synthesizer',
       display_name: 'Synthesizer',
-      allowed_parent_types: ['retrieval_worker', 'evidence_evaluator', 'hitl_gate'],
+      allowed_parent_types: ['retrieval_worker', 'memory_worker', 'timeline_worker', 'web_worker', 'evidence_evaluator', 'hitl_gate'],
       allowed_child_types: ['finalizer', 'hitl_gate'],
     }),
     finalizer: node({
@@ -171,6 +192,33 @@ const catalog = {
       artifact_keys: ['document_sources'],
       warning_codes: [],
     },
+    deep_memory: {
+      id: 'deep_memory',
+      display_name: 'Deep Memory',
+      canonical_tools: ['search_memory'],
+      allowed_node_types: ['memory_worker'],
+      required_node_capabilities: [],
+      artifact_keys: ['memory_sources'],
+      warning_codes: [],
+    },
+    thread_timeline: {
+      id: 'thread_timeline',
+      display_name: 'Thread Timeline',
+      canonical_tools: ['search_timeline'],
+      allowed_node_types: ['timeline_worker'],
+      required_node_capabilities: [],
+      artifact_keys: ['timeline_sources'],
+      warning_codes: [],
+    },
+    live_web_recon: {
+      id: 'live_web_recon',
+      display_name: 'Live Web Recon',
+      canonical_tools: ['search_web'],
+      allowed_node_types: ['web_worker'],
+      required_node_capabilities: [],
+      artifact_keys: ['web_sources'],
+      warning_codes: [],
+    },
     focused_document_evidence: {
       id: 'focused_document_evidence',
       display_name: 'Focused Document Evidence',
@@ -199,17 +247,24 @@ test('creates a router starter spec with canonical node ids and route function m
     'context_loader',
     'router',
     'retrieval_worker',
+    'memory_worker',
+    'timeline_worker',
+    'web_worker',
+    'direct_answer',
     'synthesizer',
     'finalizer',
   ]);
   assert.equal(spec.schema_version, 2);
   assert.equal(spec.workflow_id, 'custom_rag_agent');
   assert.equal(spec.workflow_type, 'custom_rag_agent');
-  assert.deepEqual(spec.config.allowed_tool_ids, ['clarify_intent', 'document_evidence', 'thread_shape']);
+  assert.deepEqual(spec.config.allowed_tool_ids, ['clarify_intent', 'deep_memory', 'document_evidence', 'live_web_recon', 'thread_shape', 'thread_timeline']);
   assert.equal(spec.config.graph.edges.find((edge) => edge.from === 'router')?.route_fn, 'router_route');
   assert.deepEqual(spec.config.graph.edges.find((edge) => edge.from === 'router')?.routes, {
     document: 'retrieval_worker',
-    direct: 'finalizer',
+    memory: 'memory_worker',
+    timeline: 'timeline_worker',
+    web: 'web_worker',
+    direct: 'direct_answer',
     clarify: 'finalizer',
   });
 });
@@ -316,7 +371,14 @@ test('normalizes unsupported node tools and over-limit node types from loaded st
 
   assert.equal(normalized.nodes.some((item) => item.id === 'router_2'), false);
   assert.equal(normalized.nodes.find((item) => item.id === 'retrieval_worker_2')?.tool_contract_ids, undefined);
-  assert.deepEqual(normalized.allowed_tool_ids, ['clarify_intent', 'document_evidence', 'thread_shape']);
+  assert.deepEqual(normalized.allowed_tool_ids, [
+    'clarify_intent',
+    'deep_memory',
+    'document_evidence',
+    'live_web_recon',
+    'thread_shape',
+    'thread_timeline',
+  ]);
 });
 
 test('expands sequential and conditional incoming paths separately', () => {

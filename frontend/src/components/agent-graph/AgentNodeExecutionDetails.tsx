@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Box, Chip, Divider, Stack, Typography } from '@mui/material';
+import { Alert, Box, Divider, Stack, Typography } from '@mui/material';
 import type { AgentRunNodeDetail } from '../../lib/api';
 import { JsonPreview } from './AgentGraphInspectorPrimitives';
 
@@ -23,12 +23,7 @@ export default function AgentNodeExecutionDetails({ detail }: { detail: AgentRun
 
   return (
     <Stack spacing={0.75} sx={{ minWidth: 0 }}>
-      <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
-        <Chip size="small" variant="outlined" label={detail.status || 'unknown'} />
-        <Chip size="small" variant="outlined" label={`Visit ${detail.visit_index || 1}`} />
-        {detail.event?.route && <Chip size="small" variant="outlined" label={`Route ${detail.event.route}`} />}
-        {safety.truncated && <Chip size="small" color="warning" label="Some data truncated" />}
-      </Stack>
+      {safety.truncated && <Alert severity="warning">Some invocation data was truncated by trace safety limits.</Alert>}
       {detail.error && <Alert severity="error">{String(detail.error)}</Alert>}
       {(safety.redacted_fields?.length || safety.omitted_fields?.length) && (
         <Alert severity="info">Sensitive or internal fields were removed from this trace.</Alert>

@@ -95,6 +95,7 @@ from app.agent_workflows.state import (
     RouterRagState,
     check_visit_budget as _check_visit_budget,
     node_visit_counts as _node_visit_counts,
+    runtime_route_labels as _runtime_route_labels,
     with_node_runtime_config as _with_node_runtime_config,
     with_visit_accounting as _with_visit_accounting,
 )
@@ -127,7 +128,7 @@ class NodeRegistry:
             raise ValueError(f"Unknown node type: {node_type}")
         return self._nodes[node_type]
 
-    def get_for_spec(self, node_spec: Dict[str, Any]) -> Callable[..., Any]:
+    def get_for_spec(self, node_spec: Dict[str, Any], *, route_labels: list[str] | None = None) -> Callable[..., Any]:
         node_type = str(node_spec.get("type") or "")
         node_id = str(node_spec.get("id") or node_type)
         metadata = get_node_type_metadata(node_type)
@@ -143,6 +144,7 @@ class NodeRegistry:
                 node_type=node_type,
                 capabilities=capabilities,
                 visit_index=visit_index,
+                route_labels=route_labels,
             )
             queue = ((runtime_config.get("configurable") or {}).get("studio_event_queue"))
             trace_recorder = ((runtime_config.get("configurable") or {}).get("trace_recorder"))
@@ -330,6 +332,13 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_router_prompt(state)
+        configured_routes = _runtime_route_labels(config)
+        if configured_routes:
+            prompt += (
+                "\n\nAuthoritative routes configured for this Router instance: "
+                + ", ".join(configured_routes)
+                + ". Return exactly one of these route values."
+            )
         response, parsed, prompt_details, retry_attempts = await invoke_json_decision_node(
             state,
             config,
@@ -356,13 +365,32 @@ class NodeRegistry:
         allowed_routes = set(ROUTER_ROUTES) - {RouterRoute.WEB.value}
         if state.get("use_web_search", False):
             allowed_routes.add(RouterRoute.WEB.value)
-        route = parsed.get("route") if parsed.get("route") in allowed_routes else RouterRoute.DOCUMENT.value
+        if configured_routes:
+            allowed_routes &= set(configured_routes)
+        if not allowed_routes:
+            raise ValueError("Router has no configured route that is enabled for this test run")
+        requested_route = parsed.get("route")
+        fallback_order = [
+            RouterRoute.DOCUMENT.value,
+            RouterRoute.DIRECT.value,
+            RouterRoute.CLARIFY.value,
+            RouterRoute.MEMORY.value,
+            RouterRoute.TIMELINE.value,
+            RouterRoute.WEB.value,
+        ]
+        fallback_route = next(route for route in fallback_order if route in allowed_routes)
+        route = requested_route if requested_route in allowed_routes else fallback_route
         clarification_options = parsed.get("clarification_options")
         if route == RouterRoute.CLARIFY.value:
             clarification_options = _bounded_string_list(clarification_options)
             if not clarification_options:
                 clarification_options = _fallback_clarification_options()
         route_reason = str(parsed.get("reason") or "")
+        if requested_route != route:
+            route_reason = (
+                f"The model selected unavailable route {requested_route!r}; "
+                f"the workflow used configured fallback {route!r}."
+            )
         data = build_decision_node_event_data(
             leading_fields={
                 "route": route,

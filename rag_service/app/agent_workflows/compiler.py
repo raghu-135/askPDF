@@ -179,9 +179,17 @@ class WorkflowCompiler(WorkflowMaterializer):
             graph_spec = (spec.get("config") or {}).get("graph") or {}
         workflow = StateGraph(RouterRagState)
         node_types: Dict[str, str] = {}
+        outgoing_route_labels: Dict[str, list[str]] = {
+            str(edge.get("from")): [str(label) for label in dict(edge.get("routes") or {})]
+            for edge in graph_spec.get("edges", [])
+            if edge.get("conditional") and isinstance(edge.get("routes"), dict)
+        }
         for node in graph_spec.get("nodes", []):
             node_types[node["id"]] = node["type"]
-            workflow.add_node(node["id"], self.registry.get_for_spec(node))
+            workflow.add_node(
+                node["id"],
+                self.registry.get_for_spec(node, route_labels=outgoing_route_labels.get(str(node["id"]))),
+            )
 
         for edge in graph_spec.get("edges", []):
             source = edge.get("from")

@@ -59,6 +59,8 @@ export default function BuilderTestStudio({
   const [latest, setLatest] = useState<AgentRunDetails | null>(null);
   const [events, setEvents] = useState<BuilderTestStreamEnvelope[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [activeStep, setActiveStep] = useState<{ nodeId: string; visitIndex: number; startedAt: number } | null>(null);
+  const [activityClock, setActivityClock] = useState(Date.now());
   const controller = useRef<AbortController | null>(null);
   const sessionId = useMemo(getSessionId, []);
   const retainedTraceView = useMemo(() => latest ? buildRunTraceView(latest) : undefined, [latest]);
@@ -97,6 +99,12 @@ export default function BuilderTestStudio({
   const controlsLocked = running || hasPendingInterrupt;
   const lockedThreadId = hasPendingInterrupt ? latest?.thread_id || null : null;
 
+  useEffect(() => {
+    if (!running || !activeStep) return undefined;
+    const timer = window.setInterval(() => setActivityClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [activeStep, running]);
+
   const refreshLatest = async () => {
     const result = await getLatestAgentWorkflowBuilderTest(sessionId, baseWorkflowId);
     setLatest(result);
@@ -114,8 +122,34 @@ export default function BuilderTestStudio({
   }, [baseWorkflowId, sessionId]);
 
   const acceptEvent = (event: BuilderTestStreamEnvelope) => {
+    setActivityClock(Date.now());
     if (event.event !== 'heartbeat') setEvents((current) => [...current, event]);
     if (event.data?.run_id) setRunId(String(event.data.run_id));
+    if (event.event === 'node.started' && event.data?.node_id) {
+      setActiveStep({
+        nodeId: String(event.data.node_id),
+        visitIndex: Number(event.data.visit_index || 1),
+        startedAt: Date.now(),
+      });
+    } else if (event.event.startsWith('node.') && event.event !== 'node.started') {
+      setActiveStep((current) => (
+        current
+        && current.nodeId === String(event.data?.node_id || '')
+        && current.visitIndex === Number(event.data?.visit_index || 1)
+          ? null
+          : current
+      ));
+    } else if (event.event.startsWith('run.') && event.event !== 'run.started') {
+      setActiveStep(null);
+    }
+    if (event.event === 'run.failed') {
+      const eventError = event.data?.error;
+      setError(
+        (eventError && typeof eventError === 'object' ? eventError.raw_message || eventError.message : eventError)
+        || event.data?.message
+        || 'Workflow test failed.',
+      );
+    }
   };
 
   const runtime = {
@@ -135,6 +169,7 @@ export default function BuilderTestStudio({
     setLatest(null);
     setEvents([]);
     setRunId(null);
+    setActiveStep(null);
     setRunning(true);
     controller.current = new AbortController();
     try {
@@ -226,6 +261,12 @@ export default function BuilderTestStudio({
             </Button>
             {running && <Button color="error" startIcon={<StopIcon />} disabled={!runId || stopping} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Stop'}</Button>}
           </Stack>
+          {running && activeStep && (
+            <Alert severity="info" icon={<CircularProgress size={16} />}>
+              {activeStep.nodeId} · Visit {activeStep.visitIndex} is still running ({Math.max(0, Math.floor((activityClock - activeStep.startedAt) / 1000))}s).
+              Model calls may take a little while; Stop remains available.
+            </Alert>
+          )}
         </Stack>
         {error && <Alert severity="error" sx={{ mt: 1.5 }}>{error}</Alert>}
       </Paper>
@@ -247,7 +288,7 @@ export default function BuilderTestStudio({
             resolvedSpec={latest?.resolved_spec_json || spec}
             workflowId={latest?.workflow_id || baseWorkflowId}
             traceView={executionTraceView}
-            status={latest?.status || terminal?.event || (running ? 'running' : 'not run')}
+            status={latest?.status || terminal?.event.replace(/^run\./, '') || (running ? 'running' : 'not run')}
             running={running}
           />
         )}

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Chip, CircularProgress, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Chip, CircularProgress, Divider, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import dynamic from 'next/dynamic';
 import ReactMarkdown from 'react-markdown';
@@ -9,7 +9,14 @@ import { getAgentRunNodeDetails, type AgentRunNodeDetail } from '../../lib/api';
 import type { TraceNodeView, TraceRunView } from '../agent-debug/agent-trace-projection';
 import type { AgentGraphSelection, AgentNodeVisitRef, AgentTraceRefs } from './agent-graph-types';
 import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
-import { agentNodeVisitKey, toAgentNodeVisitRef } from './agent-node-visits';
+import {
+  agentNodeVisitKey,
+  getChronologicalNodeVisits,
+  getNextNodeVisit,
+  getNodeVisitRoute,
+  getPreviousNodeVisit,
+  toAgentNodeVisitRef,
+} from './agent-node-visits';
 
 const AgentDebugCanvas = dynamic(() => import('./AgentDebugCanvas'), { ssr: false });
 
@@ -60,6 +67,7 @@ export default function AgentExecutionView({
   const [selectedVisit, setSelectedVisit] = useState<AgentNodeVisitRef | null>(null);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
+  const [revealRequest, setRevealRequest] = useState<{ key: string; token: number } | null>(null);
   const inFlightDetailKeys = useRef(new Set<string>());
   const timelineRows = useRef(new Map<string, HTMLElement>());
   const detailContextKey = `${runId || 'live'}:${threadId || ''}`;
@@ -74,6 +82,7 @@ export default function AgentExecutionView({
       setDetails(initialDetails);
       setExpanded(false);
       setSelectedVisit(null);
+      setRevealRequest(null);
       setLoadingKey(null);
       setDetailErrors({});
       return;
@@ -115,19 +124,23 @@ export default function AgentExecutionView({
     }
   }, [detailContextKey, loadDetail]);
 
-  const selectVisitRef = useCallback((visit: AgentNodeVisitRef) => {
-    const node = traceView.nodes.find((row) => visitKey(row) === agentNodeVisitKey(visit));
-    if (node) selectVisit(node, true);
-  }, [selectVisit, traceView.nodes]);
-
-  const viewVisit = useCallback((visit: AgentNodeVisitRef) => {
+  const revealVisit = useCallback((visit: AgentNodeVisitRef) => {
     const node = traceView.nodes.find((row) => visitKey(row) === agentNodeVisitKey(visit));
     if (!node) return;
     selectVisit(node, true);
-    window.requestAnimationFrame(() => {
-      timelineRows.current.get(agentNodeVisitKey(visit))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
+    setRevealRequest((current) => ({ key: agentNodeVisitKey(visit), token: (current?.token || 0) + 1 }));
   }, [selectVisit, traceView.nodes]);
+
+  useEffect(() => {
+    if (!revealRequest || expanded !== revealRequest.key) return;
+    // Wait until the accordion and its details have committed before measuring the row.
+    const firstFrame = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        timelineRows.current.get(revealRequest.key)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+    return () => window.cancelAnimationFrame(firstFrame);
+  }, [expanded, revealRequest]);
 
   const handleGraphSelection = useCallback((selection: AgentGraphSelection) => {
     if (!selection || selection.kind !== 'node') {
@@ -135,9 +148,9 @@ export default function AgentExecutionView({
       return;
     }
     const node = [...traceView.nodes].reverse().find((row) => row.id === selection.node.id);
-    if (node) selectVisit(node, true);
+    if (node) revealVisit(toAgentNodeVisitRef(node));
     else setSelectedVisit(null);
-  }, [selectVisit, traceView.nodes]);
+  }, [revealVisit, traceView.nodes]);
 
   useEffect(() => {
     if (!selectedVisit) return;
@@ -171,6 +184,15 @@ export default function AgentExecutionView({
         ) : traceView.nodes.map((node, index) => {
           const key = visitKey(node);
           const detail = details[key];
+          const nodeVisits = getChronologicalNodeVisits(traceView.nodes, node.id);
+          const visitPosition = nodeVisits.findIndex((visit) => visitKey(visit) === key);
+          const visitRef = toAgentNodeVisitRef(node);
+          const previousVisit = getPreviousNodeVisit(traceView.nodes, visitRef);
+          const nextVisit = getNextNodeVisit(traceView.nodes, visitRef);
+          const route = getNodeVisitRoute(node);
+          const visitTools = traceView.tools.filter((tool) => (
+            tool.callerNode === node.id && Number(tool.callerVisitIndex || 1) === visitRef.visitIndex
+          ));
           return (
             <Accordion
               key={`${key}:${index}`}
@@ -181,7 +203,10 @@ export default function AgentExecutionView({
               expanded={expanded === key}
               onChange={(_, open) => selectVisit(node, open)}
               disableGutters
-              sx={selectedVisit && agentNodeVisitKey(selectedVisit) === key ? { borderColor: 'primary.main' } : undefined}
+              sx={{
+                scrollMarginTop: 16,
+                ...(selectedVisit && agentNodeVisitKey(selectedVisit) === key ? { borderColor: 'primary.main' } : {}),
+              }}
             >
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ width: '100%', alignItems: { sm: 'center' }, minWidth: 0 }}>
@@ -191,6 +216,36 @@ export default function AgentExecutionView({
                 </Stack>
               </AccordionSummary>
               <AccordionDetails>
+                <Stack spacing={1} sx={{ mb: 1.25 }}>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }} justifyContent="space-between">
+                    <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
+                      <Chip size="small" variant="outlined" label={node.type || node.id} />
+                      {node.durationMs !== undefined && <Chip size="small" variant="outlined" label={`${Math.max(0, Math.round(node.durationMs))} ms`} />}
+                      {route && <Chip size="small" color="primary" variant="outlined" label={`Route: ${route}`} />}
+                      {visitTools.length > 0 && <Chip size="small" variant="outlined" label={`${visitTools.length} tool${visitTools.length === 1 ? '' : 's'}`} />}
+                      {node.warningCodes.length > 0 && <Chip size="small" color="warning" label={`${node.warningCodes.length} warning${node.warningCodes.length === 1 ? '' : 's'}`} />}
+                    </Stack>
+                    {nodeVisits.length > 1 && (
+                      <Stack direction="row" spacing={0.5} alignItems="center">
+                        <Button size="small" variant="outlined" disabled={!previousVisit} onClick={() => previousVisit && selectVisit(previousVisit, true)}>
+                          Previous
+                        </Button>
+                        <Typography variant="caption" sx={{ minWidth: 72, textAlign: 'center', fontWeight: 700 }}>
+                          Visit {visitPosition + 1} of {nodeVisits.length}
+                        </Typography>
+                        <Button size="small" variant="outlined" disabled={!nextVisit} onClick={() => nextVisit && selectVisit(nextVisit, true)}>
+                          Next
+                        </Button>
+                      </Stack>
+                    )}
+                  </Stack>
+                  {node.routeReason && (
+                    <Typography variant="body2" color="text.secondary">
+                      <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>Route reason: </Box>{node.routeReason}
+                    </Typography>
+                  )}
+                  <Divider />
+                </Stack>
                 {loadingKey === key && <Stack direction="row" spacing={1}><CircularProgress size={16} /><Typography variant="caption">Loading full details…</Typography></Stack>}
                 {detailErrors[key] && <Alert severity="info">Older trace—full invocation details are unavailable.</Alert>}
                 {detail && <AgentNodeExecutionDetails detail={detail} />}
@@ -210,15 +265,13 @@ export default function AgentExecutionView({
           </Box>
         )}
       </Paper>
-      <Box sx={{ minHeight: 520 }}>
+      <Box sx={{ minHeight: 400 }}>
         <AgentDebugCanvas
           resolvedSpec={resolvedSpec}
           workflowId={workflowId}
           traceView={traceView}
           focusedTraceRefs={focusedTraceRefs}
           selectedVisitRef={selectedVisit}
-          onSelectVisit={selectVisitRef}
-          onViewVisit={viewVisit}
           onSelectionChange={handleGraphSelection}
         />
       </Box>

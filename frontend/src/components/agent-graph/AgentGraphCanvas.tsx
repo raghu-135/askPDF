@@ -146,8 +146,6 @@ function AgentGraphCanvasInner({
   onSelectionChange,
   onNodePositionChange,
   selectedVisitRef,
-  onSelectVisit,
-  onViewVisit,
 }: {
   resolvedSpec?: Record<string, any>;
   workflowId?: string;
@@ -159,8 +157,6 @@ function AgentGraphCanvasInner({
   onSelectionChange?: (selection: AgentGraphSelection) => void;
   onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
   selectedVisitRef?: AgentNodeVisitRef | null;
-  onSelectVisit?: (visit: AgentNodeVisitRef) => void;
-  onViewVisit?: (visit: AgentNodeVisitRef) => void;
 }) {
   const theme = useTheme();
   const { fitView } = useReactFlow();
@@ -330,9 +326,9 @@ function AgentGraphCanvasInner({
       <Box
         sx={{
           width: '100%',
-          height: mode === 'run-debug' ? { xs: 620, md: 680 } : { xs: 420, md: 520 },
-          minHeight: 360,
-          maxHeight: '85vh',
+          height: mode === 'run-debug' ? { xs: 460, md: 520 } : { xs: 420, md: 520 },
+          minHeight: 320,
+          maxHeight: '75vh',
           minWidth: 0,
           border: 1,
           borderColor: 'divider',
@@ -391,13 +387,7 @@ function AgentGraphCanvasInner({
         </AgentGraphErrorBoundary>
       </Box>
       {showInspector ? (
-        <AgentGraphInspector
-          selection={selection}
-          selectedVisitRef={selectedVisitRef}
-          visits={selection?.kind === 'node' && traceView ? traceView.nodes.filter((visit) => visit.id === selection.node.id) : []}
-          onSelectVisit={onSelectVisit}
-          onViewVisit={onViewVisit}
-        />
+        <AgentGraphInspector selection={selection} />
       ) : null}
       {graph.executionPlan.length > 0 && (
         <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', gridColumn: '1 / -1' }}>
@@ -419,8 +409,6 @@ export default function AgentGraphCanvas(props: {
   onSelectionChange?: (selection: AgentGraphSelection) => void;
   onNodePositionChange?: (nodeId: string, position: { x: number; y: number }) => void;
   selectedVisitRef?: AgentNodeVisitRef | null;
-  onSelectVisit?: (visit: AgentNodeVisitRef) => void;
-  onViewVisit?: (visit: AgentNodeVisitRef) => void;
 }) {
   return (
     <ReactFlowProvider>
