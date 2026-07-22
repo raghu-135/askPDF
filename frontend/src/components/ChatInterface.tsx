@@ -1819,8 +1819,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     </Box>
                                 )}
                                 {showAgentRunDebug && msg.agent_run_id && (
-                                    <Box sx={{ mt: 1 }}>
-                                        <details onToggle={(event) => handleAgentRunToggle(msg, event)}>
+                                    <Box sx={{ mt: 1, width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
+                                        <details style={{ width: '100%', maxWidth: '100%', overflow: 'hidden' }} onToggle={(event) => handleAgentRunToggle(msg, event)}>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
                                                 Agent run: {formatAgentWorkflowLabel(msg)}
                                                 {msg.agent_route ? ` - ${msg.agent_route}` : ''}
@@ -1833,6 +1833,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
                                                     display: 'flex',
                                                     flexDirection: 'column',
+                                                    width: '100%',
+                                                    minWidth: 0,
+                                                    maxWidth: '100%',
+                                                    overflowX: 'hidden',
                                                     gap: 0.75,
                                                 }}
                                             >

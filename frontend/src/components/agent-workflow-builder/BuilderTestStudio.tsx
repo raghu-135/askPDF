@@ -297,6 +297,7 @@ export default function BuilderTestStudio({
             traceView={executionTraceView}
             status={latest?.status || terminal?.event.replace(/^run\./, '') || (running ? 'running' : 'not run')}
             running={running}
+            defaultGraphOpen
           />
         )}
         {latest?.status === AgentRunStatus.Cancelled && <Alert severity="warning">The test stopped after the active node finished. Its partial trace is shown above.</Alert>}

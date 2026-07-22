@@ -1,30 +1,38 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Alert, Box, Divider, Stack, Typography } from '@mui/material';
 import type { AgentRunNodeDetail } from '../../lib/api';
 import { JsonPreview } from './AgentGraphInspectorPrimitives';
 
-const Section = ({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) => (
-  <Box component="details" open={defaultOpen} sx={{ mt: 0.35 }}>
-    <Box component="summary" sx={{ cursor: 'pointer', py: 0.15, fontSize: '0.75rem', fontWeight: 700 }}>{title}</Box>
-    <Box sx={{ mt: 0.35 }}>{children}</Box>
-  </Box>
-);
+const Section = ({ title, children, defaultOpen = false }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) => {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Box component="details" open={open} onToggle={(event) => setOpen(event.currentTarget.open)} sx={{ mt: 0.35, minWidth: 0 }}>
+      <Box component="summary" sx={{ cursor: 'pointer', py: 0.15, fontSize: '0.75rem', fontWeight: 700 }}>{title}</Box>
+      {open && <Box sx={{ mt: 0.35, minWidth: 0 }}>{children}</Box>}
+    </Box>
+  );
+};
 
 const hasData = (value: unknown) => value !== undefined && value !== null
   && (!(Array.isArray(value)) || value.length > 0)
   && (!(typeof value === 'object') || Object.keys(value as Record<string, unknown>).length > 0);
 
-export default function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
+function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
   const llm = detail.llm || {};
   const safety = detail.safety || {};
   const eventLlm = detail.event?.llm_result_summary?.llm || {};
   const reasoningAvailable = llm.reasoning_available === true && typeof llm.reasoning === 'string' && llm.reasoning.length > 0;
   const warnings = Array.isArray(detail.event?.warnings) ? detail.event.warnings.map(String) : [];
+  const errorText = typeof detail.error === 'string'
+    ? detail.error
+    : detail.error && typeof detail.error === 'object'
+      ? String((detail.error as Record<string, any>).raw_message || (detail.error as Record<string, any>).message || JSON.stringify(detail.error))
+      : '';
 
   return (
     <Stack spacing={0.75} sx={{ minWidth: 0 }}>
       {safety.truncated && <Alert severity="warning">Some invocation data was truncated by trace safety limits.</Alert>}
-      {detail.error && <Alert severity="error">{String(detail.error)}</Alert>}
+      {errorText && <Alert severity="error" sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{errorText}</Alert>}
       {(safety.redacted_fields?.length || safety.omitted_fields?.length) && (
         <Alert severity="info">Sensitive or internal fields were removed from this trace.</Alert>
       )}
@@ -53,9 +61,11 @@ export default function AgentNodeExecutionDetails({ detail }: { detail: AgentRun
       </Section>}
       {Array.isArray(detail.tools) && detail.tools.length > 0 && <Section title="Tools"><JsonPreview value={detail.tools} maxHeight={440} /></Section>}
       {hasData(detail.output) && <Section title="Node output"><JsonPreview value={detail.output} maxHeight={440} /></Section>}
-      {warnings.length > 0 && <Section title="Warnings"><Typography variant="caption">{warnings.join(', ')}</Typography></Section>}
+      {warnings.length > 0 && <Section title="Warnings"><Typography variant="caption" sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{warnings.join(', ')}</Typography></Section>}
       <Divider />
       <Section title="Raw JSON" defaultOpen={false}><JsonPreview value={detail} maxHeight={520} /></Section>
     </Stack>
   );
 }
+
+export default React.memo(AgentNodeExecutionDetails);

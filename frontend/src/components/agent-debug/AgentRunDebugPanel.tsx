@@ -9,6 +9,7 @@ import { resumeAgentRun, type AgentRunDetails, type AgentRunResumeAction, type A
 import { AgentRunResumeAction as AgentRunResumeActionValue, AgentRunStatus, HitlSelectionMode, InterruptStatus } from '../../lib/enums';
 import { buildRunTraceView, buildTraceExportJson } from './agent-trace-projection';
 import AgentExecutionView from '../agent-graph/AgentExecutionView';
+import { compactExecutionText } from '../agent-graph/agent-execution-display';
 
 export default function AgentRunDebugPanel({
   runId,
@@ -156,7 +157,7 @@ export default function AgentRunDebugPanel({
   };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', gap: 0.75 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5 }}>
         <Tooltip title={runId} arrow>
           <Typography variant="caption" color="text.secondary">
@@ -183,8 +184,8 @@ export default function AgentRunDebugPanel({
         )}
       </Box>
       {routeReason && !traceView && (
-        <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-          Route reason: {routeReason}
+        <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+          Route reason: {compactExecutionText(routeReason, 480)}
         </Typography>
       )}
       {loading && (

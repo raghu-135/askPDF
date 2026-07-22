@@ -19,6 +19,7 @@ import AgentNodeExecutionDetails from './AgentNodeExecutionDetails';
 import AgentExecutionStatusIcon from './AgentExecutionStatusIcon';
 import { formatDurationMs } from '../../lib/formatDuration';
 import { TraceLlmUsageTooltip, TraceNodesTooltip, TraceToolsTooltip } from '../agent-debug/AgentRunTraceTooltips';
+import { compactExecutionText } from './agent-execution-display';
 import {
   agentNodeVisitKey,
   getChronologicalNodeVisits,
@@ -36,14 +37,16 @@ const nodeSummary = (node: TraceNodeView) => {
   const raw = node.raw || {};
   const detail = raw.detail || {};
   const event = detail.event || raw;
-  if (node.status === 'error') return `Failed: ${detail.error?.raw_message || detail.error || event.error?.raw_message || event.error || node.error?.raw_message || 'node execution failed'}`;
-  if (node.skipped) return `Skipped${event.skip_reason ? `: ${event.skip_reason}` : ''}`;
-  if (event.evaluator_route) return `Evaluated evidence and chose ${event.evaluator_route}.`;
-  if (event.route) return `Selected the ${event.route} route${event.route_reason ? `: ${event.route_reason}` : '.'}`;
-  if (Array.isArray(event.execution_plan)) return `Planned ${event.execution_plan.length} step${event.execution_plan.length === 1 ? '' : 's'}: ${event.execution_plan.join(' → ')}.`;
-  if (event.document_source_count || event.web_source_count) return `Retrieved ${Number(event.document_source_count || 0) + Number(event.web_source_count || 0)} source${Number(event.document_source_count || 0) + Number(event.web_source_count || 0) === 1 ? '' : 's'}.`;
-  if (event.answer_chars) return `Generated an answer (${event.answer_chars} characters).`;
-  return node.status === 'active' ? 'Running…' : 'Completed this step.';
+  let summary: unknown;
+  if (node.status === 'error') summary = `Failed: ${detail.error?.raw_message || event.error?.raw_message || node.error?.raw_message || 'node execution failed'}`;
+  else if (node.skipped) summary = `Skipped${event.skip_reason ? `: ${event.skip_reason}` : ''}`;
+  else if (event.evaluator_route) summary = `Evaluated evidence and chose ${event.evaluator_route}.`;
+  else if (event.route) summary = `Selected the ${event.route} route${event.route_reason ? `: ${event.route_reason}` : '.'}`;
+  else if (Array.isArray(event.execution_plan)) summary = `Planned ${event.execution_plan.length} step${event.execution_plan.length === 1 ? '' : 's'}: ${event.execution_plan.join(' → ')}.`;
+  else if (event.document_source_count || event.web_source_count) summary = `Retrieved ${Number(event.document_source_count || 0) + Number(event.web_source_count || 0)} source${Number(event.document_source_count || 0) + Number(event.web_source_count || 0) === 1 ? '' : 's'}.`;
+  else if (event.answer_chars) summary = `Generated an answer (${event.answer_chars} characters).`;
+  else summary = node.status === 'active' ? 'Running…' : 'Completed this step.';
+  return compactExecutionText(summary, 260);
 };
 
 const formatTokenCount = (value: unknown) => {
@@ -54,7 +57,7 @@ const formatTokenCount = (value: unknown) => {
   return count.toLocaleString();
 };
 
-export default function AgentExecutionView({
+function AgentExecutionView({
   runId,
   threadId,
   resolvedSpec,
@@ -63,6 +66,7 @@ export default function AgentExecutionView({
   status,
   running = false,
   focusedTraceRefs,
+  defaultGraphOpen = false,
 }: {
   runId?: string | null;
   threadId?: string | null;
@@ -72,6 +76,7 @@ export default function AgentExecutionView({
   status?: string;
   running?: boolean;
   focusedTraceRefs?: AgentTraceRefs | null;
+  defaultGraphOpen?: boolean;
 }) {
   const initialDetails = useMemo(() => {
     const result: Record<string, AgentRunNodeDetail> = {};
@@ -86,6 +91,7 @@ export default function AgentExecutionView({
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
   const [revealRequest, setRevealRequest] = useState<{ key: string; token: number } | null>(null);
+  const [graphOpen, setGraphOpen] = useState(defaultGraphOpen);
   const inFlightDetailKeys = useRef(new Set<string>());
   const timelineRows = useRef(new Map<string, HTMLElement>());
   const detailContextKey = `${runId || 'live'}:${threadId || ''}`;
@@ -103,10 +109,14 @@ export default function AgentExecutionView({
       setRevealRequest(null);
       setLoadingKey(null);
       setDetailErrors({});
+      setGraphOpen(defaultGraphOpen);
       return;
     }
-    setDetails((current) => ({ ...current, ...initialDetails }));
-  }, [detailContextKey, initialDetails]);
+    setDetails((current) => {
+      const changed = Object.entries(initialDetails).some(([key, detail]) => current[key] !== detail);
+      return changed ? { ...current, ...initialDetails } : current;
+    });
+  }, [defaultGraphOpen, detailContextKey, initialDetails]);
 
   const loadDetail = useCallback(async (node: TraceNodeView) => {
     const key = visitKey(node);
@@ -154,7 +164,7 @@ export default function AgentExecutionView({
     // Wait until the accordion and its details have committed before measuring the row.
     const firstFrame = window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        timelineRows.current.get(revealRequest.key)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        timelineRows.current.get(revealRequest.key)?.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
       });
     });
     return () => window.cancelAnimationFrame(firstFrame);
@@ -191,13 +201,13 @@ export default function AgentExecutionView({
   };
 
   return (
-    <Stack spacing={1} sx={{ minWidth: 0 }}>
-      <Paper variant="outlined" sx={{ p: 1 }}>
+    <Stack spacing={1} sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
+      <Paper variant="outlined" sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', p: 1 }}>
         <Stack direction="row" spacing={0.6} alignItems="center" sx={{ mb: 0.75, flexWrap: 'wrap', rowGap: 0.45 }}>
           <Typography variant="subtitle1" sx={{ fontWeight: 700, mr: 0.25 }}>Execution progress</Typography>
           <AgentExecutionStatusIcon status={status || (running ? 'running' : 'completed')} size={17} />
           {traceView.route && (
-            <Tooltip title={traceView.routeReason || `Selected route: ${traceView.route}`} arrow>
+            <Tooltip title={compactExecutionText(traceView.routeReason || `Selected route: ${traceView.route}`, 320)} arrow>
               <Chip size="small" variant="outlined" label={traceView.route} sx={{ height: 22 }} />
             </Tooltip>
           )}
@@ -237,6 +247,8 @@ export default function AgentExecutionView({
           const previousVisit = getPreviousNodeVisit(traceView.nodes, visitRef);
           const nextVisit = getNextNodeVisit(traceView.nodes, visitRef);
           const route = getNodeVisitRoute(node);
+          const summary = nodeSummary(node);
+          const routeReason = compactExecutionText(node.routeReason, 480);
           const hasNodeError = Boolean(node.error && Object.keys(node.error).length > 0);
           const visitTools = traceView.tools.filter((tool) => (
             tool.callerNode === node.id && Number(tool.callerVisitIndex || 1) === visitRef.visitIndex
@@ -252,15 +264,30 @@ export default function AgentExecutionView({
               onChange={(_, open) => selectVisit(node, open)}
               disableGutters
               sx={{
+                width: '100%',
+                minWidth: 0,
+                maxWidth: '100%',
+                overflow: 'hidden',
                 scrollMarginTop: 16,
                 ...(selectedVisit && agentNodeVisitKey(selectedVisit) === key ? { borderColor: 'primary.main' } : {}),
               }}
             >
               <AccordionSummary
                 expandIcon={<ExpandMoreIcon titleAccess="Expand or collapse invocation details" sx={{ fontSize: 19 }} />}
-                sx={{ minHeight: 38, px: 0.75, '&.Mui-expanded': { minHeight: 38 }, '& .MuiAccordionSummary-content': { my: 0.45 }, '& .MuiAccordionSummary-content.Mui-expanded': { my: 0.45 } }}
+                sx={{
+                  width: '100%',
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  minHeight: 38,
+                  px: 0.75,
+                  '&.Mui-expanded': { minHeight: 38 },
+                  '& .MuiAccordionSummary-content': { minWidth: 0, maxWidth: 'calc(100% - 28px)', overflow: 'hidden', my: 0.45 },
+                  '& .MuiAccordionSummary-content.Mui-expanded': { my: 0.45 },
+                  '& .MuiAccordionSummary-expandIconWrapper': { flexShrink: 0 },
+                }}
               >
-                <Stack direction="row" spacing={0.65} sx={{ width: '100%', alignItems: 'center', minWidth: 0 }}>
+                <Stack direction="row" spacing={0.65} sx={{ flex: 1, width: 0, maxWidth: '100%', alignItems: 'center', minWidth: 0, overflow: 'hidden' }}>
                   <AgentExecutionStatusIcon status={node.status || (node.skipped ? 'skipped' : 'completed')} size={16} />
                   <Typography variant="body2" noWrap sx={{ fontWeight: 700, minWidth: 105, maxWidth: 190 }}>{node.label}</Typography>
                   {nodeVisits.length > 1 && (
@@ -294,26 +321,26 @@ export default function AgentExecutionView({
                       </Tooltip>
                     </Stack>
                   )}
-                  <Tooltip title={nodeSummary(node)} placement="top" arrow>
-                    <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0 }}>{nodeSummary(node)}</Typography>
+                  <Tooltip title={<Box sx={{ maxWidth: 520, overflowWrap: 'anywhere' }}>{summary}</Box>} placement="top" arrow>
+                    <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: 1, minWidth: 0, maxWidth: '100%' }}>{summary}</Typography>
                   </Tooltip>
                 </Stack>
               </AccordionSummary>
-              <AccordionDetails sx={{ px: 1, pt: 0.25, pb: 1 }}>
+              <AccordionDetails sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', px: 1, pt: 0.25, pb: 1 }}>
                 <Stack spacing={0.6} sx={{ mb: 0.75 }}>
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={0.6} alignItems={{ sm: 'center' }} justifyContent="space-between">
                     <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
                       <Chip size="small" variant="outlined" label={node.type || node.id} sx={{ height: 21 }} />
                       {node.durationMs !== undefined && <Chip size="small" variant="outlined" label={formatDurationMs(node.durationMs)} sx={{ height: 21 }} />}
-                      {route && <Tooltip title={node.routeReason || `Selected route: ${route}`} arrow><Chip size="small" color="primary" variant="outlined" label={route} sx={{ height: 21 }} /></Tooltip>}
+                      {route && <Tooltip title={routeReason || `Selected route: ${route}`} arrow><Chip size="small" color="primary" variant="outlined" label={route} sx={{ height: 21 }} /></Tooltip>}
                       {visitTools.length > 0 && <Chip size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={visitTools.length} sx={{ height: 21 }} />}
                       {node.warningCodes.length > 0 && <Chip size="small" color="warning" variant="outlined" icon={<WarningAmberIcon />} label={node.warningCodes.length} sx={{ height: 21 }} />}
                       {hasNodeError && <Chip size="small" color="error" variant="outlined" icon={<ErrorOutlineIcon />} label="1" sx={{ height: 21 }} />}
                     </Stack>
                   </Stack>
-                  {node.routeReason && (
-                    <Typography variant="body2" color="text.secondary">
-                      <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>Route reason: </Box>{node.routeReason}
+                  {routeReason && (
+                    <Typography component="div" variant="body2" color="text.secondary" sx={{ display: 'block', width: '100%', minWidth: 0, maxWidth: '100%', whiteSpace: 'normal', overflow: 'hidden', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                      <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>Route reason: </Box>{routeReason}
                     </Typography>
                   )}
                 </Stack>
@@ -330,22 +357,33 @@ export default function AgentExecutionView({
               <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Final answer</Typography>
               <Tooltip title="Copy answer"><IconButton size="small" onClick={() => void copyAnswer()}><ContentCopyIcon fontSize="small" /></IconButton></Tooltip>
             </Stack>
-            <Box sx={{ mt: 1, '& pre': { overflowX: 'auto' }, '& table': { display: 'block', overflowX: 'auto' } }}>
+            <Box sx={{ mt: 1, minWidth: 0, maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', '& pre': { maxWidth: '100%', overflowX: 'auto' }, '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto' }, '& a': { overflowWrap: 'anywhere' } }}>
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalOutput.answer}</ReactMarkdown>
             </Box>
           </Box>
         )}
       </Paper>
-      <Box sx={{ minHeight: 400 }}>
-        <AgentDebugCanvas
-          resolvedSpec={resolvedSpec}
-          workflowId={workflowId}
-          traceView={traceView}
-          focusedTraceRefs={focusedTraceRefs}
-          selectedVisitRef={selectedVisit}
-          onSelectionChange={handleGraphSelection}
-        />
-      </Box>
+      <Paper variant="outlined" sx={{ px: 1, py: 0.4 }}>
+        <Box component="details" open={graphOpen} onToggle={(event) => setGraphOpen(event.currentTarget.open)}>
+          <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
+            Execution graph
+          </Box>
+          {graphOpen && (
+            <Box sx={{ minHeight: 400, mt: 0.4 }}>
+              <AgentDebugCanvas
+                resolvedSpec={resolvedSpec}
+                workflowId={workflowId}
+                traceView={traceView}
+                focusedTraceRefs={focusedTraceRefs}
+                selectedVisitRef={selectedVisit}
+                onSelectionChange={handleGraphSelection}
+              />
+            </Box>
+          )}
+        </Box>
+      </Paper>
     </Stack>
   );
 }
+
+export default React.memo(AgentExecutionView);

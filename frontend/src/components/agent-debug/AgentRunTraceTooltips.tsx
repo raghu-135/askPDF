@@ -5,6 +5,7 @@ import { formatDurationMs } from '../../lib/formatDuration';
 import { formatNodeInstanceLabel } from '../agent-graph/agent-graph-mapper';
 import { formatTraceError } from './agent-debug-utils';
 import type { TraceNodeView, TraceToolView } from './agent-trace-projection';
+import { compactExecutionText } from '../agent-graph/agent-execution-display';
 
 const visitSuffix = (visitIndex?: number) => (
   Number.isFinite(Number(visitIndex)) ? ` · visit ${Number(visitIndex)}` : ''
@@ -19,7 +20,7 @@ const TraceTooltipList = ({
   emptyText: string;
   children: React.ReactNode;
 }) => (
-  <Box sx={{ maxWidth: 560, maxHeight: 340, overflow: 'auto', p: 0.25 }}>
+  <Box sx={{ maxWidth: 560, maxHeight: 340, overflow: 'auto', overflowWrap: 'anywhere', wordBreak: 'break-word', p: 0.25 }}>
     <Typography variant="caption" sx={{ display: 'block', fontWeight: 700, mb: 0.5 }}>
       {title}
     </Typography>
@@ -70,7 +71,7 @@ export const TraceNodesTooltip = ({
             </Typography>
             {node.routeReason && (
               <Typography variant="caption" sx={{ display: 'block', opacity: 0.85 }}>
-                {node.routeReason}
+                {compactExecutionText(node.routeReason, 320)}
               </Typography>
             )}
             {error && (

@@ -38,7 +38,8 @@ const SECTION_HELP: Record<string, string> = {
   'Raw JSON': 'Normalized trace spans and graph adapter rows used to render this inspector.',
 };
 
-const shouldExpandJsonNode = (level: number) => level < 4;
+// Keep large trace payloads cheap to open. Deeper data remains available on demand.
+const shouldExpandJsonNode = (level: number) => level < 2;
 
 const isJsonViewData = (value: unknown): value is Record<string, unknown> | unknown[] => {
   return value !== null && typeof value === 'object';
@@ -51,12 +52,13 @@ export const hasValue = (value: unknown) => {
   return true;
 };
 
-export const JsonPreview = ({ value, maxHeight = 140 }: { value: unknown; maxHeight?: number }) => {
+export const JsonPreview = React.memo(function JsonPreview({ value, maxHeight = 140 }: { value: unknown; maxHeight?: number }) {
   const jsonSx = {
     '& .askpdf-json-view': {
       lineHeight: 1.35,
       whiteSpace: 'pre-wrap',
-      overflowWrap: 'break-word',
+      overflowWrap: 'anywhere',
+      wordBreak: 'break-word',
       color: 'text.primary',
     },
     '& .askpdf-json-view__children': {
@@ -102,6 +104,8 @@ export const JsonPreview = ({ value, maxHeight = 140 }: { value: unknown; maxHei
     },
     '& .askpdf-json-view__string': {
       color: 'success.dark',
+      overflowWrap: 'anywhere',
+      wordBreak: 'break-word',
     },
     '& .askpdf-json-view__number': {
       color: 'secondary.main',
@@ -126,6 +130,8 @@ export const JsonPreview = ({ value, maxHeight = 140 }: { value: unknown; maxHei
         p: 0.75,
         maxHeight,
         overflow: 'auto',
+        minWidth: 0,
+        maxWidth: '100%',
         borderRadius: 1,
         bgcolor: 'rgba(0,0,0,0.04)',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
@@ -148,7 +154,7 @@ export const JsonPreview = ({ value, maxHeight = 140 }: { value: unknown; maxHei
       )}
     </Box>
   );
-};
+});
 
 export const DetailLine = ({ label, value }: { label: string; value?: React.ReactNode }) => {
   if (!value) return null;
