@@ -103,7 +103,10 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_repo_sqlmodel,
     )
     from app.services import thread_management_service
-    from app.agent_workflows import repository as agent_workflow_repository
+    from app.agent_workflows import (
+        chat_cancellation,
+        repository as agent_workflow_repository,
+    )
 
     for module in (
         connection_sqlmodel,
@@ -114,6 +117,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_repo_sqlmodel,
         thread_management_service,
         agent_workflow_repository,
+        chat_cancellation,
     ):
         monkeypatch.setattr(module, "async_session_maker", session_maker)
 

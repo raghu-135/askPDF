@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agent.tool_registry import collect_tool_contract_metadata_errors, tool_contracts_by_id
 from app.agent_workflows.checkpointing import open_agent_checkpointer
+from app.agent_workflows.chat_cancellation import ChatRunCancellationRequested
 from app.agent_workflows.router_runtime import handle_router_rag_chat
 from app.agent_workflows.graph import (
     NodeRegistry,
@@ -2368,6 +2369,50 @@ class TestRouterRagGraphToolConsumers:
         assert "Do not return the clarify route" in captured_messages[-1].content
 
     @pytest.mark.asyncio
+    async def test_bound_node_cancels_after_completed_node_without_emitting_failure(self):
+        registry = NodeRegistry()
+
+        async def completed_node(_state, _config):
+            return {
+                "final_answer": "This must not be persisted.",
+                "node_events": [{"node": "finalizer", "status": "completed", "elapsed_ms": 1.0}],
+            }
+
+        registry._nodes["finalizer"] = completed_node
+        checks = iter([False, True])
+
+        async def cancellation_checker():
+            return next(checks)
+
+        sink = AgentExecutionEventSink()
+        bound = registry.get_for_spec({"id": "finalizer", "type": "finalizer"})
+        with pytest.raises(ChatRunCancellationRequested) as raised:
+            await bound(
+                {
+                    "agent_run_id": "run-cancel",
+                    "thread_id": "thread-1",
+                    "question": "Wrong question",
+                    "node_events": [],
+                    "tool_events": [],
+                    "node_visit_counts": {},
+                    "node_visit_sequence": [],
+                    "loop_policy": {},
+                },
+                {
+                    "configurable": {
+                        "thread_id": "thread-1",
+                        "execution_event_sink": sink,
+                        "cancellation_checker": cancellation_checker,
+                    },
+                },
+            )
+
+        events = [await sink.queue.get(), await sink.queue.get()]
+        assert [event["event"] for event in events] == ["node.started", "node.completed"]
+        assert sink.queue.empty()
+        assert raised.value.state["final_answer"] == "This must not be persisted."
+
+    @pytest.mark.asyncio
     async def test_evidence_evaluator_routes_to_answer_when_sufficient(self, monkeypatch):
         class FakeLlm:
             async def ainvoke(self, _messages):
@@ -3591,6 +3636,164 @@ class TestAgentRunService:
         else:
             assert retained_run is None
         assert retained_turns == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("run_delete_fails", [False, True])
+    async def test_run_thread_chat_discards_canceled_run_and_checkpoint(
+        self,
+        engine,
+        sample_thread,
+        monkeypatch,
+        run_delete_fails,
+    ):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        captured_run_id = None
+        cleanup_events = []
+
+        async with session_factory() as repo_session:
+            repo = AgentWorkflowRepository(repo_session)
+            await repo.seed_builtin_workflows()
+            original_delete_run = repo.delete_run
+
+            async def fake_delete_run(run_id):
+                cleanup_events.append(("run", run_id))
+                if run_delete_fails:
+                    raise RuntimeError("simulated canceled-run cleanup failure")
+                return await original_delete_run(run_id)
+
+            async def fake_get_thread_settings(_thread_id):
+                return {}
+
+            async def fake_handle_router_rag_chat(
+                _thread_id,
+                _req,
+                _embedding_model,
+                *,
+                agent_run_context,
+                cancellation_checker,
+                **_kwargs,
+            ):
+                nonlocal captured_run_id
+                captured_run_id = agent_run_context["agent_run_id"]
+                assert await cancellation_checker() is True
+                return {
+                    "answer": "",
+                    "status": "cancelled",
+                    "user_message_id": None,
+                    "assistant_message_id": None,
+                    "agent_run_id": None,
+                    "clarification_options": None,
+                    "document_sources": [],
+                    "web_sources": [],
+                    "used_chat_ids": [],
+                    "node_events": [{"node": "router", "status": "completed"}],
+                    "tool_events": [],
+                }
+
+            async def fake_delete_agent_checkpoints(checkpoint_ids, *, checkpointer=None):
+                cleanup_events.extend(("checkpoint", checkpoint_id) for checkpoint_id in checkpoint_ids)
+                return list(checkpoint_ids)
+
+            async def fake_cancel_requested(_run_id):
+                return True
+
+            monkeypatch.setattr(repo, "delete_run", fake_delete_run)
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr("app.agent_workflows.service.chat_run_cancel_requested", fake_cancel_requested)
+            monkeypatch.setattr(
+                "app.agent_workflows.router_runtime.handle_router_rag_chat",
+                fake_handle_router_rag_chat,
+            )
+            monkeypatch.setattr(
+                "app.agent_workflows.service.delete_agent_checkpoints",
+                fake_delete_agent_checkpoints,
+            )
+
+            result = await AgentRunService(repository=repo).run_thread_chat(
+                sample_thread.id,
+                self._agent_req("Wrong question"),
+                sample_thread.embedding_model,
+                execution_event_sink=AgentExecutionEventSink(),
+            )
+            retained_run = await repo.get_run(captured_run_id)
+            retained_turns = await repo.list_chat_turns_for_run(captured_run_id)
+
+        assert result["status"] == "cancelled"
+        assert result["agent_run_id"] is None
+        assert result["user_message_id"] is None
+        assert result["assistant_message_id"] is None
+        assert result["node_events"] == []
+        assert cleanup_events == [
+            ("checkpoint", captured_run_id),
+            ("run", captured_run_id),
+        ]
+        if run_delete_fails:
+            assert retained_run is not None
+            assert retained_run.status == "cancelled"
+        else:
+            assert retained_run is None
+        assert retained_turns == []
+
+    @pytest.mark.asyncio
+    async def test_chat_cancel_request_is_owned_idempotent_and_excludes_other_run_kinds(
+        self,
+        engine,
+        sample_thread,
+        monkeypatch,
+    ):
+        import app.agent_workflows.chat_cancellation as cancellation
+
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        monkeypatch.setattr(cancellation, "async_session_maker", session_factory)
+
+        async with session_factory() as repo_session:
+            repo = AgentWorkflowRepository(repo_session)
+            await repo.seed_builtin_workflows()
+            workflow = await repo.get_workflow(ROUTER_RAG_AGENT_ID)
+            running = await repo.create_run(
+                thread_id=sample_thread.id,
+                workflow_id=workflow.id,
+                resolved_spec_json=builtin_router_rag_v2_spec(),
+            )
+            builder = await repo.create_run(
+                thread_id=sample_thread.id,
+                workflow_id=workflow.id,
+                resolved_spec_json=builtin_router_rag_v2_spec(),
+                run_metadata_json={"run_kind": "builder_test"},
+            )
+            awaiting = await repo.create_run(
+                thread_id=sample_thread.id,
+                workflow_id=workflow.id,
+                resolved_spec_json=builtin_router_rag_v2_spec(),
+            )
+            await repo.complete_run(awaiting.id, status="awaiting_human")
+
+        missing = await cancellation.request_chat_run_cancel(running.id, thread_id="other-thread")
+        first = await cancellation.request_chat_run_cancel(running.id, thread_id=sample_thread.id)
+        second = await cancellation.request_chat_run_cancel(running.id, thread_id=sample_thread.id)
+        unsupported = await cancellation.request_chat_run_cancel(builder.id, thread_id=sample_thread.id)
+        paused = await cancellation.request_chat_run_cancel(awaiting.id, thread_id=sample_thread.id)
+
+        assert missing.status == "missing"
+        assert first.status == "cancel_requested"
+        assert second.status == "cancel_requested"
+        assert unsupported.status == "unsupported"
+        assert paused.status == "awaiting_human"
+        assert await cancellation.chat_run_cancel_requested(running.id) is True
+        async with session_factory() as repo_session:
+            await AgentWorkflowRepository(repo_session).complete_run(running.id, status="completed")
+        terminal = await cancellation.request_chat_run_cancel(running.id, thread_id=sample_thread.id)
+        assert terminal.status == "already_terminal"
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_defaults_to_router_rag(self, engine, sample_thread, monkeypatch):
@@ -5304,6 +5507,59 @@ class TestAgentRunService:
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestRouterRagRuntime:
     @pytest.mark.asyncio
+    async def test_compiled_chat_cancellation_is_not_persisted_as_failure(self, monkeypatch):
+        async def fake_invoke_graph(_app, state, _config):
+            raise ChatRunCancellationRequested({
+                **state,
+                "route": "direct",
+                "node_events": [{"node": "router", "status": "completed"}],
+            })
+
+        async def exploding_create_chat_turn(**_kwargs):
+            raise AssertionError("Cancellation must not create a chat turn")
+
+        async def never_cancel():
+            return False
+
+        monkeypatch.setattr(
+            "app.agent_workflows.router_runtime._invoke_graph_with_partial_state",
+            fake_invoke_graph,
+        )
+        monkeypatch.setattr(
+            "app.agent_workflows.router_runtime.create_chat_turn",
+            exploding_create_chat_turn,
+        )
+
+        result = await handle_router_rag_chat(
+            "thread-cancel",
+            SimpleNamespace(
+                question="Wrong question",
+                llm_model="test-llm",
+                use_web_search=False,
+                use_reranker=True,
+                context_window=4096,
+                system_role_override="",
+                tool_instructions_override={},
+                custom_instructions_override="",
+            ),
+            "test-embedding",
+            resolved_spec=builtin_router_rag_v2_spec(),
+            agent_run_context={
+                "agent_run_id": "run-cancel",
+                "agent_workflow_id": ROUTER_RAG_AGENT_ID,
+                "agent_workflow_version": ROUTER_RAG_AGENT_VERSION,
+            },
+            trace_recorder=None,
+            cancellation_checker=never_cancel,
+        )
+
+        assert result["status"] == "cancelled"
+        assert result["agent_run_id"] is None
+        assert result["user_message_id"] is None
+        assert result["assistant_message_id"] is None
+        assert result["node_events"] == [{"node": "router", "status": "completed"}]
+
+    @pytest.mark.asyncio
     async def test_handle_router_rag_chat_runs_compiled_direct_route_and_persists_turn(
         self,
         engine,
@@ -6070,6 +6326,109 @@ async def test_thread_chat_content_negotiation_streams_compact_progress(monkeypa
     assert "event: run.completed" in payload
     assert '"answer": "done"' in payload
     assert "must-not-stream" not in payload
+
+
+@pytest.mark.asyncio
+async def test_thread_chat_stream_emits_canceled_terminal_event(monkeypatch):
+    import app.api.messages as messages_api
+
+    class FakeService:
+        async def run_thread_chat(self, thread_id, req, embedding_model, *, execution_event_sink=None):
+            await execution_event_sink.emit(
+                "node.completed",
+                {"node_id": "router", "node_type": "router", "visit_index": 1},
+            )
+            return {
+                "answer": "",
+                "status": "cancelled",
+                "agent_run_id": None,
+                "user_message_id": None,
+                "assistant_message_id": None,
+                "used_chat_ids": [],
+                "document_sources": [],
+                "web_sources": [],
+                "clarification_options": None,
+            }
+
+    async def fake_get_thread(_thread_id):
+        return SimpleNamespace(embedding_model="embed-test")
+
+    async def fake_get_settings(_thread_id):
+        return {}
+
+    async def fake_supports_replans(_settings):
+        return False
+
+    monkeypatch.setattr(messages_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(messages_api, "get_thread_settings", fake_get_settings)
+    monkeypatch.setattr(messages_api, "_settings_workflow_supports_replans", fake_supports_replans)
+    monkeypatch.setattr(messages_api, "AgentRunService", FakeService)
+    request = SimpleNamespace(
+        thread_id="thread-cancel",
+        question="Wrong question",
+        llm_model="model",
+        replans=None,
+        system_role_override="",
+        tool_instructions_override={},
+        custom_instructions_override="",
+    )
+
+    response = await messages_api.thread_chat_endpoint(
+        "thread-cancel",
+        request,
+        accept="text/event-stream",
+    )
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    payload = "".join(chunks)
+
+    assert payload.count("event: run.canceled") == 1
+    assert "event: node.completed" in payload
+    assert '"status": "cancelled"' in payload
+    assert '"agent_run_id": null' in payload
+
+
+@pytest.mark.asyncio
+async def test_chat_cancel_endpoint_reports_requested_terminal_and_unsupported_runs(monkeypatch):
+    import app.api.agent_workflows as workflows_api
+    from app.agent_workflows.chat_cancellation import ChatRunCancelResult
+
+    async def fake_get_thread(thread_id):
+        return SimpleNamespace(id=thread_id) if thread_id == "thread-1" else None
+
+    outcomes = iter([
+        ChatRunCancelResult(status="cancel_requested", run_id="run-1", run_status="running"),
+        ChatRunCancelResult(status="already_terminal", run_id="run-1", run_status="completed"),
+        ChatRunCancelResult(status="unsupported", run_id="run-builder", run_status="running"),
+    ])
+
+    async def fake_request_cancel(_run_id, *, thread_id):
+        assert thread_id == "thread-1"
+        return next(outcomes)
+
+    monkeypatch.setattr(workflows_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(workflows_api, "request_chat_run_cancel", fake_request_cancel)
+    request = workflows_api.AgentRunCancelRequest(thread_id="thread-1")
+
+    requested = await workflows_api.cancel_chat_agent_run("run-1", request)
+    terminal = await workflows_api.cancel_chat_agent_run("run-1", request)
+    with pytest.raises(Exception) as unsupported:
+        await workflows_api.cancel_chat_agent_run("run-builder", request)
+    with pytest.raises(Exception) as missing_thread:
+        await workflows_api.cancel_chat_agent_run(
+            "run-1",
+            workflows_api.AgentRunCancelRequest(thread_id="missing"),
+        )
+
+    assert requested["status"] == "cancel_requested"
+    assert terminal == {
+        "status": "already_terminal",
+        "run_id": "run-1",
+        "run_status": "completed",
+    }
+    assert unsupported.value.status_code == 409
+    assert missing_thread.value.status_code == 404
 
 
 @pytest.mark.asyncio

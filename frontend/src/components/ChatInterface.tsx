@@ -31,11 +31,13 @@ import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
+import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
 import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
 import { getChatComposerState } from '../lib/chat-composer-state';
+import { canRequestChatCancellation, recoverCanceledChat } from '../lib/chat-run-cancellation';
 import {
     Thread,
     Message,
@@ -60,6 +62,7 @@ import {
     AgentRunResumeAction,
     AgentWorkflow,
     streamResumeAgentRun,
+    cancelChatAgentRun,
     type ThreadChatResponse,
 } from '../lib/api';
 import type { AgentExecutionStreamEnvelope } from '../lib/agent-execution-stream';
@@ -103,6 +106,7 @@ type LiveChatExecution = {
     messageId: string;
     runId?: string;
     running: boolean;
+    canceling?: boolean;
     error?: string;
 };
 
@@ -239,6 +243,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
     const chatRootRef = useRef<HTMLDivElement | null>(null);
+    const composerInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
     const humanReviewSubmissionKeyRef = useRef<string | null>(null);
     const manuallyToggledAgentRunsRef = useRef(new Set<string>());
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
@@ -1027,7 +1032,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             ? { ...current, runId: String(event.data.run_id) }
                             : current);
                     }
-                    if (['run.completed', 'run.failed', 'interrupt.created'].includes(event.event)) {
+                    if (['run.completed', 'run.failed', 'run.canceled', 'interrupt.created'].includes(event.event)) {
                         if (event.data?.response) response = event.data.response as ThreadChatResponse;
                         const rawError = event.data?.error;
                         terminalStreamError = event.event === 'run.failed' && !event.data?.response
@@ -1045,6 +1050,24 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 },
             );
             if (!response) throw new Error(terminalStreamError || 'The chat stream ended before returning a response.');
+
+            if (response.status === 'cancelled') {
+                setMessages(prev => recoverCanceledChat(
+                    prev,
+                    tempUserMsg.id,
+                    tempAssistantMsg.id,
+                    textToSend,
+                ).messages);
+                setOpenAgentRunIds((current) => {
+                    const next = new Set(current);
+                    next.delete(tempAssistantMsg.id);
+                    return next;
+                });
+                resetLiveExecutionEvents();
+                setInput(textToSend);
+                requestAnimationFrame(() => composerInputRef.current?.focus());
+                return;
+            }
 
             if (response.status === 'awaiting_human' && response.agent_run_id && response.pending_interrupt) {
                 const localUserMessageId = response.user_message_id || ('review-user-' + Date.now());
@@ -1212,6 +1235,30 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         } finally {
             setLiveExecution((current) => current?.messageId === tempAssistantMsg.id ? null : current);
             setLoading(false);
+        }
+    };
+
+    const handleStopChat = async () => {
+        const execution = liveExecution;
+        if (!activeThread || !canRequestChatCancellation(execution)) return;
+        setLiveExecution((current) => current?.runId === execution.runId
+            ? { ...current, canceling: true, error: undefined }
+            : current);
+        try {
+            const result = await cancelChatAgentRun(execution.runId, activeThread.id);
+            if (result.status === 'already_terminal') {
+                setLiveExecution((current) => current?.runId === execution.runId
+                    ? { ...current, canceling: false }
+                    : current);
+            }
+        } catch (error: any) {
+            setLiveExecution((current) => current?.runId === execution.runId
+                ? {
+                    ...current,
+                    canceling: false,
+                    error: error?.message || 'Unable to stop this chat run.',
+                }
+                : current);
         }
     };
 
@@ -1783,7 +1830,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                     <Box sx={{ mb: 1, width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
                                         <details style={{ width: '100%', maxWidth: '100%', overflow: 'hidden' }} open={openAgentRunIds.has(msg.id)} onToggle={(event) => handleAgentRunToggle(msg, event)}>
                                             <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                {liveForMessage?.running ? 'Live progress' : 'Debug Trace'}
+                                                {liveForMessage?.canceling ? 'Stopping after current step…' : liveForMessage?.running ? 'Live progress' : 'Debug Trace'}
                                                 {!liveForMessage && `: ${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` - ${msg.agent_route}` : ''}`}
                                             </summary>
                                             {openAgentRunIds.has(msg.id) && <Box
@@ -2191,6 +2238,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
                 <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch', px: 1 }}>
                     <TextField
+                        inputRef={composerInputRef}
                         fullWidth
                         variant="outlined"
                         multiline
@@ -2230,14 +2278,38 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             alignItems: 'center',
                         }}
                     >
-                        <IconButton
-                            size="medium"
-                            color="primary"
-                            onClick={handleSend}
-                            disabled={composerState.disabled}
-                        >
-                            {composerState.busy ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
-                        </IconButton>
+                        {loading && liveExecution ? (
+                            <Tooltip title={
+                                liveExecution.canceling
+                                    ? 'Stopping after the current LLM or tool call finishes'
+                                    : liveExecution.runId
+                                        ? 'Stop after the current step'
+                                        : 'Preparing the chat run'
+                            }>
+                                <span>
+                                    <IconButton
+                                        size="medium"
+                                        color="error"
+                                        aria-label={liveExecution.canceling ? 'Stopping chat run' : 'Stop chat run'}
+                                        onClick={handleStopChat}
+                                        disabled={!liveExecution.runId || liveExecution.canceling || !liveExecution.running}
+                                    >
+                                        {liveExecution.canceling
+                                            ? <CircularProgress size="1em" color="inherit" />
+                                            : <StopCircleOutlinedIcon fontSize="medium" />}
+                                    </IconButton>
+                                </span>
+                            </Tooltip>
+                        ) : (
+                            <IconButton
+                                size="medium"
+                                color="primary"
+                                onClick={handleSend}
+                                disabled={composerState.disabled}
+                            >
+                                {composerState.busy ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
+                            </IconButton>
+                        )}
                         <Tooltip title="AI prompt settings for this thread" placement="top">
                             <IconButton
                                 size="medium"

@@ -4,6 +4,7 @@ import type { AgentExecutionStreamEnvelope } from '../../lib/agent-execution-str
 const isTerminal = (event: AgentExecutionStreamEnvelope) => (
   event.event === 'run.completed'
   || event.event === 'run.failed'
+  || event.event === 'run.canceled'
   || event.event === 'interrupt.created'
 );
 

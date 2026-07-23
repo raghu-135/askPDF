@@ -1111,6 +1111,19 @@ export async function getAgentRun(runId: string, threadId: string): Promise<Agen
   return data.agent_run;
 }
 
+export async function cancelChatAgentRun(
+  runId: string,
+  threadId: string,
+): Promise<{ status: 'cancel_requested' | 'already_terminal'; run_id?: string; run_status?: string }> {
+  const res = await fetch(`${API_BASE}/api/agent-runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ thread_id: threadId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export interface AgentRunResumePayload {
   action: AgentRunResumeAction;
   interrupt_id: string;

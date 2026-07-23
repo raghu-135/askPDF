@@ -261,6 +261,8 @@ async def thread_chat_endpoint(
                         terminal_event = (
                             "interrupt.created"
                             if status == "awaiting_human"
+                            else "run.canceled"
+                            if status == "cancelled"
                             else "run.failed"
                             if status in {"failed", "error"} or data.get("agent_error")
                             else "run.completed"

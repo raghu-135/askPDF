@@ -7,6 +7,10 @@ from typing import Any, Dict
 from langgraph.types import Command
 
 from app.agent_workflows.compiler import WorkflowCompiler
+from app.agent_workflows.chat_cancellation import (
+    ChatRunCancellationRequested,
+    raise_if_chat_run_cancelled,
+)
 from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
 from app.agent_workflows.workflow_runtime import runtime_execution_options
 from app.db import (
@@ -44,6 +48,7 @@ def _runtime_config(
     telemetry_sink: Dict[str, Any],
     trace_recorder: Any = None,
     execution_event_sink: Any = None,
+    cancellation_checker: Any = None,
 ) -> Dict[str, Any]:
     configurable = {
         "thread_id": checkpoint_thread_id,
@@ -54,6 +59,8 @@ def _runtime_config(
     }
     if execution_event_sink is not None:
         configurable["execution_event_sink"] = execution_event_sink
+    if cancellation_checker is not None:
+        configurable["cancellation_checker"] = cancellation_checker
     if embedding_model is not None:
         configurable["embedding_model"] = embedding_model
     if context_window is not None:
@@ -191,6 +198,43 @@ def _clarification_response(
     }
 
 
+def _cancelled_response(
+    *,
+    question: str,
+    result: Dict[str, Any],
+    agent_run_context: Dict[str, Any],
+    duration_ms: float,
+) -> Dict[str, Any]:
+    return {
+        "answer": "",
+        "rewritten_query": question,
+        "chat_turn_id": None,
+        "user_message_id": None,
+        "assistant_message_id": None,
+        "used_chat_ids": [],
+        "document_sources": [],
+        "web_sources": [],
+        "clarification_options": None,
+        "reasoning": "",
+        "reasoning_available": False,
+        "reasoning_format": ReasoningFormat.NONE.value,
+        "context": "The chat workflow was canceled before it produced a persisted answer.",
+        "route": result.get("route"),
+        "route_reason": result.get("route_reason"),
+        "node_events": result.get("node_events") or [],
+        "tool_events": result.get("tool_events") or [],
+        "duration_ms": duration_ms,
+        "status": AgentRunStatus.CANCELLED.value,
+        "agent_run_id": None,
+        "agent_run_turn_kind": None,
+        "agent_run_sequence": None,
+        "agent_trace_refs": None,
+        "agent_workflow_id": agent_run_context.get("agent_workflow_id"),
+        "agent_workflow_version": agent_run_context.get("agent_workflow_version"),
+        "checkpoint_thread_id": None,
+    }
+
+
 async def _persist_success_turn(
     *,
     thread_id: str,
@@ -287,6 +331,7 @@ async def execute_compiled_rag_chat(
     trace_recorder: Any,
     checkpointer: Any = None,
     execution_event_sink: Any = None,
+    cancellation_checker: Any = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG workflow using runtime metadata from the stored spec."""
     runtime_options = runtime_execution_options(resolved_spec)
@@ -299,6 +344,7 @@ async def execute_compiled_rag_chat(
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
         execution_event_sink=execution_event_sink,
+        cancellation_checker=cancellation_checker,
         runtime_label=runtime_options["label"],
         failure_code=runtime_options["failure_code"],
         failure_reason_prefix=runtime_options["failure_reason_prefix"],
@@ -329,6 +375,7 @@ async def handle_router_rag_chat(
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
         execution_event_sink=_kwargs.get("execution_event_sink"),
+        cancellation_checker=_kwargs.get("cancellation_checker"),
     )
 
 
@@ -354,6 +401,7 @@ async def handle_plan_execute_rag_chat(
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
         execution_event_sink=_kwargs.get("execution_event_sink"),
+        cancellation_checker=_kwargs.get("cancellation_checker"),
     )
 
 
@@ -379,6 +427,7 @@ async def handle_evaluator_replanner_rag_chat(
         trace_recorder=trace_recorder,
         checkpointer=checkpointer,
         execution_event_sink=_kwargs.get("execution_event_sink"),
+        cancellation_checker=_kwargs.get("cancellation_checker"),
     )
 
 
@@ -397,6 +446,7 @@ async def _handle_compiled_rag_chat(
     success_context: str,
     failure_context: str,
     execution_event_sink: Any = None,
+    cancellation_checker: Any = None,
 ) -> Dict[str, Any]:
     """Execute a compiled RAG graph and persist a chat turn."""
 
@@ -439,6 +489,7 @@ async def _handle_compiled_rag_chat(
         telemetry_sink=telemetry_sink,
         trace_recorder=trace_recorder,
         execution_event_sink=execution_event_sink,
+        cancellation_checker=cancellation_checker,
     )
     state = {
         "agent_run_id": agent_run_id,
@@ -487,6 +538,7 @@ async def _handle_compiled_rag_chat(
         )
         result = await _invoke_graph_with_partial_state(app, state, config)
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        await raise_if_chat_run_cancelled(cancellation_checker, result)
         pending_interrupt = _pending_interrupt_from_result(
             result,
             checkpoint_thread_id=checkpoint_thread_id,
@@ -564,6 +616,26 @@ async def _handle_compiled_rag_chat(
         )
 
         return payload
+    except ChatRunCancellationRequested as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        partial_result = _without_runtime_keys(exc.state or state)
+        partial_result["node_events"] = partial_result.get("node_events") or telemetry_sink.get("node_events") or []
+        partial_result["tool_events"] = partial_result.get("tool_events") or telemetry_sink.get("tool_events") or []
+        logger.info(
+            "%s run canceled | run_id=%s thread_id=%s elapsed_ms=%.1f node_events=%s tool_events=%s",
+            runtime_label,
+            agent_run_id,
+            thread_id,
+            duration_ms,
+            len(partial_result["node_events"]),
+            len(partial_result["tool_events"]),
+        )
+        return _cancelled_response(
+            question=question,
+            result=partial_result,
+            agent_run_context=agent_run_context,
+            duration_ms=duration_ms,
+        )
     except Exception as exc:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         partial_result = result if isinstance(locals().get("result"), dict) else state

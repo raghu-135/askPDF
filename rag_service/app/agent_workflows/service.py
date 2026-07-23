@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 from app.agent_workflows.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
+from app.agent_workflows.chat_cancellation import chat_run_cancel_requested
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_workflows.enums import InterruptStatus
 from app.agent_workflows.metrics import build_run_metrics
@@ -190,7 +191,10 @@ class AgentRunService:
             }
             handler = handler_by_workflow_id.get(workflow.id, router_runtime.handle_router_rag_chat)
             async with open_agent_checkpointer() as checkpointer:
-                stream_kwargs = {"execution_event_sink": execution_event_sink} if execution_event_sink is not None else {}
+                stream_kwargs = {}
+                if execution_event_sink is not None:
+                    stream_kwargs["execution_event_sink"] = execution_event_sink
+                    stream_kwargs["cancellation_checker"] = lambda: chat_run_cancel_requested(run.id)
                 result = await handler(
                     thread_id,
                     req,
@@ -213,6 +217,46 @@ class AgentRunService:
                     else AgentRunStatus.COMPLETED.value
                 )
             metrics = build_run_metrics(result, duration_ms=duration_ms)
+            if status == AgentRunStatus.CANCELLED.value:
+                try:
+                    await self.repository.complete_run(
+                        run.id,
+                        status=AgentRunStatus.CANCELLED.value,
+                        metrics_json=metrics,
+                        error_json=error_json,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Could not mark temporary canceled chat run terminal before cleanup | "
+                        "thread_id=%s run_id=%s",
+                        thread_id,
+                        run.id,
+                    )
+                try:
+                    await delete_agent_checkpoints([str(run.checkpoint_thread_id or run.id)])
+                    deleted = await self.repository.delete_run(run.id)
+                    if not deleted:
+                        raise RuntimeError(f"Canceled chat Agent Run {run.id} was not found during cleanup")
+                except Exception:
+                    logger.exception(
+                        "Canceled chat cleanup failed; terminal run remains eligible for pruning | "
+                        "thread_id=%s run_id=%s checkpoint_thread_id=%s",
+                        thread_id,
+                        run.id,
+                        run.checkpoint_thread_id,
+                    )
+                result.update(
+                    {
+                        "agent_run_id": None,
+                        "checkpoint_thread_id": None,
+                        "agent_trace_refs": None,
+                        "agent_workflow_id": workflow.id,
+                        "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
+                        "node_events": [],
+                        "tool_events": [],
+                    }
+                )
+                return result
             if status == CLARIFICATION_REQUIRED_STATUS:
                 # Keep a terminal record only as a cleanup fallback. The normal path removes
                 # both checkpoint state and the exact run before returning clarification.

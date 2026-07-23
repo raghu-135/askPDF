@@ -31,6 +31,11 @@ from app.agent_workflows.workflow_runtime import (
     workflow_supports_replans,
 )
 from app.agent_workflows.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
+from app.agent_workflows.chat_cancellation import (
+    CHAT_CANCEL_AWAITING_HUMAN,
+    CHAT_CANCEL_UNSUPPORTED,
+    request_chat_run_cancel,
+)
 from app.agent_workflows.compiler import WorkflowCompiler
 from app.agent_workflows.trace_details import detail_manifest
 from app.agent_workflows.studio_runtime import (
@@ -73,6 +78,10 @@ class AgentRunResumeRequest(BaseModel):
     selected_option_ids: Optional[list[str]] = None
     resume_token: Optional[str] = None
     resume_version: Optional[int] = None
+    thread_id: str = Field(..., min_length=1)
+
+
+class AgentRunCancelRequest(BaseModel):
     thread_id: str = Field(..., min_length=1)
 
 
@@ -683,6 +692,27 @@ async def get_agent_run_node_details(
         if str(detail.get("node_id") or "") == node_id and detail_visit == visit_index:
             return {"run_id": run.id, "detail": detail}
     raise HTTPException(status_code=404, detail="Node visit details are unavailable")
+
+
+@router.post("/agent-runs/{run_id}/cancel")
+async def cancel_chat_agent_run(
+    run_id: str,
+    req: AgentRunCancelRequest,
+):
+    if not await get_thread(req.thread_id):
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    result = await request_chat_run_cancel(run_id, thread_id=req.thread_id)
+    if result.status == "missing":
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    if result.status == CHAT_CANCEL_UNSUPPORTED:
+        raise HTTPException(status_code=409, detail="This run uses its own cancellation endpoint")
+    if result.status == CHAT_CANCEL_AWAITING_HUMAN:
+        raise HTTPException(status_code=409, detail="Use the human-review actions for this paused run")
+    return {
+        "status": result.status,
+        "run_id": result.run_id,
+        "run_status": result.run_status,
+    }
 
 
 @router.post("/agent-runs/{run_id}/resume")

@@ -25,6 +25,10 @@ from app.agent_workflows.answer_nodes import (
     finalizer_node,
     synthesizer_node,
 )
+from app.agent_workflows.chat_cancellation import (
+    ChatRunCancellationRequested,
+    raise_if_chat_run_cancelled,
+)
 from app.agent_workflows.decision_nodes import (
     JsonDecisionNodeSpec,
     build_decision_node_event_data,
@@ -136,6 +140,8 @@ class NodeRegistry:
         node_impl = self.get(node_type)
 
         async def _bound_node(state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+            cancellation_checker = ((config or {}).get("configurable") or {}).get("cancellation_checker")
+            await raise_if_chat_run_cancelled(cancellation_checker, state)
             visit_index = _node_visit_counts(state).get(node_id, 0) + 1
             _check_visit_budget(state, node_id=node_id, node_type=node_type, visit_index=visit_index)
             runtime_config = _with_node_runtime_config(
@@ -166,7 +172,10 @@ class NodeRegistry:
                     update = await self.hitl_gate(state, runtime_config, node_id=node_id)
                 else:
                     update = await node_impl(state, runtime_config)
+            except ChatRunCancellationRequested:
+                raise
             except Exception as exc:
+                await raise_if_chat_run_cancelled(cancellation_checker, state)
                 detail = None
                 if trace_recorder is not None and hasattr(trace_recorder, "record_node_completed"):
                     detail = trace_recorder.record_node_completed(
@@ -220,6 +229,10 @@ class NodeRegistry:
                 await execution_event_sink.emit(event_name, completion_data)
             elif queue is not None:
                 await queue.put({"event": event_name, "data": completion_data})
+            await raise_if_chat_run_cancelled(
+                cancellation_checker,
+                {**state, **accounted_update},
+            )
             return accounted_update
 
         return _bound_node
