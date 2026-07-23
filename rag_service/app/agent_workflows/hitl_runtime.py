@@ -25,7 +25,7 @@ from app.agent_workflows.enums import (
     ToolName,
     WorkflowNodeType,
 )
-from app.agent_workflows.planning import WORKER_NODE_ORDER
+from app.agent_workflows.planning import WORKER_NODE_ORDER, available_worker_node_ids
 from app.agent_workflows.runtime_invocation import (
     append_event,
     log_node_end,
@@ -354,8 +354,9 @@ async def hitl_gate_node(
     selected_targets = hitl_option_targets(gate_policy, selected_option_ids)
     execution_plan = state.get("execution_plan")
     execution_plan_update = None
-    if selected_targets and all(target in WORKER_NODE_ORDER for target in selected_targets):
-        execution_plan_update = [target for target in WORKER_NODE_ORDER if target in selected_targets]
+    worker_order = available_worker_node_ids(state.get("available_worker_nodes")) or WORKER_NODE_ORDER
+    if selected_targets and all(target in worker_order for target in selected_targets):
+        execution_plan_update = [target for target in worker_order if target in selected_targets]
 
     update: Dict[str, Any] = {
         "hitl_gate_route": route,

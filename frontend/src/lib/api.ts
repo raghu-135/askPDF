@@ -347,11 +347,6 @@ export interface AgentWorkflowCatalogResponse {
     loop_policy?: Record<string, any>;
     [key: string]: any;
   };
-  auth_boundary?: {
-    authoring_enabled?: boolean;
-    custom_runtime_enabled?: boolean;
-    [key: string]: any;
-  };
   [key: string]: any;
 }
 

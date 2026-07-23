@@ -53,6 +53,7 @@ class RouterRagState(TypedDict, total=False):
     tool_events: List[Dict[str, Any]]
     errors: List[Dict[str, Any]]
     allowed_tool_ids: List[str]
+    available_worker_nodes: List[Dict[str, Any]]
     workflow_id: str
     loop_policy: Dict[str, Any]
     node_visit_counts: Dict[str, int]

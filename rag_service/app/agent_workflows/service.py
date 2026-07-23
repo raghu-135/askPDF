@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 import logging
-import os
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
@@ -40,16 +39,9 @@ class AgentRunService:
         self,
         repository: Optional[AgentWorkflowRepository] = None,
         resolver: Optional[WorkflowResolver] = None,
-        *,
-        allow_custom_agent_workflows: Optional[bool] = None,
     ):
         self.repository = repository or AgentWorkflowRepository()
         self.resolver = resolver or WorkflowResolver()
-        self.allow_custom_agent_workflows = (
-            allow_custom_agent_workflows
-            if allow_custom_agent_workflows is not None
-            else os.getenv("ASKPDF_CUSTOM_AGENT_WORKFLOWS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
-        )
 
     async def run_thread_chat(
         self,
@@ -64,6 +56,8 @@ class AgentRunService:
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
         default_workflow_key = default_agent_workflow_key()
         workflow_id = agent_settings.get("workflow_id") or default_workflow_key
+        requested_workflow_id = workflow_id
+        fallback_reason: Optional[str] = None
         include_custom_for_lookup = True
         logger.info("Resolving agent workflow for thread %s | requested_workflow=%s", thread_id, workflow_id)
 
@@ -71,14 +65,6 @@ class AgentRunService:
         if workflow is None:
             await self.repository.seed_builtin_workflows()
             workflow = await self.repository.get_workflow(workflow_id, include_custom=include_custom_for_lookup)
-        if workflow is not None and not workflow.is_builtin and not self.allow_custom_agent_workflows:
-            logger.warning(
-                "Unsupported custom agent workflow requested for thread %s | requested_workflow=%s fallback_workflow=%s",
-                thread_id,
-                workflow_id,
-                default_workflow_key,
-            )
-            workflow = None
         if workflow is None:
             if workflow_id != default_workflow_key:
                 logger.warning(
@@ -86,11 +72,11 @@ class AgentRunService:
                     thread_id,
                     workflow_id,
                 )
+                fallback_reason = "selected_workflow_unavailable"
                 workflow_id = default_workflow_key
                 workflow = await self.repository.get_workflow(default_workflow_key)
         if workflow is None:
             raise RuntimeError("Default agent workflow is unavailable")
-        workflow_version = _workflow_version_info(workflow)
         logger.info(
             "Selected agent workflow for thread %s | workflow=%s",
             thread_id,
@@ -131,7 +117,9 @@ class AgentRunService:
                 fallback_workflow = await self.repository.get_workflow(default_workflow_key)
             if fallback_workflow is None:
                 raise RuntimeError("Default agent workflow is unavailable") from exc
+            fallback_reason = "selected_workflow_validation_failed"
             workflow = fallback_workflow
+            workflow_id = workflow.id
             try:
                 resolved_spec = self.resolver.resolve(
                     workflow.spec_json,
@@ -145,6 +133,7 @@ class AgentRunService:
                     workflow.id,
                 )
                 raise RuntimeError("Default agent workflow is incompatible with this service version") from fallback_exc
+        workflow_version = _workflow_version_info(workflow)
         from app.agent_workflows.compiler import WorkflowCompiler
         from app.agent_workflows.graph import normalize_hitl_policy_for_thread_settings
 
@@ -164,6 +153,12 @@ class AgentRunService:
             workflow_version_id=workflow_version.id if workflow_version is not None else None,
             workflow_version=workflow_version.version if workflow_version is not None else None,
             resolved_spec_json=stored_resolved_spec,
+            run_metadata_json={
+                "requested_workflow_id": requested_workflow_id,
+                "executed_workflow_id": workflow.id,
+                "fallback_workflow_id": workflow.id if fallback_reason else None,
+                "fallback_reason": fallback_reason,
+            },
         )
 
         started = time.perf_counter()

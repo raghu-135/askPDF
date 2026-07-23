@@ -11,6 +11,7 @@ from app.agent.prompting import (
     sanitize_system_role,
 )
 from app.agent_workflows.enums import PromptProfile, ToolName
+from app.agent_workflows.planning import WORKER_NODE_ORDER
 from app.prompts.loaders import get_web_search_mandate, load_prompt
 
 
@@ -27,6 +28,14 @@ QUESTION_PLACEHOLDER = "{{QUESTION}}"
 PREFETCH_PLACEHOLDER = "{{PREFETCH_CONTEXT}}"
 CONTEXT_PLACEHOLDER = "{{EVIDENCE_CONTEXT}}"
 EVALUATOR_REPORT_PLACEHOLDER = "{{EVALUATOR_REPORT}}"
+
+
+WORKER_TYPE_DESCRIPTIONS = {
+    "retrieval_worker": "uploaded document, PDF, page, section, quote, citation, excerpt, summary, or cached web snippet evidence",
+    "memory_worker": "non-temporal recall of prior conversation, previous answers, or what we discussed",
+    "timeline_worker": "chronology, latest/most recent/current, first/earliest/oldest, before/after/since, date/time, or event ordering",
+    "web_worker": "live internet evidence, only when live web search is enabled",
+}
 
 
 class _SafeFormatDict(dict):
@@ -60,6 +69,30 @@ def _format_prefetch_summary(bundle: Optional[Dict[str, Any]]) -> str:
     if bundle.get("web_evidence_text"):
         parts.append("Cached web evidence:\n" + str(bundle["web_evidence_text"])[:3000])
     return "\n\n".join(parts) if parts else "No pre-fetched context available."
+
+
+def _format_available_worker_nodes(state_or_settings: Dict[str, Any]) -> str:
+    workers = state_or_settings.get("available_worker_nodes")
+    if workers is None:
+        workers = [{"id": node_type, "type": node_type, "label": node_type} for node_type in WORKER_NODE_ORDER]
+    if not isinstance(workers, list) or not workers:
+        return "No worker nodes are available for this workflow."
+    lines = [
+        "Use these exact worker node ids in `execution_plan`; do not output worker type aliases unless the id is exactly the same.",
+        "",
+    ]
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        node_id = worker.get("id")
+        node_type = worker.get("type")
+        if not isinstance(node_id, str) or not isinstance(node_type, str):
+            continue
+        label = worker.get("label")
+        label_suffix = f" ({label})" if isinstance(label, str) and label and label != node_id else ""
+        description = WORKER_TYPE_DESCRIPTIONS.get(node_type, node_type)
+        lines.append(f"- `{node_id}`{label_suffix}: {node_type}; {description}.")
+    return "\n".join(lines)
 
 
 def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,6 +142,7 @@ def _prompt_context(state_or_settings: Dict[str, Any]) -> Dict[str, Any]:
         "QUESTION": state_or_settings.get("question") or QUESTION_PLACEHOLDER,
         "PREFETCH_CONTEXT": _format_prefetch_summary(state_or_settings.get("pre_fetch_bundle") or {})
         or PREFETCH_PLACEHOLDER,
+        "AVAILABLE_WORKER_NODES": _format_available_worker_nodes(state_or_settings),
     }
 
 

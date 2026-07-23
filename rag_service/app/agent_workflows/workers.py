@@ -9,6 +9,7 @@ from app.agent.external_research_tools import search_web
 from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
 from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from app.agent_workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
+from app.agent_workflows.state import runtime_node_id
 from app.agent_workflows.trace import refs_from_timeline
 
 
@@ -116,11 +117,12 @@ async def run_tool_worker(
     append_event: Callable[..., list[Dict[str, Any]]],
     append_tool_event: Callable[..., list[Dict[str, Any]]],
 ) -> Dict[str, Any]:
+    node_id = runtime_node_id(config, spec.node_name)
     reason = spec.skip_reason(state) if spec.skip_reason is not None else None
     if reason:
-        return skipped_worker_update(state, config, spec.node_name, started, reason)
-    if should_skip_worker(state, spec.node_name):
-        return skipped_worker_update(state, config, spec.node_name, started, "not_selected_by_plan")
+        return skipped_worker_update(state, config, node_id, started, reason)
+    if should_skip_worker(state, node_id):
+        return skipped_worker_update(state, config, node_id, started, "not_selected_by_plan")
 
     tool_input = spec.tool_input(state)
     tool_config = tool_config_for_node(
@@ -134,14 +136,14 @@ async def run_tool_worker(
     if studio_queue is not None:
         await studio_queue.put({
             "event": "tool.started",
-            "data": {"tool_name": spec.tool_name, "node_id": spec.node_name},
+            "data": {"tool_name": spec.tool_name, "node_id": node_id},
         })
     raw = await invoke_tool_for_node(
         spec.tool,
         tool_input,
         state=state,
         config=tool_config,
-        node=spec.node_name,
+        node=node_id,
         started=started,
     )
     payload = normalize_tool_result(raw, tool_name=spec.tool_name, config=tool_config)
@@ -192,11 +194,11 @@ async def run_tool_worker(
         data["output_refs"] = compact_refs({**state_evidence_refs(state), **update["timeline_refs"]})
     data["output_preview"] = {"evidence": compact_preview(evidence)}
 
-    log_node_end(state, spec.node_name, started, data)
+    log_node_end(state, node_id, started, data)
     return {
         "evidence": evidence,
         "evidence_packets": evidence_packets,
         **{key: value for key, value in update.items() if key not in {"timeline_event_count", "timeline_refs"}},
-        "node_events": append_event(state, spec.node_name, data, started=started, config=config),
+        "node_events": append_event(state, node_id, data, started=started, config=config),
         "tool_events": append_tool_event(state, payload, tool_input=tool_input, config=config),
     }

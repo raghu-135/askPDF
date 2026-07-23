@@ -12,6 +12,7 @@ from app.agent_workflows.chat_cancellation import (
     raise_if_chat_run_cancelled,
 )
 from app.agent_workflows.enums import NodeEventStatus, WorkflowNodeType
+from app.agent_workflows.planning import worker_nodes_from_spec
 from app.agent_workflows.workflow_runtime import runtime_execution_options
 from app.db import (
     AgentRunStatus,
@@ -506,6 +507,7 @@ async def _handle_compiled_rag_chat(
         "tool_instructions": tool_instructions,
         "custom_instructions": custom_instructions,
         "allowed_tool_ids": allowed_tool_ids,
+        "available_worker_nodes": worker_nodes_from_spec(resolved_spec),
         "hitl_policy": hitl_policy,
         "loop_policy": loop_policy,
         "context_policy": context_policy,

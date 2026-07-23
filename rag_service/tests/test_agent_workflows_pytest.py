@@ -33,6 +33,7 @@ from app.agent_workflows.graph import (
     normalize_execution_plan,
     normalize_evaluator_report,
 )
+from app.agent_workflows.planning import normalize_replanner_execution_plan
 from app.agent_workflows.debug_trace import AgentTraceRecorder, build_debug_payload, build_debug_trace, build_runtime_trace_event
 from app.agent_workflows.trace_details import TRACE_DETAIL_SCALAR_LIMIT, sanitize_trace_detail
 from app.agent_workflows.trace_payloads import merge_debug_payloads
@@ -1228,7 +1229,7 @@ class TestRouterRagWorkflowValidator:
         with pytest.raises(WorkflowValidationError) as exc:
             WorkflowValidator().validate(spec)
 
-        assert "node planner type planner cannot connect to synthesizer type synthesizer" in str(exc.value)
+        assert "node planner type planner cannot connect to child synthesizer type synthesizer" in str(exc.value)
 
     def test_rejects_evaluator_replanner_graph_topology_changes(self):
         spec = builtin_evaluator_replanner_rag_v2_spec()
@@ -1237,7 +1238,7 @@ class TestRouterRagWorkflowValidator:
         with pytest.raises(WorkflowValidationError) as exc:
             WorkflowValidator().validate(spec)
 
-        assert "node evidence_evaluator type evidence_evaluator cannot connect to finalizer type finalizer" in str(exc.value)
+        assert "node evidence_evaluator type evidence_evaluator cannot connect to child finalizer type finalizer" in str(exc.value)
 
     def test_rejects_evaluator_replanner_unbounded_replans(self):
         spec = builtin_evaluator_replanner_rag_v2_spec()
@@ -1256,6 +1257,61 @@ class TestRouterRagWorkflowValidator:
 
         assert normalized["route"] == "execute"
         assert normalized["execution_plan"] == ["retrieval_worker"]
+
+    def test_normalize_execution_plan_accepts_worker_instance_ids(self):
+        worker_nodes = [
+            {"id": "doc_search_primary", "type": "retrieval_worker", "label": "Primary documents"},
+            {"id": "timeline_main", "type": "timeline_worker", "label": "Timeline"},
+        ]
+        normalized = normalize_execution_plan(
+            {"route": "execute", "execution_plan": ["doc_search_primary", "timeline_main"]},
+            use_web_search=False,
+            worker_nodes=worker_nodes,
+        )
+
+        assert normalized["execution_plan"] == ["doc_search_primary", "timeline_main"]
+
+    def test_normalize_execution_plan_maps_worker_type_alias_only_when_unambiguous(self):
+        worker_nodes = [
+            {"id": "doc_search_primary", "type": "retrieval_worker", "label": "Primary documents"},
+            {"id": "memory_main", "type": "memory_worker", "label": "Memory"},
+        ]
+        normalized = normalize_execution_plan(
+            {"route": "execute", "execution_plan": ["retrieval_worker", "memory_worker"]},
+            use_web_search=False,
+            worker_nodes=worker_nodes,
+        )
+
+        assert normalized["execution_plan"] == ["doc_search_primary", "memory_main"]
+
+    def test_normalize_execution_plan_drops_ambiguous_worker_type_alias(self):
+        worker_nodes = [
+            {"id": "doc_search_primary", "type": "retrieval_worker", "label": "Primary documents"},
+            {"id": "doc_search_secondary", "type": "retrieval_worker", "label": "Secondary documents"},
+        ]
+        normalized = normalize_execution_plan(
+            {"route": "execute", "execution_plan": ["retrieval_worker"]},
+            use_web_search=False,
+            worker_nodes=worker_nodes,
+        )
+
+        assert normalized["execution_plan"] == []
+        assert "empty_execute_plan_defaulted_to_retrieval_worker" in normalized["normalization_notes"]
+
+    def test_normalize_replanner_execution_plan_uses_instance_ids_and_filters_web(self):
+        worker_nodes = [
+            {"id": "doc_search_primary", "type": "retrieval_worker", "label": "Primary documents"},
+            {"id": "live_web", "type": "web_worker", "label": "Live web"},
+        ]
+        normalized = normalize_replanner_execution_plan(
+            {"execution_plan": ["doc_search_primary", "live_web"], "reason": "Need more evidence."},
+            use_web_search=False,
+            allowed_tool_ids=["document_evidence"],
+            worker_nodes=worker_nodes,
+        )
+
+        assert normalized["execution_plan"] == ["doc_search_primary"]
+        assert "web_worker_removed_when_web_search_disabled" in normalized["normalization_notes"]
 
     @pytest.mark.parametrize(
         "question, expected_steps",
@@ -1517,6 +1573,50 @@ class TestRouterRagGraphToolConsumers:
 
         assert WorkflowValidator().validate(spec)["valid"] is True
         assert WorkflowCompiler().compile(spec) is not None
+
+    def test_v2_custom_graph_rejects_parent_side_edge_incompatibility(self, monkeypatch):
+        catalog = get_node_catalog()
+        catalog["retrieval_worker"] = {
+            **catalog["retrieval_worker"],
+            "allowed_parent_types": ["router"],
+        }
+        monkeypatch.setattr("app.agent_workflows.validator.get_node_catalog", lambda: catalog)
+        spec = {
+            "schema_version": 2,
+            "workflow_id": "custom_rag_agent",
+            "runtime": builtin_router_rag_v2_spec()["runtime"],
+            "config": {
+                "allowed_tool_ids": ["document_evidence"],
+                "graph": {
+                    "nodes": [
+                        {"id": "context_1", "type": "context_loader"},
+                        {"id": "planner_1", "type": "planner"},
+                        {"id": "retrieval_1", "type": "retrieval_worker"},
+                        {"id": "final_1", "type": "finalizer"},
+                    ],
+                    "edges": [
+                        {"from": "START", "to": "context_1"},
+                        {"from": "context_1", "to": "planner_1"},
+                        {
+                            "from": "planner_1",
+                            "conditional": True,
+                            "route_fn": "planner_route",
+                            "routes": {
+                                "execute": "retrieval_1",
+                                "direct": "final_1",
+                            },
+                        },
+                        {"from": "retrieval_1", "to": "final_1"},
+                        {"from": "final_1", "to": "END"},
+                    ],
+                },
+            },
+        }
+
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
+
+        assert "node retrieval_1 type retrieval_worker cannot accept parent planner_1 type planner" in str(exc.value)
 
     def test_v2_custom_graph_rejects_incompatible_node_catalog(self, monkeypatch):
         catalog = get_node_catalog()
@@ -3986,7 +4086,7 @@ class TestAgentRunService:
         assert captured_spec["config"]["loop_policy"]["max_total_visits"] == 9
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_falls_back_for_custom_db_workflow_without_opt_in(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_runs_custom_db_workflow_without_service_opt_in(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -4012,7 +4112,7 @@ class TestAgentRunService:
             async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
                 return {
-                    "answer": "router fallback",
+                    "answer": "custom default",
                     "document_sources": [],
                     "web_sources": [],
                     "used_chat_ids": [],
@@ -4042,9 +4142,11 @@ class TestAgentRunService:
             )
             run = await repo.get_run(result["agent_run_id"])
 
-        assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
-        assert captured_spec["workflow_id"] == ROUTER_RAG_AGENT_ID
-        assert run.workflow_id == ROUTER_RAG_AGENT_ID
+        assert result["agent_workflow_id"] == "internal_custom_rag_agent"
+        assert captured_spec["workflow_id"] == "internal_custom_rag_agent"
+        assert run.workflow_id == "internal_custom_rag_agent"
+        assert run.run_metadata_json["requested_workflow_id"] == "internal_custom_rag_agent"
+        assert run.run_metadata_json["fallback_reason"] is None
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_can_load_custom_db_workflow_when_service_opted_in(self, engine, sample_thread, monkeypatch):
@@ -4096,10 +4198,7 @@ class TestAgentRunService:
                 tool_instructions_override={},
                 custom_instructions_override="",
             )
-            result = await AgentRunService(
-                repository=repo,
-                allow_custom_agent_workflows=True,
-            ).run_thread_chat(
+            result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
                 sample_thread.embedding_model,
@@ -4160,10 +4259,7 @@ class TestAgentRunService:
                 tool_instructions_override={},
                 custom_instructions_override="",
             )
-            result = await AgentRunService(
-                repository=repo,
-                allow_custom_agent_workflows=True,
-            ).run_thread_chat(
+            result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
                 sample_thread.embedding_model,
@@ -4177,7 +4273,7 @@ class TestAgentRunService:
         assert captured_spec["workflow_id"] == "internal_custom_rag_agent"
 
     @pytest.mark.asyncio
-    async def test_run_thread_chat_falls_back_when_custom_runtime_lacks_service_opt_in(self, engine, sample_thread, monkeypatch):
+    async def test_run_thread_chat_falls_back_when_selected_workflow_is_unavailable(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
             class_=AsyncSession,
@@ -4189,16 +4285,9 @@ class TestAgentRunService:
         async with session_factory() as repo_session:
             repo = AgentWorkflowRepository(repo_session)
             await repo.seed_builtin_workflows()
-            custom_spec = builtin_router_rag_v2_spec()
-            custom_spec["workflow_id"] = "internal_custom_rag_agent"
-            await repo.save_internal_workflow_version(
-                workflow_id="internal_custom_rag_agent",
-                name="Internal Custom RAG Agent",
-                spec_json=custom_spec,
-            )
 
             async def fake_get_thread_settings(_thread_id):
-                return {"agent_workflow": {"workflow_id": "internal_custom_rag_agent"}}
+                return {"agent_workflow": {"workflow_id": "missing_custom_rag_agent"}}
 
             async def fake_handle_router_rag_chat(_thread_id, _req, _embedding_model, *, resolved_spec, agent_run_context, trace_recorder, **_kwargs):
                 captured_spec.update(resolved_spec)
@@ -4236,6 +4325,9 @@ class TestAgentRunService:
         assert result["agent_workflow_id"] == ROUTER_RAG_AGENT_ID
         assert run.workflow_id == ROUTER_RAG_AGENT_ID
         assert captured_spec["workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert run.run_metadata_json["requested_workflow_id"] == "missing_custom_rag_agent"
+        assert run.run_metadata_json["fallback_workflow_id"] == ROUTER_RAG_AGENT_ID
+        assert run.run_metadata_json["fallback_reason"] == "selected_workflow_unavailable"
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_uses_current_custom_db_workflow_version(self, engine, sample_thread, monkeypatch):
@@ -4300,10 +4392,7 @@ class TestAgentRunService:
                 tool_instructions_override={},
                 custom_instructions_override="",
             )
-            result = await AgentRunService(
-                repository=repo,
-                allow_custom_agent_workflows=True,
-            ).run_thread_chat(
+            result = await AgentRunService(repository=repo).run_thread_chat(
                 sample_thread.id,
                 req,
                 sample_thread.embedding_model,
@@ -4452,7 +4541,7 @@ class TestAgentRunService:
         }
         assert selected.json()["agent_workflow"]["workflow_id"] == "internal_e2e_custom_rag_agent"
 
-        service = AgentRunService(allow_custom_agent_workflows=True)
+        service = AgentRunService()
         result = await service.run_thread_chat(
             thread_id,
             self._agent_req("What does the custom document say?"),

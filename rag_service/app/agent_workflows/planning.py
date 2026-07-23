@@ -14,6 +14,8 @@ WORKER_NODE_ORDER = [
     WorkflowNodeType.WEB_WORKER.value,
 ]
 
+WORKER_NODE_TYPES = set(WORKER_NODE_ORDER)
+
 
 TEMPORAL_PLAN_RE = re.compile(
     r"\b("
@@ -69,8 +71,78 @@ def infer_required_plan_steps(question: Optional[str]) -> List[str]:
     return required
 
 
-def ordered_plan_steps(steps: List[str]) -> List[str]:
-    return [node for node in WORKER_NODE_ORDER if node in steps]
+def worker_nodes_from_spec(spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+    graph = config.get("graph") if isinstance(config.get("graph"), dict) else {}
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    workers: List[Dict[str, Any]] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("id")
+        node_type = node.get("type")
+        if not isinstance(node_id, str) or not isinstance(node_type, str) or node_type not in WORKER_NODE_TYPES:
+            continue
+        workers.append({
+            "id": node_id,
+            "type": node_type,
+            "label": str(node.get("label") or node_id),
+            "tool_contract_ids": [str(item) for item in node.get("tool_contract_ids") or [] if isinstance(item, str)],
+        })
+    return workers
+
+
+def _default_worker_nodes() -> List[Dict[str, Any]]:
+    return [{"id": node_type, "type": node_type, "label": node_type, "tool_contract_ids": []} for node_type in WORKER_NODE_ORDER]
+
+
+def _worker_nodes_by_type(worker_nodes: Any) -> Dict[str, List[Dict[str, Any]]]:
+    available = _default_worker_nodes() if worker_nodes is None else worker_nodes if isinstance(worker_nodes, list) else []
+    by_type: Dict[str, List[Dict[str, Any]]] = {node_type: [] for node_type in WORKER_NODE_ORDER}
+    for node in available:
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("id")
+        node_type = node.get("type")
+        if isinstance(node_id, str) and node_id and isinstance(node_type, str) and node_type in WORKER_NODE_TYPES:
+            by_type.setdefault(node_type, []).append(node)
+    return by_type
+
+
+def available_worker_node_ids(worker_nodes: Any) -> List[str]:
+    by_type = _worker_nodes_by_type(worker_nodes)
+    ids: List[str] = []
+    for node_type in WORKER_NODE_ORDER:
+        ids.extend(str(node["id"]) for node in by_type.get(node_type, []))
+    return ids
+
+
+def _resolve_worker_reference(value: Any, *, by_id: Dict[str, Dict[str, Any]], by_type: Dict[str, List[Dict[str, Any]]]) -> Optional[str]:
+    node = None
+    if isinstance(value, str):
+        node = value
+    elif isinstance(value, dict):
+        node = value.get("node") or value.get("worker") or value.get("id")
+    if not isinstance(node, str) or not node:
+        return None
+    if node in by_id:
+        return node
+    matches = by_type.get(node) or []
+    if len(matches) == 1:
+        return str(matches[0]["id"])
+    return None
+
+
+def _resolve_required_worker_type(node_type: str, by_type: Dict[str, List[Dict[str, Any]]]) -> Optional[str]:
+    matches = by_type.get(node_type) or []
+    if len(matches) == 1:
+        return str(matches[0]["id"])
+    return None
+
+
+def ordered_plan_steps(steps: List[str], worker_nodes: Any = None) -> List[str]:
+    ordered_ids = set(steps)
+    return [node_id for node_id in available_worker_node_ids(worker_nodes) if node_id in ordered_ids]
 
 
 def fallback_clarification_options(question: Optional[str] = None) -> List[str]:
@@ -103,6 +175,7 @@ def normalize_execution_plan(
     use_web_search: bool,
     question: Optional[str] = None,
     bypass_clarification: bool = False,
+    worker_nodes: Any = None,
 ) -> Dict[str, Any]:
     route = parsed.get("route") if parsed.get("route") in PLANNER_ROUTES else PlannerRoute.EXECUTE.value
     required_steps = infer_required_plan_steps(question)
@@ -115,27 +188,29 @@ def normalize_execution_plan(
         normalization_notes.append("direct_route_clamped_to_execute")
     raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
     steps: List[str] = []
+    by_type = _worker_nodes_by_type(worker_nodes)
+    by_id = {str(node["id"]): node for nodes in by_type.values() for node in nodes}
     if isinstance(raw_steps, list):
         for step in raw_steps:
-            if isinstance(step, str):
-                node = step
-            elif isinstance(step, dict):
-                node = step.get("node") or step.get("worker") or step.get("id")
-            else:
-                continue
-            if node in WORKER_NODE_ORDER and node not in steps:
-                steps.append(node)
-    if not use_web_search and WorkflowNodeType.WEB_WORKER.value in steps:
-        steps = [step for step in steps if step != WorkflowNodeType.WEB_WORKER.value]
+            node_id = _resolve_worker_reference(step, by_id=by_id, by_type=by_type)
+            if node_id and node_id not in steps:
+                steps.append(node_id)
+    web_node_ids = {str(node["id"]) for node in by_type.get(WorkflowNodeType.WEB_WORKER.value, [])}
+    if not use_web_search and any(step in web_node_ids for step in steps):
+        steps = [step for step in steps if step not in web_node_ids]
         normalization_notes.append("web_worker_removed_when_web_search_disabled")
     if route == PlannerRoute.EXECUTE.value:
         for required_step in required_steps:
-            if required_step not in steps:
-                steps.append(required_step)
+            required_node_id = _resolve_required_worker_type(required_step, by_type)
+            if required_node_id and required_node_id not in steps:
+                steps.append(required_node_id)
+            elif required_node_id is None:
+                normalization_notes.append(f"required_{required_step}_ambiguous_or_unavailable")
     if route == PlannerRoute.EXECUTE.value and not steps:
-        steps = [WorkflowNodeType.RETRIEVAL_WORKER.value]
+        default_node_id = _resolve_required_worker_type(WorkflowNodeType.RETRIEVAL_WORKER.value, by_type)
+        steps = [default_node_id] if default_node_id else []
         normalization_notes.append("empty_execute_plan_defaulted_to_retrieval_worker")
-    steps = ordered_plan_steps(steps)
+    steps = ordered_plan_steps(steps, worker_nodes)
     if route != PlannerRoute.EXECUTE.value:
         steps = []
     clarification_options = parsed.get("clarification_options")
@@ -217,29 +292,28 @@ def normalize_replanner_execution_plan(
     *,
     use_web_search: bool,
     allowed_tool_ids: Any,
+    worker_nodes: Any = None,
 ) -> Dict[str, Any]:
     normalization_notes: List[str] = []
     raw_steps = parsed.get("execution_plan") or parsed.get("steps") or []
     steps: List[str] = []
+    by_type = _worker_nodes_by_type(worker_nodes)
+    by_id = {str(node["id"]): node for nodes in by_type.values() for node in nodes}
     if isinstance(raw_steps, list):
         for step in raw_steps:
-            if isinstance(step, str):
-                node = step
-            elif isinstance(step, dict):
-                node = step.get("node") or step.get("worker") or step.get("id")
-            else:
-                continue
-            if node in WORKER_NODE_ORDER and node not in steps:
-                steps.append(node)
-    if not use_web_search and WorkflowNodeType.WEB_WORKER.value in steps:
-        steps = [step for step in steps if step != WorkflowNodeType.WEB_WORKER.value]
+            node_id = _resolve_worker_reference(step, by_id=by_id, by_type=by_type)
+            if node_id and node_id not in steps:
+                steps.append(node_id)
+    web_node_ids = {str(node["id"]) for node in by_type.get(WorkflowNodeType.WEB_WORKER.value, [])}
+    if not use_web_search and any(step in web_node_ids for step in steps):
+        steps = [step for step in steps if step not in web_node_ids]
         normalization_notes.append("web_worker_removed_when_web_search_disabled")
     allowed_ids = set(allowed_tool_ids if isinstance(allowed_tool_ids, list) else [])
-    if ToolContractId.LIVE_WEB_RECON.value not in allowed_ids and WorkflowNodeType.WEB_WORKER.value in steps:
-        steps = [step for step in steps if step != WorkflowNodeType.WEB_WORKER.value]
+    if ToolContractId.LIVE_WEB_RECON.value not in allowed_ids and any(step in web_node_ids for step in steps):
+        steps = [step for step in steps if step not in web_node_ids]
         normalization_notes.append("web_worker_removed_when_tool_disallowed")
     return {
-        "execution_plan": ordered_plan_steps(steps),
+        "execution_plan": ordered_plan_steps(steps, worker_nodes),
         "reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),
         "normalization_notes": normalization_notes,
     }

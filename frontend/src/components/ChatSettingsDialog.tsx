@@ -14,6 +14,7 @@ import {
     Tooltip,
     IconButton,
     MenuItem,
+    Chip,
 } from '@mui/material';
 import ReplayIcon from '@mui/icons-material/Replay';
 import { AgentWorkflow, PromptToolDefinition } from '../lib/api';
@@ -128,12 +129,28 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                 >
                     {agentWorkflows.map((pattern) => (
                         <MenuItem key={pattern.id} value={pattern.id}>
-                            {pattern.is_builtin ? pattern.name : `Custom: ${pattern.name || pattern.id}`}
+                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, width: '100%', minWidth: 0 }}>
+                                <Typography variant="body2" noWrap>
+                                    {pattern.name || pattern.id}
+                                </Typography>
+                                <Chip
+                                    size="small"
+                                    variant={pattern.is_builtin ? 'outlined' : 'filled'}
+                                    color={pattern.is_builtin ? 'default' : 'primary'}
+                                    label={pattern.is_builtin ? 'Built-in' : 'Custom'}
+                                    sx={{ flex: '0 0 auto' }}
+                                />
+                            </Box>
                         </MenuItem>
                     ))}
                     {agentWorkflowIsCustom && !selectedWorkflowListed ? (
                         <MenuItem value={agentWorkflowId}>
-                            Custom: {agentWorkflowId}
+                            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, width: '100%', minWidth: 0 }}>
+                                <Typography variant="body2" noWrap>
+                                    {agentWorkflowId}
+                                </Typography>
+                                <Chip size="small" color="primary" label="Custom" sx={{ flex: '0 0 auto' }} />
+                            </Box>
                         </MenuItem>
                     ) : null}
                 </TextField>

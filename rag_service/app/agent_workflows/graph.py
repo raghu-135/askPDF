@@ -50,6 +50,7 @@ from app.agent_workflows.hitl_runtime import (
 )
 from app.agent_workflows.planning import (
     WORKER_NODE_ORDER,
+    available_worker_node_ids,
     current_replan_count as _current_replan_count,
     fallback_clarification_options as _fallback_clarification_options,
     infer_required_plan_steps,
@@ -318,10 +319,11 @@ class NodeRegistry:
             use_web_search=bool(state.get("use_web_search", False)),
             question=state.get("question"),
             bypass_clarification=bool(state.get("bypass_clarification")),
+            worker_nodes=state.get("available_worker_nodes"),
         )
         worker_summary = selected_and_skipped_workers(
             normalized["execution_plan"],
-            WORKER_NODE_ORDER,
+            available_worker_node_ids(state.get("available_worker_nodes")) or WORKER_NODE_ORDER,
         )
         data = build_decision_node_event_data(
             leading_fields={
@@ -632,6 +634,7 @@ class NodeRegistry:
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
             allowed_tool_ids=state.get("allowed_tool_ids"),
+            worker_nodes=state.get("available_worker_nodes"),
         )
         replan_count = _current_replan_count(state) + 1
         history_item = {

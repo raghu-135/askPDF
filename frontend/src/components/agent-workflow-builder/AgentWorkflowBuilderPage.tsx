@@ -64,7 +64,6 @@ import BuilderGraphEditor from './BuilderGraphEditor';
 import BuilderInspector from './BuilderInspector';
 import BuilderNodePalette from './BuilderNodePalette';
 import BuilderPersistencePanel, {
-  type BuilderBoundaryMessage,
   type BuilderPersistedWorkflow,
   type BuilderPersistenceState,
 } from './BuilderPersistencePanel';
@@ -72,13 +71,6 @@ import BuilderValidationPanel from './BuilderValidationPanel';
 import BuilderTestStudio from './BuilderTestStudio';
 import BuilderResizeHandle from './BuilderResizeHandle';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
-
-interface BuilderInternalBoundary {
-  hasMetadata: boolean;
-  authoringEnabled: boolean;
-  runtimeEnabled: boolean;
-  messages: BuilderBoundaryMessage[];
-}
 
 type ContextualNodeRequest =
   | { mode: 'after'; source: string; route?: string }
@@ -201,55 +193,6 @@ const buildValidationIssues = (
   ];
 };
 
-const hasExplicitFalse = (boundary: Record<string, any>, keys: string[]) => (
-  keys.some((key) => boundary[key] === false)
-);
-
-const deriveInternalBoundary = (catalog: AgentWorkflowCatalogResponse | null): BuilderInternalBoundary => {
-  const rawBoundary = catalog?.auth_boundary || {};
-  const boundary = rawBoundary as Record<string, any>;
-  const hasMetadata = Object.keys(boundary).length > 0;
-  const authoringEnabled = !hasExplicitFalse(boundary, [
-    'authoring_enabled',
-    'internal_authoring_enabled',
-    'internal_agent_workflow_authoring_enabled',
-  ]);
-  const runtimeEnabled = !hasExplicitFalse(boundary, [
-    'custom_runtime_enabled',
-    'custom_workflows_enabled',
-    'runtime_custom_execution_enabled',
-  ]);
-  const messages: BuilderBoundaryMessage[] = [];
-
-  if (!hasMetadata) {
-    return {
-      hasMetadata,
-      authoringEnabled,
-      runtimeEnabled,
-      messages,
-    };
-  }
-  if (!authoringEnabled) {
-    messages.push({
-      severity: 'error',
-      message: 'Internal workflow authoring is disabled by backend feature flags. Builder edits and saves are read-only.',
-    });
-  }
-  if (!runtimeEnabled) {
-    messages.push({
-      severity: 'warning',
-      message: 'Custom workflow runtime execution is disabled, so saved custom workflows are visible but will not run in chat yet.',
-    });
-  }
-
-  return {
-    hasMetadata,
-    authoringEnabled,
-    runtimeEnabled,
-    messages,
-  };
-};
-
 const usePrefersDarkMode = () => {
   const [darkMode, setDarkMode] = useState(false);
   useEffect(() => {
@@ -284,8 +227,7 @@ export default function AgentWorkflowBuilderPage() {
   const [busyAction, setBusyAction] = useState<'save' | 'delete' | null>(null);
   const [persistenceStatus, setPersistenceStatus] = useState<string | null>(null);
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
-  const boundary = useMemo(() => deriveInternalBoundary(catalog), [catalog]);
-  const authoringDisabled = !boundary.authoringEnabled;
+  const authoringDisabled = false;
   const undoStack = useRef<AgentWorkflowBuilderState[]>([]);
   const redoStack = useRef<AgentWorkflowBuilderState[]>([]);
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -984,7 +926,7 @@ export default function AgentWorkflowBuilderPage() {
               errorMessage={persistenceError}
               canSave={Boolean(spec && persistenceForm.name.trim())}
               authoringDisabled={authoringDisabled}
-              boundaryMessages={boundary.messages}
+              boundaryMessages={[]}
               onSave={handleSaveInternalWorkflow}
               onDelete={handleDeleteInternalWorkflow}
               showHeader={false}

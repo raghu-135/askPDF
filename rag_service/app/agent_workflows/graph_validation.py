@@ -355,10 +355,14 @@ class GenericGraphValidator:
         target_type = node_types_by_id.get(target)
         if not source_type or not target_type:
             return []
+        errors: list[str] = []
         allowed_children = set((node_catalog.get(source_type) or {}).get("allowed_child_types") or [])
         if target_type not in allowed_children:
-            return [f"node {source} type {source_type} cannot connect to {target} type {target_type}"]
-        return []
+            errors.append(f"node {source} type {source_type} cannot connect to child {target} type {target_type}")
+        allowed_parents = set((node_catalog.get(target_type) or {}).get("allowed_parent_types") or [])
+        if source_type not in allowed_parents:
+            errors.append(f"node {target} type {target_type} cannot accept parent {source} type {source_type}")
+        return errors
 
     def _collect_loop_policy_errors(
         self,
