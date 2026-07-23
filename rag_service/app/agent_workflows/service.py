@@ -6,7 +6,7 @@ import os
 from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
-from app.agent_workflows.checkpointing import open_agent_checkpointer
+from app.agent_workflows.checkpointing import delete_agent_checkpoints, open_agent_checkpointer
 from app.agent_workflows.debug_trace import AgentTraceRecorder, merge_debug_payloads
 from app.agent_workflows.enums import InterruptStatus
 from app.agent_workflows.metrics import build_run_metrics
@@ -17,6 +17,7 @@ from app.db import AgentRunStatus, ChatTurnStatus, get_thread_settings
 
 
 logger = logging.getLogger(__name__)
+CLARIFICATION_REQUIRED_STATUS = "clarification_required"
 
 
 def _workflow_version_info(workflow: Any) -> SimpleNamespace:
@@ -212,6 +213,48 @@ class AgentRunService:
                     else AgentRunStatus.COMPLETED.value
                 )
             metrics = build_run_metrics(result, duration_ms=duration_ms)
+            if status == CLARIFICATION_REQUIRED_STATUS:
+                # Keep a terminal record only as a cleanup fallback. The normal path removes
+                # both checkpoint state and the exact run before returning clarification.
+                try:
+                    await self.repository.complete_run(
+                        run.id,
+                        status=AgentRunStatus.CLARIFICATION.value,
+                        metrics_json=metrics,
+                        error_json=error_json,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Could not mark temporary clarification run terminal before cleanup | "
+                        "thread_id=%s run_id=%s",
+                        thread_id,
+                        run.id,
+                    )
+                try:
+                    await delete_agent_checkpoints([str(run.checkpoint_thread_id or run.id)])
+                    deleted = await self.repository.delete_run(run.id)
+                    if not deleted:
+                        raise RuntimeError(f"Clarification agent run {run.id} was not found during cleanup")
+                except Exception:
+                    logger.exception(
+                        "Clarification cleanup failed; terminal run remains eligible for pruning | "
+                        "thread_id=%s run_id=%s checkpoint_thread_id=%s",
+                        thread_id,
+                        run.id,
+                        run.checkpoint_thread_id,
+                    )
+                result.update(
+                    {
+                        "agent_run_id": None,
+                        "checkpoint_thread_id": None,
+                        "agent_trace_refs": None,
+                        "agent_workflow_id": workflow.id,
+                        "agent_workflow_version": workflow_version.version if workflow_version is not None else None,
+                        "node_events": [],
+                        "tool_events": [],
+                    }
+                )
+                return result
             if status == AgentRunStatus.AWAITING_HUMAN.value:
                 if hasattr(trace_recorder, "record_interrupted_snapshot"):
                     trace_recorder.record_interrupted_snapshot(

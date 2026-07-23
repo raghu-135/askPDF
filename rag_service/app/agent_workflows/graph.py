@@ -46,10 +46,10 @@ from app.agent_workflows.hitl_runtime import (
 )
 from app.agent_workflows.planning import (
     WORKER_NODE_ORDER,
-    bounded_string_list as _bounded_string_list,
     current_replan_count as _current_replan_count,
     fallback_clarification_options as _fallback_clarification_options,
     infer_required_plan_steps,
+    normalize_clarification_options as _normalize_clarification_options,
     normalize_evaluator_report,
     normalize_execution_plan,
     normalize_replanner_execution_plan as _normalize_replanner_execution_plan,
@@ -392,9 +392,9 @@ class NodeRegistry:
         route = requested_route if requested_route in allowed_routes else fallback_route
         clarification_options = parsed.get("clarification_options")
         if route == RouterRoute.CLARIFY.value:
-            clarification_options = _bounded_string_list(clarification_options)
-            if not clarification_options:
-                clarification_options = _fallback_clarification_options()
+            clarification_options = _normalize_clarification_options(clarification_options)
+            if len(clarification_options) < 2:
+                clarification_options = _fallback_clarification_options(state.get("question"))
         route_reason = str(parsed.get("reason") or "")
         if requested_route != route:
             route_reason = (

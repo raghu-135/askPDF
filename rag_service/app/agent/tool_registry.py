@@ -438,8 +438,12 @@ TOOL_FRIENDLY_CONFIG = {
     TOOL_NAME_ASK_FOR_CLARIFICATION: {
         "id": TOOL_CLARIFY_INTENT,
         "display_name": "Clarify Intent",
-        "description": "Present 2–4 alternative interpretations for user selection.",
-        "default_prompt": "Use only when ambiguity would materially change the answer.",
+        "description": "Present 2–4 complete alternative questions for user selection.",
+        "default_prompt": (
+            "Use only when ambiguity would materially change the answer. Return plausible, "
+            "self-contained questions that can be submitted exactly as written; never frame "
+            "them as 'Did you mean', 'Are you asking', 'Do you want', or 'Do I want'."
+        ),
     },
     TOOL_NAME_GET_THREAD_SHAPE: {
         "id": TOOL_THREAD_SHAPE,

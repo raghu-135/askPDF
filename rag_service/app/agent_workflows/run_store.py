@@ -82,6 +82,18 @@ async def create_run(
     return run
 
 
+async def delete_run(session: AsyncSession, run_id: str) -> bool:
+    """Delete one exact agent run without applying retention cutoffs."""
+
+    async with session.begin():
+        run = await session.get(AgentRun, run_id)
+        if run is None:
+            return False
+        await session.delete(run)
+        await session.flush()
+        return True
+
+
 async def complete_run(
     session: AsyncSession,
     run_id: str,

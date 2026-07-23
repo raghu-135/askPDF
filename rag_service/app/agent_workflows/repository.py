@@ -34,6 +34,7 @@ from app.agent_workflows.run_cleanup import (
 from app.agent_workflows.run_store import (
     complete_run as run_store_complete_run,
     create_run as run_store_create_run,
+    delete_run as run_store_delete_run,
     get_run as run_store_get_run,
     list_chat_turns_for_run as run_store_list_chat_turns_for_run,
     list_runs_for_thread as run_store_list_runs_for_thread,
@@ -281,6 +282,12 @@ class AgentWorkflowRepository:
             running_status=RUN_STATUS_RUNNING,
             run_metadata_json=run_metadata_json,
         )
+
+    async def delete_run(self, run_id: str) -> bool:
+        """Delete one exact agent run."""
+
+        session = await self._get_session()
+        return await run_store_delete_run(session, run_id)
 
     async def mark_run_awaiting_human(
         self,

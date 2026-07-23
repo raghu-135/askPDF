@@ -153,6 +153,44 @@ def _node_events_with_interrupted_gate(
     return node_events
 
 
+def _clarification_response(
+    *,
+    question: str,
+    result: Dict[str, Any],
+    agent_run_context: Dict[str, Any],
+    duration_ms: float,
+) -> Dict[str, Any]:
+    answer = result.get("final_answer") or "I was unable to compose an answer. Please try rephrasing your question."
+    return {
+        "answer": answer,
+        "rewritten_query": question,
+        "chat_turn_id": None,
+        "user_message_id": None,
+        "assistant_message_id": None,
+        "used_chat_ids": [],
+        "document_sources": [],
+        "web_sources": [],
+        "clarification_options": result.get("clarification_options") or [],
+        "reasoning": "",
+        "reasoning_available": False,
+        "reasoning_format": ReasoningFormat.NONE.value,
+        "context": "The question needs clarification before it can be submitted.",
+        "route": result.get("route"),
+        "route_reason": result.get("route_reason"),
+        "node_events": result.get("node_events") or [],
+        "tool_events": result.get("tool_events") or [],
+        "duration_ms": duration_ms,
+        "status": "clarification_required",
+        "agent_run_id": None,
+        "agent_run_turn_kind": None,
+        "agent_run_sequence": None,
+        "agent_trace_refs": None,
+        "agent_workflow_id": agent_run_context.get("agent_workflow_id"),
+        "agent_workflow_version": agent_run_context.get("agent_workflow_version"),
+        "checkpoint_thread_id": None,
+    }
+
+
 async def _persist_success_turn(
     *,
     thread_id: str,
@@ -163,8 +201,7 @@ async def _persist_success_turn(
     success_context: str,
 ) -> Dict[str, Any]:
     answer = result.get("final_answer") or "I was unable to compose an answer. Please try rephrasing your question."
-    clarification_options = result.get("clarification_options")
-    status = ChatTurnStatus.CLARIFICATION.value if clarification_options else ChatTurnStatus.COMPLETED.value
+    status = ChatTurnStatus.COMPLETED.value
     embedding_model = result.get("embedding_model")
     llm_model = result.get("llm_model")
     context_window = result.get("context_window") or DEFAULT_TOKEN_BUDGET
@@ -185,7 +222,7 @@ async def _persist_success_turn(
         web_sources=result.get("web_sources") or [],
         document_sources=result.get("document_sources") or [],
         used_chat_ids=result.get("used_chat_ids") or [],
-        clarification_options=clarification_options,
+        clarification_options=None,
         metadata=metadata,
         agent_run_id=agent_run_context.get("agent_run_id"),
         agent_run_turn_kind="assistant_final",
@@ -193,7 +230,7 @@ async def _persist_success_turn(
         agent_trace_refs_json=None,
     )
 
-    if not clarification_options and embedding_model and llm_model:
+    if embedding_model and llm_model:
         indexing_result = await index_chat_memory_for_thread(
             thread_id=thread_id,
             message_id=turn.id,
@@ -222,7 +259,7 @@ async def _persist_success_turn(
         "used_chat_ids": result.get("used_chat_ids") or [],
         "document_sources": result.get("document_sources") or [],
         "web_sources": result.get("web_sources") or [],
-        "clarification_options": clarification_options,
+        "clarification_options": None,
         "reasoning": result.get("reasoning") or "",
         "reasoning_available": bool(result.get("reasoning_available")),
         "reasoning_format": result.get("reasoning_format") or ReasoningFormat.NONE.value,
@@ -492,13 +529,22 @@ async def _handle_compiled_rag_chat(
             }
 
         result = _without_runtime_keys(result)
-        payload = await _persist_success_turn(
-            thread_id=thread_id,
-            question=question,
-            result=result,
-            agent_run_context=agent_run_context,
-            duration_ms=duration_ms,
-            success_context=success_context,
+        payload = (
+            _clarification_response(
+                question=question,
+                result=result,
+                agent_run_context=agent_run_context,
+                duration_ms=duration_ms,
+            )
+            if result.get("clarification_options")
+            else await _persist_success_turn(
+                thread_id=thread_id,
+                question=question,
+                result=result,
+                agent_run_context=agent_run_context,
+                duration_ms=duration_ms,
+                success_context=success_context,
+            )
         )
 
         logger.info(
@@ -692,13 +738,22 @@ async def resume_compiled_rag_chat(
 
     result = _without_runtime_keys(result)
     question = str(result.get("question") or snapshot_values.get("question") or "")
-    payload = await _persist_success_turn(
-        thread_id=run.thread_id,
-        question=question,
-        result=result,
-        agent_run_context=agent_run_context,
-        duration_ms=duration_ms,
-        success_context="Context retrieved by resumed compiled Agent workflow.",
+    payload = (
+        _clarification_response(
+            question=question,
+            result=result,
+            agent_run_context=agent_run_context,
+            duration_ms=duration_ms,
+        )
+        if result.get("clarification_options")
+        else await _persist_success_turn(
+            thread_id=run.thread_id,
+            question=question,
+            result=result,
+            agent_run_context=agent_run_context,
+            duration_ms=duration_ms,
+            success_context="Context retrieved by resumed compiled Agent workflow.",
+        )
     )
     logger.info(
         "Checkpointed agent run resumed | run_id=%s thread_id=%s route=%s status=%s elapsed_ms=%.1f",

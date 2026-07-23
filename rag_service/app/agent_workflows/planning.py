@@ -40,6 +40,16 @@ DOCUMENT_PLAN_RE = re.compile(
     re.IGNORECASE,
 )
 
+META_CLARIFICATION_RE = re.compile(
+    r"^(?:"
+    r"(?:did|do|does|are|were|can|could|would|should)\s+you\s+(?:mean|want|intend|refer|ask)"
+    r"|(?:do|did|would|should)\s+i\s+(?:mean|want|intend|refer|ask)"
+    r"|(?:is|was)\s+your\s+(?:question|intent|request)"
+    r"|(?:is|was|does|did)\s+(?:the\s+)?user\b"
+    r")",
+    re.IGNORECASE,
+)
+
 
 def infer_required_plan_steps(question: Optional[str]) -> List[str]:
     """Return worker nodes that should be present for obvious query intent cues."""
@@ -63,12 +73,28 @@ def ordered_plan_steps(steps: List[str]) -> List[str]:
     return [node for node in WORKER_NODE_ORDER if node in steps]
 
 
-def fallback_clarification_options() -> List[str]:
+def fallback_clarification_options(question: Optional[str] = None) -> List[str]:
+    original = compact_preview(str(question or "my original question").strip(), limit=180).rstrip(" ?!.,;:")
     return [
-        "Do I want an answer based on the uploaded document evidence?",
-        "Do I want an answer based on what we discussed earlier in this thread?",
-        "Do I want an answer based on the timeline or order of events in this thread?",
+        f'Based on the uploaded documents, what is the answer to "{original}"?',
+        f'Based on our earlier conversation, what is the answer to "{original}"?',
+        f'Based on the thread timeline, what is the answer to "{original}"?',
     ]
+
+
+def normalize_clarification_options(value: Any, *, limit: int = 4, chars: int = 240) -> List[str]:
+    """Return distinct, bounded questions that are not meta-framed clarification prompts."""
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for text in bounded_string_list(value, limit=limit, chars=chars):
+        candidate = text.strip()
+        key = candidate.casefold()
+        if not candidate or key in seen or META_CLARIFICATION_RE.match(candidate):
+            continue
+        seen.add(key)
+        normalized.append(candidate)
+    return normalized
 
 
 def normalize_execution_plan(
@@ -110,9 +136,9 @@ def normalize_execution_plan(
         steps = []
     clarification_options = parsed.get("clarification_options")
     if route == PlannerRoute.CLARIFY.value:
-        clarification_options = bounded_string_list(clarification_options)
-        if not clarification_options:
-            clarification_options = fallback_clarification_options()
+        clarification_options = normalize_clarification_options(clarification_options)
+        if len(clarification_options) < 2:
+            clarification_options = fallback_clarification_options(question)
     return {
         "route": route,
         "route_reason": str(parsed.get("reason") or parsed.get("route_reason") or ""),

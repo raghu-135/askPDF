@@ -43,8 +43,12 @@ Route this askPDF question to exactly one route.
 - Do not choose `web` when live web search is disabled; choose document, memory, direct, or clarify instead.
 - Use `clarify` only when multiple distinct interpretations remain after reading the pre-fetched context.
 - Clarification options must contain 2-4 complete, self-contained questions.
-- Each clarification option must be written as if the user is speaking in first person.
+- Infer the most likely distinct meanings of the user's message.
+- Each option must be a plausible interpretation written as the exact standalone question that can be submitted next without additional context.
+- Each option must directly ask for the likely answer in natural user voice. Use first-person wording only when it is natural.
 - Clarification options must be parallel: same task shape, same level of detail, only the ambiguity changes.
+- Never write meta-questions that ask whether an interpretation is correct. Do not begin options with wording such as "Did you mean", "Are you asking", "Do you want", or "Do I want", and do not describe what "the user" may have intended.
+- The options are shown directly as editable, clickable choices. The selected option is sent back as the next user question exactly as written.
 
 ## Worker Query Formulation Guidance
 

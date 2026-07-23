@@ -1325,11 +1325,11 @@ class TestRouterRagWorkflowValidator:
         assert normalized["route"] == "clarify"
         assert normalized["execution_plan"] == []
         assert normalized["clarification_options"] == [
-            "Do I want an answer based on the uploaded document evidence?",
-            "Do I want an answer based on what we discussed earlier in this thread?",
-            "Do I want an answer based on the timeline or order of events in this thread?",
+            'Based on the uploaded documents, what is the answer to "Which latest document do you mean"?',
+            'Based on our earlier conversation, what is the answer to "Which latest document do you mean"?',
+            'Based on the thread timeline, what is the answer to "Which latest document do you mean"?',
         ]
-        assert all(option.startswith("Do I want") for option in normalized["clarification_options"])
+        assert all("Do I want" not in option for option in normalized["clarification_options"])
 
     def test_normalize_execution_plan_coerces_clarification_options_to_strings(self):
         normalized = normalize_execution_plan(
@@ -1352,6 +1352,28 @@ class TestRouterRagWorkflowValidator:
             "Which uploaded document?",
             "Which previous answer?",
             "not a supported option shape",
+        ]
+
+    def test_normalize_execution_plan_rejects_duplicate_and_meta_clarification_options(self):
+        normalized = normalize_execution_plan(
+            {
+                "route": "clarify",
+                "execution_plan": [],
+                "reason": "ambiguous",
+                "clarification_options": [
+                    "Did you mean the uploaded report?",
+                    "What risks are described in the uploaded report?",
+                    "what risks are described in the uploaded report?",
+                    "What risks did we discuss earlier in this thread?",
+                ],
+            },
+            use_web_search=False,
+            question="What about the risks?",
+        )
+
+        assert normalized["clarification_options"] == [
+            "What risks are described in the uploaded report?",
+            "What risks did we discuss earlier in this thread?",
         ]
 
     def test_normalize_evaluator_report_bounds_payload(self):
@@ -1393,6 +1415,16 @@ class TestRouterRagWorkflowValidator:
         assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
         assert "Do not choose `direct` for latest, first, since, before, after, or current questions" in prompt
         assert "`timeline_worker` queries should preserve temporal anchor words" in prompt
+
+    def test_clarification_prompts_require_directly_submittable_questions(self):
+        prompt_root = Path(__file__).resolve().parents[1] / "app" / "prompts" / "agent_workflows"
+        for prompt_name in ("router_rag_router.md", "plan_execute_planner.md"):
+            prompt = (prompt_root / prompt_name).read_text(encoding="utf-8")
+            assert "exact standalone question" in prompt
+            assert "selected option is sent back as the next user question exactly as written" in prompt
+            assert '"Did you mean"' in prompt
+            assert '"Do I want"' in prompt
+            assert "Never write meta-questions" in prompt
 
 
 class TestRouterRagGraphToolConsumers:
@@ -3394,6 +3426,110 @@ class TestAgentRunService:
         assert run.resolved_spec_json["workflow_id"] == ROUTER_RAG_AGENT_ID
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("run_delete_fails", [False, True])
+    async def test_run_thread_chat_discards_clarification_run_and_checkpoint(
+        self,
+        engine,
+        sample_thread,
+        monkeypatch,
+        run_delete_fails,
+    ):
+        session_factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        captured_run_id = None
+        deleted_checkpoint_ids = []
+        cleanup_events = []
+
+        async with session_factory() as repo_session:
+            repo = AgentWorkflowRepository(repo_session)
+            await repo.seed_builtin_workflows()
+            original_delete_run = repo.delete_run
+
+            async def fake_delete_run(run_id):
+                cleanup_events.append(("run", run_id))
+                if run_delete_fails:
+                    raise RuntimeError("simulated exact-run cleanup failure")
+                return await original_delete_run(run_id)
+
+            monkeypatch.setattr(repo, "delete_run", fake_delete_run)
+
+            async def fake_get_thread_settings(_thread_id):
+                return {}
+
+            async def fake_handle_router_rag_chat(
+                _thread_id,
+                _req,
+                _embedding_model,
+                *,
+                resolved_spec,
+                agent_run_context,
+                trace_recorder,
+                **_kwargs,
+            ):
+                nonlocal captured_run_id
+                captured_run_id = agent_run_context["agent_run_id"]
+                return {
+                    "answer": "I need a bit more clarification.",
+                    "status": "clarification_required",
+                    "user_message_id": None,
+                    "assistant_message_id": None,
+                    "agent_run_id": None,
+                    "clarification_options": [
+                        "What risks are described in the uploaded report?",
+                        "What risks did we discuss earlier in this thread?",
+                    ],
+                    "document_sources": [],
+                    "web_sources": [],
+                    "used_chat_ids": [],
+                    "route": "clarify",
+                    "node_events": [],
+                    "tool_events": [],
+                }
+
+            async def fake_delete_agent_checkpoints(checkpoint_ids, *, checkpointer=None):
+                deleted_checkpoint_ids.extend(checkpoint_ids)
+                cleanup_events.extend(("checkpoint", checkpoint_id) for checkpoint_id in checkpoint_ids)
+                return list(checkpoint_ids)
+
+            monkeypatch.setattr("app.agent_workflows.service.get_thread_settings", fake_get_thread_settings)
+            monkeypatch.setattr(
+                "app.agent_workflows.router_runtime.handle_router_rag_chat",
+                fake_handle_router_rag_chat,
+            )
+            monkeypatch.setattr(
+                "app.agent_workflows.service.delete_agent_checkpoints",
+                fake_delete_agent_checkpoints,
+            )
+
+            result = await AgentRunService(repository=repo).run_thread_chat(
+                sample_thread.id,
+                self._agent_req("What about it?"),
+                sample_thread.embedding_model,
+            )
+            retained_run = await repo.get_run(captured_run_id)
+            retained_turns = await repo.list_chat_turns_for_run(captured_run_id)
+
+        assert result["status"] == "clarification_required"
+        assert result["agent_run_id"] is None
+        assert result["user_message_id"] is None
+        assert result["assistant_message_id"] is None
+        assert deleted_checkpoint_ids == [captured_run_id]
+        assert cleanup_events == [
+            ("checkpoint", captured_run_id),
+            ("run", captured_run_id),
+        ]
+        if run_delete_fails:
+            assert retained_run is not None
+            assert retained_run.status == "clarification"
+        else:
+            assert retained_run is None
+        assert retained_turns == []
+
+    @pytest.mark.asyncio
     async def test_run_thread_chat_defaults_to_router_rag(self, engine, sample_thread, monkeypatch):
         session_factory = async_sessionmaker(
             engine,
@@ -5372,7 +5508,7 @@ class TestRouterRagRuntime:
             ("memory", ["context_loader", "router", "memory_worker", "synthesizer", "finalizer"], "completed"),
             ("timeline", ["context_loader", "router", "timeline_worker", "synthesizer", "finalizer"], "completed"),
             ("web", ["context_loader", "router", "web_worker", "synthesizer", "finalizer"], "completed"),
-            ("clarify", ["context_loader", "router", "finalizer"], "clarification"),
+            ("clarify", ["context_loader", "router", "finalizer"], "clarification_required"),
         ],
     )
     async def test_handle_router_rag_chat_covers_compiled_routes(
@@ -5391,6 +5527,9 @@ class TestRouterRagRuntime:
             expire_on_commit=False,
             autoflush=False,
         )
+        created_turn_ids = []
+        index_calls = []
+        stats_calls = []
 
         class FakeLlm:
             def __init__(self):
@@ -5426,12 +5565,14 @@ class TestRouterRagRuntime:
             }
 
         async def fake_index_chat_memory_for_thread(**kwargs):
+            index_calls.append(kwargs)
             return {}
 
         async def fake_update_message_context_compact(_turn_id, _compact_text):
             return None
 
         async def fake_increment_qa_stats(_thread_id, _qa_chars):
+            stats_calls.append((_thread_id, _qa_chars))
             return None
 
         async def fake_create_chat_turn(
@@ -5482,6 +5623,7 @@ class TestRouterRagRuntime:
                 write_session.add(turn)
                 await write_session.commit()
                 await write_session.refresh(turn)
+            created_turn_ids.append(turn.id)
             return turn
 
         document_payload = {
@@ -5550,24 +5692,39 @@ class TestRouterRagRuntime:
         )
 
         async with session_factory() as check_session:
-            turn = await check_session.get(ChatTurn, result["user_message_id"].split(":")[0])
+            turn = (
+                await check_session.get(ChatTurn, result["user_message_id"].split(":")[0])
+                if result["user_message_id"]
+                else None
+            )
 
         assert result["route"] == route
         assert [event["node"] for event in result["node_events"]] == expected_nodes
         assert all(isinstance(event.get("elapsed_ms"), (int, float)) for event in result["node_events"])
-        assert turn is not None
-        assert turn.status == expected_status
-        assert turn.agent_run_id == run_id
-        assert turn.agent_run_turn_kind == "assistant_final"
-        assert turn.agent_run_sequence == 0
-        assert turn.agent_trace_refs_json is None
-        assert turn.payload["metadata"]["agent_route"] == route
-        assert "agent_debug_trace" not in turn.payload["metadata"]
-        assert "agent_node_events" not in turn.payload["metadata"]
-        assert "agent_tool_events" not in turn.payload["metadata"]
         if route == "clarify":
+            assert turn is None
+            assert result["status"] == expected_status
+            assert result["user_message_id"] is None
+            assert result["assistant_message_id"] is None
+            assert result["agent_run_id"] is None
+            assert created_turn_ids == []
+            assert index_calls == []
+            assert stats_calls == []
             assert result["tool_events"] == []
         else:
+            assert turn is not None
+            assert turn.status == expected_status
+            assert turn.agent_run_id == run_id
+            assert turn.agent_run_turn_kind == "assistant_final"
+            assert turn.agent_run_sequence == 0
+            assert turn.agent_trace_refs_json is None
+            assert turn.payload["metadata"]["agent_route"] == route
+            assert "agent_debug_trace" not in turn.payload["metadata"]
+            assert "agent_node_events" not in turn.payload["metadata"]
+            assert "agent_tool_events" not in turn.payload["metadata"]
+            assert created_turn_ids == [turn.id]
+            assert len(index_calls) == 1
+            assert len(stats_calls) == 1
             assert len(result["tool_events"]) == 1
             assert result["tool_events"][0]["caller_node"] == expected_nodes[2]
             assert result["tool_events"][0]["ok"] is True
@@ -5850,6 +6007,75 @@ async def test_thread_chat_content_negotiation_streams_compact_progress(monkeypa
     assert "event: run.completed" in payload
     assert '"answer": "done"' in payload
     assert "must-not-stream" not in payload
+
+
+@pytest.mark.asyncio
+async def test_thread_chat_returns_non_persistent_clarification_for_json_and_sse(monkeypatch):
+    import app.api.messages as messages_api
+
+    class FakeService:
+        async def run_thread_chat(self, thread_id, req, embedding_model, *, execution_event_sink=None):
+            return {
+                "answer": "I need a bit more clarification.",
+                "status": "clarification_required",
+                "agent_run_id": None,
+                "user_message_id": None,
+                "assistant_message_id": None,
+                "used_chat_ids": [],
+                "document_sources": [],
+                "web_sources": [],
+                "clarification_options": [
+                    "What risks are described in the uploaded report?",
+                    "What risks did we discuss earlier in this thread?",
+                ],
+            }
+
+    async def fake_get_thread(_thread_id):
+        return SimpleNamespace(embedding_model="embed-test")
+
+    async def fake_get_settings(_thread_id):
+        return {}
+
+    async def fake_supports_replans(_settings):
+        return False
+
+    monkeypatch.setattr(messages_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(messages_api, "get_thread_settings", fake_get_settings)
+    monkeypatch.setattr(messages_api, "_settings_workflow_supports_replans", fake_supports_replans)
+    monkeypatch.setattr(messages_api, "AgentRunService", FakeService)
+    request = SimpleNamespace(
+        thread_id="thread-clarify",
+        question="What about it?",
+        llm_model="model",
+        replans=None,
+        system_role_override="",
+        tool_instructions_override={},
+        custom_instructions_override="",
+    )
+
+    json_result = await messages_api.thread_chat_endpoint(
+        "thread-clarify",
+        request,
+        accept="application/json",
+    )
+    stream_response = await messages_api.thread_chat_endpoint(
+        "thread-clarify",
+        request,
+        accept="text/event-stream",
+    )
+    chunks = []
+    async for chunk in stream_response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    payload = "".join(chunks)
+
+    assert json_result["status"] == "clarification_required"
+    assert json_result["agent_run_id"] is None
+    assert json_result["user_message_id"] is None
+    assert json_result["assistant_message_id"] is None
+    assert "event: run.completed" in payload
+    assert '"status": "clarification_required"' in payload
+    assert '"run_id": null' in payload
+    assert "What risks are described in the uploaded report?" in payload
 
 
 @pytest.mark.asyncio

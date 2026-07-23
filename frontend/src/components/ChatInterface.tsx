@@ -238,7 +238,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const messagesEndRef = useRef<null | HTMLDivElement>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
-    const lastClarificationIdsRef = useRef<{ userId: string | null; assistantId: string | null } | null>(null);
     const chatRootRef = useRef<HTMLDivElement | null>(null);
     const humanReviewSubmissionKeyRef = useRef<string | null>(null);
     const manuallyToggledAgentRunsRef = useRef(new Set<string>());
@@ -289,30 +288,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setIsClarificationResizing(false);
     }, []);
 
-    const cleanupClarificationTurn = (ids = lastClarificationIdsRef.current) => {
-        setMessages(prev => prev.filter(m => {
-            if (m.id.startsWith('clarify-')) return false;
-            if (ids && (m.id === ids.userId || m.id === ids.assistantId)) return false;
-            return true;
-        }));
-
-        if (ids && (ids.assistantId || ids.userId)) {
-            const deleteTargetId = ids.assistantId || ids.userId;
-            deleteMessage(deleteTargetId)
-                .then(() => {
-                    if (lastClarificationIdsRef.current === ids) {
-                        lastClarificationIdsRef.current = null;
-                    }
-                })
-                .catch(err => {
-                    lastClarificationIdsRef.current = ids;
-                    console.warn('Failed to delete clarification message pair:', err);
-                });
-        } else {
-            lastClarificationIdsRef.current = null;
-        }
-    };
-
     useEffect(() => {
         if (!isClarificationResizing) return;
 
@@ -343,7 +318,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         } else {
             setMessages([]);
             setClarificationOptions(null);
-            lastClarificationIdsRef.current = null;
             setIndexingStatus(ChatComposerIndexingStatus.Ready);
             applyThreadSettingsToState(undefined);
             setIsEmbeddingModelValid(null);
@@ -354,7 +328,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     useEffect(() => {
         if (activeThread) {
             setClarificationOptions(null);
-            lastClarificationIdsRef.current = null;
             setEditingMessageId(null);
             setEditingOriginalText('');
             setAgentRunDetails({});
@@ -975,15 +948,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const handleSend = async (
-        overrideInput?: string | React.SyntheticEvent,
-        options?: { isClarificationSelection?: boolean }
-    ) => {
+    const handleSend = async (overrideInput?: string | React.SyntheticEvent) => {
         const rawTextToSend = typeof overrideInput === 'string' ? overrideInput : input;
         const textToSend = rawTextToSend.trim();
-        const isClarificationSelection = Boolean(options?.isClarificationSelection);
-        const priorClarificationIds = isClarificationSelection ? lastClarificationIdsRef.current : null;
-        const editMessageId = !isClarificationSelection ? editingMessageId : null;
+        const editMessageId = editingMessageId;
         const editOriginalText = editingOriginalText.trim();
         const isEditingQuestion = Boolean(editMessageId);
 
@@ -1033,19 +1001,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 }
             }
 
-            setMessages(prev => {
-                let updated = prev;
-                // Immediate replacement: If this is a clarification selection, remove the previous "ambiguous" turn
-                if (isClarificationSelection) {
-                    const lastIds = priorClarificationIds;
-                    updated = updated.filter(m => {
-                        if (m.id.startsWith('clarify-')) return false;
-                        if (lastIds && (m.id === lastIds.userId || m.id === lastIds.assistantId)) return false;
-                        return true;
-                    });
-                }
-                return [...updated, tempUserMsg, tempAssistantMsg];
-            });
+            setMessages(prev => [...prev, tempUserMsg, tempAssistantMsg]);
 
             let response: ThreadChatResponse | undefined;
             let terminalStreamError: string | undefined;
@@ -1147,12 +1103,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     setEditingMessageId(null);
                     setEditingOriginalText('');
                 }
-                if (isClarificationSelection) {
-                    if (priorClarificationIds) {
-                        cleanupClarificationTurn(priorClarificationIds);
-                    }
-                    lastClarificationIdsRef.current = null;
-                }
                 return;
             }
 
@@ -1165,14 +1115,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                         .map((text) => ({ text, isOriginal: false })),
                     { text: textToSend, isOriginal: true }
                 ]);
-                const clarificationIds = {
-                    userId: response.user_message_id ?? null,
-                    assistantId: response.assistant_message_id ?? null
-                };
-                lastClarificationIdsRef.current = clarificationIds;
-
                 setMessages(prev => prev.filter(m => m.id !== tempUserMsg.id && m.id !== tempAssistantMsg.id));
-                cleanupClarificationTurn(clarificationIds);
+                if (isEditingQuestion) {
+                    setEditingMessageId(null);
+                    setEditingOriginalText('');
+                }
             } else {
                 // Normal flow: update messages with real IDs and add assistant response
                 setMessages(prev => {
@@ -1234,14 +1181,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 }
             }
 
-            if (isClarificationSelection) {
-                if (priorClarificationIds) {
-                    cleanupClarificationTurn(priorClarificationIds);
-                }
-                if (!response.clarification_options) {
-                    lastClarificationIdsRef.current = null;
-                }
-            }
         } catch (err: any) {
             console.error(err);
             const errorMessage: ChatMessage = {
@@ -2072,7 +2011,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                         size="small"
                                         onClick={() => {
                                             setClarificationOptions(null);
-                                            cleanupClarificationTurn();
                                         }}
                                         sx={{ flex: '0 0 auto' }}
                                     >
@@ -2129,7 +2067,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     color="primary"
                                                     size="medium"
                                                     disabled={!trimmedChoiceText || loading}
-                                                    onClick={() => handleSend(trimmedChoiceText, { isClarificationSelection: true })}
+                                                    onClick={() => handleSend(trimmedChoiceText)}
                                                     sx={{ mt: 0.25 }}
                                                 >
                                                     <SendIcon fontSize="medium" />

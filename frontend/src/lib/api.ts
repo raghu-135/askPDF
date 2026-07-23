@@ -1243,7 +1243,7 @@ export interface ThreadChatResponse {
   reasoning_format?: ReasoningFormatValue;
   rewritten_query?: string;
   clarification_options?: string[] | null;
-  agent_run_id?: string;
+  agent_run_id?: string | null;
   agent_run_turn_kind?: string;
   agent_run_sequence?: number | null;
   agent_trace_refs?: AgentTraceRefs | null;
