@@ -60,6 +60,11 @@ function AgentRunDebugPanel({
     : [];
   const selectionMode = String(pendingInterrupt?.selection_mode || HitlSelectionMode.Single);
   const isMultiSelect = selectionMode === HitlSelectionMode.Multi || selectionMode === HitlSelectionMode.SingleOrMulti;
+  const executionThreadId = runDetails?.thread_id || null;
+  const executionWorkflowId = runDetails?.workflow_id;
+  const executionResolvedSpec = runDetails?.resolved_spec_json;
+  const executionStatus = runDetails?.status || (running ? 'running' : undefined);
+  const executionDetailsAvailable = Boolean(runDetails && !running);
 
   useEffect(() => {
     if (interruptOptions.length === 0) {
@@ -111,12 +116,15 @@ function AgentRunDebugPanel({
         setResumeMessage('Decision applied.');
         return;
       }
+      if (!executionThreadId) {
+        throw new Error('Cannot submit human review because the run thread is unavailable.');
+      }
       const response = await resumeAgentRun(runId, {
         action,
         interrupt_id: pendingInterrupt.interrupt_id,
         resume_token: pendingInterrupt.resume_token || undefined,
         resume_version: pendingInterrupt.resume_version || undefined,
-        thread_id: runDetails.thread_id,
+        thread_id: executionThreadId,
         selected_option_ids: action === AgentRunResumeActionValue.ApproveSelected ? selectedOptionIds : undefined,
         client_metadata: { source: 'agent_run_debug_panel' },
       });
@@ -295,17 +303,17 @@ function AgentRunDebugPanel({
         <>
           <AgentExecutionView
             runId={runId}
-            threadId={runDetails?.thread_id}
-            resolvedSpec={runDetails?.resolved_spec_json}
-            workflowId={runDetails?.workflow_id}
+            threadId={executionThreadId}
+            resolvedSpec={executionResolvedSpec}
+            workflowId={executionWorkflowId}
             traceView={executionTraceView}
-            status={runDetails?.status || (running ? 'running' : undefined)}
+            status={executionStatus}
             running={running}
             focusedTraceRefs={traceRefs}
             suspended={suspendHeavyContent}
             defaultFinalAnswerOpen={false}
             chatMode
-            detailsAvailable={Boolean(runDetails && !running)}
+            detailsAvailable={executionDetailsAvailable}
           />
         </>
       )}
