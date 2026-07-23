@@ -1331,6 +1331,24 @@ class TestRouterRagWorkflowValidator:
         ]
         assert all("Do I want" not in option for option in normalized["clarification_options"])
 
+    def test_normalize_execution_plan_bypasses_clarification_when_user_resubmits_original(self):
+        normalized = normalize_execution_plan(
+            {
+                "route": "clarify",
+                "execution_plan": [],
+                "reason": "still ambiguous",
+                "clarification_options": ["Which document?", "Which prior answer?"],
+            },
+            use_web_search=False,
+            question="What about it?",
+            bypass_clarification=True,
+        )
+
+        assert normalized["route"] == "direct"
+        assert normalized["execution_plan"] == []
+        assert normalized["clarification_options"] is None
+        assert "clarify_route_bypassed_by_user" in normalized["normalization_notes"]
+
     def test_normalize_execution_plan_coerces_clarification_options_to_strings(self):
         normalized = normalize_execution_plan(
             {
@@ -2303,6 +2321,51 @@ class TestRouterRagGraphToolConsumers:
         assert update["route"] == "document"
         assert "configured fallback 'document'" in update["route_reason"]
         assert "document, clarify" in captured_messages[-1].content
+
+    @pytest.mark.asyncio
+    async def test_router_bypasses_clarification_when_user_resubmits_original(self, monkeypatch):
+        captured_messages = []
+
+        class FakeLlm:
+            async def ainvoke(self, messages):
+                captured_messages.extend(messages)
+                return SimpleNamespace(
+                    content=json.dumps({
+                        "route": "clarify",
+                        "reason": "The question remains ambiguous.",
+                        "clarification_options": ["Which document?", "Which prior answer?"],
+                    })
+                )
+
+        monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
+
+        update = await NodeRegistry().router(
+            {
+                "agent_run_id": "run-1",
+                "thread_id": "thread-1",
+                "question": "What about it?",
+                "llm_model": "test-llm",
+                "use_web_search": False,
+                "bypass_clarification": True,
+                "context_window": 8192,
+                "pre_fetch_bundle": {},
+                "node_events": [],
+                "tool_events": [],
+            },
+            {
+                "configurable": {
+                    "thread_id": "thread-1",
+                    "agent_workflow_node_runtime": {
+                        "route_labels": ["direct", "clarify"],
+                    },
+                },
+            },
+        )
+
+        assert update["route"] == "direct"
+        assert update["clarification_options"] is None
+        assert "configured fallback 'direct'" in update["route_reason"]
+        assert "Do not return the clarify route" in captured_messages[-1].content
 
     @pytest.mark.asyncio
     async def test_evidence_evaluator_routes_to_answer_when_sufficient(self, monkeypatch):

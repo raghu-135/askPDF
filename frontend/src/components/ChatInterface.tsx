@@ -948,7 +948,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const handleSend = async (overrideInput?: string | React.SyntheticEvent) => {
+    const handleSend = async (
+        overrideInput?: string | React.SyntheticEvent,
+        options?: { bypassClarification?: boolean },
+    ) => {
         const rawTextToSend = typeof overrideInput === 'string' ? overrideInput : input;
         const textToSend = rawTextToSend.trim();
         const editMessageId = editingMessageId;
@@ -1016,6 +1019,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 systemRole,
                 effectiveToolInstructions,
                 customInstructions,
+                Boolean(options?.bypassClarification),
                 (event: AgentExecutionStreamEnvelope) => {
                     if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
                     if (event.event === 'run.started' && event.data?.run_id) {
@@ -2067,7 +2071,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                                     color="primary"
                                                     size="medium"
                                                     disabled={!trimmedChoiceText || loading}
-                                                    onClick={() => handleSend(trimmedChoiceText)}
+                                                    onClick={() => handleSend(
+                                                        trimmedChoiceText,
+                                                        { bypassClarification: choice.isOriginal },
+                                                    )}
                                                     sx={{ mt: 0.25 }}
                                                 >
                                                     <SendIcon fontSize="medium" />

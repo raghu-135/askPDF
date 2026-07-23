@@ -271,6 +271,12 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_planner_prompt(state)
+        if state.get("bypass_clarification"):
+            prompt += (
+                "\n\nThe user explicitly chose to submit their original question unchanged. "
+                "Do not return the clarify route. Choose the best answer-producing route and "
+                "make a reasonable best-effort interpretation from the available context."
+            )
         response, parsed, prompt_details, retry_attempts = await invoke_json_decision_node(
             state,
             config,
@@ -298,6 +304,7 @@ class NodeRegistry:
             parsed,
             use_web_search=bool(state.get("use_web_search", False)),
             question=state.get("question"),
+            bypass_clarification=bool(state.get("bypass_clarification")),
         )
         worker_summary = selected_and_skipped_workers(
             normalized["execution_plan"],
@@ -342,6 +349,13 @@ class NodeRegistry:
         started = time.perf_counter()
         llm = get_llm(state["llm_model"])
         prompt = build_router_prompt(state)
+        bypass_clarification = bool(state.get("bypass_clarification"))
+        if bypass_clarification:
+            prompt += (
+                "\n\nThe user explicitly chose to submit their original question unchanged. "
+                "Do not return the clarify route. Choose the best answer-producing route and "
+                "make a reasonable best-effort interpretation from the available context."
+            )
         configured_routes = _runtime_route_labels(config)
         if configured_routes:
             prompt += (
@@ -375,14 +389,16 @@ class NodeRegistry:
         allowed_routes = set(ROUTER_ROUTES) - {RouterRoute.WEB.value}
         if state.get("use_web_search", False):
             allowed_routes.add(RouterRoute.WEB.value)
+        if bypass_clarification:
+            allowed_routes.discard(RouterRoute.CLARIFY.value)
         if configured_routes:
             allowed_routes &= set(configured_routes)
         if not allowed_routes:
             raise ValueError("Router has no configured route that is enabled for this test run")
         requested_route = parsed.get("route")
         fallback_order = [
-            RouterRoute.DOCUMENT.value,
-            RouterRoute.DIRECT.value,
+            RouterRoute.DIRECT.value if bypass_clarification else RouterRoute.DOCUMENT.value,
+            RouterRoute.DOCUMENT.value if bypass_clarification else RouterRoute.DIRECT.value,
             RouterRoute.CLARIFY.value,
             RouterRoute.MEMORY.value,
             RouterRoute.TIMELINE.value,

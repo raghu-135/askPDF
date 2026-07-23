@@ -450,6 +450,7 @@ async def _handle_compiled_rag_chat(
         "context_window": context_window,
         "use_web_search": use_web_search,
         "use_reranker": use_reranker,
+        "bypass_clarification": bool(getattr(req, "bypass_clarification", False)),
         "system_role": system_role,
         "tool_instructions": tool_instructions,
         "custom_instructions": custom_instructions,

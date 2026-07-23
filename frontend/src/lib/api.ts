@@ -1264,7 +1264,8 @@ const threadChatPayload = (
   replans?: number,
   systemRoleOverride?: string,
   toolInstructionsOverride?: Record<string, string>,
-  customInstructionsOverride?: string
+  customInstructionsOverride?: string,
+  bypassClarification: boolean = false,
 ): Record<string, any> => {
   const payload: any = {
     thread_id: threadId,
@@ -1275,6 +1276,9 @@ const threadChatPayload = (
     context_window: contextWindowSize,
     ...getBrowserRuntimeContext()
   };
+  if (bypassClarification) {
+    payload.bypass_clarification = true;
+  }
   if (typeof replans === "number") {
     payload.replans = replans;
   }
@@ -1300,9 +1304,10 @@ export async function threadChat(
   replans?: number,
   systemRoleOverride?: string,
   toolInstructionsOverride?: Record<string, string>,
-  customInstructionsOverride?: string
+  customInstructionsOverride?: string,
+  bypassClarification: boolean = false,
 ): Promise<ThreadChatResponse> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification);
   const maxRetries = 2;
   let attempt = 0;
 
@@ -1346,10 +1351,11 @@ export async function streamThreadChat(
   systemRoleOverride: string | undefined,
   toolInstructionsOverride: Record<string, string> | undefined,
   customInstructionsOverride: string | undefined,
+  bypassClarification: boolean,
   onEvent: (event: AgentExecutionStreamEnvelope) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification);
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },

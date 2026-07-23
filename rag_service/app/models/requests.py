@@ -99,6 +99,7 @@ class ThreadChatRequest(BaseModel):
     llm_model: str
     use_web_search: bool = False
     use_reranker: Optional[bool] = None
+    bypass_clarification: bool = False
     context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size
     replans: Optional[int] = Field(default=None, ge=1, le=REPLANS_LIMIT)
     system_role_override: Optional[str] = Field(

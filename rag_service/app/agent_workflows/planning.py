@@ -102,10 +102,14 @@ def normalize_execution_plan(
     *,
     use_web_search: bool,
     question: Optional[str] = None,
+    bypass_clarification: bool = False,
 ) -> Dict[str, Any]:
     route = parsed.get("route") if parsed.get("route") in PLANNER_ROUTES else PlannerRoute.EXECUTE.value
     required_steps = infer_required_plan_steps(question)
     normalization_notes: List[str] = []
+    if route == PlannerRoute.CLARIFY.value and bypass_clarification:
+        route = PlannerRoute.DIRECT.value
+        normalization_notes.append("clarify_route_bypassed_by_user")
     if route == PlannerRoute.DIRECT.value and required_steps:
         route = PlannerRoute.EXECUTE.value
         normalization_notes.append("direct_route_clamped_to_execute")

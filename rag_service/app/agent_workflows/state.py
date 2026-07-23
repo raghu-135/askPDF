@@ -23,6 +23,7 @@ class RouterRagState(TypedDict, total=False):
     context_window: int
     use_web_search: bool
     use_reranker: bool
+    bypass_clarification: bool
     system_role: str
     tool_instructions: Dict[str, str]
     custom_instructions: str
