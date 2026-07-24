@@ -41,6 +41,7 @@ import {
   assembleAgentWorkflowSpec,
   canAddNodeType,
   canConnectNodes,
+  canConnectNodeTypeToTarget,
   canConnectSourceToType,
   canInsertExistingNodeBefore,
   canInsertNodeTypeBefore,
@@ -60,6 +61,7 @@ import {
   type BuilderIncomingPath,
   type BuilderNodeState,
 } from '../../lib/agent-workflow-builder';
+import { BuiltinAgentNodeType } from '../../lib/enums';
 import BuilderActionsBar from './BuilderActionsBar';
 import BuilderGraphEditor from './BuilderGraphEditor';
 import BuilderInspector from './BuilderInspector';
@@ -1004,6 +1006,16 @@ export default function AgentWorkflowBuilderPage() {
                     <ListItemText primary={node.label || catalog?.node_catalog[node.type]?.display_name || node.id} secondary="Connect existing node" />
                   </ListItemButton>
                 )) : null}
+              {builderState && nodeRequest?.mode === 'after' ? (
+                <Box
+                  component="li"
+                  sx={{ borderTop: 1, borderColor: 'divider', listStyle: 'none', mt: 0.5, pt: 1, px: 2 }}
+                >
+                  <Typography variant="overline" color="text.secondary">
+                    Add a directly compatible node
+                  </Typography>
+                </Box>
+              ) : null}
               {builderState && nodeRequest?.mode === 'after' ? Object.entries(catalog?.node_catalog || {})
                 .filter(([nodeType]) => canAddNodeType(catalog!, builderState, nodeType).ok)
                 .filter(([nodeType]) => canConnectSourceToType(catalog!, builderState, nodeRequest.source, nodeType).ok)
@@ -1029,6 +1041,39 @@ export default function AgentWorkflowBuilderPage() {
                 && (nodeRequest.incomingPaths.length === 0 || nodeRequest.selectedPathId)
                 ? (() => {
                   const incomingPath = nodeRequest.incomingPaths.find((path) => path.id === nodeRequest.selectedPathId);
+                  const hitlGateEntry = catalog?.node_catalog[BuiltinAgentNodeType.HitlGate];
+                  const hitlGateId = getCanonicalNodeId(
+                    `hitl_${nodeRequest.target}`,
+                    builderState.nodes.map((node) => node.id),
+                  );
+                  const hitlGate = hitlGateEntry
+                    && canAddNodeType(catalog!, builderState, BuiltinAgentNodeType.HitlGate).ok
+                    ? (
+                      <ListItemButton key={`new:${BuiltinAgentNodeType.HitlGate}`} onClick={() => {
+                        updateState((previous) => createHitlGateForTarget(
+                          catalog!,
+                          previous,
+                          nodeRequest.target,
+                          {
+                            id: hitlGateId,
+                            incomingPath,
+                            position: positionForPreviousStep(
+                              builderState,
+                              nodeRequest.target,
+                              incomingPath,
+                            ),
+                          },
+                        ));
+                        setSelection({ kind: 'node', nodeId: hitlGateId });
+                        setNodeRequest(null);
+                      }}>
+                        <ListItemText
+                          primary={`Add ${hitlGateEntry.display_name || 'Human Review Gate'}`}
+                          secondary="Pause for human approval before this step"
+                        />
+                      </ListItemButton>
+                    )
+                    : null;
                   const existing = builderState.nodes
                     .filter((node) => canInsertExistingNodeBefore(
                       catalog!,
@@ -1068,6 +1113,7 @@ export default function AgentWorkflowBuilderPage() {
                       nodeType,
                       incomingPath,
                     ).ok)
+                    .filter(([nodeType]) => nodeType !== BuiltinAgentNodeType.HitlGate)
                     .map(([nodeType, entry]) => (
                       <ListItemButton key={`new:${nodeType}`} onClick={() => {
                         const id = getCanonicalNodeId(nodeType, builderState.nodes.map((node) => node.id));
@@ -1090,7 +1136,69 @@ export default function AgentWorkflowBuilderPage() {
                         <ListItemText primary={`Add ${entry.display_name || nodeType}`} secondary={entry.ui?.summary} />
                       </ListItemButton>
                     ));
-                  return [...existing, ...fresh];
+                  const strictNodeTypes = new Set(
+                    Object.entries(catalog?.node_catalog || {})
+                      .filter(([nodeType]) => canInsertNodeTypeBefore(
+                        catalog!,
+                        builderState,
+                        nodeRequest.target,
+                        nodeType,
+                        incomingPath,
+                      ).ok)
+                      .map(([nodeType]) => nodeType),
+                  );
+                  const direct = Object.entries(catalog?.node_catalog || {})
+                    .filter(([nodeType]) => !strictNodeTypes.has(nodeType))
+                    .filter(([nodeType]) => canAddNodeType(catalog!, builderState, nodeType).ok)
+                    .filter(([nodeType]) => getAllowedRouteFunctionsForNode(catalog!, nodeType).length === 0)
+                    .filter(([nodeType]) => canConnectNodeTypeToTarget(
+                      catalog!,
+                      builderState,
+                      nodeType,
+                      nodeRequest.target,
+                    ).ok)
+                    .map(([nodeType, entry]) => (
+                      <ListItemButton key={`direct:${nodeType}`} onClick={() => {
+                        const id = getCanonicalNodeId(nodeType, builderState.nodes.map((node) => node.id));
+                        const allowedTools = getAllowedToolContractsForNode(catalog!, nodeType);
+                        const nextNode: BuilderNodeState = {
+                          id,
+                          type: nodeType,
+                          position: positionForPreviousStep(builderState, nodeRequest.target),
+                          ...(allowedTools[0] ? { tool_contract_ids: [allowedTools[0].id] } : {}),
+                        };
+                        updateState((previous) => insertNodeBefore(
+                          previous,
+                          nodeRequest.target,
+                          nextNode,
+                        ));
+                        setSelection({ kind: 'node', nodeId: id });
+                        setNodeRequest(null);
+                      }}>
+                        <ListItemText
+                          primary={`Add ${entry.display_name || nodeType}`}
+                          secondary="Connect directly to this step and keep its existing incoming path"
+                        />
+                      </ListItemButton>
+                    ));
+                  return (
+                    <>
+                      {existing}
+                      {hitlGate}
+                      {fresh}
+                      {direct.length > 0 ? (
+                        <Box
+                          component="li"
+                          sx={{ borderTop: 1, borderColor: 'divider', listStyle: 'none', mt: 0.5, pt: 1, px: 2 }}
+                        >
+                          <Typography variant="overline" color="text.secondary">
+                            Also compatible directly
+                          </Typography>
+                        </Box>
+                      ) : null}
+                      {direct}
+                    </>
+                  );
                 })()
                 : null}
             </List>

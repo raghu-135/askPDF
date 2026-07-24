@@ -803,6 +803,77 @@ class TestRouterRagWorkflowValidator:
 
         assert result == {"valid": True, "errors": []}
 
+    def test_rejects_incomplete_conditional_routes_with_structured_edge_issue(self):
+        spec = builtin_router_rag_v2_spec()
+        router_edge = next(
+            edge for edge in spec["config"]["graph"]["edges"] if edge.get("from") == "router"
+        )
+        router_edge["routes"].pop("clarify")
+
+        report = WorkflowValidator().report(spec)
+
+        issue = next(item for item in report["issues"] if item["code"] == "incomplete_conditional_routes")
+        assert issue["node_id"] == "router"
+        assert issue["edge_index"] == spec["config"]["graph"]["edges"].index(router_edge)
+
+    def test_rejects_semantically_invalid_route_target(self):
+        spec = builtin_router_rag_v2_spec()
+        router_edge = next(
+            edge for edge in spec["config"]["graph"]["edges"] if edge.get("from") == "router"
+        )
+        router_edge["routes"]["direct"] = "retrieval_worker"
+
+        report = WorkflowValidator().report(spec)
+
+        issue = next(item for item in report["issues"] if item["code"] == "invalid_route_target")
+        assert issue["node_id"] == "router"
+        assert issue["route"] == "direct"
+
+    def test_rejects_reachable_branch_that_cannot_terminate(self):
+        spec = builtin_router_rag_v2_spec()
+        graph = spec["config"]["graph"]
+        graph["nodes"].append({"id": "orphan_finalizer", "type": "finalizer"})
+        router_edge = next(edge for edge in graph["edges"] if edge.get("from") == "router")
+        router_edge["routes"]["clarify"] = "orphan_finalizer"
+
+        report = WorkflowValidator().report(spec)
+
+        assert any(issue["code"] == "non_terminating_path" for issue in report["issues"])
+
+    def test_rejects_evaluator_path_without_worker_evidence(self):
+        spec = builtin_evaluator_replanner_rag_v2_spec()
+        graph = spec["config"]["graph"]
+        planner_edge = next(edge for edge in graph["edges"] if edge.get("from") == "planner")
+        evaluator_id = next(
+            node["id"] for node in graph["nodes"] if node["type"] == "evidence_evaluator"
+        )
+        planner_edge["routes"]["execute"] = evaluator_id
+
+        report = WorkflowValidator().report(spec)
+
+        assert any(issue["code"] == "missing_evidence_flow" for issue in report["issues"])
+
+    def test_rejects_cycle_budget_that_cannot_revisit(self):
+        spec = builtin_evaluator_replanner_rag_v2_spec()
+        node_ids = [node["id"] for node in spec["config"]["graph"]["nodes"]]
+        spec["config"]["loop_policy"] = {
+            "max_total_visits": len(node_ids),
+            "default_max_node_visits": 1,
+            "node_visit_limits": {},
+        }
+
+        report = WorkflowValidator().report(spec)
+
+        assert any(issue["code"] == "insufficient_loop_budget" for issue in report["issues"])
+
+    def test_accepts_state_flow_after_hitl_gate_materialization(self):
+        spec = builtin_router_rag_v2_spec()
+        spec["config"]["hitl_policy"] = builtin_router_rag_hitl_web_spec()["config"]["hitl_policy"]
+
+        report = WorkflowValidator().report(spec)
+
+        assert report["valid"] is True
+
     def test_evaluator_replanner_loop_policy_matches_replan_budget(self):
         spec = builtin_evaluator_replanner_rag_v2_spec()
         spec["config"]["replans"] = 2

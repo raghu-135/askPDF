@@ -304,7 +304,7 @@ export function wouldCreateBuilderCycle(
   return false;
 }
 
-const canConnectTypeToTarget = (
+export const canConnectNodeTypeToTarget = (
   catalog: AgentWorkflowCatalogResponse,
   state: AgentWorkflowBuilderState,
   sourceType: string,
@@ -348,7 +348,7 @@ export function canInsertNodeTypeBefore(
     const before = canConnectSourceToType(catalog, state, incomingPath.source, nodeType);
     if (!before.ok) return before;
   }
-  return canConnectTypeToTarget(catalog, state, nodeType, targetId);
+  return canConnectNodeTypeToTarget(catalog, state, nodeType, targetId);
 }
 
 export function canInsertExistingNodeBefore(
@@ -738,6 +738,8 @@ export function createHitlGateForTarget(
   options: {
     id?: string;
     sourceNodeId?: string;
+    incomingPath?: BuilderIncomingPath;
+    position?: { x: number; y: number };
     title?: string;
     body?: string;
     mode?: string;
@@ -751,6 +753,7 @@ export function createHitlGateForTarget(
   const gate: BuilderNodeState = {
     id: gateId,
     type: BuiltinAgentNodeType.HitlGate,
+    ...(options.position ? { position: options.position } : {}),
     hitl: {
       title: options.title || `Review ${target.id}`,
       body: options.body || '',
@@ -764,13 +767,41 @@ export function createHitlGateForTarget(
       },
     },
   };
-  const sourceEdge = options.sourceNodeId
-    ? state.edges.find((edge) => edge.from === options.sourceNodeId && edge.to === targetNodeId)
-    : state.edges.find((edge) => edge.to === targetNodeId && !edge.conditional);
-  const edges = state.edges.map((edge) => (
-    sourceEdge && edge === sourceEdge ? { ...edge, to: gateId } : edge
-  ));
-  if (!sourceEdge) {
+  const sourceEdgeIndex = options.incomingPath
+    ? options.incomingPath.edgeIndex
+    : state.edges.findIndex((edge) => (
+      (!options.sourceNodeId || edge.from === options.sourceNodeId)
+      && (
+        edge.to === targetNodeId
+        || Object.values(edge.routes || {}).includes(targetNodeId)
+      )
+    ));
+  const edges = state.edges.map((edge, edgeIndex) => {
+    if (edgeIndex !== sourceEdgeIndex) return edge;
+    if (
+      edge.conditional
+      && options.incomingPath?.route
+      && edge.routes?.[options.incomingPath.route] === targetNodeId
+    ) {
+      return {
+        ...edge,
+        routes: { ...edge.routes, [options.incomingPath.route]: gateId },
+      };
+    }
+    if (edge.conditional && edge.routes) {
+      return {
+        ...edge,
+        routes: Object.fromEntries(
+          Object.entries(edge.routes).map(([route, target]) => [
+            route,
+            target === targetNodeId ? gateId : target,
+          ]),
+        ),
+      };
+    }
+    return edge.to === targetNodeId ? { ...edge, to: gateId } : edge;
+  });
+  if (sourceEdgeIndex < 0) {
     edges.push({ from: 'START', to: gateId });
   }
   edges.push({

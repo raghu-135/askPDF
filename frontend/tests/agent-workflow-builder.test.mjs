@@ -6,6 +6,7 @@ import {
   canAddNodeType,
   canConnectNodes,
   canConnectNodeTypes,
+  canConnectNodeTypeToTarget,
   canConnectSourceToType,
   canInsertExistingNodeBefore,
   canInsertNodeTypeBefore,
@@ -152,18 +153,37 @@ const catalog = {
     router_route: {
       allowed_source_types: ['router'],
       route_labels: ['document', 'memory', 'timeline', 'web', 'direct', 'clarify'],
+      target_types_by_label: {
+        document: ['retrieval_worker'],
+        memory: ['memory_worker'],
+        timeline: ['timeline_worker'],
+        web: ['web_worker'],
+        direct: ['direct_answer'],
+        clarify: ['finalizer'],
+      },
     },
     planner_route: {
       allowed_source_types: ['planner'],
       route_labels: ['execute', 'direct', 'clarify'],
+      target_types_by_label: {
+        execute: ['retrieval_worker', 'memory_worker', 'timeline_worker', 'web_worker'],
+        direct: ['direct_answer', 'finalizer'],
+        clarify: ['finalizer'],
+      },
     },
     evaluator_route: {
       allowed_source_types: ['evidence_evaluator'],
       route_labels: ['answer', 'replan', 'answer_budget_exhausted'],
+      target_types_by_label: {
+        answer: ['synthesizer'],
+        replan: ['replanner'],
+        answer_budget_exhausted: ['synthesizer'],
+      },
     },
     hitl_gate_route: {
       allowed_source_types: ['hitl_gate'],
       route_labels: null,
+      target_types_by_label: null,
     },
   },
   tool_contracts: {
@@ -288,6 +308,9 @@ test('catalog helpers filter routes, labels, tool contracts, and edge compatibil
   assert.equal(canConnectNodes(catalog, state, 'planner', 'END').ok, false);
   assert.equal(canConnectNodeTypes(parentIncompatibleCatalog, 'router', 'retrieval_worker').ok, false);
   assert.equal(canConnectSourceToType(parentIncompatibleCatalog, state, 'router', 'retrieval_worker').ok, false);
+  const evaluatorTargets = catalog.route_functions.evaluator_route.target_types_by_label;
+  assert.deepEqual(evaluatorTargets.answer, ['synthesizer']);
+  assert.deepEqual(evaluatorTargets.replan, ['replanner']);
 });
 
 test('enforces catalog max instances and canonical fallback ids', () => {
@@ -344,9 +367,11 @@ test('stores canvas positions and notes as builder-only metadata', () => {
 
 test('generates HITL gate nodes with matching conditional route and policy entries', () => {
   const state = createInitialBuilderState(catalog, 'router');
+  const incomingPath = getIncomingPaths(state, 'retrieval_worker')
+    .find((path) => path.source === 'router' && path.route === 'document');
   const gated = createHitlGateForTarget(catalog, state, 'retrieval_worker', {
     id: 'review_retrieval',
-    sourceNodeId: 'router',
+    incomingPath,
     title: 'Review retrieval',
     defaultAction: 'continue_without',
   });
@@ -355,6 +380,10 @@ test('generates HITL gate nodes with matching conditional route and policy entri
   assert.equal(gated.nodes.find((item) => item.id === 'review_retrieval')?.type, 'hitl_gate');
   assert.equal(spec.config.hitl_policy.enabled, true);
   assert.deepEqual(spec.config.hitl_policy.gates.review_retrieval.target, { node_id: 'retrieval_worker' });
+  assert.equal(
+    gated.edges.find((edge) => edge.from === 'router')?.routes?.document,
+    'review_retrieval',
+  );
   assert.equal(
     spec.config.graph.edges.find((edge) => edge.from === 'review_retrieval')?.route_fn,
     'hitl_gate_route',
@@ -422,6 +451,7 @@ test('filters previous-step types using both sides and excludes route-producing 
 
   assert.equal(canInsertNodeTypeBefore(catalog, state, 'finalizer', 'synthesizer', path).ok, true);
   assert.equal(canInsertNodeTypeBefore(catalog, state, 'finalizer', 'direct_answer', path).ok, false);
+  assert.equal(canConnectNodeTypeToTarget(catalog, state, 'direct_answer', 'finalizer').ok, true);
   assert.match(canInsertNodeTypeBefore(catalog, state, 'finalizer', 'evidence_evaluator', path).reason, /named outgoing routes/);
 });
 

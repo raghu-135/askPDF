@@ -84,9 +84,19 @@ export default function BuilderValidationPanel({
                       }}
                     >
                       {issue.severity === 'error' ? <ErrorOutlineIcon color="error" fontSize="small" /> : <WarningAmberIcon color="warning" fontSize="small" />}
-                      <Typography variant="caption" sx={{ wordBreak: 'break-word' }}>
-                        {issue.message}
-                      </Typography>
+                      <Box sx={{ minWidth: 0 }}>
+                        {issue.code ? (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={issue.code.replaceAll('_', ' ')}
+                            sx={{ mb: 0.5, height: 20, fontSize: '0.65rem' }}
+                          />
+                        ) : null}
+                        <Typography variant="caption" sx={{ display: 'block', wordBreak: 'break-word' }}>
+                          {issue.message}
+                        </Typography>
+                      </Box>
                       {issue.fix ? (
                         <Button size="small" onClick={() => onApplyFix(issue)} sx={{ whiteSpace: 'nowrap' }}>
                           Fix

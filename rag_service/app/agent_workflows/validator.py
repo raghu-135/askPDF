@@ -110,16 +110,58 @@ class WorkflowValidator:
             for node in graph.get("nodes", [])
             if isinstance(node, dict) and node.get("id")
         }
-        node_id = next((node_id for node_id in node_ids if node_id in message), None)
+        explicit_node_id = None
+        if "graph conditional edge from " in message:
+            explicit_node_id = message.split("graph conditional edge from ", 1)[1].split(" ", 1)[0]
+        elif " from node " in message:
+            explicit_node_id = message.split(" from node ", 1)[1].split(" ", 1)[0]
+        elif message.startswith("node "):
+            explicit_node_id = message.split(" ", 2)[1]
+        elif message.startswith("evidence evaluator "):
+            explicit_node_id = message.split(" ", 2)[2].split(" ", 1)[0]
+        elif message.startswith("replanner "):
+            explicit_node_id = message.split(" ", 1)[1].split(" ", 1)[0]
+        node_id = (
+            explicit_node_id
+            if explicit_node_id in node_ids
+            else next((candidate for candidate in node_ids if candidate in message), None)
+        )
         lowered = message.lower()
         code = (
-            "missing_start" if "start" in lowered and ("missing" in lowered or "must" in lowered)
+            "incomplete_conditional_routes" if "missing route labels" in lowered
+            else "invalid_route_target" if lowered.startswith("route ") and "must target" in lowered
+            else "ambiguous_outgoing_flow" if "outgoing edges" in lowered
+            else "non_terminating_path" if "no path to end" in lowered
+            else "missing_evidence_flow" if "upstream worker evidence" in lowered
+            else "invalid_replan_cycle" if "replanner" in lowered and (
+                "evidence evaluator" in lowered or "one more visit" in lowered
+            )
+            else "insufficient_loop_budget" if "cycle revisit" in lowered or "repeat visit budget" in lowered
+            else "missing_finalizer" if "requires a finalizer node" in lowered
+            else "missing_finalizer_flow" if "flow through a finalizer" in lowered
+            else "missing_start" if "start" in lowered and ("missing" in lowered or "must" in lowered)
             else "missing_end" if "end" in lowered and ("missing" in lowered or "must" in lowered)
             else "incompatible_connection" if "cannot connect" in lowered
             else "unreachable_node" if "unreachable" in lowered
             else "missing_route" if "route" in lowered and "missing" in lowered
             else "invalid_workflow"
         )
+        edge_index = None
+        route = None
+        if code in {"incomplete_conditional_routes", "invalid_route_target", "ambiguous_outgoing_flow"}:
+            source = None
+            if "graph conditional edge from " in message:
+                source = message.split("graph conditional edge from ", 1)[1].split(" ", 1)[0]
+            elif " from node " in message:
+                source = message.split(" from node ", 1)[1].split(" ", 1)[0]
+            elif message.startswith("node "):
+                source = message.split(" ", 2)[1]
+            for index, edge in enumerate(graph.get("edges", [])):
+                if isinstance(edge, dict) and edge.get("from") == source:
+                    edge_index = index
+                    break
+            if message.startswith("route "):
+                route = message.split(" ", 2)[1]
         fix = None
         if code in {"missing_start", "missing_end", "unreachable_node", "incompatible_connection", "missing_route"}:
             fix = {
@@ -132,8 +174,8 @@ class WorkflowValidator:
             "severity": "error",
             "message": message,
             "node_id": node_id,
-            "edge_index": None,
-            "route": None,
+            "edge_index": edge_index,
+            "route": route,
             "allowed_alternatives": [],
             "fix": fix,
         }

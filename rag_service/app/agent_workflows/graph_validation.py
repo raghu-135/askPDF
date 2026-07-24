@@ -7,6 +7,7 @@ from app.agent.tool_registry import (
     collect_tool_contract_metadata_errors,
 )
 from app.agent_workflows.enums import GraphSentinel
+from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.hitl_policy_validation import collect_hitl_policy_errors
 from app.agent_workflows.node_catalog import (
     collect_node_catalog_errors,
@@ -100,6 +101,7 @@ class GenericGraphValidator:
             return [f"tool contract registry incompatible: {error}" for error in tool_contract_errors]
         errors.extend(self._collect_catalog_route_function_errors(node_catalog, route_registry))
         errors.extend(self._collect_catalog_tool_contract_errors(node_catalog, tool_contracts))
+        errors.extend(self._collect_catalog_state_flow_errors(node_catalog))
         node_ids: set[str] = set()
         node_types_by_id: dict[str, str] = {}
         node_type_counts: dict[str, int] = {}
@@ -185,6 +187,13 @@ class GenericGraphValidator:
                 elif source_type and not route_function_allowed_for_node_type(route_fn, source_type):
                     errors.append(f"route_fn {route_fn} is not allowed from node {source} type {source_type}")
                 labels = route_function_labels(route_fn) if isinstance(route_fn, str) else None
+                if labels is not None:
+                    missing_labels = sorted(labels - set(routes))
+                    if missing_labels:
+                        errors.append(
+                            f"graph conditional edge from {source} is missing route labels: "
+                            + ", ".join(missing_labels)
+                        )
                 for route_name, route_target in routes.items():
                     if not isinstance(route_name, str) or not isinstance(route_target, str):
                         errors.append(f"graph conditional edge from {source} routes keys and values must be strings")
@@ -207,6 +216,18 @@ class GenericGraphValidator:
 
         errors.extend(self._collect_loop_policy_errors(config.get("loop_policy"), adjacency, node_ids, node_types_by_id, node_catalog))
         errors.extend(self._collect_reachability_errors(adjacency, node_ids))
+        errors.extend(
+            self._collect_state_flow_errors(
+                graph=graph,
+                hitl_policy=config.get("hitl_policy"),
+                loop_policy=config.get("loop_policy"),
+                adjacency=adjacency,
+                node_ids=node_ids,
+                node_types_by_id=node_types_by_id,
+                node_catalog=node_catalog,
+                route_registry=route_registry,
+            )
+        )
         return errors
 
     def _collect_catalog_route_function_errors(
@@ -255,6 +276,30 @@ class GenericGraphValidator:
                         f"node catalog type {node_type} allows tool contract {contract_id}, "
                         "but tool registry does not allow that node type or capability"
                     )
+        return errors
+
+    def _collect_catalog_state_flow_errors(
+        self,
+        node_catalog: Dict[str, Dict[str, Any]],
+    ) -> list[str]:
+        errors: list[str] = []
+        worker_types = {
+            "retrieval_worker",
+            "memory_worker",
+            "timeline_worker",
+            "web_worker",
+        }
+        for node_type in sorted(worker_types):
+            writes = set((node_catalog.get(node_type) or {}).get("state_writes") or [])
+            missing = sorted({"evidence", "evidence_packets"} - writes)
+            if missing:
+                errors.append(
+                    f"node catalog type {node_type} must write worker evidence state: {', '.join(missing)}"
+                )
+        for node_type in ("direct_answer", "synthesizer"):
+            writes = set((node_catalog.get(node_type) or {}).get("state_writes") or [])
+            if "final_answer" not in writes:
+                errors.append(f"node catalog type {node_type} must write final_answer")
         return errors
 
     def _collect_node_contract_errors(
@@ -466,6 +511,392 @@ class GenericGraphValidator:
             return False
 
         return any(visit(node_id) for node_id in sorted(node_ids))
+
+    def _collect_state_flow_errors(
+        self,
+        *,
+        graph: Dict[str, Any],
+        hitl_policy: Any,
+        loop_policy: Any,
+        adjacency: dict[str, set[str]],
+        node_ids: set[str],
+        node_types_by_id: dict[str, str],
+        node_catalog: Dict[str, Dict[str, Any]],
+        route_registry: Dict[str, Dict[str, Any]],
+    ) -> list[str]:
+        errors: list[str] = []
+        edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+        outgoing_edges: dict[str, list[Dict[str, Any]]] = {}
+        for edge in edges:
+            source = edge.get("from")
+            if isinstance(source, str):
+                outgoing_edges.setdefault(source, []).append(edge)
+
+        for source, source_edges in sorted(outgoing_edges.items()):
+            conditional_count = sum(bool(edge.get("conditional")) for edge in source_edges)
+            if conditional_count > 1:
+                errors.append(f"node {source} has multiple conditional outgoing edges")
+            if (
+                conditional_count
+                and conditional_count != len(source_edges)
+                and node_types_by_id.get(source) != "hitl_gate"
+            ):
+                errors.append(f"node {source} mixes conditional and unconditional outgoing edges")
+
+        errors.extend(
+            self._collect_route_target_errors(
+                edges,
+                adjacency,
+                node_types_by_id,
+                route_registry,
+            )
+        )
+
+        finalizer_ids = {
+            node_id for node_id, node_type in node_types_by_id.items() if node_type == "finalizer"
+        }
+        if not finalizer_ids:
+            errors.append("graph requires a finalizer node")
+
+        for node_id, node_type in sorted(node_types_by_id.items()):
+            if node_type in {"direct_answer", "synthesizer"} and not self._can_reach_type(
+                node_id,
+                {"finalizer"},
+                adjacency,
+                node_types_by_id,
+            ):
+                errors.append(f"node {node_id} type {node_type} must flow through a finalizer")
+            if node_type == "evidence_evaluator" and self._can_reach_while_avoiding_types(
+                GraphSentinel.START.value,
+                node_id,
+                {
+                    "retrieval_worker",
+                    "memory_worker",
+                    "timeline_worker",
+                    "web_worker",
+                },
+                adjacency,
+                node_types_by_id,
+            ):
+                errors.append(f"evidence evaluator {node_id} requires upstream worker evidence on every path")
+            if node_type == "replanner":
+                reaches_worker = self._can_reach_type(
+                    node_id,
+                    {
+                        "retrieval_worker",
+                        "memory_worker",
+                        "timeline_worker",
+                        "web_worker",
+                    },
+                    adjacency,
+                    node_types_by_id,
+                )
+                reaches_evaluator = self._can_reach_type(
+                    node_id,
+                    {"evidence_evaluator"},
+                    adjacency,
+                    node_types_by_id,
+                )
+                if not reaches_worker or not reaches_evaluator:
+                    errors.append(
+                        f"replanner {node_id} must return through an evidence worker to an evidence evaluator"
+                    )
+
+        errors.extend(
+            self._collect_cycle_state_flow_errors(
+                adjacency,
+                node_ids,
+                node_types_by_id,
+                loop_policy,
+            )
+        )
+
+        effective_graph = materialize_hitl_gates(
+            graph,
+            hitl_policy=hitl_policy if isinstance(hitl_policy, dict) else {},
+        )
+        effective_nodes = {
+            str(node.get("id")): str(node.get("type"))
+            for node in effective_graph.get("nodes", [])
+            if isinstance(node, dict)
+            and isinstance(node.get("id"), str)
+            and isinstance(node.get("type"), str)
+        }
+        effective_adjacency = self._adjacency_from_edges(effective_graph.get("edges", []))
+        reachable = self._reachable_from(GraphSentinel.START.value, effective_adjacency)
+        can_end = self._nodes_that_can_reach_end(effective_adjacency)
+        non_terminating = sorted(
+            node_id
+            for node_id in reachable
+            if node_id in effective_nodes and node_id not in can_end
+        )
+        if non_terminating:
+            errors.append(
+                "graph contains reachable nodes with no path to END after HITL materialization: "
+                + ", ".join(non_terminating)
+            )
+
+        for edge in effective_graph.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            source = edge.get("from")
+            targets = (
+                list((edge.get("routes") or {}).values())
+                if edge.get("conditional") and isinstance(edge.get("routes"), dict)
+                else [edge.get("to")]
+            )
+            if (
+                GraphSentinel.END.value in targets
+                and source in effective_nodes
+                and effective_nodes[source] not in {"finalizer", "hitl_gate"}
+            ):
+                errors.append(f"node {source} must flow through a finalizer before END")
+        return errors
+
+    def _collect_route_target_errors(
+        self,
+        edges: list[Dict[str, Any]],
+        adjacency: dict[str, set[str]],
+        node_types_by_id: dict[str, str],
+        route_registry: Dict[str, Dict[str, Any]],
+    ) -> list[str]:
+        errors: list[str] = []
+        for edge in edges:
+            if not edge.get("conditional") or not isinstance(edge.get("routes"), dict):
+                continue
+            source = edge.get("from")
+            route_fn = edge.get("route_fn")
+            metadata = route_registry.get(route_fn) if isinstance(route_fn, str) else None
+            target_types_by_label = (
+                metadata.get("target_types_by_label")
+                if isinstance(metadata, dict)
+                and isinstance(metadata.get("target_types_by_label"), dict)
+                else {}
+            )
+            for label, target in edge["routes"].items():
+                allowed_types = set(target_types_by_label.get(label) or [])
+                if not allowed_types or not isinstance(target, str):
+                    continue
+                actual_types = self._first_non_hitl_target_types(
+                    target,
+                    adjacency,
+                    node_types_by_id,
+                )
+                if actual_types and actual_types.isdisjoint(allowed_types):
+                    errors.append(
+                        f"route {label} from node {source} must target node types "
+                        f"{', '.join(sorted(allowed_types))}; found {', '.join(sorted(actual_types))}"
+                    )
+        return errors
+
+    def _first_non_hitl_target_types(
+        self,
+        target: str,
+        adjacency: dict[str, set[str]],
+        node_types_by_id: dict[str, str],
+    ) -> set[str]:
+        pending = [target]
+        visited: set[str] = set()
+        result: set[str] = set()
+        while pending:
+            node_id = pending.pop()
+            if node_id in visited or node_id == GraphSentinel.END.value:
+                continue
+            visited.add(node_id)
+            node_type = node_types_by_id.get(node_id)
+            if node_type == "hitl_gate":
+                pending.extend(adjacency.get(node_id) or [])
+            elif node_type:
+                result.add(node_type)
+        return result
+
+    def _collect_cycle_state_flow_errors(
+        self,
+        adjacency: dict[str, set[str]],
+        node_ids: set[str],
+        node_types_by_id: dict[str, str],
+        loop_policy: Any,
+    ) -> list[str]:
+        errors: list[str] = []
+        components = self._strongly_connected_components(adjacency, node_ids)
+        cyclic_components = [
+            component
+            for component in components
+            if len(component) > 1
+            or any(node_id in adjacency.get(node_id, set()) for node_id in component)
+        ]
+        if not cyclic_components or not isinstance(loop_policy, dict):
+            return errors
+        default_limit = self._positive_int(loop_policy.get("default_max_node_visits"), 1)
+        node_limits = (
+            loop_policy.get("node_visit_limits")
+            if isinstance(loop_policy.get("node_visit_limits"), dict)
+            else {}
+        )
+        max_total = self._positive_int(loop_policy.get("max_total_visits"), 0)
+        if max_total <= len(node_ids):
+            errors.append("loop_policy.max_total_visits must allow at least one bounded cycle revisit")
+        for component in cyclic_components:
+            limits = {
+                node_id: self._positive_int(node_limits.get(node_id), default_limit)
+                for node_id in component
+            }
+            if max(limits.values(), default=1) <= 1:
+                errors.append(
+                    "cycle has no node with a repeat visit budget: "
+                    + ", ".join(sorted(component))
+                )
+            replanners = [
+                node_id for node_id in component if node_types_by_id.get(node_id) == "replanner"
+            ]
+            evaluators = [
+                node_id for node_id in component if node_types_by_id.get(node_id) == "evidence_evaluator"
+            ]
+            for replanner_id in replanners:
+                for evaluator_id in evaluators:
+                    if limits[evaluator_id] < limits[replanner_id] + 1:
+                        errors.append(
+                            f"loop_policy must allow evaluator {evaluator_id} one more visit than "
+                            f"replanner {replanner_id}"
+                        )
+                for worker_id in component:
+                    if (
+                        node_types_by_id.get(worker_id)
+                        in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker"}
+                        and limits[worker_id] < limits[replanner_id] + 1
+                    ):
+                        errors.append(
+                            f"loop_policy must allow worker {worker_id} one more visit than "
+                            f"replanner {replanner_id}"
+                        )
+        return errors
+
+    def _strongly_connected_components(
+        self,
+        adjacency: dict[str, set[str]],
+        node_ids: set[str],
+    ) -> list[set[str]]:
+        index = 0
+        indices: dict[str, int] = {}
+        lowlinks: dict[str, int] = {}
+        stack: list[str] = []
+        on_stack: set[str] = set()
+        components: list[set[str]] = []
+
+        def visit(node_id: str) -> None:
+            nonlocal index
+            indices[node_id] = index
+            lowlinks[node_id] = index
+            index += 1
+            stack.append(node_id)
+            on_stack.add(node_id)
+            for target in adjacency.get(node_id, set()):
+                if target not in node_ids:
+                    continue
+                if target not in indices:
+                    visit(target)
+                    lowlinks[node_id] = min(lowlinks[node_id], lowlinks[target])
+                elif target in on_stack:
+                    lowlinks[node_id] = min(lowlinks[node_id], indices[target])
+            if lowlinks[node_id] == indices[node_id]:
+                component: set[str] = set()
+                while stack:
+                    member = stack.pop()
+                    on_stack.remove(member)
+                    component.add(member)
+                    if member == node_id:
+                        break
+                components.append(component)
+
+        for node_id in sorted(node_ids):
+            if node_id not in indices:
+                visit(node_id)
+        return components
+
+    def _can_reach_type(
+        self,
+        start: str,
+        target_types: set[str],
+        adjacency: dict[str, set[str]],
+        node_types_by_id: dict[str, str],
+    ) -> bool:
+        return any(
+            node_types_by_id.get(node_id) in target_types
+            for node_id in self._reachable_from(start, adjacency)
+            if node_id != start
+        )
+
+    def _can_reach_while_avoiding_types(
+        self,
+        start: str,
+        target: str,
+        avoided_types: set[str],
+        adjacency: dict[str, set[str]],
+        node_types_by_id: dict[str, str],
+    ) -> bool:
+        pending = [start]
+        visited: set[str] = set()
+        while pending:
+            node_id = pending.pop()
+            if node_id == target:
+                return True
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            for child in adjacency.get(node_id, set()):
+                if child == target or node_types_by_id.get(child) not in avoided_types:
+                    pending.append(child)
+        return False
+
+    def _adjacency_from_edges(self, edges: Any) -> dict[str, set[str]]:
+        adjacency: dict[str, set[str]] = {}
+        if not isinstance(edges, list):
+            return adjacency
+        for edge in edges:
+            if not isinstance(edge, dict) or not isinstance(edge.get("from"), str):
+                continue
+            targets = (
+                list(edge.get("routes", {}).values())
+                if edge.get("conditional") and isinstance(edge.get("routes"), dict)
+                else [edge.get("to")]
+            )
+            for target in targets:
+                if isinstance(target, str):
+                    adjacency.setdefault(edge["from"], set()).add(target)
+        return adjacency
+
+    def _reachable_from(
+        self,
+        start: str,
+        adjacency: dict[str, set[str]],
+    ) -> set[str]:
+        visited: set[str] = set()
+        pending = list(adjacency.get(start) or [])
+        while pending:
+            node_id = pending.pop()
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            pending.extend(adjacency.get(node_id) or [])
+        return visited
+
+    def _nodes_that_can_reach_end(
+        self,
+        adjacency: dict[str, set[str]],
+    ) -> set[str]:
+        reverse: dict[str, set[str]] = {}
+        for source, targets in adjacency.items():
+            for target in targets:
+                reverse.setdefault(target, set()).add(source)
+        return self._reachable_from(GraphSentinel.END.value, reverse)
+
+    @staticmethod
+    def _positive_int(value: Any, fallback: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return fallback
+        return parsed if parsed > 0 else fallback
 
     def _collect_reachability_errors(self, adjacency: dict[str, set[str]], node_ids: set[str]) -> list[str]:
         errors: list[str] = []

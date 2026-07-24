@@ -16,18 +16,45 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
     RouteFunctionId.ROUTER.value: {
         "allowed_source_types": [WorkflowNodeType.ROUTER.value],
         "route_labels": [route.value for route in RouterRoute],
+        "target_types_by_label": {
+            RouterRoute.DOCUMENT.value: [WorkflowNodeType.RETRIEVAL_WORKER.value],
+            RouterRoute.MEMORY.value: [WorkflowNodeType.MEMORY_WORKER.value],
+            RouterRoute.TIMELINE.value: [WorkflowNodeType.TIMELINE_WORKER.value],
+            RouterRoute.WEB.value: [WorkflowNodeType.WEB_WORKER.value],
+            RouterRoute.DIRECT.value: [WorkflowNodeType.DIRECT_ANSWER.value],
+            RouterRoute.CLARIFY.value: [WorkflowNodeType.FINALIZER.value],
+        },
     },
     RouteFunctionId.PLANNER.value: {
         "allowed_source_types": [WorkflowNodeType.PLANNER.value],
         "route_labels": [route.value for route in PlannerRoute],
+        "target_types_by_label": {
+            PlannerRoute.EXECUTE.value: [
+                WorkflowNodeType.RETRIEVAL_WORKER.value,
+                WorkflowNodeType.MEMORY_WORKER.value,
+                WorkflowNodeType.TIMELINE_WORKER.value,
+                WorkflowNodeType.WEB_WORKER.value,
+            ],
+            PlannerRoute.DIRECT.value: [
+                WorkflowNodeType.DIRECT_ANSWER.value,
+                WorkflowNodeType.FINALIZER.value,
+            ],
+            PlannerRoute.CLARIFY.value: [WorkflowNodeType.FINALIZER.value],
+        },
     },
     RouteFunctionId.EVALUATOR.value: {
         "allowed_source_types": [WorkflowNodeType.EVIDENCE_EVALUATOR.value],
         "route_labels": [route.value for route in EvaluatorRoute],
+        "target_types_by_label": {
+            EvaluatorRoute.ANSWER.value: [WorkflowNodeType.SYNTHESIZER.value],
+            EvaluatorRoute.REPLAN.value: [WorkflowNodeType.REPLANNER.value],
+            EvaluatorRoute.ANSWER_BUDGET_EXHAUSTED.value: [WorkflowNodeType.SYNTHESIZER.value],
+        },
     },
     RouteFunctionId.HITL_GATE.value: {
         "allowed_source_types": [WorkflowNodeType.HITL_GATE.value],
         "route_labels": None,
+        "target_types_by_label": None,
     },
 }
 
@@ -71,7 +98,7 @@ def collect_route_function_registry_errors(registry: Dict[str, Dict[str, Any]] |
             errors.append(f"{route_fn} metadata must be an object")
             continue
 
-        missing = sorted({"allowed_source_types", "route_labels"} - set(metadata))
+        missing = sorted({"allowed_source_types", "route_labels", "target_types_by_label"} - set(metadata))
         if missing:
             errors.append(f"{route_fn} missing registry keys: {', '.join(missing)}")
 
@@ -86,6 +113,31 @@ def collect_route_function_registry_errors(registry: Dict[str, Dict[str, Any]] |
             not isinstance(route_labels, list) or not all(isinstance(item, str) and item for item in route_labels)
         ):
             errors.append(f"{route_fn}.route_labels must be null or a list of non-empty strings")
+
+        target_types_by_label = metadata.get("target_types_by_label")
+        if route_labels is None:
+            if target_types_by_label is not None:
+                errors.append(f"{route_fn}.target_types_by_label must be null when route_labels is null")
+        elif not isinstance(target_types_by_label, dict):
+            errors.append(f"{route_fn}.target_types_by_label must be an object")
+        else:
+            missing_targets = sorted(set(route_labels) - set(target_types_by_label))
+            unknown_targets = sorted(set(target_types_by_label) - set(route_labels))
+            if missing_targets:
+                errors.append(
+                    f"{route_fn}.target_types_by_label is missing route labels: {', '.join(missing_targets)}"
+                )
+            if unknown_targets:
+                errors.append(
+                    f"{route_fn}.target_types_by_label has unknown route labels: {', '.join(unknown_targets)}"
+                )
+            for label, target_types in sorted(target_types_by_label.items()):
+                if not isinstance(target_types, list) or not all(
+                    isinstance(item, str) and item for item in target_types
+                ):
+                    errors.append(
+                        f"{route_fn}.target_types_by_label.{label} must be a list of non-empty strings"
+                    )
     return errors
 
 
