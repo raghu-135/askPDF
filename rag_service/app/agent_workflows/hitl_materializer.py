@@ -97,11 +97,29 @@ def resolve_hitl_target_node_id(gate: Dict[str, Any], node_types: Dict[str, str]
     return None
 
 
-def default_bypass_target(target_node_id: str, edges: List[Dict[str, Any]]) -> str:
+def immediate_successor_targets(target_node_id: str, edges: List[Dict[str, Any]]) -> List[str]:
+    targets: List[str] = []
     for edge in edges:
-        if edge.get("from") == target_node_id and isinstance(edge.get("to"), str):
-            return str(edge["to"])
-    return GraphSentinel.END.value
+        if edge.get("from") != target_node_id:
+            continue
+        candidates = (
+            list(edge.get("routes", {}).values())
+            if edge.get("conditional") and isinstance(edge.get("routes"), dict)
+            else [edge.get("to")]
+        )
+        for candidate in candidates:
+            if (
+                isinstance(candidate, str)
+                and candidate != target_node_id
+                and candidate not in targets
+            ):
+                targets.append(candidate)
+    return targets
+
+
+def default_bypass_target(target_node_id: str, edges: List[Dict[str, Any]]) -> Optional[str]:
+    targets = immediate_successor_targets(target_node_id, edges)
+    return targets[0] if len(targets) == 1 else None
 
 
 def hitl_gate_routes(gate: Dict[str, Any], target_node_id: str, edges: List[Dict[str, Any]], *, phase: str) -> Dict[str, str]:
@@ -118,12 +136,21 @@ def hitl_gate_routes(gate: Dict[str, Any], target_node_id: str, edges: List[Dict
             option_target = option.get("target_node_id")
             if isinstance(option_id, str) and isinstance(option_target, str):
                 routes[option_id] = option_target
-        routes[AgentRunResumeAction.CONTINUE_WITHOUT.value] = configured.get(AgentRunResumeAction.CONTINUE_WITHOUT.value) or bypass
+        continue_target = configured.get(AgentRunResumeAction.CONTINUE_WITHOUT.value) or bypass
+        if isinstance(continue_target, str):
+            routes[AgentRunResumeAction.CONTINUE_WITHOUT.value] = continue_target
         if AgentRunResumeAction.REJECT.value in configured:
             routes[AgentRunResumeAction.REJECT.value] = configured[AgentRunResumeAction.REJECT.value]
         return routes
-    routes[AgentRunResumeAction.APPROVE.value] = configured.get(AgentRunResumeAction.APPROVE.value) or (target_node_id if phase == HitlPhase.BEFORE.value else bypass)
-    routes[AgentRunResumeAction.CONTINUE_WITHOUT.value] = configured.get(AgentRunResumeAction.CONTINUE_WITHOUT.value) or bypass
+    approve_target = configured.get(AgentRunResumeAction.APPROVE.value) or (
+        target_node_id
+        if phase == HitlPhase.BEFORE.value
+        else bypass or GraphSentinel.END.value
+    )
+    routes[AgentRunResumeAction.APPROVE.value] = approve_target
+    continue_target = configured.get(AgentRunResumeAction.CONTINUE_WITHOUT.value) or bypass
+    if isinstance(continue_target, str):
+        routes[AgentRunResumeAction.CONTINUE_WITHOUT.value] = continue_target
     if AgentRunResumeAction.REJECT.value in configured:
         routes[AgentRunResumeAction.REJECT.value] = configured[AgentRunResumeAction.REJECT.value]
     if AgentRunResumeAction.EDIT.value in configured:
@@ -192,6 +219,16 @@ def materialize_hitl_gates(graph_spec: Dict[str, Any], *, hitl_policy: Dict[str,
         nodes.append({"id": gate_id, "type": WorkflowNodeType.HITL_GATE.value})
         existing_node_ids.add(gate_id)
         routes = hitl_gate_routes(gate, target_node_id, edges, phase=phase)
+        gate["routes"] = routes
+        if AgentRunResumeAction.CONTINUE_WITHOUT.value not in routes:
+            gate["allowed_actions"] = [
+                action
+                for action in gate.get("allowed_actions", [])
+                if action != AgentRunResumeAction.CONTINUE_WITHOUT.value
+            ]
+            if gate.get("default_action") == AgentRunResumeAction.CONTINUE_WITHOUT.value:
+                gate["default_action"] = AgentRunResumeAction.APPROVE.value
+        gates[gate_id] = gate
         if phase == HitlPhase.BEFORE.value:
             edges = insert_before_gate(edges, gate_id, target_node_id)
         elif phase == HitlPhase.AFTER.value:

@@ -13,6 +13,7 @@ import {
   createHitlGateForTarget,
   createInitialBuilderState,
   getIncomingPaths,
+  getImmediateSuccessorIds,
   getAllowedRouteFunctionsForNode,
   getAllowedToolContractsForNode,
   getCanonicalNodeId,
@@ -21,6 +22,7 @@ import {
   isIsolatedBuilderNode,
   loadBuilderStateFromSpec,
   normalizeBuilderState,
+  setHitlContinueWithoutTarget,
   wouldCreateBuilderCycle,
 } from '../src/lib/agent-workflow-builder.ts';
 
@@ -58,7 +60,7 @@ const catalog = {
       display_name: 'Context Loader',
       allowed_tool_contract_ids: ['thread_shape'],
       allowed_parent_types: ['START'],
-      allowed_child_types: ['router', 'planner'],
+      allowed_child_types: ['router', 'planner', 'hitl_gate'],
     }),
     router: node({
       type: 'router',
@@ -144,8 +146,8 @@ const catalog = {
       type: 'hitl_gate',
       display_name: 'HITL Gate',
       allowed_route_functions: ['hitl_gate_route'],
-      allowed_parent_types: ['router', 'planner', 'retrieval_worker', 'evidence_evaluator', 'synthesizer', 'finalizer'],
-      allowed_child_types: ['retrieval_worker', 'synthesizer', 'finalizer', 'END'],
+      allowed_parent_types: ['START', 'context_loader', 'router', 'planner', 'retrieval_worker', 'evidence_evaluator', 'synthesizer', 'finalizer'],
+      allowed_child_types: ['router', 'planner', 'retrieval_worker', 'synthesizer', 'finalizer', 'END'],
       max_instances: 8,
     }),
   },
@@ -390,9 +392,61 @@ test('generates HITL gate nodes with matching conditional route and policy entri
   );
   assert.deepEqual(spec.config.graph.edges.find((edge) => edge.from === 'review_retrieval')?.routes, {
     approve: 'retrieval_worker',
-    continue_without: 'retrieval_worker',
     reject: 'END',
+    continue_without: 'synthesizer',
   });
+});
+
+test('inserts a HITL gate between context loading and planning as a compatible path step', () => {
+  const state = createInitialBuilderState(catalog, 'plan_execute');
+  const incomingPath = getIncomingPaths(state, 'planner')[0];
+  const gated = createHitlGateForTarget(catalog, state, 'planner', {
+    id: 'review_planner',
+    incomingPath,
+  });
+
+  assert.equal(canConnectNodes(catalog, gated, 'context_loader', 'review_planner').ok, true);
+  assert.equal(canConnectNodes(catalog, gated, 'review_planner', 'planner').ok, true);
+  assert.equal(
+    gated.edges.some((edge) => edge.from === 'context_loader' && edge.to === 'review_planner'),
+    true,
+  );
+});
+
+test('resolves HITL bypasses only for a unique immediate successor', () => {
+  const sequential = createInitialBuilderState(catalog, 'router');
+  assert.deepEqual(getImmediateSuccessorIds(sequential, 'retrieval_worker'), ['synthesizer']);
+  const retrievalGate = createHitlGateForTarget(catalog, sequential, 'retrieval_worker', { id: 'review_retrieval' });
+  const retrievalRoutes = retrievalGate.edges.find((edge) => edge.from === 'review_retrieval')?.routes;
+  assert.equal(retrievalRoutes.approve, 'retrieval_worker');
+  assert.equal(retrievalRoutes.continue_without, 'synthesizer');
+
+  const routerGate = createHitlGateForTarget(catalog, sequential, 'router', { id: 'review_router' });
+  const routerNode = routerGate.nodes.find((item) => item.id === 'review_router');
+  const routerRoutes = routerGate.edges.find((edge) => edge.from === 'review_router')?.routes;
+  assert.equal('continue_without' in routerRoutes, false);
+  assert.deepEqual(routerNode.hitl.allowed_actions, ['approve', 'reject']);
+  assert.equal(routerNode.hitl.default_action, 'approve');
+});
+
+test('updates and clears a HITL continue-without target atomically', () => {
+  const state = createInitialBuilderState(catalog, 'router');
+  const gated = createHitlGateForTarget(catalog, state, 'router', { id: 'review_router' });
+  const enabled = setHitlContinueWithoutTarget(gated, 'review_router', 'retrieval_worker');
+  const enabledNode = enabled.nodes.find((item) => item.id === 'review_router');
+  const enabledEdge = enabled.edges.find((edge) => edge.from === 'review_router');
+  assert.equal(enabledNode.hitl.routes.continue_without, 'retrieval_worker');
+  assert.equal(enabledEdge.routes.continue_without, 'retrieval_worker');
+  assert.equal(enabledNode.hitl.allowed_actions.includes('continue_without'), true);
+
+  enabledNode.hitl.default_action = 'continue_without';
+  const cleared = setHitlContinueWithoutTarget(enabled, 'review_router');
+  const clearedNode = cleared.nodes.find((item) => item.id === 'review_router');
+  const clearedEdge = cleared.edges.find((edge) => edge.from === 'review_router');
+  assert.equal('continue_without' in clearedNode.hitl.routes, false);
+  assert.equal('continue_without' in clearedEdge.routes, false);
+  assert.equal(clearedNode.hitl.allowed_actions.includes('continue_without'), false);
+  assert.equal(clearedNode.hitl.default_action, 'approve');
 });
 
 test('normalizes unsupported node tools and over-limit node types from loaded state', () => {

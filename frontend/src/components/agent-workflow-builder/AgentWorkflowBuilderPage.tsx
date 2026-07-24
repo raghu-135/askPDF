@@ -55,6 +55,7 @@ import {
   insertNodeBefore,
   loadBuilderStateFromSpec,
   normalizeBuilderState,
+  setHitlContinueWithoutTarget,
   type AgentWorkflowBuilderState,
   type AgentWorkflowStarter,
   type BuilderEdgeState,
@@ -561,6 +562,10 @@ export default function AgentWorkflowBuilderPage() {
     }));
   };
 
+  const handleUpdateHitlBypass = (gateNodeId: string, targetId?: string) => {
+    updateState((previous) => setHitlContinueWithoutTarget(previous, gateNodeId, targetId));
+  };
+
   const handleNodePositionChange = (nodeId: string, position: { x: number; y: number }) => {
     handleUpdateNode(nodeId, { position });
   };
@@ -869,7 +874,7 @@ export default function AgentWorkflowBuilderPage() {
                       <Box sx={{ height: 'calc(100% - 44px)', minHeight: 0, overflow: 'auto', p: 1.5 }}>
                         <BuilderInspector
                           catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
-                          onUpdateNode={handleUpdateNode} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
+                          onUpdateNode={handleUpdateNode} onUpdateHitlBypass={handleUpdateHitlBypass} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
                           onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
                           onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
                         />
@@ -902,7 +907,7 @@ export default function AgentWorkflowBuilderPage() {
                     <AccordionDetails>
                       <BuilderInspector
                         catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
-                        onUpdateNode={handleUpdateNode} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
+                        onUpdateNode={handleUpdateNode} onUpdateHitlBypass={handleUpdateHitlBypass} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
                         onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
                         onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
                       />

@@ -82,6 +82,12 @@ export const HitlPhase = {
 } as const;
 export type HitlPhase = typeof HitlPhase[keyof typeof HitlPhase];
 
+export const GraphSentinel = {
+  Start: 'START',
+  End: 'END',
+} as const;
+export type GraphSentinel = typeof GraphSentinel[keyof typeof GraphSentinel];
+
 export const HitlSelectionMode = {
   Single: 'single',
   Multi: 'multi',

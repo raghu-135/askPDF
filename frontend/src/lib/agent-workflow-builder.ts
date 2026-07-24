@@ -6,7 +6,14 @@ import type {
   AgentWorkflowRouteFunctionMetadata,
   AgentWorkflowToolContract,
 } from './api';
-import { AgentRunResumeAction, BuiltinAgentNodeType, HitlMode, HitlPhase, RouteFunctionId } from './enums.ts';
+import {
+  AgentRunResumeAction,
+  BuiltinAgentNodeType,
+  GraphSentinel,
+  HitlMode,
+  HitlPhase,
+  RouteFunctionId,
+} from './enums.ts';
 
 export type AgentWorkflowStarter = 'router' | 'plan_execute' | 'evaluator_replanner';
 
@@ -731,6 +738,94 @@ export function normalizeBuilderState(
   return normalized;
 }
 
+export function getImmediateSuccessorIds(
+  state: AgentWorkflowBuilderState,
+  nodeId: string,
+): string[] {
+  const successors = new Set<string>();
+  state.edges.forEach((edge) => {
+    if (edge.from !== nodeId) return;
+    const targets = edge.conditional
+      ? Object.values(edge.routes || {})
+      : edge.to
+        ? [edge.to]
+        : [];
+    targets.forEach((target) => {
+      if (target && target !== nodeId) successors.add(target);
+    });
+  });
+  return Array.from(successors);
+}
+
+export function resolveAutomaticHitlBypassTarget(
+  state: AgentWorkflowBuilderState,
+  targetNodeId: string,
+): string | undefined {
+  const successors = getImmediateSuccessorIds(state, targetNodeId);
+  return successors.length === 1 ? successors[0] : undefined;
+}
+
+export function setHitlContinueWithoutTarget(
+  state: AgentWorkflowBuilderState,
+  gateNodeId: string,
+  targetId?: string,
+): AgentWorkflowBuilderState {
+  const gateNode = getNode(state, gateNodeId);
+  if (!gateNode || gateNode.type !== BuiltinAgentNodeType.HitlGate) return state;
+  const gateEdge = state.edges.find((edge) => edge.from === gateNodeId && edge.conditional);
+  const currentRoutes = { ...(gateEdge?.routes || gateNode.hitl?.routes || {}) };
+  const approvedTarget = currentRoutes[AgentRunResumeAction.Approve];
+  if (
+    targetId
+    && (
+      !approvedTarget
+      || !getImmediateSuccessorIds(state, approvedTarget).includes(targetId)
+    )
+  ) {
+    return state;
+  }
+
+  const routes = { ...currentRoutes };
+  if (targetId) {
+    routes[AgentRunResumeAction.ContinueWithout] = targetId;
+  } else {
+    delete routes[AgentRunResumeAction.ContinueWithout];
+  }
+  const existingActions = gateNode.hitl?.allowed_actions || [];
+  const actionsWithoutContinue = existingActions.filter(
+    (action) => action !== AgentRunResumeAction.ContinueWithout,
+  );
+  const allowedActions = targetId
+    ? [...actionsWithoutContinue, AgentRunResumeAction.ContinueWithout]
+    : actionsWithoutContinue;
+  const currentDefault = gateNode.hitl?.default_action;
+  const defaultAction = (
+    currentDefault === AgentRunResumeAction.ContinueWithout && !targetId
+  )
+    ? AgentRunResumeAction.Approve
+    : currentDefault || AgentRunResumeAction.Approve;
+
+  return {
+    ...state,
+    nodes: state.nodes.map((node) => node.id === gateNodeId
+      ? {
+        ...node,
+        hitl: {
+          ...(node.hitl || {}),
+          routes,
+          allowed_actions: allowedActions,
+          default_action: defaultAction,
+        },
+      }
+      : node),
+    edges: state.edges.map((edge) => (
+      edge.from === gateNodeId && edge.conditional
+        ? { ...edge, routes }
+        : edge
+    )),
+  };
+}
+
 export function createHitlGateForTarget(
   catalog: AgentWorkflowCatalogResponse,
   state: AgentWorkflowBuilderState,
@@ -750,6 +845,19 @@ export function createHitlGateForTarget(
   const target = getNode(state, targetNodeId);
   if (!target) return state;
   const gateId = options.id || getCanonicalNodeId(`hitl_${targetNodeId}`, state.nodes.map((node) => node.id));
+  const bypassTarget = resolveAutomaticHitlBypassTarget(state, targetNodeId);
+  const routes = {
+    [AgentRunResumeAction.Approve]: target.id,
+    [AgentRunResumeAction.Reject]: GraphSentinel.End,
+    ...(bypassTarget
+      ? { [AgentRunResumeAction.ContinueWithout]: bypassTarget }
+      : {}),
+  };
+  const allowedActions = [
+    AgentRunResumeAction.Approve,
+    AgentRunResumeAction.Reject,
+    ...(bypassTarget ? [AgentRunResumeAction.ContinueWithout] : []),
+  ];
   const gate: BuilderNodeState = {
     id: gateId,
     type: BuiltinAgentNodeType.HitlGate,
@@ -758,13 +866,10 @@ export function createHitlGateForTarget(
       title: options.title || `Review ${target.id}`,
       body: options.body || '',
       mode: options.mode || HitlMode.Approval,
-      allowed_actions: options.allowedActions || [AgentRunResumeAction.Approve, AgentRunResumeAction.Reject, AgentRunResumeAction.ContinueWithout],
-      default_action: options.defaultAction || AgentRunResumeAction.ContinueWithout,
-      routes: {
-        [AgentRunResumeAction.Approve]: target.id,
-        [AgentRunResumeAction.ContinueWithout]: target.id,
-        [AgentRunResumeAction.Reject]: 'END',
-      },
+      allowed_actions: options.allowedActions || allowedActions,
+      default_action: options.defaultAction
+        || (bypassTarget ? AgentRunResumeAction.ContinueWithout : AgentRunResumeAction.Approve),
+      routes,
     },
   };
   const sourceEdgeIndex = options.incomingPath
@@ -808,7 +913,7 @@ export function createHitlGateForTarget(
     from: gateId,
     conditional: true,
     route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.HitlGate) || RouteFunctionId.HitlGate,
-    routes: gate.hitl?.routes || {},
+    routes,
   });
   return {
     ...state,

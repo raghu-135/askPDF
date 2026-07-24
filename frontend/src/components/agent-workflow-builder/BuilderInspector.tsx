@@ -24,6 +24,7 @@ import type { AgentWorkflowBuilderState, BuilderEdgeState, BuilderNodeState } fr
 import { AgentRunResumeAction, BuiltinAgentNodeType, HitlMode, HitlPhase } from '../../lib/enums';
 import {
   canConnectNodes,
+  getImmediateSuccessorIds,
   getAllowedRouteFunctionsForNode,
   getAllowedToolContractsForNode,
   getRouteLabelsForFunction,
@@ -63,6 +64,7 @@ function NodeInspector({
   node,
   disabled,
   onUpdateNode,
+  onUpdateHitlBypass,
   onRemoveNode,
   onAddHitlGate,
 }: {
@@ -71,6 +73,7 @@ function NodeInspector({
   node: BuilderNodeState;
   disabled?: boolean;
   onUpdateNode: (nodeId: string, patch: Partial<BuilderNodeState>) => void;
+  onUpdateHitlBypass: (gateNodeId: string, targetId?: string) => void;
   onRemoveNode: (nodeId: string) => void;
   onAddHitlGate: (targetNodeId: string) => void;
 }) {
@@ -79,7 +82,14 @@ function NodeInspector({
   const selectedToolIds = node.tool_contract_ids || [];
   const capabilities = entry?.capabilities || [];
   const isHitl = node.type === BuiltinAgentNodeType.HitlGate;
-  const selectedActions = node.hitl?.allowed_actions || [AgentRunResumeAction.Approve, AgentRunResumeAction.Reject, AgentRunResumeAction.ContinueWithout];
+  const selectedActions = node.hitl?.allowed_actions || [AgentRunResumeAction.Approve, AgentRunResumeAction.Reject];
+  const hitlRouteEdge = isHitl
+    ? state.edges.find((edge) => edge.from === node.id && edge.conditional)
+    : undefined;
+  const hitlRoutes = hitlRouteEdge?.routes || node.hitl?.routes || {};
+  const approvedTarget = hitlRoutes[AgentRunResumeAction.Approve];
+  const bypassTargets = approvedTarget ? getImmediateSuccessorIds(state, approvedTarget) : [];
+  const continueWithoutTarget = hitlRoutes[AgentRunResumeAction.ContinueWithout] || '';
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
@@ -215,6 +225,33 @@ function NodeInspector({
               </Select>
             </FormControl>
           </Box>
+          <FormControl size="small" disabled={disabled || !approvedTarget || bypassTargets.length === 0}>
+            <InputLabel id={`hitl-bypass-${node.id}`}>Continue without target</InputLabel>
+            <Select
+              labelId={`hitl-bypass-${node.id}`}
+              label="Continue without target"
+              value={continueWithoutTarget}
+              onChange={(event: SelectChangeEvent) => (
+                onUpdateHitlBypass(node.id, event.target.value || undefined)
+              )}
+            >
+              <MenuItem value=""><em>Disabled</em></MenuItem>
+              {bypassTargets.map((targetId) => (
+                <MenuItem key={targetId} value={targetId}>
+                  {targetId === 'END'
+                    ? 'End'
+                    : state.nodes.find((candidate) => candidate.id === targetId)?.label
+                      || catalog.node_catalog[state.nodes.find((candidate) => candidate.id === targetId)?.type || '']?.display_name
+                      || targetId}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          {bypassTargets.length > 1 && !continueWithoutTarget ? (
+            <Typography variant="caption" color="text.secondary">
+              Continue without is disabled until a bypass target is selected.
+            </Typography>
+          ) : null}
           <FormControl size="small" disabled={disabled}>
             <InputLabel id={`hitl-actions-${node.id}`}>Allowed actions</InputLabel>
             <Select<string[]>
@@ -223,12 +260,16 @@ function NodeInspector({
               label="Allowed actions"
               value={selectedActions}
               onChange={(event) => {
-                const next = asArrayValue(event.target.value);
+                const next = asArrayValue(event.target.value)
+                  .filter((action) => action !== AgentRunResumeAction.ContinueWithout);
+                if (continueWithoutTarget) next.push(AgentRunResumeAction.ContinueWithout);
                 onUpdateNode(node.id, { hitl: { ...(node.hitl || {}), allowed_actions: next } });
               }}
               renderValue={(selected) => (selected as string[]).join(', ')}
             >
-              {Object.values(AgentRunResumeAction).map((action) => (
+              {Object.values(AgentRunResumeAction)
+                .filter((action) => action !== AgentRunResumeAction.ContinueWithout)
+                .map((action) => (
                 <MenuItem key={action} value={action}>{action}</MenuItem>
               ))}
             </Select>
@@ -238,7 +279,7 @@ function NodeInspector({
             <Select
               labelId={`hitl-default-${node.id}`}
               label="Default action"
-              value={node.hitl?.default_action || AgentRunResumeAction.ContinueWithout}
+              value={node.hitl?.default_action || AgentRunResumeAction.Approve}
               onChange={(event: SelectChangeEvent) => onUpdateNode(node.id, { hitl: { ...(node.hitl || {}), default_action: event.target.value } })}
             >
               {selectedActions.map((action) => (
@@ -503,6 +544,7 @@ export default function BuilderInspector({
   selection,
   disabled,
   onUpdateNode,
+  onUpdateHitlBypass,
   onUpdateEdge,
   onRemoveNode,
   onRemoveEdge,
@@ -514,6 +556,7 @@ export default function BuilderInspector({
   selection: BuilderSelection;
   disabled?: boolean;
   onUpdateNode: (nodeId: string, patch: Partial<BuilderNodeState>) => void;
+  onUpdateHitlBypass: (gateNodeId: string, targetId?: string) => void;
   onUpdateEdge: (edgeIndex: number, patch: Partial<BuilderEdgeState>) => void;
   onRemoveNode: (nodeId: string) => void;
   onRemoveEdge: (edgeIndex: number) => void;
@@ -533,6 +576,7 @@ export default function BuilderInspector({
         node={selectedNode}
         disabled={disabled}
         onUpdateNode={onUpdateNode}
+        onUpdateHitlBypass={onUpdateHitlBypass}
         onRemoveNode={onRemoveNode}
         onAddHitlGate={onAddHitlGate}
       />

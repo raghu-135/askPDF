@@ -44,6 +44,7 @@ from app.agent_workflows.route_registry import collect_route_function_registry_e
 from app.agent_workflows.service import AgentRunService
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
+from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.validator import WorkflowResolver, WorkflowValidationError, WorkflowValidator
 from app.db import get_thread_settings
 from app.db.models_sqlmodel import AgentWorkflow, AgentRun, ChatTurn, Thread
@@ -873,6 +874,94 @@ class TestRouterRagWorkflowValidator:
         report = WorkflowValidator().report(spec)
 
         assert report["valid"] is True
+
+    def test_accepts_hitl_gate_between_context_loader_and_planner(self):
+        spec = builtin_plan_execute_rag_v2_spec()
+        spec["config"]["hitl_policy"] = {
+            "enabled": True,
+            "gates": {
+                "review_planner": {
+                    "enabled": True,
+                    "mode": "approval",
+                    "phase": "before",
+                    "target": {"node_id": "planner"},
+                    "allowed_actions": ["approve", "reject"],
+                    "default_action": "approve",
+                    "routes": {
+                        "approve": "planner",
+                        "reject": "END",
+                    },
+                },
+            },
+        }
+        materialized = WorkflowCompiler().materialize_spec(spec)
+
+        result = WorkflowValidator().validate(materialized)
+
+        assert result == {"valid": True, "errors": []}
+
+    def test_hitl_materializer_omits_ambiguous_unconfigured_bypass(self):
+        graph = {
+            "nodes": [
+                {"id": "router_1", "type": "router"},
+                {"id": "retrieval_1", "type": "retrieval_worker"},
+                {"id": "final_1", "type": "finalizer"},
+            ],
+            "edges": [
+                {"from": "START", "to": "router_1"},
+                {
+                    "from": "router_1",
+                    "conditional": True,
+                    "routes": {"document": "retrieval_1", "clarify": "final_1"},
+                },
+            ],
+        }
+        policy = {
+            "enabled": True,
+            "gates": {
+                "review_router": {
+                    "target": {"node_id": "router_1"},
+                    "allowed_actions": ["approve", "reject", "continue_without"],
+                    "default_action": "continue_without",
+                },
+            },
+        }
+
+        materialized = materialize_hitl_gates(graph, hitl_policy=policy)
+
+        gate_edge = next(edge for edge in materialized["edges"] if edge["from"] == "review_router")
+        assert "continue_without" not in gate_edge["routes"]
+        assert policy["gates"]["review_router"]["allowed_actions"] == ["approve", "reject"]
+        assert policy["gates"]["review_router"]["default_action"] == "approve"
+
+    def test_hitl_materializer_uses_converged_conditional_successor(self):
+        graph = {
+            "nodes": [
+                {"id": "router_1", "type": "router"},
+                {"id": "final_1", "type": "finalizer"},
+            ],
+            "edges": [
+                {"from": "START", "to": "router_1"},
+                {
+                    "from": "router_1",
+                    "conditional": True,
+                    "routes": {"direct": "final_1", "clarify": "final_1"},
+                },
+            ],
+        }
+        policy = {
+            "enabled": True,
+            "gates": {
+                "review_router": {
+                    "target": {"node_id": "router_1"},
+                },
+            },
+        }
+
+        materialized = materialize_hitl_gates(graph, hitl_policy=policy)
+
+        gate_edge = next(edge for edge in materialized["edges"] if edge["from"] == "review_router")
+        assert gate_edge["routes"]["continue_without"] == "final_1"
 
     def test_evaluator_replanner_loop_policy_matches_replan_budget(self):
         spec = builtin_evaluator_replanner_rag_v2_spec()
