@@ -124,7 +124,12 @@ class WorkflowMaterializer:
             metadata = get_node_type_metadata(str(node_type)) if isinstance(node_type, str) else {}
             display_name = metadata.get("display_name")
             category = metadata.get("category")
-            if isinstance(display_name, str) and display_name:
+            label = node.get("label")
+            if (
+                (not isinstance(label, str) or not label.strip())
+                and isinstance(display_name, str)
+                and display_name
+            ):
                 node["label"] = display_name
             if isinstance(category, str) and category:
                 node["category"] = category

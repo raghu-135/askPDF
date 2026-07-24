@@ -41,6 +41,7 @@ import {
   assembleAgentWorkflowSpec,
   canAddNodeType,
   canConnectNodes,
+  canConnectSourceToType,
   canInsertExistingNodeBefore,
   canInsertNodeTypeBefore,
   createHitlGateForTarget,
@@ -1005,13 +1006,7 @@ export default function AgentWorkflowBuilderPage() {
                 )) : null}
               {builderState && nodeRequest?.mode === 'after' ? Object.entries(catalog?.node_catalog || {})
                 .filter(([nodeType]) => canAddNodeType(catalog!, builderState, nodeType).ok)
-                .filter(([nodeType]) => {
-                  if (nodeRequest.source === 'START') {
-                    return (catalog?.node_catalog[nodeType]?.allowed_parent_types || []).includes('START');
-                  }
-                  const sourceType = builderState.nodes.find((node) => node.id === nodeRequest.source)?.type;
-                  return sourceType ? (catalog?.node_catalog[sourceType]?.allowed_child_types || []).includes(nodeType) : false;
-                })
+                .filter(([nodeType]) => canConnectSourceToType(catalog!, builderState, nodeRequest.source, nodeType).ok)
                 .map(([nodeType, entry]) => (
                   <ListItemButton key={`new:${nodeType}`} onClick={() => {
                     const id = getCanonicalNodeId(nodeType, builderState.nodes.map((node) => node.id));

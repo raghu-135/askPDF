@@ -349,19 +349,29 @@ class GenericGraphValidator:
         node_types_by_id: dict[str, str],
         node_catalog: Dict[str, Dict[str, Any]],
     ) -> list[str]:
-        if source == GraphSentinel.START.value or target == GraphSentinel.END.value:
-            return []
-        source_type = node_types_by_id.get(source)
-        target_type = node_types_by_id.get(target)
+        if source == GraphSentinel.START.value and target == GraphSentinel.END.value:
+            return ["START cannot connect directly to END"]
+        source_type = (
+            GraphSentinel.START.value
+            if source == GraphSentinel.START.value
+            else node_types_by_id.get(source)
+        )
+        target_type = (
+            GraphSentinel.END.value
+            if target == GraphSentinel.END.value
+            else node_types_by_id.get(target)
+        )
         if not source_type or not target_type:
             return []
         errors: list[str] = []
-        allowed_children = set((node_catalog.get(source_type) or {}).get("allowed_child_types") or [])
-        if target_type not in allowed_children:
-            errors.append(f"node {source} type {source_type} cannot connect to child {target} type {target_type}")
-        allowed_parents = set((node_catalog.get(target_type) or {}).get("allowed_parent_types") or [])
-        if source_type not in allowed_parents:
-            errors.append(f"node {target} type {target_type} cannot accept parent {source} type {source_type}")
+        if source_type != GraphSentinel.START.value:
+            allowed_children = set((node_catalog.get(source_type) or {}).get("allowed_child_types") or [])
+            if target_type not in allowed_children:
+                errors.append(f"node {source} type {source_type} cannot connect to child {target} type {target_type}")
+        if target_type != GraphSentinel.END.value:
+            allowed_parents = set((node_catalog.get(target_type) or {}).get("allowed_parent_types") or [])
+            if source_type not in allowed_parents:
+                errors.append(f"node {target} type {target_type} cannot accept parent {source} type {source_type}")
         return errors
 
     def _collect_loop_policy_errors(

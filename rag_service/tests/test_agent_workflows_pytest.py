@@ -1618,6 +1618,33 @@ class TestRouterRagGraphToolConsumers:
 
         assert "node retrieval_1 type retrieval_worker cannot accept parent planner_1 type planner" in str(exc.value)
 
+    def test_v2_custom_graph_rejects_start_edge_incompatibility(self):
+        spec = builtin_router_rag_v2_spec()
+        spec["config"]["graph"]["edges"][0] = {"from": "START", "to": "retrieval_worker"}
+
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
+
+        assert "node retrieval_worker type retrieval_worker cannot accept parent START type START" in str(exc.value)
+
+    def test_v2_custom_graph_rejects_end_edge_incompatibility(self):
+        spec = builtin_plan_execute_rag_v2_spec()
+        spec["config"]["graph"]["edges"].append({"from": "planner", "to": "END"})
+
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
+
+        assert "node planner type planner cannot connect to child END type END" in str(exc.value)
+
+    def test_v2_custom_graph_rejects_direct_start_to_end_edge(self):
+        spec = builtin_router_rag_v2_spec()
+        spec["config"]["graph"]["edges"].append({"from": "START", "to": "END"})
+
+        with pytest.raises(WorkflowValidationError) as exc:
+            WorkflowValidator().validate(spec)
+
+        assert "START cannot connect directly to END" in str(exc.value)
+
     def test_v2_custom_graph_rejects_incompatible_node_catalog(self, monkeypatch):
         catalog = get_node_catalog()
         catalog["router"].pop("context_policy")
@@ -4419,7 +4446,7 @@ class TestAgentRunService:
                     "nodes": [
                         {"id": "context_1", "type": "context_loader"},
                         {"id": "router_1", "type": "router"},
-                        {"id": "retrieval_1", "type": "retrieval_worker"},
+                        {"id": "retrieval_1", "type": "retrieval_worker", "label": "Primary document search"},
                         {"id": "synth_1", "type": "synthesizer"},
                         {"id": "final_1", "type": "finalizer"},
                     ],
@@ -4564,7 +4591,7 @@ class TestAgentRunService:
         )
         assert retrieval_node["id"] == "retrieval_1"
         assert retrieval_node["type"] == "retrieval_worker"
-        assert retrieval_node["label"] == "Document Retrieval"
+        assert retrieval_node["label"] == "Primary document search"
         assert retrieval_node["category"] == "retrieval"
         assert retrieval_node["capabilities"] == ["retrieval.document"]
         assert "document_evidence" in retrieval_node["allowed_tool_contract_ids"]
@@ -4588,7 +4615,7 @@ class TestAgentRunService:
         assert any(
             attrs.get("askpdf.node.id") == "retrieval_1"
             and attrs.get("askpdf.node.type") == "retrieval_worker"
-            and attrs.get("askpdf.node.name") == "Document Retrieval"
+            and attrs.get("askpdf.node.name") == "Primary document search"
             and attrs.get("askpdf.node.category") == "retrieval"
             and attrs.get("askpdf.node.capabilities") == ["retrieval.document"]
             and attrs.get("askpdf.observability.span_kind") == "tool_worker"
@@ -4602,7 +4629,7 @@ class TestAgentRunService:
         )
         graph_nodes = (run.debug_trace_json or {}).get("graph", {}).get("nodes", [])
         debug_retrieval_node = next(node for node in graph_nodes if node.get("id") == "retrieval_1")
-        assert debug_retrieval_node["label"] == "Document Retrieval"
+        assert debug_retrieval_node["label"] == "Primary document search"
         assert debug_retrieval_node["category"] == "retrieval"
         assert debug_retrieval_node["capabilities"] == ["retrieval.document"]
         assert debug_retrieval_node["observability"]["span_kind"] == "tool_worker"

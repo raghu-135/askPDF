@@ -5,6 +5,8 @@ import {
   assembleAgentWorkflowSpec,
   canAddNodeType,
   canConnectNodes,
+  canConnectNodeTypes,
+  canConnectSourceToType,
   canInsertExistingNodeBefore,
   canInsertNodeTypeBefore,
   createHitlGateForTarget,
@@ -271,6 +273,8 @@ test('creates a router starter spec with canonical node ids and route function m
 
 test('catalog helpers filter routes, labels, tool contracts, and edge compatibility', () => {
   const state = createInitialBuilderState(catalog, 'router');
+  const parentIncompatibleCatalog = structuredClone(catalog);
+  parentIncompatibleCatalog.node_catalog.retrieval_worker.allowed_parent_types = ['planner'];
 
   assert.deepEqual(getAllowedRouteFunctionsForNode(catalog, 'router'), ['router_route']);
   assert.deepEqual(getRouteLabelsForFunction(catalog, 'planner_route'), ['execute', 'direct', 'clarify']);
@@ -280,6 +284,10 @@ test('catalog helpers filter routes, labels, tool contracts, and edge compatibil
   );
   assert.equal(canConnectNodes(catalog, state, 'router', 'retrieval_worker').ok, true);
   assert.equal(canConnectNodes(catalog, state, 'retrieval_worker', 'router').ok, false);
+  assert.equal(canConnectNodes(catalog, state, 'START', 'retrieval_worker').ok, false);
+  assert.equal(canConnectNodes(catalog, state, 'planner', 'END').ok, false);
+  assert.equal(canConnectNodeTypes(parentIncompatibleCatalog, 'router', 'retrieval_worker').ok, false);
+  assert.equal(canConnectSourceToType(parentIncompatibleCatalog, state, 'router', 'retrieval_worker').ok, false);
 });
 
 test('enforces catalog max instances and canonical fallback ids', () => {

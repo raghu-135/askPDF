@@ -180,9 +180,13 @@ export function canConnectNodeTypes(
   if (!sourceType || !targetType) return { ok: false, reason: 'Unknown source or target node type.' };
   const source = catalogEntry(catalog, sourceType);
   if (!source) return { ok: false, reason: `Unknown source node type: ${sourceType}` };
-  if (!catalogEntry(catalog, targetType)) return { ok: false, reason: `Unknown target node type: ${targetType}` };
+  const target = catalogEntry(catalog, targetType);
+  if (!target) return { ok: false, reason: `Unknown target node type: ${targetType}` };
   if (!(source.allowed_child_types || []).includes(targetType)) {
     return { ok: false, reason: `${sourceType} cannot connect to ${targetType}.` };
+  }
+  if (!(target.allowed_parent_types || []).includes(sourceType)) {
+    return { ok: false, reason: `${targetType} cannot accept ${sourceType} as a parent.` };
   }
   return { ok: true };
 }
@@ -314,7 +318,7 @@ const canConnectTypeToTarget = (
   return canConnectNodeTypes(catalog, sourceType, getNode(state, targetId)?.type);
 };
 
-const canConnectSourceToType = (
+export const canConnectSourceToType = (
   catalog: AgentWorkflowCatalogResponse,
   state: AgentWorkflowBuilderState,
   sourceId: string,
