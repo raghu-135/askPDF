@@ -179,18 +179,12 @@ class AgentRunService:
             logger.info("Invoking compiled agent workflow for thread %s | workflow=%s", thread_id, workflow.id)
             from app.agent_workflows import router_runtime
 
-            handler_by_workflow_id = {
-                "router_rag_agent": router_runtime.handle_router_rag_chat,
-                "plan_execute_rag_agent": router_runtime.handle_plan_execute_rag_chat,
-                "evaluator_replanner_rag_agent": router_runtime.handle_evaluator_replanner_rag_chat,
-            }
-            handler = handler_by_workflow_id.get(workflow.id, router_runtime.handle_router_rag_chat)
             async with open_agent_checkpointer() as checkpointer:
                 stream_kwargs = {}
                 if execution_event_sink is not None:
                     stream_kwargs["execution_event_sink"] = execution_event_sink
                     stream_kwargs["cancellation_checker"] = lambda: chat_run_cancel_requested(run.id)
-                result = await handler(
+                result = await router_runtime.execute_compiled_rag_chat(
                     thread_id,
                     req,
                     embedding_model,
