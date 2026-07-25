@@ -44,6 +44,7 @@ import CallSplitIcon from '@mui/icons-material/CallSplit';
 import {
   Project,
   Thread,
+  createProject,
   createThread,
   listProjects,
   listThreads,
@@ -96,12 +97,15 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const theme = useTheme();
   const [loading, setLoading] = useState(true);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [newThreadName, setNewThreadName] = useState(() => {
     const now = new Date();
     return `Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
   });
   const [newThreadProjectId, setNewThreadProjectId] = useState<string>('');
-  const [newThreadEmbeddingModel, setNewThreadEmbeddingModel] = useState('');
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectDescription, setNewProjectDescription] = useState('');
+  const [newProjectEmbeddingModel, setNewProjectEmbeddingModel] = useState('');
   const [availableEmbeddingModels, setAvailableEmbeddingModels] = useState<{
     local_embedding_models: string[];
     embedding_models: string[];
@@ -167,8 +171,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       setAvailableEmbeddingModels(models);
       const allModels = [...models.embedding_models, ...models.local_embedding_models, ...models.not_embedding_models];
       const defaultModel = allModels[0] || '';
-      if (!newThreadEmbeddingModel && defaultModel) {
-        setNewThreadEmbeddingModel(defaultModel);
+      if (!newProjectEmbeddingModel && defaultModel) {
+        setNewProjectEmbeddingModel(defaultModel);
       }
     });
   }, []);
@@ -193,29 +197,41 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   };
 
   const handleCreateThread = async () => {
-    if (!newThreadName.trim() || !newThreadEmbeddingModel) return;
+    if (!newThreadName.trim() || !newThreadProjectId) return;
 
     try {
-      // Check if the embedding model is valid before proceeding
-      const isReady = await checkEmbeddingModelReady(newThreadEmbeddingModel);
-      if (!isReady) {
-        setIsEmbeddingModelValid(false);
-        return;
-      }
-
-      setIsEmbeddingModelValid(true);
       setCreating(true);
-      const thread = await createThread(newThreadName.trim(), newThreadEmbeddingModel, newThreadProjectId || undefined);
+      const thread = await createThread(newThreadName.trim(), newThreadProjectId);
       setThreads(prev => [thread, ...prev]);
       onThreadSelect(thread);
       if (onEmbeddingModelChange) {
-        onEmbeddingModelChange(newThreadEmbeddingModel);
+        onEmbeddingModelChange(thread.embeddingModel);
       }
       setCreateDialogOpen(false);
       setNewThreadName('');
-      setNewThreadEmbeddingModel('');
     } catch (error) {
       console.error('Failed to create thread:', error);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleCreateProject = async () => {
+    if (!newProjectName.trim() || !newProjectEmbeddingModel) return;
+    try {
+      setCreating(true);
+      const project = await createProject(
+        newProjectName.trim(),
+        newProjectEmbeddingModel,
+        newProjectDescription.trim()
+      );
+      setProjects(prev => [...prev, project]);
+      setNewThreadProjectId(project.id);
+      setCreateProjectDialogOpen(false);
+      setNewProjectName('');
+      setNewProjectDescription('');
+    } catch (error) {
+      console.error('Failed to create project:', error);
     } finally {
       setCreating(false);
     }
@@ -386,9 +402,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     }
   };
 
-  // Add validation check when embedding model changes
+  // Project model selection is immutable, so surface availability before creation.
   useEffect(() => {
-    if (!newThreadEmbeddingModel) {
+    if (!newProjectEmbeddingModel) {
       setIsEmbeddingModelValid(null);
       setIsCheckingEmbeddingModel(false);
       return;
@@ -398,7 +414,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       setIsCheckingEmbeddingModel(true);
       setIsEmbeddingModelValid(null);
       try {
-        const isReady = await checkEmbeddingModelReady(newThreadEmbeddingModel);
+        const isReady = await checkEmbeddingModelReady(newProjectEmbeddingModel);
         setIsEmbeddingModelValid(isReady);
       } catch (error) {
         setIsEmbeddingModelValid(false);
@@ -408,7 +424,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     };
 
     validateEmbeddingModel();
-  }, [newThreadEmbeddingModel]);
+  }, [newProjectEmbeddingModel]);
 
   const handleOpenCreateDialog = useCallback(() => {
     const now = new Date();
@@ -928,30 +944,72 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               ))}
             </Select>
           </FormControl>
+          <Button
+            size="small"
+            startIcon={<AddIcon />}
+            onClick={() => setCreateProjectDialogOpen(true)}
+            sx={{ mt: 1 }}
+          >
+            Create project
+          </Button>
+          <Box sx={{ mt: 2, p: 1.5, bgcolor: 'warning.light', borderRadius: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <LockIcon fontSize="small" />
+              <Typography variant="caption" color="text.secondary">
+                This thread inherits the project model
+                {projectsById.get(newThreadProjectId)?.embeddingModel
+                  ? ` (${projectsById.get(newThreadProjectId)?.embeddingModel})`
+                  : ''}.
+              </Typography>
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+          <Button
+            onClick={handleCreateThread}
+            variant="contained"
+            disabled={!newThreadName.trim() || !newThreadProjectId || creating}
+          >
+            {creating ? <CircularProgress size={20} /> : 'Create'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={createProjectDialogOpen}
+        onClose={() => setCreateProjectDialogOpen(false)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Create Project</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            margin="dense"
+            label="Project Name"
+            fullWidth
+            value={newProjectName}
+            onChange={(event) => setNewProjectName(event.target.value)}
+          />
+          <TextField
+            margin="dense"
+            label="Description"
+            fullWidth
+            value={newProjectDescription}
+            onChange={(event) => setNewProjectDescription(event.target.value)}
+          />
           <FormControl fullWidth margin="dense">
             <InputLabel>Embedding Model</InputLabel>
             <Select
-              value={newThreadEmbeddingModel}
+              value={newProjectEmbeddingModel}
               label="Embedding Model"
-              onChange={(e) => setNewThreadEmbeddingModel(e.target.value)}
+              onChange={(event) => setNewProjectEmbeddingModel(String(event.target.value))}
             >
-              {[...availableEmbeddingModels.embedding_models, ...availableEmbeddingModels.local_embedding_models, ...availableEmbeddingModels.not_embedding_models].map((model) => (
+              {[...availableEmbeddingModels.embedding_models, ...availableEmbeddingModels.local_embedding_models].map((model) => (
                 <MenuItem key={model} value={model}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                     {getModelIcon(model)}
-                    <Box>
-                      {model}
-                      {availableEmbeddingModels.local_embedding_models.includes(model) && (
-                        <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-                          (slower)
-                        </Typography>
-                      )}
-                      {availableEmbeddingModels.not_embedding_models.includes(model) && (
-                        <Typography variant="caption" sx={{ ml: 1, color: 'text.secondary' }}>
-                          (may not work)
-                        </Typography>
-                      )}
-                    </Box>
+                    {model}
                   </Box>
                 </MenuItem>
               ))}
@@ -964,28 +1022,25 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             </Box>
           )}
           {isEmbeddingModelValid === false && !isCheckingEmbeddingModel && (
-            <Typography color="error" variant="body2" sx={{ mt: 1 }}>
-              The selected model is not an embedding model. Please choose a valid model.
+            <Typography color="warning.main" variant="body2" sx={{ mt: 1 }}>
+              This model is currently unavailable. The project can be created, but its threads will be read-only until the model is available.
             </Typography>
           )}
-          <Box sx={{ mt: 2, p: 1.5, bgcolor: 'warning.light', borderRadius: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <LockIcon fontSize="small" />
-              <Typography variant="caption" color="text.secondary">
-                The embedding model is locked once a thread is created.
-                To use a different model, create a new thread.
-              </Typography>
-            </Box>
+          <Box sx={{ mt: 2, p: 1.5, bgcolor: 'warning.light', borderRadius: 1, display: 'flex', gap: 1 }}>
+            <LockIcon fontSize="small" />
+            <Typography variant="caption" color="text.secondary">
+              The project embedding model is permanent. Every thread and project-scoped memory uses this model.
+            </Typography>
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setCreateProjectDialogOpen(false)}>Cancel</Button>
           <Button
-            onClick={handleCreateThread}
+            onClick={handleCreateProject}
             variant="contained"
-            disabled={!newThreadName.trim() || !newThreadEmbeddingModel || creating || isEmbeddingModelValid === false || isCheckingEmbeddingModel}
+            disabled={!newProjectName.trim() || !newProjectEmbeddingModel || creating || isCheckingEmbeddingModel}
           >
-            {creating ? <CircularProgress size={20} /> : 'Create'}
+            {creating ? <CircularProgress size={20} /> : 'Create Project'}
           </Button>
         </DialogActions>
       </Dialog>

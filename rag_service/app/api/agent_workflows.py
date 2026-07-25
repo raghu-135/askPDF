@@ -49,10 +49,27 @@ from app.agent_workflows.studio_runtime import (
 from app.db import AgentRunStatus, get_thread, get_thread_settings
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET
 from app.models.requests import ThreadChatRequest
+from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
+    EmbeddingModelUnavailableError,
+    require_thread_embedding_ready,
+)
 from app.time_utils import iso_utc_z
 
 
 router = APIRouter(tags=["agent-workflows"])
+
+
+async def _require_ready_thread(thread_id: str):
+    try:
+        return await require_thread_embedding_ready(thread_id)
+    except EmbeddingModelResolutionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except EmbeddingModelUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "embedding_model_unavailable", "message": str(exc)},
+        ) from exc
 
 
 class WorkflowValidationRequest(BaseModel):
@@ -328,9 +345,8 @@ async def validate_agent_workflow(req: WorkflowValidationRequest):
 
 @router.post("/internal/agent-workflows/test-runs/stream")
 async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
-    thread = await get_thread(req.thread_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
+    embedding_context = await _require_ready_thread(req.thread_id)
+    thread = embedding_context.thread
     workflow = await AgentWorkflowRepository().get_workflow(req.base_workflow_id, include_custom=True)
     if workflow is None:
         raise HTTPException(status_code=404, detail="Base agent workflow not found")
@@ -372,7 +388,7 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
                 async for event in stream_builder_test(
                     run=run,
                     request=req,
-                    embedding_model=thread.embedding_model,
+                    embedding_model=embedding_context.embedding_model,
                     checkpointer=checkpointer,
                 ):
                     sequence += 1
@@ -418,9 +434,8 @@ async def cancel_internal_agent_workflow_test(run_id: str):
 
 @router.post("/internal/agent-workflows/test-runs/{run_id}/resume/stream")
 async def resume_internal_agent_workflow_test(run_id: str, req: BuilderTestRunResumeRequest):
-    thread = await get_thread(req.thread_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="Builder test run not found")
+    embedding_context = await _require_ready_thread(req.thread_id)
+    thread = embedding_context.thread
     repo = AgentWorkflowRepository()
     run = await repo.get_run(run_id)
     if run is None or run.thread_id != req.thread_id or (run.run_metadata_json or {}).get("run_kind") != BUILDER_TEST_RUN_KIND:
@@ -452,7 +467,7 @@ async def resume_internal_agent_workflow_test(run_id: str, req: BuilderTestRunRe
                 async for event in stream_builder_test(
                     run=resolution.run,
                     request=req,
-                    embedding_model=thread.embedding_model,
+                    embedding_model=embedding_context.embedding_model,
                     checkpointer=checkpointer,
                     resume_decision=decision,
                 ):
@@ -721,9 +736,7 @@ async def resume_agent_run(
     req: AgentRunResumeRequest,
     accept: Optional[str] = Header(default=None),
 ):
-    thread = await get_thread(req.thread_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="Agent run not found")
+    await _require_ready_thread(req.thread_id)
 
     service = AgentRunService()
 

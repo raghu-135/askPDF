@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 
-from app.db.models_sqlmodel import Thread, ChatTurn, ChatTurnStatus, ThreadFile
+from app.db.models_sqlmodel import Project, Thread, ChatTurn, ChatTurnStatus, ThreadFile
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import utc_now
@@ -31,23 +31,25 @@ class ThreadRepository:
             return self._session
         return async_session_maker()
 
-    async def create(self, name: str, embedding_model: str, project_id: Optional[str] = None) -> Thread:
+    async def create(self, name: str, project_id: str) -> Thread:
         """Create a new thread with default settings."""
         thread_id = str(uuid.uuid4())
         created_at = utc_now()
 
-        thread = Thread(
-            id=thread_id,
-            project_id=project_id,
-            name=name,
-            embedding_model=embedding_model,
-            settings={},
-            thread_metadata={},
-            created_at=created_at
-        )
-
         session = await self._get_session()
         async with session.begin():
+            project = await session.get(Project, project_id)
+            if project is None:
+                raise ValueError("Project not found")
+            thread = Thread(
+                id=thread_id,
+                project_id=project.id,
+                name=name,
+                embedding_model=project.embedding_model,
+                settings={},
+                thread_metadata={},
+                created_at=created_at
+            )
             session.add(thread)
             await session.flush()
             await session.refresh(thread)
@@ -148,6 +150,7 @@ class ThreadRepository:
                     "project_id": thread.project_id,
                     "name": thread.name,
                     "embedding_model": thread.embedding_model,
+                    "long_term_memory_enabled": not thread.is_legacy,
                     "settings": thread.settings if thread.settings else {},
                     "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
                     "documents_meta": thread.documents_meta if thread.documents_meta else {},

@@ -9,6 +9,7 @@ This module handles:
 
 import logging
 import os
+import asyncio
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -46,6 +47,27 @@ from app.agent_workflows.repository import AgentWorkflowRepository
 from app.db import ensure_default_project
 from app.db.connection_sqlmodel import init_db, close_db
 from app.db.vector import close_vector_db, get_vector_db
+from app.services.memory_service import (
+    hard_delete_expired_memories,
+    retry_pending_memory_indexes,
+)
+
+
+async def _memory_maintenance_loop(stop_event: asyncio.Event) -> None:
+    """Incrementally clean expired rows and retry only pending/failed indexes."""
+
+    interval = max(30, int(os.environ.get("MEMORY_MAINTENANCE_INTERVAL_SECONDS", "300")))
+    batch_size = max(1, min(500, int(os.environ.get("MEMORY_MAINTENANCE_BATCH_SIZE", "100"))))
+    while not stop_event.is_set():
+        try:
+            await hard_delete_expired_memories(limit=batch_size)
+            await retry_pending_memory_indexes(limit=batch_size)
+        except Exception:
+            logger.exception("Incremental memory maintenance failed")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -62,7 +84,7 @@ async def lifespan(app: FastAPI):
         logger.info("Database initialization complete.")
     except Exception as e:
         logger.critical(f"Failed to initialize database: {e}", exc_info=True)
-        # We continue to allow the process to start so it can be debugged via /health
+        raise
 
     try:
         logger.info("Initializing Weaviate collections...")
@@ -70,9 +92,15 @@ async def lifespan(app: FastAPI):
         logger.info("Weaviate collection initialization complete.")
     except Exception as e:
         logger.critical(f"Failed to initialize Weaviate collections: {e}", exc_info=True)
-        
+
+    memory_maintenance_stop = asyncio.Event()
+    memory_maintenance_task = asyncio.create_task(
+        _memory_maintenance_loop(memory_maintenance_stop)
+    )
     yield
     logger.info("--- RAG Service Shutting Down ---")
+    memory_maintenance_stop.set()
+    await memory_maintenance_task
     try:
         logger.info("Closing database connections...")
         await close_db()

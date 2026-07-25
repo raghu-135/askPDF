@@ -13,7 +13,6 @@ from app.db import (
     list_projects,
     update_project,
 )
-from app.models.llm_server_client import LOCAL_EMBEDDING_MODEL
 from app.models.requests import ProjectCreateRequest, ProjectUpdateRequest, ThreadCreateRequest
 from app.time_utils import iso_utc_z
 
@@ -26,6 +25,7 @@ def _project_payload(project) -> Dict[str, Any]:
         "id": project.id,
         "name": project.name,
         "description": project.description,
+        "embedding_model": project.embedding_model,
         "settings_json": project.settings_json if isinstance(project.settings_json, dict) else {},
         "created_at": iso_utc_z(project.created_at) if project.created_at else None,
         "updated_at": iso_utc_z(project.updated_at) if project.updated_at else None,
@@ -38,6 +38,7 @@ def _thread_payload(thread) -> Dict[str, Any]:
         "project_id": thread.project_id,
         "name": thread.name,
         "embedding_model": thread.embedding_model,
+        "long_term_memory_enabled": not bool(getattr(thread, "is_legacy", False)),
         "settings": thread.settings if isinstance(thread.settings, dict) else {},
         "thread_metadata": thread.thread_metadata if isinstance(thread.thread_metadata, dict) else {},
         "created_at": iso_utc_z(thread.created_at) if thread.created_at else None,
@@ -56,8 +57,12 @@ async def create_project_endpoint(req: ProjectCreateRequest):
     name = req.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required")
+    embedding_model = req.embedding_model.strip()
+    if not embedding_model:
+        raise HTTPException(status_code=400, detail="embedding_model is required")
     project = await create_project(
         name=name,
+        embedding_model=embedding_model,
         description=req.description,
         settings_json=req.settings_json,
     )
@@ -90,14 +95,16 @@ async def create_project_thread_endpoint(project_id: str, req: ThreadCreateReque
     project = await get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    embedding_model = (req.embedding_model or "").strip() or LOCAL_EMBEDDING_MODEL
-    thread = await create_thread(req.name, embedding_model, project_id=project_id)
+    thread = await create_thread(req.name, project_id)
     return _thread_payload(thread)
 
 
 @router.put("/projects/{project_id}/threads/{thread_id}")
 async def assign_project_thread_endpoint(project_id: str, thread_id: str):
-    thread = await assign_thread_to_project(thread_id, project_id)
+    try:
+        thread = await assign_thread_to_project(thread_id, project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if thread is None:
         raise HTTPException(status_code=404, detail="Project or thread not found")
     return _thread_payload(thread)

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.models.llm_server_client import (
-    LOCAL_EMBEDDING_MODEL,
     DEFAULT_TOKEN_BUDGET,
     MAX_CUSTOM_INSTRUCTIONS_CHARS,
     REPLANS_LIMIT,
@@ -17,13 +17,9 @@ from app.models.llm_server_client import (
 class ThreadCreateRequest(BaseModel):
     """Request body for creating a thread."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
     name: str
-    embedding_model: str = Field(
-        default=LOCAL_EMBEDDING_MODEL,
-        validation_alias=AliasChoices("embedding_model", "embed_model"),
-    )
     project_id: Optional[str] = None
 
 
@@ -80,6 +76,7 @@ class ProjectCreateRequest(BaseModel):
     """Request body for creating a project."""
 
     name: str
+    embedding_model: str
     description: str = ""
     settings_json: Dict[str, Any] = Field(default_factory=dict)
 
@@ -95,6 +92,8 @@ class ProjectUpdateRequest(BaseModel):
 class MemoryCreateRequest(BaseModel):
     """Request body for creating a canonical memory."""
 
+    model_config = ConfigDict(extra="forbid")
+
     scope_type: str
     scope_id: str
     memory_type: str = "semantic"
@@ -104,24 +103,17 @@ class MemoryCreateRequest(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     visibility: str = "private"
     created_by: Optional[str] = None
-    embedding_model: Optional[str] = None
-
-
-class MemoryStatusUpdateRequest(BaseModel):
-    """Request body for changing memory lifecycle status."""
-
-    status: str
-    actor_id: Optional[str] = None
-    payload_json: Dict[str, Any] = Field(default_factory=dict)
+    expires_at: Optional[datetime] = None
 
 
 class MemorySearchRequest(BaseModel):
     """Request body for read-only scoped memory retrieval."""
 
+    model_config = ConfigDict(extra="forbid")
+
     query: str
     allowed_scopes: Optional[List[str]] = None
     max_results: int = Field(default=10, ge=1, le=50)
-    embedding_model: Optional[str] = None
 
 
 class MemoryCandidateCreateRequest(BaseModel):
@@ -143,8 +135,9 @@ class MemoryCandidateCreateRequest(BaseModel):
 class MemoryCandidateResolveRequest(BaseModel):
     """Request body for resolving a promotion candidate."""
 
+    model_config = ConfigDict(extra="forbid")
+
     status: str
-    embedding_model: Optional[str] = None
     actor_id: Optional[str] = None
 
 

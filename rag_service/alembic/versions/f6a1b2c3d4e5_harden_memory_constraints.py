@@ -18,6 +18,31 @@ depends_on = None
 
 def upgrade() -> None:
     op.create_check_constraint(
+        "ck_projects_embedding_model_nonempty",
+        "projects",
+        "length(btrim(embedding_model)) > 0",
+    )
+    op.execute(
+        """
+        create function prevent_project_embedding_model_change()
+        returns trigger as $$
+        begin
+            if new.embedding_model is distinct from old.embedding_model then
+                raise exception 'project embedding_model is immutable';
+            end if;
+            return new;
+        end;
+        $$ language plpgsql
+        """
+    )
+    op.execute(
+        """
+        create trigger trg_projects_embedding_model_immutable
+        before update of embedding_model on projects
+        for each row execute function prevent_project_embedding_model_change()
+        """
+    )
+    op.create_check_constraint(
         "ck_memories_scope_type",
         "memories",
         "scope_type in ('user', 'project', 'thread')",
@@ -30,7 +55,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_memories_status",
         "memories",
-        "status in ('active', 'archived', 'deleted', 'rejected')",
+        "status = 'active'",
     )
     op.create_check_constraint(
         "ck_memories_visibility",
@@ -51,6 +76,26 @@ def upgrade() -> None:
         "ck_memories_content_nonempty",
         "memories",
         "length(btrim(content)) > 0",
+    )
+    op.create_check_constraint(
+        "ck_memories_embedding_model_nonempty",
+        "memories",
+        "length(btrim(embedding_model)) > 0",
+    )
+    op.create_check_constraint(
+        "ck_memories_content_hash_nonempty",
+        "memories",
+        "length(btrim(content_hash)) > 0",
+    )
+    op.create_check_constraint(
+        "ck_memories_index_status",
+        "memories",
+        "index_status in ('pending', 'indexing', 'indexed', 'failed')",
+    )
+    op.create_check_constraint(
+        "ck_memories_index_attempts",
+        "memories",
+        "index_attempts >= 0",
     )
     op.create_check_constraint(
         "ck_memory_candidates_scope_type",
@@ -86,6 +131,10 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     for name, table in (
+        ("ck_memories_index_attempts", "memories"),
+        ("ck_memories_index_status", "memories"),
+        ("ck_memories_content_hash_nonempty", "memories"),
+        ("ck_memories_embedding_model_nonempty", "memories"),
         ("ck_memory_candidates_content_nonempty", "memory_candidates"),
         ("ck_memory_candidates_scope_id_nonempty", "memory_candidates"),
         ("ck_memory_candidates_confidence", "memory_candidates"),
@@ -101,3 +150,6 @@ def downgrade() -> None:
         ("ck_memories_scope_type", "memories"),
     ):
         op.drop_constraint(name, table, type_="check")
+    op.execute("drop trigger if exists trg_projects_embedding_model_immutable on projects")
+    op.execute("drop function if exists prevent_project_embedding_model_change()")
+    op.drop_constraint("ck_projects_embedding_model_nonempty", "projects", type_="check")

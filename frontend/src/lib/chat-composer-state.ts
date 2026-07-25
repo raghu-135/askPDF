@@ -64,7 +64,7 @@ export function getChatComposerState(input: ChatComposerStateInput): ChatCompose
   }
 
   if (input.isEmbeddingModelValid === false || input.indexingStatus === ChatComposerIndexingStatus.Blocked) {
-    return locked(ChatComposerStatus.EmbeddingUnavailable, 'Blocked: selected embedding model is unavailable on server.');
+    return locked(ChatComposerStatus.EmbeddingUnavailable, 'Blocked: this project’s embedding model is unavailable on the server.');
   }
 
   if (input.indexingStatus === ChatComposerIndexingStatus.Error) {

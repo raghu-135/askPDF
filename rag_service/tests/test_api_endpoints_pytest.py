@@ -50,7 +50,7 @@ class TestThreadEndpoints:
         """Test creating a new thread."""
         response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread"}
         )
         assert response.status_code == 200
         data = response.json()
@@ -59,16 +59,13 @@ class TestThreadEndpoints:
         assert data["name"] == "Test Thread"
         assert data["embedding_model"] == "BAAI/bge-m3"
 
-    def test_create_thread_accepts_legacy_embed_model_alias(self, client):
-        """Test creating a thread with the legacy embed_model request field."""
+    def test_create_thread_rejects_thread_level_embedding_model(self, client):
+        """Thread creation must not accept a model independent of its project."""
         response = client.post(
             "/api/threads",
             json={"name": "Legacy Alias Thread", "embed_model": "BAAI/bge-m3"}
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["name"] == "Legacy Alias Thread"
-        assert data["embedding_model"] == "BAAI/bge-m3"
+        assert response.status_code == 422
 
     def test_create_thread_default_embedding_model(self, client):
         """Test creating a thread with default embed model."""
@@ -87,7 +84,7 @@ class TestThreadEndpoints:
         # Create a thread first
         client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread"}
         )
         
         response = client.get("/api/threads")
@@ -100,24 +97,32 @@ class TestThreadEndpoints:
     def test_create_project_and_thread_in_project(self, client):
         project_response = client.post(
             "/api/projects",
-            json={"name": "Research", "description": "Shared research context"},
+            json={
+                "name": "Research",
+                "description": "Shared research context",
+                "embedding_model": "BAAI/bge-m3",
+            },
         )
         assert project_response.status_code == 200
         project = project_response.json()
 
         thread_response = client.post(
             f"/api/projects/{project['id']}/threads",
-            json={"name": "Project Thread", "embedding_model": "BAAI/bge-m3"},
+            json={"name": "Project Thread"},
         )
         assert thread_response.status_code == 200
         thread = thread_response.json()
         assert thread["project_id"] == project["id"]
+        assert thread["embedding_model"] == project["embedding_model"]
 
     def test_move_thread_to_project(self, client):
-        project_response = client.post("/api/projects", json={"name": "Target"})
+        project_response = client.post(
+            "/api/projects",
+            json={"name": "Target", "embedding_model": "BAAI/bge-m3"},
+        )
         thread_response = client.post(
             "/api/threads",
-            json={"name": "Movable", "embedding_model": "BAAI/bge-m3"},
+            json={"name": "Movable"},
         )
         project_id = project_response.json()["id"]
         thread_id = thread_response.json()["id"]
@@ -129,8 +134,66 @@ class TestThreadEndpoints:
         assert move_response.status_code == 200
         assert move_response.json()["project_id"] == project_id
 
-    def test_memory_create_archive_and_candidate_approval(self, client):
-        project_response = client.post("/api/projects", json={"name": "Memory Project"})
+    def test_move_and_cross_project_fork_reject_different_embedding_models(self, client):
+        source_thread = client.post(
+            "/api/threads",
+            json={"name": "Locked source"},
+        ).json()
+        incompatible_project = client.post(
+            "/api/projects",
+            json={
+                "name": "Different embedding space",
+                "embedding_model": "remote/other-embedding-model",
+            },
+        ).json()
+
+        move_response = client.put(
+            f"/api/threads/{source_thread['id']}/project",
+            json={"project_id": incompatible_project["id"]},
+        )
+        assert move_response.status_code == 409
+
+        fork_response = client.post(
+            f"/api/threads/{source_thread['id']}/fork",
+            json={"target_project_id": incompatible_project["id"]},
+        )
+        assert fork_response.status_code == 409
+
+    def test_chat_rejects_unavailable_project_embedding_model(self, client):
+        project = client.post(
+            "/api/projects",
+            json={
+                "name": "Offline model project",
+                "embedding_model": "remote/offline-embedding-model",
+            },
+        ).json()
+        thread = client.post(
+            "/api/threads",
+            json={"name": "Visible but blocked", "project_id": project["id"]},
+        ).json()
+
+        with patch(
+            "app.services.embedding_model_service.check_embedding_model_ready",
+            new_callable=AsyncMock,
+            return_value=False,
+        ):
+            response = client.post(
+                f"/api/threads/{thread['id']}/chat",
+                json={
+                    "thread_id": thread["id"],
+                    "question": "Can this bypass the composer?",
+                    "llm_model": "test-chat-model",
+                },
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "embedding_model_unavailable"
+
+    def test_memory_create_hard_delete_and_candidate_approval(self, client):
+        project_response = client.post(
+            "/api/projects",
+            json={"name": "Memory Project", "embedding_model": "BAAI/bge-m3"},
+        )
         project_id = project_response.json()["id"]
 
         memory_response = client.post(
@@ -151,8 +214,7 @@ class TestThreadEndpoints:
             f"/api/memories/{memory['id']}/status",
             json={"status": "archived", "actor_id": "tester"},
         )
-        assert archive_response.status_code == 200
-        assert archive_response.json()["status"] == "archived"
+        assert archive_response.status_code == 404
 
         candidate_response = client.post(
             "/api/memory-candidates",
@@ -175,6 +237,14 @@ class TestThreadEndpoints:
         resolved = resolve_response.json()
         assert resolved["memory_candidate"]["status"] == "approved"
         assert resolved["memory"]["scope_id"] == project_id
+        assert resolved["memory"]["embedding_model"] == "BAAI/bge-m3"
+
+        repeated = client.post(
+            f"/api/memory-candidates/{candidate['id']}/resolve",
+            json={"status": "approved", "actor_id": "tester"},
+        )
+        assert repeated.status_code == 200
+        assert repeated.json()["memory"]["id"] == resolved["memory"]["id"]
 
         user_candidate_response = client.post(
             "/api/memory-candidates",
@@ -217,11 +287,16 @@ class TestThreadEndpoints:
         assert invalid_candidate.status_code == 400
 
     def test_memory_delete_endpoints_hard_delete_records(self, client):
+        thread_response = client.post(
+            "/api/threads",
+            json={"name": "Memory delete thread"},
+        )
+        thread_id = thread_response.json()["id"]
         memory_response = client.post(
             "/api/memories",
             json={
                 "scope_type": "thread",
-                "scope_id": "thread-delete-api",
+                "scope_id": thread_id,
                 "memory_type": "semantic",
                 "content": "Delete this memory through the API.",
             },
@@ -260,7 +335,7 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread"}
         )
         thread_id = create_response.json()["id"]
         
@@ -387,7 +462,7 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "Original Name", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Original Name"}
         )
         thread_id = create_response.json()["id"]
         
@@ -412,7 +487,7 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread"}
         )
         thread_id = create_response.json()["id"]
         
@@ -426,7 +501,7 @@ class TestThreadEndpoints:
         """Stored replans above the current limit should not break settings reads."""
         create_response = client.post(
             "/api/threads",
-            json={"name": "Legacy Settings Thread", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Legacy Settings Thread"}
         )
         thread_id = create_response.json()["id"]
 
@@ -450,7 +525,7 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread"}
         )
         thread_id = create_response.json()["id"]
         
@@ -482,7 +557,7 @@ class TestThreadEndpoints:
         # Create a thread
         create_response = client.post(
             "/api/threads",
-            json={"name": "To Delete", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "To Delete"}
         )
         thread_id = create_response.json()["id"]
 
@@ -497,7 +572,7 @@ class TestThreadEndpoints:
         data = response.json()
         assert data["status"] == "deleted"
         assert data["thread_id"] == thread_id
-        cleanup_memory.assert_awaited_once_with(thread_id, embedding_model="BAAI/bge-m3")
+        cleanup_memory.assert_awaited_once_with(thread_id)
 
     def test_delete_nonexistent_thread(self, client):
         """Test deleting a thread that doesn't exist."""
@@ -723,7 +798,7 @@ class TestMessageEndpoints:
         """Create a sample thread for message tests."""
         response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread"}
         )
         return response.json()["id"]
 
@@ -767,7 +842,7 @@ class TestFileEndpoints:
         """Create a sample thread for file tests."""
         response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread"}
         )
         return response.json()["id"]
 
@@ -808,7 +883,7 @@ class TestProactiveCollectionCreation:
         """Create a sample thread for collection tests."""
         response = client.post(
             "/api/threads",
-            json={"name": "Test Thread", "embedding_model": "BAAI/bge-m3"}
+            json={"name": "Test Thread"}
         )
         return response.json()["id"]
     

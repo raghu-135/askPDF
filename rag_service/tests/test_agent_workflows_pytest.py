@@ -4645,11 +4645,11 @@ class TestAgentRunService:
 
         thread_response = await async_api_client.post(
             "/api/threads",
-            json={"name": "Custom Workflow Thread", "embedding_model": "BAAI/bge-m3"},
+            json={"name": "Custom Workflow Thread"},
         )
         other_thread_response = await async_api_client.post(
             "/api/threads",
-            json={"name": "Default Workflow Thread", "embedding_model": "BAAI/bge-m3"},
+            json={"name": "Default Workflow Thread"},
         )
         created = await async_api_client.post(
             "/api/internal/agent-workflows",
@@ -5387,13 +5387,22 @@ class TestAgentRunService:
         async def fake_increment_qa_stats(_thread_id, _qa_chars):
             return None
 
+        from app.db.models_sqlmodel import Project
+
         async with session_factory() as setup_session:
+            project = Project(
+                id=str(uuid.uuid4()),
+                name="Postgres checkpoint project",
+                embedding_model="BAAI/bge-m3",
+            )
             thread = Thread(
                 id=str(uuid.uuid4()),
                 name="Postgres checkpoint test",
+                project_id=project.id,
                 embedding_model="BAAI/bge-m3",
                 settings={},
             )
+            setup_session.add(project)
             setup_session.add(thread)
             await setup_session.commit()
             await setup_session.refresh(thread)

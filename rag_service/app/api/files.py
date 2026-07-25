@@ -55,10 +55,27 @@ from app.services.file_processing_service import (
 )
 from app.services.file_cleanup_service import cleanup_detached_file
 from app.time_utils import iso_utc_z, maybe_iso_utc_z
+from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
+    EmbeddingModelUnavailableError,
+    require_thread_embedding_ready,
+)
 
 router = APIRouter(tags=["files"])
 
 INDEXING_IN_PROGRESS = "in_progress"
+
+
+async def _require_ready_thread(thread_id: str):
+    try:
+        return (await require_thread_embedding_ready(thread_id)).thread
+    except EmbeddingModelResolutionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except EmbeddingModelUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "embedding_model_unavailable", "message": str(exc)},
+        ) from exc
 
 
 @router.post("/threads/{thread_id}/files/upload")
@@ -74,9 +91,7 @@ async def upload_pdf_endpoint(
         raise HTTPException(status_code=400, detail="Please upload a PDF file.")
 
     # Verify thread exists
-    thread = await get_thread(thread_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
+    thread = await _require_ready_thread(thread_id)
 
     content = await file.read()
     file_hash = hashlib.md5(content).hexdigest()
@@ -115,9 +130,7 @@ async def add_file_to_thread_endpoint(
     """Add a file to a thread and trigger background indexing."""
     try:
         # Verify thread exists
-        thread = await get_thread(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
+        thread = await _require_ready_thread(thread_id)
 
         await queue_file_processing(
             background_tasks=background_tasks,
@@ -285,7 +298,6 @@ async def get_file_status_endpoint(
     thread_id: str,
     file_hash: str,
     section: Optional[str] = None,
-    embedding_model: Optional[str] = None,
 ):
     """
     Retrieve file status (parsing and indexing status) from database.
@@ -320,9 +332,7 @@ async def get_file_status_endpoint(
         if not file:
             raise HTTPException(status_code=404, detail="File not found")
 
-        # Use thread's embedding_model if not specified
-        if not embedding_model:
-            embedding_model = thread.embedding_model
+        embedding_model = thread.embedding_model
 
         status = _scoped_status_payload(
             file_hash=file_hash,
@@ -468,9 +478,7 @@ async def capture_browser_page_endpoint(
     convert to PDF, and add to thread.
     """
     try:
-        thread = await get_thread(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
+        thread = await _require_ready_thread(thread_id)
         
         # Call browser-capture service
         async with httpx.AsyncClient() as client:

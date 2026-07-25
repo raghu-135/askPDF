@@ -48,11 +48,7 @@ from app.db import (
     update_thread_settings,
 )
 from app.db.vector import get_vector_db
-from app.models.llm_server_client import (
-    LOCAL_EMBEDDING_MODEL,
-    check_embedding_model_ready,
-    merge_thread_settings,
-)
+from app.models.llm_server_client import check_embedding_model_ready, merge_thread_settings
 from app.models.requests import (
     PromptDefaults,
     PromptPreviewRequest,
@@ -71,6 +67,7 @@ from app.services.file_cleanup_service import cleanup_detached_file
 from app.services.memory_service import hard_delete_thread_memory_resources
 from app.services.thread_management_service import (
     ForkMessageNotFoundError,
+    TargetProjectEmbeddingModelMismatchError,
     SourceThreadNotFoundError,
     fork_thread,
     repair_thread_documents_meta,
@@ -112,6 +109,7 @@ def _thread_payload(thread) -> dict:
         "project_id": getattr(thread, "project_id", None),
         "name": thread.name,
         "embedding_model": thread.embedding_model,
+        "long_term_memory_enabled": not bool(getattr(thread, "is_legacy", False)),
         "settings": _public_thread_settings(thread.settings),
         "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
         "created_at": iso_utc_z(thread.created_at),
@@ -132,7 +130,7 @@ async def _delete_thread_resources(thread_id: str) -> bool:
 
     db = get_vector_db()
     await db.delete_thread_data(thread_id)
-    await hard_delete_thread_memory_resources(thread_id, embedding_model=thread.embedding_model)
+    await hard_delete_thread_memory_resources(thread_id)
 
     deleted = await delete_thread(thread_id)
     if not deleted:
@@ -200,13 +198,7 @@ async def prompt_preview_endpoint(req: PromptPreviewRequest):
 async def create_thread_endpoint(req: ThreadCreateRequest):
     """Create a new chat thread."""
     try:
-        embedding_model = (req.embedding_model or "").strip() or LOCAL_EMBEDDING_MODEL
-        if not embedding_model:
-            raise HTTPException(
-                status_code=400,
-                detail="embedding_model is required (set LOCAL_EMBEDDING_MODEL or pass embedding_model).",
-            )
-        # Create thread in database
+        # Create thread in the selected project and inherit its immutable model.
         from app.db import create_thread
         project_id = req.project_id
         if project_id:
@@ -216,9 +208,13 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
         else:
             project = await ensure_default_project()
             project_id = project.id
-        thread = await create_thread(req.name, embedding_model, project_id=project_id)
+        thread = await create_thread(req.name, project_id)
 
         return _thread_payload(thread)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -310,6 +306,8 @@ async def fork_thread_endpoint(thread_id: str, req: ThreadForkRequest):
             status_code=400,
             detail="Fork message not found in source thread",
         )
+    except TargetProjectEmbeddingModelMismatchError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as e:
@@ -404,7 +402,10 @@ async def update_thread_endpoint(thread_id: str, req: ThreadUpdateRequest):
 async def update_thread_project_endpoint(thread_id: str, req: ThreadProjectUpdateRequest):
     """Move a thread into a project."""
     try:
-        thread = await assign_thread_to_project(thread_id, req.project_id)
+        try:
+            thread = await assign_thread_to_project(thread_id, req.project_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not thread:
             raise HTTPException(status_code=404, detail="Thread or project not found")
         return _thread_payload(thread)

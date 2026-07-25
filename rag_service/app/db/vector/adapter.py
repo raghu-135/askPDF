@@ -276,7 +276,7 @@ class WeaviateAdapter:
                         batch_ctx.add_object(
                             properties=p["properties"],
                             vector=p["vector"],
-                            uuid=str(uuid.uuid4()),
+                            uuid=p.get("uuid") or str(uuid.uuid4()),
                         )
                     return len(points)
             
@@ -587,10 +587,26 @@ class WeaviateAdapter:
             raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model}'")
 
         collection = await self.collection_manager.get_collection(CollectionNames.MEMORY, embedding_model)
+        deterministic_uuid = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"askpdf:memory:{embedding_model}:{memory_id}",
+            )
+        )
+        existing_filter = wvc.query.Filter.by_property("memory_id").equal(memory_id)
+        if not await self._delete_many_from_collection(
+            collection,
+            existing_filter,
+            description=f"stale memory vector for memory '{memory_id}'",
+        ):
+            raise VectorDBInsertError(
+                f"Could not replace memory vector for memory '{memory_id}'"
+            )
         return await self._insert_many_model_aware(
             collection,
             [
                 {
+                    "uuid": deterministic_uuid,
                     "vector": embedding,
                     "properties": {
                         "memory_id": memory_id,

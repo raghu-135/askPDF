@@ -148,9 +148,14 @@ async def ensure_default_project():
     return await get_project_repo().ensure_default_project()
 
 
-async def create_project(name: str, description: str = "", settings_json: dict = None):
+async def create_project(name: str, embedding_model: str, description: str = "", settings_json: dict = None):
     """Create a project."""
-    return await get_project_repo().create(name=name, description=description, settings_json=settings_json)
+    return await get_project_repo().create(
+        name=name,
+        embedding_model=embedding_model,
+        description=description,
+        settings_json=settings_json,
+    )
 
 
 async def get_project(project_id: str):
@@ -179,9 +184,9 @@ async def assign_thread_to_project(thread_id: str, project_id: str):
 
 
 # Thread operations
-async def create_thread(name: str, embedding_model: str, project_id: str = None):
+async def create_thread(name: str, project_id: str):
     """Create a new thread."""
-    return await get_thread_repo().create(name, embedding_model, project_id=project_id)
+    return await get_thread_repo().create(name, project_id)
 
 
 async def get_thread(thread_id: str):
@@ -496,11 +501,6 @@ async def list_memories(**kwargs):
     return await get_memory_repo().list_memories(**kwargs)
 
 
-async def update_memory_status(memory_id: str, **kwargs):
-    """Update a memory lifecycle status and append an audit event."""
-    return await get_memory_repo().update_memory_status(memory_id, **kwargs)
-
-
 async def delete_memory(memory_id: str):
     """Hard-delete a durable memory and its audit events."""
     return await get_memory_repo().delete_memory(memory_id)
@@ -519,6 +519,22 @@ async def delete_expired_memories(**kwargs):
 async def list_expired_memories(**kwargs):
     """List expired durable memories."""
     return await get_memory_repo().list_expired_memories(**kwargs)
+
+
+async def mark_memory_indexing(memory_id: str):
+    return await get_memory_repo().mark_memory_indexing(memory_id)
+
+
+async def mark_memory_indexed(memory_id: str):
+    return await get_memory_repo().mark_memory_indexed(memory_id)
+
+
+async def mark_memory_index_failed(memory_id: str, error: str):
+    return await get_memory_repo().mark_memory_index_failed(memory_id, error)
+
+
+async def list_memories_for_index_retry(**kwargs):
+    return await get_memory_repo().list_memories_for_index_retry(**kwargs)
 
 
 async def create_memory_candidate(**kwargs):
@@ -643,7 +659,6 @@ __all__ = [
     "create_memory",
     "get_memory",
     "list_memories",
-    "update_memory_status",
     "delete_memory",
     "delete_memories_for_scope",
     "delete_expired_memories",

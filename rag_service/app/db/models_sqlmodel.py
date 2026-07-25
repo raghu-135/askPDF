@@ -11,7 +11,20 @@ from datetime import datetime
 import uuid
 from typing import Dict, Any, List, Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, func, Index, String, Integer, Float, ForeignKey
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Float,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from app.db.enums import (
     AgentRunStatus,
@@ -69,6 +82,7 @@ class Project(SQLModel, table=True):
     id: str = Field(primary_key=True)
     name: str = Field(index=True)
     description: str = ""
+    embedding_model: str = Field(index=True)
     settings_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -88,6 +102,8 @@ class Project(SQLModel, table=True):
     )
 
     __table_args__ = (
+        UniqueConstraint("id", "embedding_model", name="uq_projects_id_embedding_model"),
+        CheckConstraint("length(btrim(embedding_model)) > 0", name="ck_projects_embedding_model_nonempty"),
         Index("idx_project_created_at", "created_at"),
     )
 
@@ -97,12 +113,12 @@ class Thread(SQLModel, table=True):
     __tablename__ = "threads"
     
     id: str = Field(primary_key=True)
-    project_id: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String, ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True)
+    project_id: str = Field(
+        sa_column=Column(String, index=True, nullable=False)
     )
     name: str = Field(index=True)
     embedding_model: str = Field(index=True)
+    is_legacy: bool = Field(default=False, index=True)
     settings: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -147,6 +163,12 @@ class Thread(SQLModel, table=True):
         sa_relationship_kwargs={"passive_deletes": True}
     )
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id"],
+            ["projects.id"],
+            name="fk_threads_project_id_projects",
+            ondelete="RESTRICT",
+        ),
         Index("idx_thread_created_at", "created_at"),
     )
 
@@ -380,6 +402,15 @@ class Memory(SQLModel, table=True):
     memory_type: str = Field(default=MemoryType.SEMANTIC.value, index=True)
     content: str
     summary: str = ""
+    embedding_model: str = Field(index=True)
+    content_hash: str = Field(index=True)
+    index_status: str = Field(default="pending", index=True)
+    index_attempts: int = Field(default=0)
+    indexed_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True))
+    )
+    index_error: Optional[str] = None
     source_refs_json: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -413,12 +444,17 @@ class Memory(SQLModel, table=True):
     __table_args__ = (
         CheckConstraint("scope_type in ('user', 'project', 'thread')", name="ck_memories_scope_type"),
         CheckConstraint("memory_type in ('semantic', 'episodic', 'procedural')", name="ck_memories_memory_type"),
-        CheckConstraint("status in ('active', 'archived', 'deleted', 'rejected')", name="ck_memories_status"),
+        CheckConstraint("status = 'active'", name="ck_memories_status"),
         CheckConstraint("visibility in ('private', 'project', 'internal')", name="ck_memories_visibility"),
         CheckConstraint("confidence >= 0 and confidence <= 1", name="ck_memories_confidence"),
         CheckConstraint("length(btrim(scope_id)) > 0", name="ck_memories_scope_id_nonempty"),
         CheckConstraint("length(btrim(content)) > 0", name="ck_memories_content_nonempty"),
+        CheckConstraint("length(btrim(embedding_model)) > 0", name="ck_memories_embedding_model_nonempty"),
+        CheckConstraint("length(btrim(content_hash)) > 0", name="ck_memories_content_hash_nonempty"),
+        CheckConstraint("index_status in ('pending', 'indexing', 'indexed', 'failed')", name="ck_memories_index_status"),
+        CheckConstraint("index_attempts >= 0", name="ck_memories_index_attempts"),
         Index("idx_memory_scope_status", "scope_type", "scope_id", "status"),
+        Index("idx_memory_index_retry", "index_status", "updated_at"),
         Index("idx_memory_created_at", "created_at"),
     )
 
@@ -461,6 +497,15 @@ class MemoryCandidate(SQLModel, table=True):
     confidence: float = Field(default=0.0, sa_column=Column(Float, nullable=False, server_default="0"))
     reason: str = ""
     status: str = Field(default=MemoryCandidateStatus.PENDING.value, index=True)
+    promoted_memory_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("memories.id", ondelete="SET NULL"), index=True)
+    )
+    resolved_by: Optional[str] = Field(default=None, index=True)
+    resolved_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True))
+    )
     created_by: Optional[str] = Field(default=None, index=True)
     created_at: datetime = Field(
         default_factory=utc_now,

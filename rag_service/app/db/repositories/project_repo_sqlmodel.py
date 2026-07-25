@@ -12,6 +12,7 @@ from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import Project, Thread
 from app.time_utils import utc_now
+from app.models.llm_server_client import LOCAL_EMBEDDING_MODEL
 
 
 DEFAULT_PROJECT_NAME = "Personal"
@@ -40,6 +41,7 @@ class ProjectRepository:
                     id=str(uuid.uuid4()),
                     name=DEFAULT_PROJECT_NAME,
                     description="Default project for existing threads.",
+                    embedding_model=LOCAL_EMBEDDING_MODEL,
                     settings_json={},
                     created_at=utc_now(),
                 )
@@ -49,14 +51,23 @@ class ProjectRepository:
             orphan_result = await session.execute(select(Thread).where(Thread.project_id.is_(None)))
             for thread in orphan_result.scalars().all():
                 thread.project_id = project.id
+                thread.embedding_model = project.embedding_model
             await session.flush()
             await session.refresh(project)
             return project
 
-    async def create(self, *, name: str, description: str = "", settings_json: Optional[Dict[str, Any]] = None) -> Project:
+    async def create(
+        self,
+        *,
+        name: str,
+        embedding_model: str,
+        description: str = "",
+        settings_json: Optional[Dict[str, Any]] = None,
+    ) -> Project:
         project = Project(
             id=str(uuid.uuid4()),
             name=name,
+            embedding_model=embedding_model,
             description=description or "",
             settings_json=settings_json or {},
             created_at=utc_now(),
@@ -109,6 +120,10 @@ class ProjectRepository:
             thread = await session.get(Thread, thread_id)
             if project is None or thread is None:
                 return None
+            if thread.embedding_model != project.embedding_model:
+                raise ValueError(
+                    "Thread cannot move to a project with a different embedding model"
+                )
             thread.project_id = project.id
             await session.flush()
             await session.refresh(thread)

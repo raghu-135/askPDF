@@ -332,7 +332,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             setMemoryCandidateActionId(candidate.id);
             await resolveMemoryCandidate(candidate.id, status, {
-                embeddingModel: status === 'approved' ? activeThread.embeddingModel : undefined,
                 actorId: 'ui',
             });
             setPendingMemoryCandidates(prev => prev.filter(item => item.id !== candidate.id));
@@ -342,7 +341,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         } finally {
             setMemoryCandidateActionId(null);
         }
-    }, [activeThread?.id, activeThread?.embeddingModel]);
+    }, [activeThread?.id]);
 
     useEffect(() => {
         if (!isClarificationResizing) return;

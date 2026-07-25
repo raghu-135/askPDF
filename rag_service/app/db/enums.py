@@ -133,9 +133,6 @@ class MemoryStatus(str, Enum):
     """Durable memory lifecycle statuses."""
 
     ACTIVE = "active"
-    ARCHIVED = "archived"
-    DELETED = "deleted"
-    REJECTED = "rejected"
 
 
 class MemoryVisibility(str, Enum):

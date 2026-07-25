@@ -706,7 +706,6 @@ export default function Home() {
               {/* PDF Uploader */}
               <PdfUploader
                 threadId={activeThread?.id ?? null}
-                embeddingModel={activeThread?.embeddingModel ?? null}
                 onUploaded={handlePdfUploaded}
                 onIndexingComplete={handleIndexingComplete}
                 onParsingComplete={handleParsingComplete}

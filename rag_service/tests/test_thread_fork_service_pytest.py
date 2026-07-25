@@ -35,15 +35,19 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
     created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     async with test_session_maker() as session:
         async with session.begin():
-            session.add(
+            session.add_all(
+                [
+                Project(id="project-a", name="Project A", embedding_model="BAAI/bge-m3"),
                 Thread(
                     id="source-thread",
+                    project_id="project-a",
                     name="Source Thread",
                     embedding_model="BAAI/bge-m3",
                     settings={"replans": 3},
                     thread_metadata={"existing": True},
                     created_at=created_at,
-                )
+                ),
+                ]
             )
             session.add(
                 File(
@@ -171,8 +175,10 @@ async def test_fork_thread_rejects_message_from_another_thread(engine, monkeypat
         async with session.begin():
             session.add_all(
                 [
+                    Project(id="project-a", name="Project A", embedding_model="BAAI/bge-m3"),
                     Thread(
                         id="source-thread",
+                        project_id="project-a",
                         name="Source Thread",
                         embedding_model="BAAI/bge-m3",
                         settings={},
@@ -180,6 +186,7 @@ async def test_fork_thread_rejects_message_from_another_thread(engine, monkeypat
                     ),
                     Thread(
                         id="other-thread",
+                        project_id="project-a",
                         name="Other Thread",
                         embedding_model="BAAI/bge-m3",
                         settings={},
@@ -220,7 +227,7 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
     )
     indexed_memory_ids: list[str] = []
 
-    async def fake_index_memory_record(memory, _embedding_model):
+    async def fake_index_memory_record(memory):
         indexed_memory_ids.append(memory.id)
         return 1
 
@@ -231,7 +238,7 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
     late_at = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
     async with test_session_maker() as session:
         async with session.begin():
-            session.add(Project(id="project-a", name="Project A"))
+            session.add(Project(id="project-a", name="Project A", embedding_model="BAAI/bge-m3"))
             session.add(
                 Thread(
                     id="source-thread",
@@ -267,6 +274,8 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
                         scope_id="source-thread",
                         memory_type="semantic",
                         content="Remembered before fork",
+                        embedding_model="BAAI/bge-m3",
+                        content_hash="memory-before-hash",
                         summary="before",
                         source_refs_json={"turn_id": "turn-1"},
                         confidence=0.9,
@@ -281,6 +290,8 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
                         scope_id="source-thread",
                         memory_type="semantic",
                         content="Remembered after fork",
+                        embedding_model="BAAI/bge-m3",
+                        content_hash="memory-after-hash",
                         summary="after",
                         source_refs_json={"turn_id": "turn-2"},
                         confidence=0.9,
@@ -295,6 +306,8 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
                         scope_id="project-a",
                         memory_type="semantic",
                         content="Shared project memory stays shared",
+                        embedding_model="BAAI/bge-m3",
+                        content_hash="project-memory-hash",
                         summary="project",
                         confidence=0.9,
                         status="active",
@@ -355,7 +368,7 @@ async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, mo
     )
     indexed_memory_ids: list[str] = []
 
-    async def fake_index_memory_record(memory, _embedding_model):
+    async def fake_index_memory_record(memory):
         indexed_memory_ids.append(memory.id)
         return 1
 
@@ -366,8 +379,8 @@ async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, mo
         async with session.begin():
             session.add_all(
                 [
-                    Project(id="project-a", name="Project A"),
-                    Project(id="project-b", name="Project B"),
+                    Project(id="project-a", name="Project A", embedding_model="BAAI/bge-m3"),
+                    Project(id="project-b", name="Project B", embedding_model="BAAI/bge-m3"),
                     Thread(
                         id="source-thread",
                         project_id="project-a",
@@ -391,6 +404,8 @@ async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, mo
                         scope_id="project-a",
                         memory_type="semantic",
                         content="Project A launch name is AskPDF Pro",
+                        embedding_model="BAAI/bge-m3",
+                        content_hash="source-project-memory-hash",
                         summary="launch name",
                         source_refs_json={"project": "a"},
                         confidence=0.95,
@@ -405,6 +420,8 @@ async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, mo
                         scope_id="source-thread",
                         memory_type="semantic",
                         content="Thread-local detail",
+                        embedding_model="BAAI/bge-m3",
+                        content_hash="source-thread-memory-hash",
                         summary="thread detail",
                         confidence=0.8,
                         status="active",

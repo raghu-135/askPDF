@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.enums import MemoryCandidateStatus, MemoryScopeType, MemoryStatus, MemoryType
-from app.db.models_sqlmodel import Memory, MemoryCandidate, MemoryEvent, Thread
+from app.db.enums import MemoryCandidateStatus, MemoryScopeType, MemoryType
+from app.db.models_sqlmodel import Memory, MemoryCandidate, MemoryEvent
 from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
 from app.db.repositories.project_repo_sqlmodel import DEFAULT_PROJECT_NAME, ProjectRepository
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
@@ -29,42 +29,28 @@ def repo_sessionmaker(engine, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_default_project_backfills_orphan_threads(repo_sessionmaker):
-    async with repo_sessionmaker() as session:
-        async with session.begin():
-            session.add(
-                Thread(
-                    id="orphan-thread",
-                    name="Orphan",
-                    embedding_model="BAAI/bge-m3",
-                    settings={},
-                    thread_metadata={},
-                )
-            )
-
+async def test_default_project_has_locked_embedding_model(repo_sessionmaker):
     project = await ProjectRepository().ensure_default_project()
 
-    async with repo_sessionmaker() as session:
-        refreshed = await session.get(Thread, "orphan-thread")
     assert project.name == DEFAULT_PROJECT_NAME
-    assert refreshed.project_id == project.id
+    assert project.embedding_model == "BAAI/bge-m3"
 
 
 @pytest.mark.asyncio
 async def test_thread_repository_creates_thread_in_project(repo_sessionmaker):
-    project = await ProjectRepository().create(name="Research")
-
-    thread = await ThreadRepository().create(
-        "Thread",
-        "BAAI/bge-m3",
-        project_id=project.id,
+    project = await ProjectRepository().create(
+        name="Research",
+        embedding_model="BAAI/bge-m3",
     )
 
+    thread = await ThreadRepository().create("Thread", project.id)
+
     assert thread.project_id == project.id
+    assert thread.embedding_model == project.embedding_model
 
 
 @pytest.mark.asyncio
-async def test_memory_repository_lifecycle_and_audit(repo_sessionmaker):
+async def test_memory_repository_index_lifecycle_and_audit(repo_sessionmaker):
     repo = MemoryRepository()
 
     memory = await repo.create_memory(
@@ -72,25 +58,20 @@ async def test_memory_repository_lifecycle_and_audit(repo_sessionmaker):
         scope_id="project-1",
         memory_type=MemoryType.SEMANTIC.value,
         content="The project codename is Atlas.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="atlas-hash",
         confidence=0.9,
         created_by="test",
     )
-    archived = await repo.update_memory_status(
-        memory.id,
-        status=MemoryStatus.ARCHIVED.value,
-        actor_id="reviewer",
-    )
+    indexing = await repo.mark_memory_indexing(memory.id)
+    indexed = await repo.mark_memory_indexed(memory.id)
 
-    assert archived.status == MemoryStatus.ARCHIVED.value
-    rows = await repo.list_memories(
-        scope_type=MemoryScopeType.PROJECT.value,
-        scope_id="project-1",
-        status=MemoryStatus.ARCHIVED.value,
-    )
-    assert [row.id for row in rows] == [memory.id]
+    assert indexing.index_attempts == 1
+    assert indexed.index_status == "indexed"
+    assert indexed.indexed_at is not None
     async with repo_sessionmaker() as session:
         event_result = await session.execute(select(MemoryEvent).where(MemoryEvent.memory_id == memory.id))
-        assert len(list(event_result.scalars().all())) == 2
+        assert len(list(event_result.scalars().all())) == 1
 
 
 @pytest.mark.asyncio
@@ -107,6 +88,8 @@ async def test_memory_repository_rejects_invalid_memory_values(repo_sessionmaker
     ]
 
     for kwargs in invalid_cases:
+        kwargs.setdefault("embedding_model", "BAAI/bge-m3")
+        kwargs.setdefault("content_hash", "content-hash")
         with pytest.raises(ValueError):
             await repo.create_memory(**kwargs)
 
@@ -120,6 +103,8 @@ async def test_memory_repository_hard_deletes_memory_and_events(repo_sessionmake
         scope_id="thread-1",
         memory_type=MemoryType.SEMANTIC.value,
         content="Delete this durable memory.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="delete-hash",
         created_by="tester",
     )
     deleted = await repo.delete_memory(memory.id)
@@ -141,12 +126,16 @@ async def test_memory_repository_deletes_scope_and_expired_memories(repo_session
         scope_id="thread-cleanup",
         memory_type=MemoryType.SEMANTIC.value,
         content="Thread cleanup memory.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="thread-cleanup-hash",
     )
     expired = await repo.create_memory(
         scope_type=MemoryScopeType.PROJECT.value,
         scope_id="project-cleanup",
         memory_type=MemoryType.SEMANTIC.value,
         content="Expired cleanup memory.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="expired-hash",
         expires_at=now - timedelta(minutes=1),
     )
     fresh = await repo.create_memory(
@@ -154,6 +143,8 @@ async def test_memory_repository_deletes_scope_and_expired_memories(repo_session
         scope_id="project-cleanup",
         memory_type=MemoryType.SEMANTIC.value,
         content="Fresh memory.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="fresh-hash",
         expires_at=now + timedelta(minutes=1),
     )
 

@@ -38,6 +38,10 @@ class ForkMessageNotFoundError(ThreadForkError):
     """Raised when the requested fork message is not in the source thread."""
 
 
+class TargetProjectEmbeddingModelMismatchError(ThreadForkError):
+    """Raised when a cross-project fork would change embedding spaces."""
+
+
 async def fork_thread(
     source_thread_id: str,
     message_id: str | None = None,
@@ -60,11 +64,21 @@ async def fork_thread(
             source_thread = source_result.scalar_one_or_none()
             if not source_thread:
                 raise SourceThreadNotFoundError("Source thread not found")
-            embedding_model_for_memory_index = source_thread.embedding_model
+            source_is_legacy = bool(getattr(source_thread, "is_legacy", False))
+            embedding_model_for_memory_index = (
+                None if source_is_legacy else source_thread.embedding_model
+            )
             if target_project_id:
                 target_project = await session.get(Project, target_project_id)
                 if target_project is None:
                     raise SourceThreadNotFoundError("Target project not found")
+                if (
+                    target_project.id != source_thread.project_id
+                    and target_project.embedding_model != source_thread.embedding_model
+                ):
+                    raise TargetProjectEmbeddingModelMismatchError(
+                        "Thread cannot fork to a project with a different embedding model"
+                    )
 
             turns_result = await session.execute(
                 select(ChatTurn)
@@ -100,7 +114,9 @@ async def fork_thread(
             }
             target_project = target_project_id or source_thread.project_id
             resolved_memory_copy_mode = memory_copy_mode
-            if not resolved_memory_copy_mode:
+            if source_is_legacy:
+                resolved_memory_copy_mode = "none"
+            elif not resolved_memory_copy_mode:
                 resolved_memory_copy_mode = (
                     "project_snapshot"
                     if target_project and target_project != source_thread.project_id
@@ -116,6 +132,7 @@ async def fork_thread(
                 project_id=target_project,
                 name=(name or "").strip() or f"{source_thread.name} (Fork)",
                 embedding_model=source_thread.embedding_model,
+                is_legacy=source_is_legacy,
                 settings=copy.deepcopy(source_thread.settings or {}),
                 thread_metadata=source_metadata,
                 created_at=forked_at,
@@ -179,6 +196,9 @@ async def fork_thread(
                         memory_type=memory.memory_type,
                         content=memory.content,
                         summary=memory.summary,
+                        embedding_model=source_thread.embedding_model,
+                        content_hash=memory.content_hash,
+                        index_status="pending",
                         source_refs_json=copy.deepcopy(memory.source_refs_json or {}),
                         confidence=memory.confidence,
                         status=memory.status,
@@ -230,6 +250,9 @@ async def fork_thread(
                         memory_type=memory.memory_type,
                         content=memory.content,
                         summary=memory.summary,
+                        embedding_model=source_thread.embedding_model,
+                        content_hash=memory.content_hash,
+                        index_status="pending",
                         source_refs_json=copy.deepcopy(memory.source_refs_json or {}),
                         confidence=memory.confidence,
                         status=memory.status,
@@ -285,7 +308,7 @@ async def fork_thread(
 
         for memory in copied_memory_index_jobs:
             try:
-                await index_memory_record(memory, embedding_model_for_memory_index)
+                await index_memory_record(memory)
             except Exception as memory_index_err:
                 logger.warning("forked memory indexing skipped for %s: %s", memory.id, memory_index_err)
     return {"thread": forked_thread, "files": files}

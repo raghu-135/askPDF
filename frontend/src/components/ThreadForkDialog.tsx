@@ -50,14 +50,18 @@ const ThreadForkDialog: React.FC<ThreadForkDialogProps> = ({
   const [targetProjectId, setTargetProjectId] = useState('');
   const [memoryCopyMode, setMemoryCopyMode] = useState<MemoryCopyMode>('thread_snapshot');
   const sourceProjectId = sourceThread?.project_id || '';
+  const compatibleProjects = useMemo(
+    () => projects.filter(project => project.embeddingModel === sourceThread?.embeddingModel),
+    [projects, sourceThread?.embeddingModel]
+  );
   const isCrossProjectFork = Boolean(targetProjectId && sourceProjectId && targetProjectId !== sourceProjectId);
 
   useEffect(() => {
     if (!open || !sourceThread) return;
     setName(`${sourceThread.name} (Fork)`);
-    setTargetProjectId(sourceThread.project_id || projects[0]?.id || '');
+    setTargetProjectId(sourceThread.project_id || compatibleProjects[0]?.id || '');
     setMemoryCopyMode('thread_snapshot');
-  }, [open, projects, sourceThread]);
+  }, [compatibleProjects, open, sourceThread]);
 
   useEffect(() => {
     if (!open || !sourceThread) return;
@@ -90,7 +94,7 @@ const ThreadForkDialog: React.FC<ThreadForkDialogProps> = ({
               label="Project"
               onChange={(event) => setTargetProjectId(String(event.target.value))}
             >
-              {projects.map((project) => (
+              {compatibleProjects.map((project) => (
                 <MenuItem key={project.id} value={project.id}>
                   {project.name}
                 </MenuItem>
@@ -120,6 +124,9 @@ const ThreadForkDialog: React.FC<ThreadForkDialogProps> = ({
             {isCrossProjectFork
               ? 'Project memories are copied into the selected project as snapshots.'
               : 'Project memory stays shared; thread memory is copied as a branch snapshot.'}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Only projects using {sourceThread.embeddingModel} can receive this fork.
           </Typography>
         </Stack>
       </DialogContent>

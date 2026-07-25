@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from app.db.models_sqlmodel import (
-    Thread, File, ThreadFile,
+    Project, Thread, File, ThreadFile,
     ChatTurn, ProcessStatus, MessageRole
 )
 
@@ -235,9 +235,16 @@ async def sample_thread(session, thread_data):
     """Create a sample thread in the database."""
     
     import uuid
+    project = Project(
+        id=str(uuid.uuid4()),
+        name="Sample Project",
+        embedding_model=thread_data["embedding_model"],
+    )
+    session.add(project)
     thread = Thread(
         id=str(uuid.uuid4()),
         name=thread_data["name"],
+        project_id=project.id,
         embedding_model=thread_data["embedding_model"],
         settings=thread_data["settings"],
         created_at=datetime.utcnow()
@@ -383,11 +390,18 @@ async def multiple_threads(session, thread_data):
     """Create multiple sample threads."""
     
     import uuid
+    project = Project(
+        id=str(uuid.uuid4()),
+        name="Multiple Threads Project",
+        embedding_model=thread_data["embedding_model"],
+    )
+    session.add(project)
     threads = []
     for i in range(3):
         thread = Thread(
             id=str(uuid.uuid4()),
             name=f"{thread_data['name']} {i}",
+            project_id=project.id,
             embedding_model=thread_data["embedding_model"],
             settings=thread_data["settings"],
             created_at=datetime.utcnow()

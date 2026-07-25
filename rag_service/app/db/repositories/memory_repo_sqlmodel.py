@@ -64,6 +64,8 @@ class MemoryRepository:
         scope_id: str,
         memory_type: str,
         content: str,
+        embedding_model: str,
+        content_hash: str,
         summary: str = "",
         source_refs_json: Optional[Dict[str, Any]] = None,
         confidence: float = 1.0,
@@ -85,6 +87,9 @@ class MemoryRepository:
             memory_type=memory_type,
             content=content,
             summary=summary or "",
+            embedding_model=_require_nonempty(embedding_model, "embedding_model"),
+            content_hash=_require_nonempty(content_hash, "content_hash"),
+            index_status="pending",
             source_refs_json=source_refs_json or {},
             confidence=confidence,
             visibility=visibility,
@@ -139,38 +144,71 @@ class MemoryRepository:
                 query = query.where(Memory.scope_id == scope_id)
             if status:
                 query = query.where(Memory.status == status)
+            query = query.where(
+                or_(Memory.expires_at.is_(None), Memory.expires_at > utc_now())
+            )
             result = await session.execute(
                 query.order_by(Memory.updated_at.desc().nullslast(), Memory.created_at.desc()).limit(bounded_limit)
             )
             return list(result.scalars().all())
 
-    async def update_memory_status(
-        self,
-        memory_id: str,
-        *,
-        status: str,
-        actor_id: Optional[str] = None,
-        payload_json: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Memory]:
-        status = _require_enum(status, "status", VALID_MEMORY_STATUSES)
+    async def mark_memory_indexing(self, memory_id: str) -> Optional[Memory]:
         session = await self._get_session()
         async with session.begin():
             memory = await session.get(Memory, memory_id)
             if memory is None:
                 return None
-            memory.status = status
-            session.add(
-                MemoryEvent(
-                    memory_id=memory.id,
-                    event_type=status,
-                    actor_id=actor_id,
-                    payload_json=payload_json or {},
-                    created_at=utc_now(),
-                )
-            )
+            memory.index_status = "indexing"
+            memory.index_attempts = int(memory.index_attempts or 0) + 1
+            memory.index_error = None
+            memory.updated_at = utc_now()
             await session.flush()
             await session.refresh(memory)
             return memory
+
+    async def mark_memory_indexed(self, memory_id: str) -> Optional[Memory]:
+        session = await self._get_session()
+        async with session.begin():
+            memory = await session.get(Memory, memory_id)
+            if memory is None:
+                return None
+            now = utc_now()
+            memory.index_status = "indexed"
+            memory.indexed_at = now
+            memory.index_error = None
+            memory.updated_at = now
+            await session.flush()
+            await session.refresh(memory)
+            return memory
+
+    async def mark_memory_index_failed(self, memory_id: str, error: str) -> Optional[Memory]:
+        session = await self._get_session()
+        async with session.begin():
+            memory = await session.get(Memory, memory_id)
+            if memory is None:
+                return None
+            memory.index_status = "failed"
+            memory.index_error = str(error or "Memory indexing failed")[:2000]
+            memory.updated_at = utc_now()
+            await session.flush()
+            await session.refresh(memory)
+            return memory
+
+    async def list_memories_for_index_retry(self, *, limit: int = 100) -> list[Memory]:
+        bounded_limit = max(1, min(int(limit), 500))
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(Memory)
+                .where(
+                    Memory.status == MemoryStatus.ACTIVE.value,
+                    Memory.index_status.in_(("pending", "failed")),
+                    or_(Memory.expires_at.is_(None), Memory.expires_at > utc_now()),
+                )
+                .order_by(Memory.updated_at.asc().nullsfirst(), Memory.created_at.asc())
+                .limit(bounded_limit)
+            )
+            return list(result.scalars().all())
 
     async def delete_memory(self, memory_id: str) -> bool:
         memory_id = _require_nonempty(memory_id, "memory_id")
@@ -293,17 +331,122 @@ class MemoryRepository:
         async with session.begin():
             return await session.get(MemoryCandidate, candidate_id)
 
-    async def resolve_candidate(self, candidate_id: str, *, status: str) -> Optional[MemoryCandidate]:
+    async def resolve_candidate(
+        self,
+        candidate_id: str,
+        *,
+        status: str,
+        actor_id: Optional[str] = None,
+    ) -> Optional[MemoryCandidate]:
         status = _require_enum(status, "status", VALID_CANDIDATE_STATUSES)
         session = await self._get_session()
         async with session.begin():
-            candidate = await session.get(MemoryCandidate, candidate_id)
+            result = await session.execute(
+                select(MemoryCandidate)
+                .where(MemoryCandidate.id == candidate_id)
+                .with_for_update()
+            )
+            candidate = result.scalar_one_or_none()
             if candidate is None:
                 return None
+            if candidate.status != MemoryCandidateStatus.PENDING.value:
+                if candidate.status != status:
+                    raise ValueError(
+                        f"Memory candidate is already {candidate.status}"
+                    )
+                return candidate
             candidate.status = status
+            candidate.resolved_by = actor_id
+            candidate.resolved_at = utc_now()
             await session.flush()
             await session.refresh(candidate)
             return candidate
+
+    async def promote_candidate(
+        self,
+        candidate_id: str,
+        *,
+        status: str,
+        embedding_model: str,
+        content_hash: str,
+        actor_id: Optional[str] = None,
+    ) -> tuple[Optional[MemoryCandidate], Optional[Memory], bool]:
+        """Atomically resolve a pending candidate and create its canonical memory once."""
+
+        if status not in {
+            MemoryCandidateStatus.APPROVED.value,
+            MemoryCandidateStatus.AUTO_APPROVED.value,
+        }:
+            raise ValueError("Candidate promotion requires an approved status")
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(MemoryCandidate)
+                .where(MemoryCandidate.id == candidate_id)
+                .with_for_update()
+            )
+            candidate = result.scalar_one_or_none()
+            if candidate is None:
+                return None, None, False
+            if candidate.status != MemoryCandidateStatus.PENDING.value:
+                if candidate.status not in {
+                    MemoryCandidateStatus.APPROVED.value,
+                    MemoryCandidateStatus.AUTO_APPROVED.value,
+                }:
+                    raise ValueError(
+                        f"Memory candidate is already {candidate.status}"
+                    )
+                memory = (
+                    await session.get(Memory, candidate.promoted_memory_id)
+                    if candidate.promoted_memory_id
+                    else None
+                )
+                return candidate, memory, False
+
+            memory = Memory(
+                scope_type=candidate.proposed_scope_type,
+                scope_id=candidate.proposed_scope_id,
+                memory_type=candidate.memory_type,
+                content=candidate.content,
+                summary="",
+                embedding_model=_require_nonempty(embedding_model, "embedding_model"),
+                content_hash=_require_nonempty(content_hash, "content_hash"),
+                index_status="pending",
+                source_refs_json={
+                    "candidate_id": candidate.id,
+                    "source_thread_id": candidate.source_thread_id,
+                    "source_project_id": candidate.source_project_id,
+                    "source_agent_run_id": candidate.source_agent_run_id,
+                    "source_turn_id": candidate.source_turn_id,
+                },
+                confidence=candidate.confidence,
+                visibility=(
+                    MemoryVisibility.PROJECT.value
+                    if candidate.proposed_scope_type == MemoryScopeType.PROJECT.value
+                    else MemoryVisibility.PRIVATE.value
+                ),
+                created_by=actor_id or candidate.created_by,
+                created_at=utc_now(),
+            )
+            session.add(memory)
+            await session.flush()
+            session.add(
+                MemoryEvent(
+                    memory_id=memory.id,
+                    event_type="created",
+                    actor_id=actor_id or candidate.created_by,
+                    payload_json={"candidate_id": candidate.id},
+                    created_at=utc_now(),
+                )
+            )
+            candidate.status = status
+            candidate.promoted_memory_id = memory.id
+            candidate.resolved_by = actor_id
+            candidate.resolved_at = utc_now()
+            await session.flush()
+            await session.refresh(candidate)
+            await session.refresh(memory)
+            return candidate, memory, True
 
     async def delete_candidate(self, candidate_id: str) -> bool:
         candidate_id = _require_nonempty(candidate_id, "candidate_id")

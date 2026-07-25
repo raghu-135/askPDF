@@ -6,7 +6,6 @@ import { isRetryableError, isNotFoundError } from "../lib/error-utils";
 
 type Props = {
   threadId?: string | null;
-  embeddingModel?: string | null;
   onUploaded: (data: { sentences: any[] | null; downloadUrl: string; fileHash: string; fileName?: string }) => void;
   onIndexingComplete?: (fileHash: string) => void;
   onParsingComplete?: (fileHash: string, sentences: any[]) => void;
@@ -16,7 +15,6 @@ type Props = {
 
 const PdfUploader = React.memo(function PdfUploader({
   threadId,
-  embeddingModel,
   onUploaded,
   onIndexingComplete,
   onParsingComplete,
@@ -63,9 +61,7 @@ const PdfUploader = React.memo(function PdfUploader({
           console.error("Thread ID is required for file status polling");
           return;
         }
-        const status = await getFileStatus(fileStatus.fileHash, threadId, {
-          embeddingModel: embeddingModel || undefined,
-        });
+        const status = await getFileStatus(fileStatus.fileHash, threadId);
         // Ensure we have a full FileStatus object
         const fullStatus: FileStatus = 'parsing' in status && 'indexing' in status
           ? status as FileStatus
@@ -140,7 +136,7 @@ const PdfUploader = React.memo(function PdfUploader({
     }, 5000);
 
     return () => clearInterval(pollInterval);
-  }, [embeddingModel, fileStatus?.fileHash, fileStatus?.status, onIndexingComplete, onParsingComplete, threadId]);
+  }, [fileStatus?.fileHash, fileStatus?.status, onIndexingComplete, onParsingComplete, threadId]);
 
   const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

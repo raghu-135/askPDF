@@ -47,7 +47,13 @@ def merge_jsonb_field(
     Merge updates into a JSONB field with proper change tracking.
     
     Usage:
-        thread = Thread(id="t1", name="Test")
+        project = Project(id="p1", name="Test", embedding_model="BAAI/bge-m3")
+        thread = Thread(
+            id="t1",
+            project_id=project.id,
+            name="Test",
+            embedding_model=project.embedding_model,
+        )
         merge_jsonb_field(thread, "settings", {"replans": 10})
     """
     current = getattr(obj, field_name) or {}

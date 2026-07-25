@@ -103,12 +103,10 @@ export async function getFileStatus(
   threadId: string,
   options?: {
     section?: FileStatusSectionValue;
-    embeddingModel?: string;
   }
 ): Promise<FileStatus | { parsing: ProcessSection } | { indexing: IndexingSection }> {
   const params = new URLSearchParams();
   if (options?.section) params.set("section", options.section);
-  if (options?.embeddingModel) params.set("embedding_model", options.embeddingModel);
   const query = params.toString();
   const url = `${API_BASE}/api/threads/${threadId}/files/${fileHash}/status${query ? `?${query}` : ""}`;
   const res = await fetch(url);
@@ -153,6 +151,7 @@ export interface Thread {
   name: string;
   project_id?: string | null;
   embeddingModel: string;
+  longTermMemoryEnabled?: boolean;
   settings?: ThreadSettings;
   thread_metadata?: ThreadMetadata;
   documents_meta?: Record<string, ThreadDocumentMeta>;
@@ -166,6 +165,7 @@ interface RawThread {
   name: string;
   project_id?: string | null;
   embedding_model: string;
+  long_term_memory_enabled?: boolean;
   settings?: ThreadSettings;
   thread_metadata?: ThreadMetadata;
   documents_meta?: Record<string, ThreadDocumentMeta>;
@@ -179,6 +179,7 @@ const mapThread = (raw: RawThread): Thread => ({
   name: raw.name,
   project_id: raw.project_id,
   embeddingModel: raw.embedding_model,
+  longTermMemoryEnabled: raw.long_term_memory_enabled,
   settings: raw.settings,
   thread_metadata: raw.thread_metadata,
   documents_meta: raw.documents_meta,
@@ -225,10 +226,31 @@ export interface Project {
   id: string;
   name: string;
   description?: string | null;
+  embeddingModel: string;
   settings_json?: Record<string, any>;
   created_at: string;
   updated_at?: string | null;
 }
+
+interface RawProject {
+  id: string;
+  name: string;
+  description?: string | null;
+  embedding_model: string;
+  settings_json?: Record<string, any>;
+  created_at: string;
+  updated_at?: string | null;
+}
+
+const mapProject = (raw: RawProject): Project => ({
+  id: raw.id,
+  name: raw.name,
+  description: raw.description,
+  embeddingModel: raw.embedding_model,
+  settings_json: raw.settings_json,
+  created_at: raw.created_at,
+  updated_at: raw.updated_at,
+});
 
 export interface MemoryCandidate {
   id: string;
@@ -763,34 +785,35 @@ export interface AgentRunSummary {
 export async function listProjects(): Promise<{ projects: Project[] }> {
   const res = await fetch(`${API_BASE}/api/projects`);
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const raw = await res.json();
+  return { projects: (raw.projects || []).map(mapProject) };
 }
 
-export async function createProject(name: string, description?: string): Promise<Project> {
+export async function createProject(name: string, embeddingModel: string, description?: string): Promise<Project> {
   const res = await fetch(`${API_BASE}/api/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, description })
+    body: JSON.stringify({ name, embedding_model: embeddingModel, description })
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return mapProject(await res.json());
 }
 
-export async function createThread(name: string, embeddingModel: string, projectId?: string | null): Promise<Thread> {
+export async function createThread(name: string, projectId?: string | null): Promise<Thread> {
   const res = await fetch(`${API_BASE}/api/threads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, embedding_model: embeddingModel, project_id: projectId || undefined })
+    body: JSON.stringify({ name, project_id: projectId || undefined })
   });
   if (!res.ok) throw new Error(await res.text());
   return mapThread(await res.json());
 }
 
-export async function createProjectThread(projectId: string, name: string, embeddingModel: string): Promise<Thread> {
+export async function createProjectThread(projectId: string, name: string): Promise<Thread> {
   const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/threads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, embedding_model: embeddingModel })
+    body: JSON.stringify({ name })
   });
   if (!res.ok) throw new Error(await res.text());
   return mapThread(await res.json());
@@ -814,14 +837,13 @@ export async function listMemoryCandidates(options: {
 export async function resolveMemoryCandidate(
   candidateId: string,
   status: "approved" | "rejected",
-  options: { embeddingModel?: string; actorId?: string } = {}
+  options: { actorId?: string } = {}
 ): Promise<{ memory_candidate: MemoryCandidate; memory?: any | null }> {
   const res = await fetch(`${API_BASE}/api/memory-candidates/${encodeURIComponent(candidateId)}/resolve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       status,
-      embedding_model: options.embeddingModel,
       actor_id: options.actorId,
     })
   });

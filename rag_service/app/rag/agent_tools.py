@@ -498,9 +498,7 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("app_thread_id") or conf.get("thread_id")
-        embedding_model = conf.get("embedding_model")
-
-        if not thread_id or not embedding_model:
+        if not thread_id:
             return make_tool_result(
                 tool_name=tool_name,
                 content="No thread context found.",
@@ -514,7 +512,6 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
         result = await search_thread_memory(
             thread_id=thread_id,
             query=query,
-            embedding_model=embedding_model,
             max_results=max_results,
         )
         memories = result.get("memories", []) if isinstance(result, dict) else []
@@ -532,7 +529,7 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
         memory_refs = []
         scopes = []
         for index, item in enumerate(memories, start=1):
-            memory = item.get("memory") or {}
+            memory = item if isinstance(item, dict) else {}
             scope_type = memory.get("scope_type") or "unknown"
             scope_id = memory.get("scope_id") or "unknown"
             memory_type = memory.get("memory_type") or "semantic"
@@ -543,7 +540,7 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                 "scope_type": scope_type,
                 "scope_id": scope_id,
                 "memory_type": memory_type,
-                "score": item.get("score"),
+                "score": memory.get("score"),
             })
             scope_key = {"scope_type": scope_type, "scope_id": scope_id}
             if scope_key not in scopes:

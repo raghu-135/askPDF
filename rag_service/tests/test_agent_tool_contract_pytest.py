@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import AsyncMock, patch
 
 from app.agent.tool_contract import (
     ToolErrorCode,
@@ -9,6 +10,7 @@ from app.agent.tool_contract import (
     normalize_tool_result,
     tool_started,
 )
+from app.rag.agent_tools import search_long_term_memory
 
 
 class TestAskPdfToolContract:
@@ -128,3 +130,41 @@ class TestAskPdfToolContract:
 
         assert payload["content"] == "hello"
         assert payload["trace"]["caller_node"] == "test_node"
+
+    @pytest.mark.asyncio
+    async def test_long_term_memory_tool_preserves_flat_memory_evidence_and_debug_ids(self):
+        search_result = {
+            "memories": [
+                {
+                    "id": "memory-1",
+                    "scope_type": "project",
+                    "scope_id": "project-1",
+                    "memory_type": "semantic",
+                    "content": "The launch codename is Atlas.",
+                    "summary": "",
+                    "score": 0.91,
+                }
+            ],
+            "scopes": [{"scope_type": "project", "scope_id": "project-1"}],
+        }
+        with patch(
+            "app.services.memory_service.search_thread_memory",
+            new_callable=AsyncMock,
+            return_value=search_result,
+        ):
+            raw = await search_long_term_memory.ainvoke(
+                {"query": "launch codename"},
+                config={"configurable": {"app_thread_id": "thread-1"}},
+            )
+
+        payload = normalize_tool_result(raw, tool_name="search_long_term_memory")
+        assert "The launch codename is Atlas." in payload["content"]
+        assert payload["artifacts"]["memory_refs"] == [
+            {
+                "memory_id": "memory-1",
+                "scope_type": "project",
+                "scope_id": "project-1",
+                "memory_type": "semantic",
+                "score": 0.91,
+            }
+        ]

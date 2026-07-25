@@ -22,10 +22,7 @@ class TestAPIIntegration:
         """POST /api/threads with PostgreSQL."""
         response = await client.post(
             "/api/threads",
-            json={
-                "name": "Test Thread",
-                "embedding_model": "BAAI/bge-m3"
-            }
+            json={"name": "Test Thread"}
         )
 
         assert response.status_code == 200

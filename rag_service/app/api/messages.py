@@ -33,6 +33,11 @@ from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z
 from app.models.llm_server_client import merge_thread_settings
 from app.models.requests import ThreadChatRequest
+from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
+    EmbeddingModelUnavailableError,
+    require_thread_embedding_ready,
+)
 
 router = APIRouter(tags=["messages"])
 
@@ -202,10 +207,16 @@ async def thread_chat_endpoint(
     Returns answer, used_chat_ids (recollected messages), and document_sources.
     """
     try:
-        # Verify thread exists
-        thread = await get_thread(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
+        try:
+            embedding_context = await require_thread_embedding_ready(thread_id)
+        except EmbeddingModelResolutionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EmbeddingModelUnavailableError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "embedding_model_unavailable", "message": str(exc)},
+            ) from exc
+        thread = embedding_context.thread
 
         # Override thread_id from path
         req.thread_id = thread_id
@@ -222,7 +233,7 @@ async def thread_chat_endpoint(
             req.custom_instructions_override = thread_settings["custom_instructions"]
         service = AgentRunService()
         if "text/event-stream" not in str(accept or "").lower():
-            return await service.run_thread_chat(thread_id, req, thread.embedding_model)
+            return await service.run_thread_chat(thread_id, req, embedding_context.embedding_model)
 
         sink = AgentExecutionEventSink(include_details=False)
 
@@ -231,7 +242,7 @@ async def thread_chat_endpoint(
                 result = await service.run_thread_chat(
                     thread_id,
                     req,
-                    thread.embedding_model,
+                    embedding_context.embedding_model,
                     execution_event_sink=sink,
                 )
                 await sink.queue.put({"event": "__result__", "data": result})
