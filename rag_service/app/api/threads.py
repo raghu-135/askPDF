@@ -109,7 +109,6 @@ def _thread_payload(thread) -> dict:
         "project_id": getattr(thread, "project_id", None),
         "name": thread.name,
         "embedding_model": thread.embedding_model,
-        "long_term_memory_enabled": not bool(getattr(thread, "is_legacy", False)),
         "settings": _public_thread_settings(thread.settings),
         "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
         "created_at": iso_utc_z(thread.created_at),

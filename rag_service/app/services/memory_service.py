@@ -38,6 +38,13 @@ from app.services.embedding_model_service import (
 
 logger = logging.getLogger(__name__)
 
+MEMORY_RRF_K = 60
+_MEMORY_SCOPE_PRIORITY = {
+    MemoryScopeType.THREAD.value: 0,
+    MemoryScopeType.PROJECT.value: 1,
+    MemoryScopeType.USER.value: 2,
+}
+
 
 DEFAULT_MEMORY_SETTINGS = {
     "global_memory_enabled": False,
@@ -62,7 +69,7 @@ async def scopes_for_thread(thread_id: str, allowed_scopes: Optional[List[str]] 
     """Return explicitly allowed memory scopes for a thread."""
 
     thread = await get_thread(thread_id)
-    if thread is None or bool(getattr(thread, "is_legacy", False)):
+    if thread is None:
         return []
     settings = {**DEFAULT_MEMORY_SETTINGS, **(thread.settings or {}).get("memory", {})}
     allowed = _normalize_allowed_scopes(allowed_scopes)
@@ -87,6 +94,48 @@ async def scopes_for_thread(thread_id: str, allowed_scopes: Optional[List[str]] 
 
 def memory_content_hash(content: str) -> str:
     return hashlib.sha256(str(content).encode("utf-8")).hexdigest()
+
+
+def _rank_fuse_memory_hits(
+    ranked_hit_groups: List[tuple[str, List[Dict[str, Any]]]],
+) -> List[Dict[str, Any]]:
+    """Fuse model-local rankings without comparing their raw similarity scores."""
+
+    fused: Dict[str, Dict[str, Any]] = {}
+    for model_order, (embedding_model, hits) in enumerate(ranked_hit_groups):
+        for rank, hit in enumerate(hits, start=1):
+            memory_id = str(hit.get("memory_id") or "")
+            if not memory_id:
+                continue
+            contribution = 1.0 / (MEMORY_RRF_K + rank)
+            existing = fused.get(memory_id)
+            if existing is None:
+                existing = {
+                    **hit,
+                    "embedding_model": embedding_model,
+                    "raw_score": hit.get("score"),
+                    "score": 0.0,
+                    "_best_rank": rank,
+                    "_model_order": model_order,
+                }
+                fused[memory_id] = existing
+            existing["score"] += contribution
+            existing["_best_rank"] = min(existing["_best_rank"], rank)
+
+    ranked = sorted(
+        fused.values(),
+        key=lambda hit: (
+            -float(hit["score"]),
+            _MEMORY_SCOPE_PRIORITY.get(str(hit.get("scope_type") or ""), 99),
+            int(hit["_best_rank"]),
+            int(hit["_model_order"]),
+            str(hit.get("memory_id") or ""),
+        ),
+    )
+    for hit in ranked:
+        hit.pop("_best_rank", None)
+        hit.pop("_model_order", None)
+    return ranked
 
 
 async def index_memory_record(memory) -> int:
@@ -241,8 +290,6 @@ async def search_thread_memory(
     if not scopes:
         return {"memories": [], "scopes": []}
     context = await resolve_thread_embedding_context(thread_id)
-    if not context.long_term_memory_enabled:
-        return {"memories": [], "scopes": []}
     scopes_by_model: Dict[str, List[Dict[str, str]]] = {}
     for scope in scopes:
         model = (
@@ -252,7 +299,7 @@ async def search_thread_memory(
         )
         scopes_by_model.setdefault(model, []).append(scope)
 
-    hits = []
+    ranked_hit_groups: List[tuple[str, List[Dict[str, Any]]]] = []
     for embedding_model, model_scopes in scopes_by_model.items():
         await require_embedding_model_ready(embedding_model)
         embedding_client = get_embedding_model(embedding_model)
@@ -264,8 +311,8 @@ async def search_thread_memory(
             limit=max_results,
             query_text=query,
         )
-        hits.extend(model_hits)
-    hits.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+        ranked_hit_groups.append((embedding_model, model_hits))
+    hits = _rank_fuse_memory_hits(ranked_hit_groups)
     memories = []
     seen = set()
     for hit in hits:
@@ -292,6 +339,9 @@ async def search_thread_memory(
                 "confidence": memory.confidence,
                 "visibility": memory.visibility,
                 "score": hit.get("score"),
+                "score_type": "rrf",
+                "raw_score": hit.get("raw_score"),
+                "embedding_model": hit.get("embedding_model"),
                 "created_at": iso_utc_z(memory.created_at) if memory.created_at else None,
                 "updated_at": iso_utc_z(memory.updated_at) if memory.updated_at else None,
             }

@@ -143,6 +143,9 @@ class TestAskPdfToolContract:
                     "content": "The launch codename is Atlas.",
                     "summary": "",
                     "score": 0.91,
+                    "score_type": "rrf",
+                    "raw_score": 0.83,
+                    "embedding_model": "BAAI/bge-m3",
                 }
             ],
             "scopes": [{"scope_type": "project", "scope_id": "project-1"}],
@@ -166,5 +169,8 @@ class TestAskPdfToolContract:
                 "scope_id": "project-1",
                 "memory_type": "semantic",
                 "score": 0.91,
+                "score_type": "rrf",
+                "raw_score": 0.83,
+                "embedding_model": "BAAI/bge-m3",
             }
         ]

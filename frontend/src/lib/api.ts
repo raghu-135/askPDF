@@ -151,7 +151,6 @@ export interface Thread {
   name: string;
   project_id?: string | null;
   embeddingModel: string;
-  longTermMemoryEnabled?: boolean;
   settings?: ThreadSettings;
   thread_metadata?: ThreadMetadata;
   documents_meta?: Record<string, ThreadDocumentMeta>;
@@ -165,7 +164,6 @@ interface RawThread {
   name: string;
   project_id?: string | null;
   embedding_model: string;
-  long_term_memory_enabled?: boolean;
   settings?: ThreadSettings;
   thread_metadata?: ThreadMetadata;
   documents_meta?: Record<string, ThreadDocumentMeta>;
@@ -179,7 +177,6 @@ const mapThread = (raw: RawThread): Thread => ({
   name: raw.name,
   project_id: raw.project_id,
   embeddingModel: raw.embedding_model,
-  longTermMemoryEnabled: raw.long_term_memory_enabled,
   settings: raw.settings,
   thread_metadata: raw.thread_metadata,
   documents_meta: raw.documents_meta,

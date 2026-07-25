@@ -118,7 +118,6 @@ class Thread(SQLModel, table=True):
     )
     name: str = Field(index=True)
     embedding_model: str = Field(index=True)
-    is_legacy: bool = Field(default=False, index=True)
     settings: Dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, default=dict)
@@ -164,9 +163,9 @@ class Thread(SQLModel, table=True):
     )
     __table_args__ = (
         ForeignKeyConstraint(
-            ["project_id"],
-            ["projects.id"],
-            name="fk_threads_project_id_projects",
+            ["project_id", "embedding_model"],
+            ["projects.id", "projects.embedding_model"],
+            name="fk_threads_project_embedding_model",
             ondelete="RESTRICT",
         ),
         Index("idx_thread_created_at", "created_at"),

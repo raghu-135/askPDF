@@ -38,7 +38,6 @@ def _thread_payload(thread) -> Dict[str, Any]:
         "project_id": thread.project_id,
         "name": thread.name,
         "embedding_model": thread.embedding_model,
-        "long_term_memory_enabled": not bool(getattr(thread, "is_legacy", False)),
         "settings": thread.settings if isinstance(thread.settings, dict) else {},
         "thread_metadata": thread.thread_metadata if isinstance(thread.thread_metadata, dict) else {},
         "created_at": iso_utc_z(thread.created_at) if thread.created_at else None,

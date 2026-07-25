@@ -541,6 +541,9 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                 "scope_id": scope_id,
                 "memory_type": memory_type,
                 "score": memory.get("score"),
+                "score_type": memory.get("score_type"),
+                "raw_score": memory.get("raw_score"),
+                "embedding_model": memory.get("embedding_model"),
             })
             scope_key = {"scope_type": scope_type, "scope_id": scope_id}
             if scope_key not in scopes:

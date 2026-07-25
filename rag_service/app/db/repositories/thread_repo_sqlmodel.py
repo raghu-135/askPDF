@@ -150,7 +150,6 @@ class ThreadRepository:
                     "project_id": thread.project_id,
                     "name": thread.name,
                     "embedding_model": thread.embedding_model,
-                    "long_term_memory_enabled": not thread.is_legacy,
                     "settings": thread.settings if thread.settings else {},
                     "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
                     "documents_meta": thread.documents_meta if thread.documents_meta else {},

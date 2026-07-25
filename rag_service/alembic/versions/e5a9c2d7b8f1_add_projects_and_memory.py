@@ -7,6 +7,7 @@ Create Date: 2026-07-24 00:00:00.000000
 """
 from __future__ import annotations
 
+import os
 import uuid
 
 from alembic import op
@@ -18,6 +19,16 @@ revision = "e5a9c2d7b8f1"
 down_revision = "d4b9c7e2a1f0"
 branch_labels = None
 depends_on = None
+
+
+def _local_embedding_model() -> str:
+    embedding_model = os.environ.get("LOCAL_EMBEDDING_MODEL", "").strip()
+    if not embedding_model:
+        raise RuntimeError(
+            "LOCAL_EMBEDDING_MODEL environment variable is required for "
+            "project-memory migration"
+        )
+    return embedding_model
 
 
 def upgrade() -> None:
@@ -34,22 +45,74 @@ def upgrade() -> None:
         sa.UniqueConstraint("id", "embedding_model", name="uq_projects_id_embedding_model"),
     )
     op.create_index("ix_projects_name", "projects", ["name"], unique=False)
+    op.create_index("ix_projects_embedding_model", "projects", ["embedding_model"], unique=False)
     op.create_index("idx_project_created_at", "projects", ["created_at"], unique=False)
 
     op.add_column("threads", sa.Column("project_id", sa.String(), nullable=True))
     op.create_index("ix_threads_project_id", "threads", ["project_id"], unique=False)
 
+    bind = op.get_bind()
+    local_embedding_model = _local_embedding_model()
     default_project_id = str(uuid.uuid4())
-    op.execute(
+    bind.execute(
         sa.text(
             """
-            insert into projects (id, name, description, embedding_model, settings_json, created_at)
-            values (:id, 'Personal', 'Default project for existing threads.', 'BAAI/bge-m3', '{}'::jsonb, now())
+            insert into projects
+                (id, name, description, embedding_model, settings_json, created_at)
+            values
+                (:id, 'Personal', 'Default project.', :model, '{}'::jsonb, now())
             """
-        ).bindparams(id=default_project_id)
+        ),
+        {"id": default_project_id, "model": local_embedding_model},
     )
-    op.execute(sa.text("update threads set project_id = :id where project_id is null").bindparams(id=default_project_id))
-    op.execute("update threads set embedding_model = 'BAAI/bge-m3'")
+    bind.execute(
+        sa.text(
+            """
+            update threads
+            set embedding_model = :model
+            where embedding_model is null or btrim(embedding_model) = ''
+            """
+        ),
+        {"model": local_embedding_model},
+    )
+    existing_models = [
+        row[0]
+        for row in bind.execute(
+            sa.text("select distinct embedding_model from threads order by embedding_model")
+        )
+    ]
+    for embedding_model in existing_models:
+        if embedding_model == local_embedding_model:
+            project_id = default_project_id
+        else:
+            project_id = str(uuid.uuid4())
+            bind.execute(
+                sa.text(
+                    """
+                    insert into projects
+                        (id, name, description, embedding_model, settings_json, created_at)
+                    values
+                        (:id, :name, :description, :model, '{}'::jsonb, now())
+                    """
+                ),
+                {
+                    "id": project_id,
+                    "name": f"Imported threads ({embedding_model})",
+                    "description": "Imported threads grouped by their existing embedding model.",
+                    "model": embedding_model,
+                },
+            )
+        bind.execute(
+            sa.text(
+                """
+                update threads
+                set project_id = :project_id
+                where embedding_model = :model
+                  and project_id is null
+                """
+            ),
+            {"project_id": project_id, "model": embedding_model},
+        )
     op.alter_column("threads", "project_id", nullable=False)
     op.create_foreign_key(
         "fk_threads_project_embedding_model",
@@ -172,5 +235,6 @@ def downgrade() -> None:
     op.drop_constraint("fk_threads_project_embedding_model", "threads", type_="foreignkey")
     op.drop_column("threads", "project_id")
     op.drop_index("idx_project_created_at", table_name="projects")
+    op.drop_index("ix_projects_embedding_model", table_name="projects")
     op.drop_index("ix_projects_name", table_name="projects")
     op.drop_table("projects")

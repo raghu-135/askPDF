@@ -15,6 +15,7 @@ from app.db.repositories.project_repo_sqlmodel import DEFAULT_PROJECT_NAME, Proj
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
 from app.time_utils import utc_now
 from app.services.memory_promotion_service import extract_memory_candidates_from_text
+from app.services.memory_service import _rank_fuse_memory_hits
 from app.db.vector.config import VectorDBInsertError
 
 
@@ -333,3 +334,46 @@ def test_explicit_user_memory_extracts_user_candidate():
     assert len(proposals) == 1
     assert proposals[0].scope_type == MemoryScopeType.USER.value
     assert proposals[0].scope_id == "user-1"
+
+
+def test_memory_rank_fusion_does_not_compare_raw_scores_across_models():
+    fused = _rank_fuse_memory_hits(
+        [
+            (
+                "project-model",
+                [
+                    {
+                        "memory_id": "project-rank-1",
+                        "scope_type": "project",
+                        "score": 0.05,
+                    },
+                    {
+                        "memory_id": "project-rank-2",
+                        "scope_type": "project",
+                        "score": 0.99,
+                    },
+                ],
+            ),
+            (
+                "BAAI/bge-m3",
+                [
+                    {
+                        "memory_id": "user-rank-1",
+                        "scope_type": "user",
+                        "score": 0.999,
+                    },
+                ],
+            ),
+        ]
+    )
+
+    assert [hit["memory_id"] for hit in fused] == [
+        "project-rank-1",
+        "user-rank-1",
+        "project-rank-2",
+    ]
+    assert fused[0]["score"] == fused[1]["score"]
+    assert fused[0]["raw_score"] == 0.05
+    assert fused[1]["raw_score"] == 0.999
+    assert fused[0]["embedding_model"] == "project-model"
+    assert fused[1]["embedding_model"] == "BAAI/bge-m3"

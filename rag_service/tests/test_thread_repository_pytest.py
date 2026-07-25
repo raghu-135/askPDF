@@ -14,7 +14,7 @@ from typing import Dict, Any
 # Import will work after migration
 try:
     from sqlmodel import select
-    from app.db.models_sqlmodel import Thread, ChatTurn, ThreadFile
+    from app.db.models_sqlmodel import Project, Thread, ChatTurn, ThreadFile
     from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
     # Only mark as available if TEST_DATABASE_URL is explicitly set
     SQLMODEL_AVAILABLE = bool(os.getenv("TEST_DATABASE_URL"))
@@ -38,8 +38,17 @@ class TestThreadRepository:
         """Create thread via ORM, verify persistence."""
         import uuid
         thread_id = str(uuid.uuid4())
+        project_id = str(uuid.uuid4())
+        repo.add(
+            Project(
+                id=project_id,
+                name="Test Project",
+                embedding_model="BAAI/bge-m3",
+            )
+        )
         thread = Thread(
             id=thread_id,
+            project_id=project_id,
             name="Test Thread",
             embedding_model="BAAI/bge-m3",
             settings={"replans": 10},
@@ -197,9 +206,17 @@ class TestThreadRepository:
             },
             "array": [1, 2, 3, 4, 5]
         }
-        
+        project_id = str(uuid.uuid4())
+        repo.add(
+            Project(
+                id=project_id,
+                name="Complex Settings Project",
+                embedding_model="test-model",
+            )
+        )
         thread = Thread(
             id=str(uuid.uuid4()),
+            project_id=project_id,
             name="Complex Settings Thread",
             embedding_model="test-model",
             settings=complex_settings,
@@ -215,13 +232,22 @@ class TestThreadRepository:
 
     @pytest.mark.asyncio
     async def test_thread_embedding_model_variations(self, repo):
-        """Test threads with different embedding models."""
+        """Test threads inherit different project-locked embedding models."""
         import uuid
         models = ["BAAI/bge-m3", "openai/text-embedding-3-small", "cohere/embed-english-v3.0"]
         
         for model in models:
+            project_id = str(uuid.uuid4())
+            repo.add(
+                Project(
+                    id=project_id,
+                    name=f"Project for {model}",
+                    embedding_model=model,
+                )
+            )
             thread = Thread(
                 id=str(uuid.uuid4()),
+                project_id=project_id,
                 name=f"Thread for {model}",
                 embedding_model=model,
                 settings={},

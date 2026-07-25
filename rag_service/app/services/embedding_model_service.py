@@ -22,16 +22,11 @@ class EmbeddingModelUnavailableError(RuntimeError):
     """Raised when an embedding-dependent operation targets an unavailable model."""
 
 
-class LongTermMemoryDisabledError(RuntimeError):
-    """Raised when durable memory is requested for a legacy thread."""
-
-
 @dataclass(frozen=True)
 class ThreadEmbeddingContext:
     thread: object
     project: object
     embedding_model: str
-    long_term_memory_enabled: bool
 
 
 async def resolve_thread_embedding_context(thread_id: str) -> ThreadEmbeddingContext:
@@ -41,16 +36,14 @@ async def resolve_thread_embedding_context(thread_id: str) -> ThreadEmbeddingCon
     project = await get_project(thread.project_id)
     if project is None:
         raise EmbeddingModelResolutionError("Thread project not found")
-    is_legacy = bool(getattr(thread, "is_legacy", False))
-    if not is_legacy and thread.embedding_model != project.embedding_model:
+    if thread.embedding_model != project.embedding_model:
         raise EmbeddingModelResolutionError(
             "Thread embedding model is inconsistent with its project"
         )
     return ThreadEmbeddingContext(
         thread=thread,
         project=project,
-        embedding_model=thread.embedding_model if is_legacy else project.embedding_model,
-        long_term_memory_enabled=not is_legacy,
+        embedding_model=project.embedding_model,
     )
 
 
@@ -64,10 +57,6 @@ async def resolve_scope_embedding_model(scope_type: str, scope_id: str) -> str:
         return project.embedding_model
     if scope_type == MemoryScopeType.THREAD.value:
         context = await resolve_thread_embedding_context(scope_id)
-        if not context.long_term_memory_enabled:
-            raise LongTermMemoryDisabledError(
-                "Long-term memory is disabled for legacy threads"
-            )
         return context.embedding_model
     raise EmbeddingModelResolutionError(f"Unsupported memory scope_type: {scope_type}")
 

@@ -3,6 +3,10 @@ test_schema_guardrails.py - Tests that protect the simplified Postgres schema.
 """
 
 
+from pathlib import Path
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 import pytest
 from sqlalchemy import text
 
@@ -35,6 +39,21 @@ REMOVED_MODEL_EXPORTS = {
 }
 
 
+def test_alembic_graph_retains_applied_memory_compatibility_revisions():
+    service_root = Path(__file__).resolve().parents[1]
+    config = Config(str(service_root / "alembic.ini"))
+    config.set_main_option("script_location", str(service_root / "alembic"))
+    scripts = ScriptDirectory.from_config(config)
+
+    cleanup = scripts.get_revision("c9e6a1b4d3f8")
+
+    assert scripts.get_heads() == ["c9e6a1b4d3f8"]
+    assert scripts.get_revision("a7c4e9f2b1d6") is not None
+    assert scripts.get_revision("b8d5f0a3c2e7") is not None
+    assert cleanup is not None
+    assert cleanup.down_revision == "b8d5f0a3c2e7"
+
+
 def test_sqlmodel_metadata_only_contains_current_application_tables():
     table_names = set(models_sqlmodel.SQLModel.metadata.tables.keys())
 
@@ -45,6 +64,25 @@ def test_sqlmodel_metadata_only_contains_current_application_tables():
 def test_removed_orm_models_are_not_exported():
     for model_name in REMOVED_MODEL_EXPORTS:
         assert not hasattr(models_sqlmodel, model_name)
+
+
+def test_thread_model_has_one_strict_project_embedding_foreign_key():
+    assert not hasattr(models_sqlmodel.Thread, "is_legacy")
+    foreign_keys = {
+        constraint.name: constraint
+        for constraint in models_sqlmodel.Thread.__table__.constraints
+        if constraint.name and constraint.__class__.__name__ == "ForeignKeyConstraint"
+    }
+
+    constraint = foreign_keys["fk_threads_project_embedding_model"]
+    assert [column.name for column in constraint.columns] == [
+        "project_id",
+        "embedding_model",
+    ]
+    assert [element.target_fullname for element in constraint.elements] == [
+        "projects.id",
+        "projects.embedding_model",
+    ]
 
 
 def test_memory_models_define_hardening_check_constraints():
