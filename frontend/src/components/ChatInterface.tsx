@@ -47,6 +47,7 @@ import {
     getThreadMessages,
     deleteMessage,
     forkThread,
+    listProjects,
     listThreads,
     getThreadIndexStatus,
     getThreadSettings,
@@ -66,6 +67,7 @@ import {
     cancelChatAgentRun,
     resolveMemoryCandidate,
     type MemoryCandidate,
+    type Project,
     type ThreadChatResponse,
 } from '../lib/api';
 import type { AgentExecutionStreamEnvelope } from '../lib/agent-execution-stream';
@@ -84,6 +86,7 @@ import {
 } from '../lib/enums';
 import ChatSettingsDialog from './ChatSettingsDialog';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
+import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
 import AgentRunDebugPanel from './agent-debug/AgentRunDebugPanel';
 import { buildLiveTraceView } from './agent-debug/agent-trace-projection';
 import useBatchedExecutionEvents from './agent-graph/useBatchedExecutionEvents';
@@ -228,6 +231,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [isEmbeddingModelValid, setIsEmbeddingModelValid] = useState<boolean | null>(null);
     const [copiedId, setCopiedId] = useState<string | null>(null);
     const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
+    const [forkDialogMessageId, setForkDialogMessageId] = useState<string | null>(null);
+    const [forkProjects, setForkProjects] = useState<Project[]>([]);
     const [lineageThreads, setLineageThreads] = useState<Thread[]>([]);
     const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
     const [editingOriginalText, setEditingOriginalText] = useState('');
@@ -1454,10 +1459,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const handleForkFromMessage = async (messageId: string, event: React.MouseEvent) => {
         event.stopPropagation();
         if (!activeThread) return;
+        setForkDialogMessageId(messageId);
+        if (forkProjects.length === 0) {
+            try {
+                const response = await listProjects();
+                setForkProjects(response.projects || []);
+            } catch (error) {
+                console.error('Failed to load projects for fork dialog:', error);
+            }
+        }
+    };
 
+    const submitMessageFork = async (options: { name?: string; targetProjectId?: string; memoryCopyMode?: MemoryCopyMode }) => {
+        if (!activeThread || !forkDialogMessageId) return;
         try {
-            setForkingMessageId(messageId);
-            const forked = await forkThread(activeThread.id, { messageId });
+            setForkingMessageId(forkDialogMessageId);
+            const forked = await forkThread(activeThread.id, { messageId: forkDialogMessageId, ...options });
+            setForkDialogMessageId(null);
             onThreadForked?.(forked);
         } catch (error) {
             console.error('Failed to fork thread from message:', error);
@@ -2466,6 +2484,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 onResetSystemRole={resetSystemRoleToDefault}
                 onResetToolInstruction={resetToolInstructionToDefault}
                 onResetCustomInstructions={resetCustomInstructionsToDefault}
+            />
+            <ThreadForkDialog
+                open={Boolean(forkDialogMessageId)}
+                sourceThread={activeThread}
+                projects={forkProjects}
+                fromMessageId={forkDialogMessageId}
+                submitting={Boolean(forkingMessageId)}
+                onClose={() => setForkDialogMessageId(null)}
+                onSubmit={submitMessageFork}
             />
         </Paper>
     );

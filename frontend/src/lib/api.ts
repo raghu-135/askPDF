@@ -202,6 +202,8 @@ export interface ThreadMetadata {
     source_message_id?: string | null;
     source_message_created_at?: string | null;
     mode?: 'from_message' | 'full_thread' | string;
+    memory_copy_mode?: string | null;
+    copied_memory_ids?: string[];
   };
   fork_children?: string[];
   [key: string]: any;

@@ -8,6 +8,9 @@ from sqlalchemy.future import select
 from app.db.models_sqlmodel import (
     ChatTurn,
     File,
+    Memory,
+    MemoryEvent,
+    Project,
     Thread,
     ThreadFile,
 )
@@ -199,3 +202,246 @@ async def test_fork_thread_rejects_message_from_another_thread(engine, monkeypat
             "source-thread",
             message_id="other-turn:user",
         )
+
+
+@pytest.mark.asyncio
+async def test_same_project_fork_snapshots_thread_memories_before_message(engine, monkeypatch):
+    test_session_maker = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
+    monkeypatch.setattr(
+        thread_management_service,
+        "async_session_maker",
+        test_session_maker,
+    )
+    indexed_memory_ids: list[str] = []
+
+    async def fake_index_memory_record(memory, _embedding_model):
+        indexed_memory_ids.append(memory.id)
+        return 1
+
+    monkeypatch.setattr("app.services.memory_service.index_memory_record", fake_index_memory_record)
+
+    early_at = datetime(2026, 1, 1, 10, tzinfo=timezone.utc)
+    fork_at = datetime(2026, 1, 1, 11, tzinfo=timezone.utc)
+    late_at = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add(Project(id="project-a", name="Project A"))
+            session.add(
+                Thread(
+                    id="source-thread",
+                    project_id="project-a",
+                    name="Source Thread",
+                    embedding_model="BAAI/bge-m3",
+                    settings={},
+                    thread_metadata={},
+                    created_at=early_at,
+                )
+            )
+            session.add_all(
+                [
+                    ChatTurn(
+                        id="turn-1",
+                        thread_id="source-thread",
+                        status="completed",
+                        payload={"question": "q1", "answer": "a1"},
+                        created_at=fork_at,
+                        completed_at=fork_at,
+                    ),
+                    ChatTurn(
+                        id="turn-2",
+                        thread_id="source-thread",
+                        status="completed",
+                        payload={"question": "q2", "answer": "a2"},
+                        created_at=late_at,
+                        completed_at=late_at,
+                    ),
+                    Memory(
+                        id="memory-before",
+                        scope_type="thread",
+                        scope_id="source-thread",
+                        memory_type="semantic",
+                        content="Remembered before fork",
+                        summary="before",
+                        source_refs_json={"turn_id": "turn-1"},
+                        confidence=0.9,
+                        status="active",
+                        visibility="private",
+                        created_at=early_at,
+                        updated_at=early_at,
+                    ),
+                    Memory(
+                        id="memory-after",
+                        scope_type="thread",
+                        scope_id="source-thread",
+                        memory_type="semantic",
+                        content="Remembered after fork",
+                        summary="after",
+                        source_refs_json={"turn_id": "turn-2"},
+                        confidence=0.9,
+                        status="active",
+                        visibility="private",
+                        created_at=late_at,
+                        updated_at=late_at,
+                    ),
+                    Memory(
+                        id="project-memory",
+                        scope_type="project",
+                        scope_id="project-a",
+                        memory_type="semantic",
+                        content="Shared project memory stays shared",
+                        summary="project",
+                        confidence=0.9,
+                        status="active",
+                        visibility="project",
+                        created_at=early_at,
+                        updated_at=early_at,
+                    ),
+                ]
+            )
+
+    result = await thread_management_service.fork_thread(
+        "source-thread",
+        message_id="turn-1:assistant",
+    )
+    forked = result["thread"]
+
+    async with test_session_maker() as session:
+        copied_memories = (
+            await session.execute(
+                select(Memory)
+                .where(Memory.scope_id == forked.id)
+                .order_by(Memory.created_at.asc())
+            )
+        ).scalars().all()
+        snapshot_events = (
+            await session.execute(
+                select(MemoryEvent).where(MemoryEvent.event_type == "fork_snapshot")
+            )
+        ).scalars().all()
+
+    assert forked.project_id == "project-a"
+    assert forked.thread_metadata["fork"]["memory_copy_mode"] == "thread_snapshot"
+    assert len(copied_memories) == 1
+    copied = copied_memories[0]
+    assert copied.content == "Remembered before fork"
+    assert copied.scope_type == "thread"
+    assert copied.scope_id == forked.id
+    assert copied.fork_origin_json["source_memory_id"] == "memory-before"
+    assert copied.fork_origin_json["copy_mode"] == "thread_snapshot"
+    assert forked.thread_metadata["fork"]["copied_memory_ids"] == [copied.id]
+    assert [event.memory_id for event in snapshot_events] == [copied.id]
+    assert indexed_memory_ids == [copied.id]
+
+
+@pytest.mark.asyncio
+async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, monkeypatch):
+    test_session_maker = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
+    monkeypatch.setattr(
+        thread_management_service,
+        "async_session_maker",
+        test_session_maker,
+    )
+    indexed_memory_ids: list[str] = []
+
+    async def fake_index_memory_record(memory, _embedding_model):
+        indexed_memory_ids.append(memory.id)
+        return 1
+
+    monkeypatch.setattr("app.services.memory_service.index_memory_record", fake_index_memory_record)
+
+    created_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    async with test_session_maker() as session:
+        async with session.begin():
+            session.add_all(
+                [
+                    Project(id="project-a", name="Project A"),
+                    Project(id="project-b", name="Project B"),
+                    Thread(
+                        id="source-thread",
+                        project_id="project-a",
+                        name="Source Thread",
+                        embedding_model="BAAI/bge-m3",
+                        settings={},
+                        thread_metadata={},
+                        created_at=created_at,
+                    ),
+                    ChatTurn(
+                        id="turn-1",
+                        thread_id="source-thread",
+                        status="completed",
+                        payload={"question": "q1", "answer": "a1"},
+                        created_at=created_at,
+                        completed_at=created_at,
+                    ),
+                    Memory(
+                        id="source-project-memory",
+                        scope_type="project",
+                        scope_id="project-a",
+                        memory_type="semantic",
+                        content="Project A launch name is AskPDF Pro",
+                        summary="launch name",
+                        source_refs_json={"project": "a"},
+                        confidence=0.95,
+                        status="active",
+                        visibility="project",
+                        created_at=created_at,
+                        updated_at=created_at,
+                    ),
+                    Memory(
+                        id="source-thread-memory",
+                        scope_type="thread",
+                        scope_id="source-thread",
+                        memory_type="semantic",
+                        content="Thread-local detail",
+                        summary="thread detail",
+                        confidence=0.8,
+                        status="active",
+                        visibility="private",
+                        created_at=created_at,
+                        updated_at=created_at,
+                    ),
+                ]
+            )
+
+    result = await thread_management_service.fork_thread(
+        "source-thread",
+        target_project_id="project-b",
+    )
+    forked = result["thread"]
+
+    async with test_session_maker() as session:
+        project_b_memories = (
+            await session.execute(
+                select(Memory).where(Memory.scope_type == "project", Memory.scope_id == "project-b")
+            )
+        ).scalars().all()
+        fork_thread_memories = (
+            await session.execute(
+                select(Memory).where(Memory.scope_type == "thread", Memory.scope_id == forked.id)
+            )
+        ).scalars().all()
+
+    assert forked.project_id == "project-b"
+    assert forked.thread_metadata["fork"]["memory_copy_mode"] == "project_snapshot"
+    assert fork_thread_memories == []
+    assert len(project_b_memories) == 1
+    copied = project_b_memories[0]
+    assert copied.content == "Project A launch name is AskPDF Pro"
+    assert copied.fork_origin_json["source_memory_id"] == "source-project-memory"
+    assert copied.fork_origin_json["source_project_id"] == "project-a"
+    assert copied.fork_origin_json["target_project_id"] == "project-b"
+    assert copied.fork_origin_json["copy_mode"] == "project_snapshot"
+    assert forked.thread_metadata["fork"]["copied_memory_ids"] == [copied.id]
+    assert indexed_memory_ids == [copied.id]

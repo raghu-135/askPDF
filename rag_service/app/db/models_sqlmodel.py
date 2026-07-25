@@ -11,7 +11,7 @@ from datetime import datetime
 import uuid
 from typing import Dict, Any, List, Optional
 
-from sqlalchemy import Boolean, Column, DateTime, func, Index, String, Integer, Float, ForeignKey
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, func, Index, String, Integer, Float, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from app.db.enums import (
     AgentRunStatus,
@@ -411,6 +411,13 @@ class Memory(SQLModel, table=True):
     )
 
     __table_args__ = (
+        CheckConstraint("scope_type in ('user', 'project', 'thread')", name="ck_memories_scope_type"),
+        CheckConstraint("memory_type in ('semantic', 'episodic', 'procedural')", name="ck_memories_memory_type"),
+        CheckConstraint("status in ('active', 'archived', 'deleted', 'rejected')", name="ck_memories_status"),
+        CheckConstraint("visibility in ('private', 'project', 'internal')", name="ck_memories_visibility"),
+        CheckConstraint("confidence >= 0 and confidence <= 1", name="ck_memories_confidence"),
+        CheckConstraint("length(btrim(scope_id)) > 0", name="ck_memories_scope_id_nonempty"),
+        CheckConstraint("length(btrim(content)) > 0", name="ck_memories_content_nonempty"),
         Index("idx_memory_scope_status", "scope_type", "scope_id", "status"),
         Index("idx_memory_created_at", "created_at"),
     )
@@ -465,6 +472,12 @@ class MemoryCandidate(SQLModel, table=True):
     )
 
     __table_args__ = (
+        CheckConstraint("proposed_scope_type in ('user', 'project', 'thread')", name="ck_memory_candidates_scope_type"),
+        CheckConstraint("memory_type in ('semantic', 'episodic', 'procedural')", name="ck_memory_candidates_memory_type"),
+        CheckConstraint("status in ('pending', 'approved', 'rejected', 'auto_approved')", name="ck_memory_candidates_status"),
+        CheckConstraint("confidence >= 0 and confidence <= 1", name="ck_memory_candidates_confidence"),
+        CheckConstraint("length(btrim(proposed_scope_id)) > 0", name="ck_memory_candidates_scope_id_nonempty"),
+        CheckConstraint("length(btrim(content)) > 0", name="ck_memory_candidates_content_nonempty"),
         Index("idx_memory_candidate_scope_status", "proposed_scope_type", "proposed_scope_id", "status"),
         Index("idx_memory_candidate_source_thread", "source_thread_id", "created_at"),
     )

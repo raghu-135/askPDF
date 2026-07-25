@@ -8,6 +8,7 @@
       "allowed_tool_ids": [
         "document_evidence",
         "deep_memory",
+        "memory_recall",
         "thread_timeline",
         "live_web_recon",
         "clarify_intent"
@@ -39,6 +40,7 @@
               "clarify": "finalizer",
               "direct": "direct_answer",
               "document": "retrieval_worker",
+              "long_term_memory": "long_term_memory_worker",
               "memory": "memory_worker",
               "timeline": "timeline_worker",
               "web": "web_worker"
@@ -50,6 +52,10 @@
           },
           {
             "from": "memory_worker",
+            "to": "synthesizer"
+          },
+          {
+            "from": "long_term_memory_worker",
             "to": "synthesizer"
           },
           {
@@ -91,6 +97,10 @@
             "type": "memory_worker"
           },
           {
+            "id": "long_term_memory_worker",
+            "type": "long_term_memory_worker"
+          },
+          {
             "id": "timeline_worker",
             "type": "timeline_worker"
           },
@@ -118,8 +128,9 @@
       },
       "loop_policy": {
         "default_max_node_visits": 1,
-        "max_total_visits": 9,
+        "max_total_visits": 10,
         "node_visit_limits": {
+          "long_term_memory_worker": 2,
           "memory_worker": 2,
           "retrieval_worker": 2,
           "timeline_worker": 2,

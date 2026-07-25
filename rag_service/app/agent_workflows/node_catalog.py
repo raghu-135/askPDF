@@ -245,7 +245,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
         "allowed_parent_types": [NODE_EVIDENCE_EVALUATOR, NODE_HITL_GATE],
-        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1, "max_visits": REPLANS_LIMIT},
     },
     NODE_DIRECT_ANSWER: {
@@ -267,6 +267,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_parent_types": [
             NODE_RETRIEVAL_WORKER,
             NODE_MEMORY_WORKER,
+            NODE_LONG_TERM_MEMORY_WORKER,
             NODE_TIMELINE_WORKER,
             NODE_WEB_WORKER,
             NODE_EVIDENCE_EVALUATOR,
@@ -286,6 +287,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_PLANNER,
             NODE_RETRIEVAL_WORKER,
             NODE_MEMORY_WORKER,
+            NODE_LONG_TERM_MEMORY_WORKER,
             NODE_TIMELINE_WORKER,
             NODE_WEB_WORKER,
             NODE_DIRECT_ANSWER,

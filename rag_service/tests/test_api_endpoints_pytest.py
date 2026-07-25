@@ -193,6 +193,29 @@ class TestThreadEndpoints:
         )
         assert auto_response.status_code == 400
 
+    def test_memory_endpoints_reject_invalid_contract_values(self, client):
+        invalid_memory = client.post(
+            "/api/memories",
+            json={
+                "scope_type": "project",
+                "scope_id": "project-1",
+                "memory_type": "fact",
+                "content": "Invalid memory type.",
+            },
+        )
+        assert invalid_memory.status_code == 400
+
+        invalid_candidate = client.post(
+            "/api/memory-candidates",
+            json={
+                "proposed_scope_type": "workspace",
+                "proposed_scope_id": "project-1",
+                "memory_type": "semantic",
+                "content": "Invalid scope.",
+            },
+        )
+        assert invalid_candidate.status_code == 400
+
     def test_get_thread(self, client):
         """Test getting a specific thread."""
         # Create a thread

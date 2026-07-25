@@ -47,6 +47,37 @@ def test_removed_orm_models_are_not_exported():
         assert not hasattr(models_sqlmodel, model_name)
 
 
+def test_memory_models_define_hardening_check_constraints():
+    memory_constraints = {
+        constraint.name
+        for constraint in models_sqlmodel.Memory.__table__.constraints
+        if constraint.name
+    }
+    candidate_constraints = {
+        constraint.name
+        for constraint in models_sqlmodel.MemoryCandidate.__table__.constraints
+        if constraint.name
+    }
+
+    assert {
+        "ck_memories_scope_type",
+        "ck_memories_memory_type",
+        "ck_memories_status",
+        "ck_memories_visibility",
+        "ck_memories_confidence",
+        "ck_memories_scope_id_nonempty",
+        "ck_memories_content_nonempty",
+    }.issubset(memory_constraints)
+    assert {
+        "ck_memory_candidates_scope_type",
+        "ck_memory_candidates_memory_type",
+        "ck_memory_candidates_status",
+        "ck_memory_candidates_confidence",
+        "ck_memory_candidates_scope_id_nonempty",
+        "ck_memory_candidates_content_nonempty",
+    }.issubset(candidate_constraints)
+
+
 @pytest.mark.asyncio
 async def test_created_database_schema_excludes_removed_tables(engine):
     async with engine.connect() as connection:

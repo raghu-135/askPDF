@@ -48,6 +48,7 @@ class HitlRejectBehavior(str, Enum):
 class RouterRoute(str, Enum):
     DOCUMENT = "document"
     MEMORY = "memory"
+    LONG_TERM_MEMORY = "long_term_memory"
     TIMELINE = "timeline"
     WEB = "web"
     DIRECT = "direct"

@@ -67,13 +67,20 @@ def _candidate_payload(candidate) -> Dict[str, Any]:
     }
 
 
+def _bad_request_from_value_error(exc: ValueError) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(exc))
+
+
 @router.get("/memories")
 async def list_memories_endpoint(
     scope_type: str = Query(...),
     scope_id: str = Query(...),
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    rows = await list_scope_memories(scope_type=scope_type, scope_id=scope_id, limit=limit)
+    try:
+        rows = await list_scope_memories(scope_type=scope_type, scope_id=scope_id, limit=limit)
+    except ValueError as exc:
+        raise _bad_request_from_value_error(exc) from exc
     return {"memories": rows}
 
 
@@ -83,18 +90,21 @@ async def create_memory_endpoint(req: MemoryCreateRequest):
         raise HTTPException(status_code=400, detail="Invalid memory scope_type")
     if not req.scope_id.strip() or not req.content.strip():
         raise HTTPException(status_code=400, detail="scope_id and content are required")
-    memory = await create_and_index_memory(
-        embedding_model=req.embedding_model,
-        scope_type=req.scope_type,
-        scope_id=req.scope_id,
-        memory_type=req.memory_type,
-        content=req.content,
-        summary=req.summary,
-        source_refs_json=req.source_refs_json,
-        confidence=req.confidence,
-        visibility=req.visibility,
-        created_by=req.created_by,
-    )
+    try:
+        memory = await create_and_index_memory(
+            embedding_model=req.embedding_model,
+            scope_type=req.scope_type,
+            scope_id=req.scope_id,
+            memory_type=req.memory_type,
+            content=req.content,
+            summary=req.summary,
+            source_refs_json=req.source_refs_json,
+            confidence=req.confidence,
+            visibility=req.visibility,
+            created_by=req.created_by,
+        )
+    except ValueError as exc:
+        raise _bad_request_from_value_error(exc) from exc
     return _memory_payload(memory)
 
 
@@ -102,12 +112,15 @@ async def create_memory_endpoint(req: MemoryCreateRequest):
 async def update_memory_status_endpoint(memory_id: str, req: MemoryStatusUpdateRequest):
     if req.status not in {item.value for item in MemoryStatus}:
         raise HTTPException(status_code=400, detail="Invalid memory status")
-    memory = await update_memory_status(
-        memory_id,
-        status=req.status,
-        actor_id=req.actor_id,
-        payload_json=req.payload_json,
-    )
+    try:
+        memory = await update_memory_status(
+            memory_id,
+            status=req.status,
+            actor_id=req.actor_id,
+            payload_json=req.payload_json,
+        )
+    except ValueError as exc:
+        raise _bad_request_from_value_error(exc) from exc
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return _memory_payload(memory)
@@ -144,19 +157,22 @@ async def list_memory_candidates_endpoint(
 
 @router.post("/memory-candidates")
 async def create_memory_candidate_endpoint(req: MemoryCandidateCreateRequest):
-    candidate = await create_memory_candidate(
-        proposed_scope_type=req.proposed_scope_type,
-        proposed_scope_id=req.proposed_scope_id,
-        memory_type=req.memory_type,
-        content=req.content,
-        source_thread_id=req.source_thread_id,
-        source_project_id=req.source_project_id,
-        source_agent_run_id=req.source_agent_run_id,
-        source_turn_id=req.source_turn_id,
-        confidence=req.confidence,
-        reason=req.reason,
-        created_by=req.created_by,
-    )
+    try:
+        candidate = await create_memory_candidate(
+            proposed_scope_type=req.proposed_scope_type,
+            proposed_scope_id=req.proposed_scope_id,
+            memory_type=req.memory_type,
+            content=req.content,
+            source_thread_id=req.source_thread_id,
+            source_project_id=req.source_project_id,
+            source_agent_run_id=req.source_agent_run_id,
+            source_turn_id=req.source_turn_id,
+            confidence=req.confidence,
+            reason=req.reason,
+            created_by=req.created_by,
+        )
+    except ValueError as exc:
+        raise _bad_request_from_value_error(exc) from exc
     return _candidate_payload(candidate)
 
 
@@ -171,7 +187,10 @@ async def resolve_memory_candidate_endpoint(candidate_id: str, req: MemoryCandid
         and existing.proposed_scope_type == MemoryScopeType.USER.value
     ):
         raise HTTPException(status_code=400, detail="User/global memory candidates require explicit approval")
-    candidate = await repo.resolve_candidate(candidate_id, status=req.status)
+    try:
+        candidate = await repo.resolve_candidate(candidate_id, status=req.status)
+    except ValueError as exc:
+        raise _bad_request_from_value_error(exc) from exc
     memory = None
     if req.status in {MemoryCandidateStatus.APPROVED.value, MemoryCandidateStatus.AUTO_APPROVED.value}:
         memory = await create_and_index_memory(

@@ -1045,12 +1045,13 @@ class TestRouterRagWorkflowValidator:
             (
                 builtin_router_rag_v2_spec,
                 {
-                    "node_ids": ["context_loader", "router", "retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
+                    "node_ids": ["context_loader", "router", "retrieval_worker", "memory_worker", "long_term_memory_worker", "timeline_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
                     "node_types": {
                         "context_loader": "context_loader",
                         "router": "router",
                         "retrieval_worker": "retrieval_worker",
                         "memory_worker": "memory_worker",
+                        "long_term_memory_worker": "long_term_memory_worker",
                         "timeline_worker": "timeline_worker",
                         "web_worker": "web_worker",
                         "direct_answer": "direct_answer",
@@ -1062,6 +1063,7 @@ class TestRouterRagWorkflowValidator:
                         ("context_loader", "router"),
                         ("retrieval_worker", "synthesizer"),
                         ("memory_worker", "synthesizer"),
+                        ("long_term_memory_worker", "synthesizer"),
                         ("timeline_worker", "synthesizer"),
                         ("web_worker", "synthesizer"),
                         ("direct_answer", "finalizer"),
@@ -1074,6 +1076,7 @@ class TestRouterRagWorkflowValidator:
                             "routes": {
                                 "document": "retrieval_worker",
                                 "memory": "memory_worker",
+                                "long_term_memory": "long_term_memory_worker",
                                 "timeline": "timeline_worker",
                                 "web": "web_worker",
                                 "direct": "direct_answer",
@@ -4279,7 +4282,7 @@ class TestAgentRunService:
         assert run.workflow_version_id == f"{ROUTER_RAG_AGENT_ID}:v{ROUTER_RAG_AGENT_V2_VERSION}"
         assert run.resolved_spec_json["schema_version"] == 2
         assert router_edge["route_fn"] == "router_route"
-        assert captured_spec["config"]["loop_policy"]["max_total_visits"] == 9
+        assert captured_spec["config"]["loop_policy"]["max_total_visits"] == len(captured_spec["config"]["graph"]["nodes"])
 
     @pytest.mark.asyncio
     async def test_run_thread_chat_runs_selected_custom_db_workflow(self, engine, sample_thread, monkeypatch):
@@ -6049,6 +6052,7 @@ class TestRouterRagRuntime:
         [
             ("document", ["context_loader", "router", "retrieval_worker", "synthesizer", "finalizer"], "completed"),
             ("memory", ["context_loader", "router", "memory_worker", "synthesizer", "finalizer"], "completed"),
+            ("long_term_memory", ["context_loader", "router", "long_term_memory_worker", "synthesizer", "finalizer"], "completed"),
             ("timeline", ["context_loader", "router", "timeline_worker", "synthesizer", "finalizer"], "completed"),
             ("web", ["context_loader", "router", "web_worker", "synthesizer", "finalizer"], "completed"),
             ("clarify", ["context_loader", "router", "finalizer"], "clarification_required"),
@@ -6177,6 +6181,16 @@ class TestRouterRagRuntime:
             "content": "Memory worker evidence.",
             "__used_chat_ids__": ["turn-1"],
         }
+        long_term_memory_payload = {
+            "content": "Long-term memory worker evidence.",
+            "artifacts": {
+                "memories": [{"id": "memory-1", "content": "Remembered project fact."}],
+                "memory_scopes": [{"scope_type": "project", "scope_id": "project-1"}],
+            },
+            "artifact_refs": {
+                "memories": [{"memory_id": "memory-1", "scope_type": "project", "scope_id": "project-1"}],
+            },
+        }
         timeline_payload = {
             "content": "Timeline worker evidence.",
             "__timeline_events__": [{"timeline_event_type": "document_added", "timeline_event_at": "2026-07-01T00:00:00Z"}],
@@ -6191,6 +6205,7 @@ class TestRouterRagRuntime:
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeTool(document_payload))
         monkeypatch.setattr("app.agent_workflows.graph.search_conversation_history", FakeTool(memory_payload))
+        monkeypatch.setattr("app.agent_workflows.graph.search_long_term_memory", FakeTool(long_term_memory_payload))
         monkeypatch.setattr("app.agent_workflows.graph.search_thread_timeline", FakeTool(timeline_payload))
         monkeypatch.setattr("app.agent_workflows.graph.search_web", FakeTool(web_payload))
         monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
@@ -6282,6 +6297,10 @@ class TestRouterRagRuntime:
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
             assert result["used_chat_ids"] == ["turn-1"]
             assert result["answer"] == "Final answer from memory route."
+        elif route == "long_term_memory":
+            assert result["tool_events"][0]["tool_name"] == "search_long_term_memory"
+            assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
+            assert result["answer"] == "Final answer from long_term_memory route."
         elif route == "timeline":
             assert result["tool_events"][0]["tool_name"] == "search_thread_timeline"
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"

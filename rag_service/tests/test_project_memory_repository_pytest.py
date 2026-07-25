@@ -91,6 +91,24 @@ async def test_memory_repository_lifecycle_and_audit(repo_sessionmaker):
 
 
 @pytest.mark.asyncio
+async def test_memory_repository_rejects_invalid_memory_values(repo_sessionmaker):
+    repo = MemoryRepository()
+
+    invalid_cases = [
+        {"scope_type": "workspace", "scope_id": "scope-1", "memory_type": MemoryType.SEMANTIC.value, "content": "content"},
+        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": " ", "memory_type": MemoryType.SEMANTIC.value, "content": "content"},
+        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": "scope-1", "memory_type": "fact", "content": "content"},
+        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": "scope-1", "memory_type": MemoryType.SEMANTIC.value, "content": " "},
+        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": "scope-1", "memory_type": MemoryType.SEMANTIC.value, "content": "content", "confidence": 1.5},
+        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": "scope-1", "memory_type": MemoryType.SEMANTIC.value, "content": "content", "visibility": "public"},
+    ]
+
+    for kwargs in invalid_cases:
+        with pytest.raises(ValueError):
+            await repo.create_memory(**kwargs)
+
+
+@pytest.mark.asyncio
 async def test_memory_candidate_resolution(repo_sessionmaker):
     repo = MemoryRepository()
 
@@ -106,6 +124,35 @@ async def test_memory_candidate_resolution(repo_sessionmaker):
     )
 
     assert resolved.status == MemoryCandidateStatus.REJECTED.value
+
+
+@pytest.mark.asyncio
+async def test_memory_repository_rejects_invalid_candidate_values(repo_sessionmaker):
+    repo = MemoryRepository()
+
+    with pytest.raises(ValueError):
+        await repo.create_candidate(
+            proposed_scope_type="workspace",
+            proposed_scope_id="thread-1",
+            memory_type=MemoryType.SEMANTIC.value,
+            content="content",
+        )
+    with pytest.raises(ValueError):
+        await repo.create_candidate(
+            proposed_scope_type=MemoryScopeType.THREAD.value,
+            proposed_scope_id="thread-1",
+            memory_type="fact",
+            content="content",
+        )
+    with pytest.raises(ValueError):
+        await repo.create_candidate(
+            proposed_scope_type=MemoryScopeType.THREAD.value,
+            proposed_scope_id="thread-1",
+            memory_type=MemoryType.SEMANTIC.value,
+            content="",
+        )
+    with pytest.raises(ValueError):
+        await repo.resolve_candidate("missing", status="done")
 
 
 def test_explicit_remember_phrase_extracts_project_candidate():

@@ -9,9 +9,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
-from app.db.enums import MemoryCandidateStatus, MemoryStatus
+from app.db.enums import MemoryCandidateStatus, MemoryScopeType, MemoryStatus, MemoryType, MemoryVisibility
 from app.db.models_sqlmodel import Memory, MemoryCandidate, MemoryEvent
 from app.time_utils import utc_now
+
+
+VALID_MEMORY_SCOPE_TYPES = {item.value for item in MemoryScopeType}
+VALID_MEMORY_TYPES = {item.value for item in MemoryType}
+VALID_MEMORY_STATUSES = {item.value for item in MemoryStatus}
+VALID_MEMORY_VISIBILITIES = {item.value for item in MemoryVisibility}
+VALID_CANDIDATE_STATUSES = {item.value for item in MemoryCandidateStatus}
+
+
+def _require_nonempty(value: str, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{field_name} is required")
+    return normalized
+
+
+def _require_enum(value: str, field_name: str, allowed: set[str]) -> str:
+    normalized = _require_nonempty(value, field_name)
+    if normalized not in allowed:
+        raise ValueError(f"invalid {field_name}: {normalized}")
+    return normalized
+
+
+def _normalize_confidence(value: float) -> float:
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("confidence must be a number between 0 and 1") from exc
+    if confidence < 0 or confidence > 1:
+        raise ValueError("confidence must be between 0 and 1")
+    return confidence
 
 
 class MemoryRepository:
@@ -41,6 +72,12 @@ class MemoryRepository:
         fork_origin_json: Optional[Dict[str, Any]] = None,
         event_payload: Optional[Dict[str, Any]] = None,
     ) -> Memory:
+        scope_type = _require_enum(scope_type, "scope_type", VALID_MEMORY_SCOPE_TYPES)
+        scope_id = _require_nonempty(scope_id, "scope_id")
+        memory_type = _require_enum(memory_type, "memory_type", VALID_MEMORY_TYPES)
+        content = _require_nonempty(content, "content")
+        visibility = _require_enum(visibility, "visibility", VALID_MEMORY_VISIBILITIES)
+        confidence = _normalize_confidence(confidence)
         memory = Memory(
             scope_type=scope_type,
             scope_id=scope_id,
@@ -48,7 +85,7 @@ class MemoryRepository:
             content=content,
             summary=summary or "",
             source_refs_json=source_refs_json or {},
-            confidence=float(confidence),
+            confidence=confidence,
             visibility=visibility,
             created_by=created_by,
             expires_at=expires_at,
@@ -86,6 +123,12 @@ class MemoryRepository:
         limit: int = 100,
     ) -> list[Memory]:
         bounded_limit = max(1, min(int(limit), 500))
+        if scope_type is not None:
+            scope_type = _require_enum(scope_type, "scope_type", VALID_MEMORY_SCOPE_TYPES)
+        if scope_id is not None:
+            scope_id = _require_nonempty(scope_id, "scope_id")
+        if status:
+            status = _require_enum(status, "status", VALID_MEMORY_STATUSES)
         session = await self._get_session()
         async with session.begin():
             query = select(Memory)
@@ -108,6 +151,7 @@ class MemoryRepository:
         actor_id: Optional[str] = None,
         payload_json: Optional[Dict[str, Any]] = None,
     ) -> Optional[Memory]:
+        status = _require_enum(status, "status", VALID_MEMORY_STATUSES)
         session = await self._get_session()
         async with session.begin():
             memory = await session.get(Memory, memory_id)
@@ -142,6 +186,11 @@ class MemoryRepository:
         reason: str = "",
         created_by: Optional[str] = None,
     ) -> MemoryCandidate:
+        proposed_scope_type = _require_enum(proposed_scope_type, "proposed_scope_type", VALID_MEMORY_SCOPE_TYPES)
+        proposed_scope_id = _require_nonempty(proposed_scope_id, "proposed_scope_id")
+        memory_type = _require_enum(memory_type, "memory_type", VALID_MEMORY_TYPES)
+        content = _require_nonempty(content, "content")
+        confidence = _normalize_confidence(confidence)
         candidate = MemoryCandidate(
             source_thread_id=source_thread_id,
             source_project_id=source_project_id,
@@ -151,7 +200,7 @@ class MemoryRepository:
             proposed_scope_id=proposed_scope_id,
             memory_type=memory_type,
             content=content,
-            confidence=float(confidence),
+            confidence=confidence,
             reason=reason or "",
             created_by=created_by,
             created_at=utc_now(),
@@ -171,6 +220,8 @@ class MemoryRepository:
         limit: int = 100,
     ) -> list[MemoryCandidate]:
         bounded_limit = max(1, min(int(limit), 500))
+        if status:
+            status = _require_enum(status, "status", VALID_CANDIDATE_STATUSES)
         session = await self._get_session()
         async with session.begin():
             query = select(MemoryCandidate)
@@ -187,6 +238,7 @@ class MemoryRepository:
             return await session.get(MemoryCandidate, candidate_id)
 
     async def resolve_candidate(self, candidate_id: str, *, status: str) -> Optional[MemoryCandidate]:
+        status = _require_enum(status, "status", VALID_CANDIDATE_STATUSES)
         session = await self._get_session()
         async with session.begin():
             candidate = await session.get(MemoryCandidate, candidate_id)

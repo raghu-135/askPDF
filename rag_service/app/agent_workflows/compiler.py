@@ -21,14 +21,15 @@ CANONICAL_NODE_TYPE_ORDER = {
     WorkflowNodeType.PLANNER.value: 1,
     WorkflowNodeType.RETRIEVAL_WORKER.value: 2,
     WorkflowNodeType.MEMORY_WORKER.value: 3,
-    WorkflowNodeType.TIMELINE_WORKER.value: 4,
-    WorkflowNodeType.WEB_WORKER.value: 5,
-    WorkflowNodeType.EVIDENCE_EVALUATOR.value: 6,
-    WorkflowNodeType.REPLANNER.value: 7,
-    WorkflowNodeType.DIRECT_ANSWER.value: 8,
-    WorkflowNodeType.SYNTHESIZER.value: 9,
-    WorkflowNodeType.FINALIZER.value: 10,
-    WorkflowNodeType.HITL_GATE.value: 11,
+    WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value: 4,
+    WorkflowNodeType.TIMELINE_WORKER.value: 5,
+    WorkflowNodeType.WEB_WORKER.value: 6,
+    WorkflowNodeType.EVIDENCE_EVALUATOR.value: 7,
+    WorkflowNodeType.REPLANNER.value: 8,
+    WorkflowNodeType.DIRECT_ANSWER.value: 9,
+    WorkflowNodeType.SYNTHESIZER.value: 10,
+    WorkflowNodeType.FINALIZER.value: 11,
+    WorkflowNodeType.HITL_GATE.value: 12,
 }
 
 

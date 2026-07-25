@@ -54,6 +54,7 @@ import {
 import { fetchAvailableEmbeddingModels, checkEmbeddingModelReady } from '../lib/models-api';
 import { formatDate } from '../lib/date-utils';
 import ThreadReferenceChip from './ThreadReferenceChip';
+import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
 
 
 export interface ThreadSidebarHeaderState {
@@ -116,6 +117,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [forkingThreadId, setForkingThreadId] = useState<string | null>(null);
+  const [forkDialogThread, setForkDialogThread] = useState<Thread | null>(null);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
   const threadRowRefs = useRef<Record<string, HTMLLIElement | null>>({});
@@ -360,12 +362,18 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     setEditingName(thread.name);
   };
 
-  const handleForkThread = async (thread: Thread, event: React.MouseEvent) => {
+  const openForkDialog = (thread: Thread, event: React.MouseEvent) => {
     event.stopPropagation();
+    setForkDialogThread(thread);
+  };
+
+  const handleForkThread = async (options: { name?: string; targetProjectId?: string; memoryCopyMode?: MemoryCopyMode }) => {
+    if (!forkDialogThread) return;
     try {
-      setForkingThreadId(thread.id);
-      const forked = await forkThread(thread.id);
+      setForkingThreadId(forkDialogThread.id);
+      const forked = await forkThread(forkDialogThread.id, options);
       setThreads(prev => [forked, ...prev]);
+      setForkDialogThread(null);
       onThreadForked?.(forked);
       if (!onThreadForked) {
         onThreadSelect(forked);
@@ -596,6 +604,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             </Typography>
             <Typography variant="caption" component="div">
               {new Date(forkInfo.forked_at).toLocaleString()}
+            </Typography>
+          </Box>
+        )}
+        {forkInfo?.memory_copy_mode && (
+          <Box sx={sectionSx}>
+            <Typography variant="caption" color="text.secondary" component="div">
+              Memory copy
+            </Typography>
+            <Typography variant="caption" component="div" sx={{ wordBreak: 'break-word' }}>
+              {forkInfo.memory_copy_mode.replace(/_/g, ' ')}
+              {Array.isArray(forkInfo.copied_memory_ids) ? ` (${forkInfo.copied_memory_ids.length})` : ''}
             </Typography>
           </Box>
         )}
@@ -859,7 +878,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flex: '0 0 auto', px: 1 }}>
                         <Tooltip title="Fork thread">
                           <span>
-                            <IconButton size="small" onClick={(e) => handleForkThread(thread, e)} disabled={forkingThreadId === thread.id} sx={threadActionButtonSx}>
+                            <IconButton size="small" onClick={(e) => openForkDialog(thread, e)} disabled={forkingThreadId === thread.id} sx={threadActionButtonSx}>
                               {forkingThreadId === thread.id ? <CircularProgress size={16} /> : <CallSplitIcon fontSize="small" />}
                             </IconButton>
                           </span>
@@ -970,6 +989,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </Button>
         </DialogActions>
       </Dialog>
+      <ThreadForkDialog
+        open={Boolean(forkDialogThread)}
+        sourceThread={forkDialogThread}
+        projects={projects}
+        submitting={Boolean(forkingThreadId)}
+        onClose={() => setForkDialogThread(null)}
+        onSubmit={handleForkThread}
+      />
     </Paper>
   );
 };

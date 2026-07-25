@@ -11,7 +11,7 @@ from langgraph.types import interrupt
 from app.agent.tool_contract import normalize_tool_result
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.agent.external_research_tools import search_web
-from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
+from app.rag.agent_tools import search_conversation_history, search_documents, search_long_term_memory, search_thread_timeline
 from app.rag.chat_service import prefetch_context
 from app.agent_workflows.prompting import (
     build_evaluator_prompt,
@@ -417,6 +417,7 @@ class NodeRegistry:
             RouterRoute.DOCUMENT.value if bypass_clarification else RouterRoute.DIRECT.value,
             RouterRoute.CLARIFY.value,
             RouterRoute.MEMORY.value,
+            RouterRoute.LONG_TERM_MEMORY.value,
             RouterRoute.TIMELINE.value,
             RouterRoute.WEB.value,
         ]

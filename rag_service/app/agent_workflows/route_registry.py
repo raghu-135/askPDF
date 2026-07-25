@@ -19,6 +19,7 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         "target_types_by_label": {
             RouterRoute.DOCUMENT.value: [WorkflowNodeType.RETRIEVAL_WORKER.value],
             RouterRoute.MEMORY.value: [WorkflowNodeType.MEMORY_WORKER.value],
+            RouterRoute.LONG_TERM_MEMORY.value: [WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value],
             RouterRoute.TIMELINE.value: [WorkflowNodeType.TIMELINE_WORKER.value],
             RouterRoute.WEB.value: [WorkflowNodeType.WEB_WORKER.value],
             RouterRoute.DIRECT.value: [WorkflowNodeType.DIRECT_ANSWER.value],
@@ -32,6 +33,7 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
             PlannerRoute.EXECUTE.value: [
                 WorkflowNodeType.RETRIEVAL_WORKER.value,
                 WorkflowNodeType.MEMORY_WORKER.value,
+                WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value,
                 WorkflowNodeType.TIMELINE_WORKER.value,
                 WorkflowNodeType.WEB_WORKER.value,
             ],
@@ -62,10 +64,11 @@ ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
     RouteFunctionId.ROUTER.value: {
         RouterRoute.DOCUMENT.value: {"display_name": "Document question", "description": "Search uploaded documents.", "order": 0},
         RouterRoute.MEMORY.value: {"display_name": "Previous conversation", "description": "Search conversation memory.", "order": 1},
-        RouterRoute.TIMELINE.value: {"display_name": "Timeline question", "description": "Search chronological thread events.", "order": 2},
-        RouterRoute.WEB.value: {"display_name": "Current information", "description": "Search approved external sources.", "order": 3},
-        RouterRoute.DIRECT.value: {"display_name": "Answer directly", "description": "Answer without retrieval.", "order": 4},
-        RouterRoute.CLARIFY.value: {"display_name": "Needs clarification", "description": "Ask the user for more detail.", "order": 5},
+        RouterRoute.LONG_TERM_MEMORY.value: {"display_name": "Long-term memory", "description": "Recall durable user, project, or thread memory.", "order": 2},
+        RouterRoute.TIMELINE.value: {"display_name": "Timeline question", "description": "Search chronological thread events.", "order": 3},
+        RouterRoute.WEB.value: {"display_name": "Current information", "description": "Search approved external sources.", "order": 4},
+        RouterRoute.DIRECT.value: {"display_name": "Answer directly", "description": "Answer without retrieval.", "order": 5},
+        RouterRoute.CLARIFY.value: {"display_name": "Needs clarification", "description": "Ask the user for more detail.", "order": 6},
     },
     RouteFunctionId.PLANNER.value: {
         PlannerRoute.EXECUTE.value: {"display_name": "Run the plan", "description": "Continue through planned retrieval.", "order": 0},

@@ -49,6 +49,8 @@ async def fork_thread(
     forked_at = utc_now()
     forked_at_iso = iso_utc_z(forked_at)
     new_thread_id = str(uuid.uuid4())
+    copied_memory_index_jobs: list[Memory] = []
+    embedding_model_for_memory_index: str | None = None
 
     async with async_session_maker() as session:
         async with session.begin():
@@ -58,6 +60,7 @@ async def fork_thread(
             source_thread = source_result.scalar_one_or_none()
             if not source_thread:
                 raise SourceThreadNotFoundError("Source thread not found")
+            embedding_model_for_memory_index = source_thread.embedding_model
             if target_project_id:
                 target_project = await session.get(Project, target_project_id)
                 if target_project is None:
@@ -193,6 +196,7 @@ async def fork_thread(
                         },
                     )
                     session.add(copied_memory)
+                    copied_memory_index_jobs.append(copied_memory)
                     session.add(
                         MemoryEvent(
                             memory_id=copied_id,
@@ -244,6 +248,7 @@ async def fork_thread(
                         },
                     )
                     session.add(copied_memory)
+                    copied_memory_index_jobs.append(copied_memory)
                     session.add(
                         MemoryEvent(
                             memory_id=copied_id,
@@ -275,6 +280,14 @@ async def fork_thread(
     except Exception as files_err:
         logger.warning("forked thread file reload skipped: %s", files_err)
         files = []
+    if copied_memory_index_jobs and embedding_model_for_memory_index:
+        from app.services.memory_service import index_memory_record
+
+        for memory in copied_memory_index_jobs:
+            try:
+                await index_memory_record(memory, embedding_model_for_memory_index)
+            except Exception as memory_index_err:
+                logger.warning("forked memory indexing skipped for %s: %s", memory.id, memory_index_err)
     return {"thread": forked_thread, "files": files}
 
 
