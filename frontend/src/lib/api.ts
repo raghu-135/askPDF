@@ -647,6 +647,8 @@ export interface AgentRunFinalOutput {
   reasoning?: string;
   reasoning_available?: boolean;
   reasoning_format?: string;
+  memory_candidate_ids?: string[];
+  memory_candidates?: MemoryCandidate[];
   safety?: Record<string, any>;
 }
 

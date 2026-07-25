@@ -49,6 +49,7 @@ def _summary_node(span: Mapping[str, Any]) -> Dict[str, Any]:
         "evaluatorRoute": attributes.get("askpdf.evaluator_route"),
         "evaluationConfidence": attributes.get("askpdf.evaluation_confidence"),
         "replanCount": attributes.get("askpdf.replan_count"),
+        "usedMemoryIdCount": attributes.get("askpdf.used_memory_id_count"),
         "executionPlan": _as_string_list(attributes.get("askpdf.execution_plan")),
         "warningCodes": [str(warning) for warning in warnings if warning],
         "error": error,
@@ -105,6 +106,21 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
     error_count = int(metrics.get("error_count") or 0)
     if errors:
         error_count = max(error_count, len(errors))
+    memory_refs: List[Dict[str, Any]] = []
+    memory_scopes: List[Dict[str, Any]] = []
+    for tool in tools:
+        raw = _as_dict(tool.get("raw"))
+        refs = _as_dict(raw.get("artifact_refs"))
+        artifacts = _as_dict(raw.get("artifacts"))
+        memory_refs.extend([item for item in _as_list(refs.get("memories")) if isinstance(item, dict)])
+        memory_scopes.extend([item for item in _as_list(artifacts.get("memory_scopes")) if isinstance(item, dict)])
+    final_output = _as_dict(trace.get("final_output"))
+    memory_candidate_ids = _as_string_list(final_output.get("memory_candidate_ids"))
+    if not memory_candidate_ids:
+        for candidate in _as_list(final_output.get("memory_candidates")):
+            candidate_id = _as_dict(candidate).get("id")
+            if candidate_id:
+                memory_candidate_ids.append(str(candidate_id))
     config = _as_dict(resolved_spec.get("config"))
     evaluator_nodes = [node for node in nodes if node.get("id") == WorkflowNodeType.EVIDENCE_EVALUATOR.value]
     replanner_nodes = [node for node in nodes if node.get("id") == WorkflowNodeType.REPLANNER.value]
@@ -134,6 +150,13 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
         "warningCount": int(metrics.get("tool_warning_count") or warning_count),
         "errorCount": error_count,
         "errors": [error for error in errors if error],
+        "memory": {
+            "recalledMemoryIds": [str(item.get("memory_id")) for item in memory_refs if item.get("memory_id")],
+            "searchedScopes": memory_scopes,
+            "candidateIds": memory_candidate_ids,
+            "recalledCount": len({str(item.get("memory_id")) for item in memory_refs if item.get("memory_id")}),
+            "candidateCount": len(set(memory_candidate_ids)),
+        },
         **_interrupt_summary(trace),
     }
 

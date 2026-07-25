@@ -6,6 +6,7 @@ from typing import Any, Dict
 from app.agent.tool_registry import (
     collect_tool_contract_metadata_errors,
 )
+from app.agent_workflows.builtin_workflows import builtin_workflow_keys
 from app.agent_workflows.enums import GraphSentinel
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
 from app.agent_workflows.hitl_policy_validation import collect_hitl_policy_errors
@@ -56,6 +57,7 @@ class GenericGraphValidator:
         workflow_id = spec.get("workflow_id")
         if not isinstance(workflow_id, str) or not workflow_id:
             errors.append("workflow_id must be a non-empty string")
+        strict_route_completeness = isinstance(workflow_id, str) and workflow_id in builtin_workflow_keys()
 
         config = spec.get("config")
         if not isinstance(config, dict):
@@ -187,7 +189,7 @@ class GenericGraphValidator:
                 elif source_type and not route_function_allowed_for_node_type(route_fn, source_type):
                     errors.append(f"route_fn {route_fn} is not allowed from node {source} type {source_type}")
                 labels = route_function_labels(route_fn) if isinstance(route_fn, str) else None
-                if labels is not None:
+                if labels is not None and strict_route_completeness:
                     missing_labels = sorted(labels - set(routes))
                     if missing_labels:
                         errors.append(

@@ -25,6 +25,13 @@ function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
   const eventLlm = detail.event?.llm_result_summary?.llm || {};
   const reasoningAvailable = llm.reasoning_available === true && typeof llm.reasoning === 'string' && llm.reasoning.length > 0;
   const warnings = Array.isArray(detail.event?.warnings) ? detail.event.warnings.map(String) : [];
+  const memoryRefs = detail.event?.output_refs?.memories
+    || detail.event?.artifact_refs?.memories
+    || detail.output?.memory_refs
+    || detail.output?.refs?.memories;
+  const memoryScopes = detail.output?.memory_scopes
+    || detail.output?.artifacts?.memory_scopes
+    || detail.event?.artifact_refs?.memory_scopes;
   const errorText = typeof detail.error === 'string'
     ? detail.error
     : detail.error && typeof detail.error === 'object'
@@ -70,6 +77,12 @@ function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
         )}
       </Section>}
       {Array.isArray(detail.tools) && detail.tools.length > 0 && <Section title="Tools"><JsonPreview value={detail.tools} maxHeight={440} /></Section>}
+      {(hasData(memoryRefs) || hasData(memoryScopes)) && (
+        <Section title="Memory refs" defaultOpen>
+          {hasData(memoryRefs) && <JsonPreview value={{ memories: memoryRefs }} maxHeight={220} />}
+          {hasData(memoryScopes) && <JsonPreview value={{ scopes: memoryScopes }} maxHeight={220} />}
+        </Section>
+      )}
       {hasData(detail.output) && <Section title="Node output"><JsonPreview value={detail.output} maxHeight={440} /></Section>}
       {warnings.length > 0 && <Section title="Warnings"><Typography variant="caption" sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{warnings.join(', ')}</Typography></Section>}
       <Divider />

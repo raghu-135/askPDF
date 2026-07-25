@@ -17,6 +17,7 @@ export interface TraceNodeView {
   route?: string;
   routeReason?: string;
   executionPlan?: string[];
+  usedMemoryIdCount?: number;
   warningCodes: string[];
   error?: Record<string, any>;
   span?: Record<string, any>;
@@ -62,6 +63,13 @@ export interface TraceRunView {
   warningCount: number;
   errorCount: number;
   errors: Record<string, any>[];
+  memory?: {
+    recalledMemoryIds: string[];
+    searchedScopes: Record<string, any>[];
+    candidateIds: string[];
+    recalledCount: number;
+    candidateCount: number;
+  };
   finalOutput?: AgentRunFinalOutput;
   detailManifest: AgentRunNodeDetailManifest[];
 }
@@ -141,6 +149,7 @@ const nodeViewFromSummary = (row: Record<string, any>, nodeCatalog?: AgentNodeCa
     route: typeof row.route === 'string' ? row.route : undefined,
     routeReason: typeof row.routeReason === 'string' ? row.routeReason : typeof row.route_reason === 'string' ? row.route_reason : undefined,
     executionPlan: asStringArray(row.executionPlan ?? row.execution_plan),
+    usedMemoryIdCount: asNumber(row.usedMemoryIdCount ?? row.used_memory_id_count ?? raw.used_memory_id_count),
     warningCodes: asStringArray(row.warningCodes ?? row.warnings),
     error: row.error && typeof row.error === 'object' ? row.error : undefined,
     span: row.span && typeof row.span === 'object' ? row.span : undefined,
@@ -219,6 +228,7 @@ export const buildRunTraceView = (
     const tools = asArray(summary.tools).map(toolViewFromSummary);
     const usedNodeCount = asNumber(summary.usedNodeCount) ?? nodes.filter((node) => !node.skipped).length;
     const usedToolCount = asNumber(summary.usedToolCount) ?? tools.length;
+    const memory = asObject(summary.memory);
     return {
       debug,
       trace: getRunTrace(runDetails),
@@ -235,6 +245,13 @@ export const buildRunTraceView = (
       warningCount: asNumber(summary.warningCount) ?? Number(metrics.tool_warning_count ?? 0),
       errorCount: asNumber(summary.errorCount) ?? Number(metrics.error_count ?? metrics.tool_error_count ?? 0),
       errors: asArray(summary.errors),
+      memory: Object.keys(memory).length > 0 ? {
+        recalledMemoryIds: asStringArray(memory.recalledMemoryIds),
+        searchedScopes: asArray(memory.searchedScopes),
+        candidateIds: asStringArray(memory.candidateIds),
+        recalledCount: asNumber(memory.recalledCount) ?? 0,
+        candidateCount: asNumber(memory.candidateCount) ?? 0,
+      } : undefined,
       finalOutput: runDetails.final_output || debug.final_output,
       detailManifest: Array.isArray(debug.detail_manifest) ? debug.detail_manifest : [],
     };

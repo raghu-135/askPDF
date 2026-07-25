@@ -5,6 +5,7 @@ import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import MemoryIcon from '@mui/icons-material/Memory';
 import TimerOutlinedIcon from '@mui/icons-material/TimerOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import { Accordion, AccordionDetails, AccordionSummary, Alert, Box, Chip, CircularProgress, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
@@ -43,6 +44,7 @@ const nodeSummary = (node: TraceNodeView) => {
   else if (event.evaluator_route) summary = `Evaluated evidence and chose ${event.evaluator_route}.`;
   else if (event.route) summary = `Selected the ${event.route} route${event.route_reason ? `: ${event.route_reason}` : '.'}`;
   else if (Array.isArray(event.execution_plan)) summary = `Planned ${event.execution_plan.length} step${event.execution_plan.length === 1 ? '' : 's'}: ${event.execution_plan.join(' → ')}.`;
+  else if (node.usedMemoryIdCount) summary = `Recalled ${node.usedMemoryIdCount} long-term memor${Number(node.usedMemoryIdCount) === 1 ? 'y' : 'ies'}.`;
   else if (event.document_source_count || event.web_source_count) summary = `Retrieved ${Number(event.document_source_count || 0) + Number(event.web_source_count || 0)} source${Number(event.document_source_count || 0) + Number(event.web_source_count || 0) === 1 ? '' : 's'}.`;
   else if (event.answer_chars) summary = `Generated an answer (${event.answer_chars} characters).`;
   else summary = node.status === 'active' ? 'Running…' : 'Completed this step.';
@@ -204,6 +206,7 @@ function AgentExecutionView({
   }, [detailContextKey, selectedVisit, traceView.nodes]);
 
   const finalOutput = traceView.finalOutput;
+  const memoryDebug = traceView.memory;
   const runDuration = formatDurationMs(Number(traceView.metrics.duration_ms));
   const tokenCount = formatTokenCount(traceView.metrics.llm_token_count_total);
   const copyAnswer = useCallback(async () => {
@@ -255,6 +258,29 @@ function AgentExecutionView({
             </Tooltip>
           )}
         </Stack>
+        {memoryDebug && (memoryDebug.recalledCount > 0 || memoryDebug.candidateCount > 0 || memoryDebug.searchedScopes.length > 0) && (
+          <Paper variant="outlined" sx={{ p: 0.75, mb: 0.75, bgcolor: 'background.default' }}>
+            <Stack direction="row" spacing={0.6} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.45 }}>
+              <MemoryIcon sx={{ fontSize: 16 }} color="primary" />
+              <Typography variant="caption" sx={{ fontWeight: 700 }}>Memory debug</Typography>
+              {memoryDebug.searchedScopes.length > 0 && (
+                <Tooltip title={memoryDebug.searchedScopes.map(scope => `${scope.scope_type}:${scope.scope_id}`).join('\n')} arrow>
+                  <Chip size="small" variant="outlined" label={`${memoryDebug.searchedScopes.length} scopes`} sx={{ height: 22 }} />
+                </Tooltip>
+              )}
+              {memoryDebug.recalledCount > 0 && (
+                <Tooltip title={memoryDebug.recalledMemoryIds.join('\n')} arrow>
+                  <Chip size="small" variant="outlined" label={`${memoryDebug.recalledCount} recalled`} sx={{ height: 22 }} />
+                </Tooltip>
+              )}
+              {memoryDebug.candidateCount > 0 && (
+                <Tooltip title={memoryDebug.candidateIds.join('\n')} arrow>
+                  <Chip size="small" color="primary" variant="outlined" label={`${memoryDebug.candidateCount} candidates`} sx={{ height: 22 }} />
+                </Tooltip>
+              )}
+            </Stack>
+          </Paper>
+        )}
         {traceView.nodes.length === 0 ? (
           <Typography variant="body2" color="text.secondary">Start a run to see each node invocation.</Typography>
         ) : traceView.nodes.map((node, index) => {

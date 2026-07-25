@@ -98,13 +98,15 @@ def state_changes(before: Mapping[str, Any], after: Mapping[str, Any]) -> Dict[s
 def final_output_from_result(result: Any) -> Dict[str, Any]:
     source = result if isinstance(result, Mapping) else {}
     payload = {
-        "answer": source.get("final_answer"),
+        "answer": source.get("final_answer") or source.get("answer"),
         "clarification_options": source.get("clarification_options"),
         "route": source.get("route"),
         "route_reason": source.get("route_reason"),
         "reasoning": source.get("reasoning"),
         "reasoning_available": source.get("reasoning_available"),
         "reasoning_format": source.get("reasoning_format"),
+        "memory_candidate_ids": source.get("memory_candidate_ids"),
+        "memory_candidates": source.get("memory_candidates"),
     }
     compact = {key: value for key, value in payload.items() if value not in (None, "", [], {})}
     if not compact:
