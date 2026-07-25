@@ -216,6 +216,45 @@ class TestThreadEndpoints:
         )
         assert invalid_candidate.status_code == 400
 
+    def test_memory_delete_endpoints_hard_delete_records(self, client):
+        memory_response = client.post(
+            "/api/memories",
+            json={
+                "scope_type": "thread",
+                "scope_id": "thread-delete-api",
+                "memory_type": "semantic",
+                "content": "Delete this memory through the API.",
+            },
+        )
+        assert memory_response.status_code == 200
+        memory_id = memory_response.json()["id"]
+
+        delete_memory_response = client.delete(f"/api/memories/{memory_id}")
+        assert delete_memory_response.status_code == 200
+        assert delete_memory_response.json()["status"] == "deleted"
+
+        missing_memory_response = client.delete(f"/api/memories/{memory_id}")
+        assert missing_memory_response.status_code == 404
+
+        candidate_response = client.post(
+            "/api/memory-candidates",
+            json={
+                "proposed_scope_type": "thread",
+                "proposed_scope_id": "thread-delete-api",
+                "memory_type": "semantic",
+                "content": "Delete this candidate through the API.",
+            },
+        )
+        assert candidate_response.status_code == 200
+        candidate_id = candidate_response.json()["id"]
+
+        delete_candidate_response = client.delete(f"/api/memory-candidates/{candidate_id}")
+        assert delete_candidate_response.status_code == 200
+        assert delete_candidate_response.json()["status"] == "deleted"
+
+        missing_candidate_response = client.delete(f"/api/memory-candidates/{candidate_id}")
+        assert missing_candidate_response.status_code == 404
+
     def test_get_thread(self, client):
         """Test getting a specific thread."""
         # Create a thread
@@ -446,12 +485,19 @@ class TestThreadEndpoints:
             json={"name": "To Delete", "embedding_model": "BAAI/bge-m3"}
         )
         thread_id = create_response.json()["id"]
-        
-        response = client.delete(f"/api/threads/{thread_id}")
+
+        with patch("app.api.threads.hard_delete_thread_memory_resources", new_callable=AsyncMock) as cleanup_memory:
+            cleanup_memory.return_value = {
+                "deleted_memory_ids": [],
+                "deleted_candidate_ids": [],
+                "vector_cleanup": False,
+            }
+            response = client.delete(f"/api/threads/{thread_id}")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "deleted"
         assert data["thread_id"] == thread_id
+        cleanup_memory.assert_awaited_once_with(thread_id, embedding_model="BAAI/bge-m3")
 
     def test_delete_nonexistent_thread(self, client):
         """Test deleting a thread that doesn't exist."""

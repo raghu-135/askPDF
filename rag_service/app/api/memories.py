@@ -20,7 +20,13 @@ from app.models.requests import (
     MemorySearchRequest,
     MemoryStatusUpdateRequest,
 )
-from app.services.memory_service import create_and_index_memory, list_scope_memories, search_thread_memory
+from app.services.memory_service import (
+    create_and_index_memory,
+    hard_delete_memory,
+    hard_delete_memory_candidate,
+    list_scope_memories,
+    search_thread_memory,
+)
 from app.time_utils import iso_utc_z
 
 
@@ -126,6 +132,17 @@ async def update_memory_status_endpoint(memory_id: str, req: MemoryStatusUpdateR
     return _memory_payload(memory)
 
 
+@router.delete("/memories/{memory_id}")
+async def delete_memory_endpoint(
+    memory_id: str,
+    embedding_model: Optional[str] = Query(default=None),
+):
+    result = await hard_delete_memory(memory_id, embedding_model=embedding_model)
+    if not result["deleted"]:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    return {"status": "deleted", "memory_id": memory_id, "vector_cleanup": result["vector_cleanup"]}
+
+
 @router.post("/threads/{thread_id}/memories/search")
 async def search_thread_memories_endpoint(thread_id: str, req: MemorySearchRequest):
     embedding_model = req.embedding_model
@@ -216,3 +233,11 @@ async def resolve_memory_candidate_endpoint(candidate_id: str, req: MemoryCandid
         "memory_candidate": _candidate_payload(candidate),
         "memory": _memory_payload(memory) if memory is not None else None,
     }
+
+
+@router.delete("/memory-candidates/{candidate_id}")
+async def delete_memory_candidate_endpoint(candidate_id: str):
+    result = await hard_delete_memory_candidate(candidate_id)
+    if not result["deleted"]:
+        raise HTTPException(status_code=404, detail="Memory candidate not found")
+    return {"status": "deleted", "memory_candidate_id": candidate_id}

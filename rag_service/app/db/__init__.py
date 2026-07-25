@@ -501,6 +501,21 @@ async def update_memory_status(memory_id: str, **kwargs):
     return await get_memory_repo().update_memory_status(memory_id, **kwargs)
 
 
+async def delete_memory(memory_id: str):
+    """Hard-delete a durable memory and its audit events."""
+    return await get_memory_repo().delete_memory(memory_id)
+
+
+async def delete_memories_for_scope(**kwargs):
+    """Hard-delete all durable memories in a scope."""
+    return await get_memory_repo().delete_memories_for_scope(**kwargs)
+
+
+async def delete_expired_memories(**kwargs):
+    """Hard-delete expired durable memories."""
+    return await get_memory_repo().delete_expired_memories(**kwargs)
+
+
 async def create_memory_candidate(**kwargs):
     """Create a memory promotion candidate."""
     return await get_memory_repo().create_candidate(**kwargs)
@@ -514,6 +529,16 @@ async def list_memory_candidates(**kwargs):
 async def resolve_memory_candidate(candidate_id: str, **kwargs):
     """Resolve a memory promotion candidate."""
     return await get_memory_repo().resolve_candidate(candidate_id, **kwargs)
+
+
+async def delete_memory_candidate(candidate_id: str):
+    """Hard-delete a memory promotion candidate."""
+    return await get_memory_repo().delete_candidate(candidate_id)
+
+
+async def delete_memory_candidates_for_thread(thread_id: str):
+    """Hard-delete memory promotion candidates related to a thread."""
+    return await get_memory_repo().delete_candidates_for_thread(thread_id)
 
 
 __all__ = [
@@ -614,7 +639,12 @@ __all__ = [
     "get_memory",
     "list_memories",
     "update_memory_status",
+    "delete_memory",
+    "delete_memories_for_scope",
+    "delete_expired_memories",
     "create_memory_candidate",
     "list_memory_candidates",
     "resolve_memory_candidate",
+    "delete_memory_candidate",
+    "delete_memory_candidates_for_thread",
 ]

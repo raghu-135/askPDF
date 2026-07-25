@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, or_
 from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
@@ -171,6 +172,48 @@ class MemoryRepository:
             await session.refresh(memory)
             return memory
 
+    async def delete_memory(self, memory_id: str) -> bool:
+        memory_id = _require_nonempty(memory_id, "memory_id")
+        session = await self._get_session()
+        async with session.begin():
+            memory = await session.get(Memory, memory_id)
+            if memory is None:
+                return False
+            await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id == memory_id))
+            await session.delete(memory)
+            await session.flush()
+            return True
+
+    async def delete_memories_for_scope(self, *, scope_type: str, scope_id: str) -> list[str]:
+        scope_type = _require_enum(scope_type, "scope_type", VALID_MEMORY_SCOPE_TYPES)
+        scope_id = _require_nonempty(scope_id, "scope_id")
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(Memory.id).where(Memory.scope_type == scope_type, Memory.scope_id == scope_id)
+            )
+            memory_ids = [str(row[0]) for row in result.all()]
+            if not memory_ids:
+                return []
+            await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id.in_(memory_ids)))
+            await session.execute(delete(Memory).where(Memory.id.in_(memory_ids)))
+            return memory_ids
+
+    async def delete_expired_memories(self, *, now: Optional[datetime] = None) -> list[Memory]:
+        cutoff = now or utc_now()
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(Memory).where(Memory.expires_at.is_not(None), Memory.expires_at <= cutoff)
+            )
+            memories = list(result.scalars().all())
+            if not memories:
+                return []
+            memory_ids = [memory.id for memory in memories]
+            await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id.in_(memory_ids)))
+            await session.execute(delete(Memory).where(Memory.id.in_(memory_ids)))
+            return memories
+
     async def create_candidate(
         self,
         *,
@@ -248,3 +291,34 @@ class MemoryRepository:
             await session.flush()
             await session.refresh(candidate)
             return candidate
+
+    async def delete_candidate(self, candidate_id: str) -> bool:
+        candidate_id = _require_nonempty(candidate_id, "candidate_id")
+        session = await self._get_session()
+        async with session.begin():
+            candidate = await session.get(MemoryCandidate, candidate_id)
+            if candidate is None:
+                return False
+            await session.delete(candidate)
+            await session.flush()
+            return True
+
+    async def delete_candidates_for_thread(self, thread_id: str) -> list[str]:
+        thread_id = _require_nonempty(thread_id, "thread_id")
+        session = await self._get_session()
+        async with session.begin():
+            query = select(MemoryCandidate.id).where(
+                or_(
+                    MemoryCandidate.source_thread_id == thread_id,
+                    (
+                        (MemoryCandidate.proposed_scope_type == MemoryScopeType.THREAD.value)
+                        & (MemoryCandidate.proposed_scope_id == thread_id)
+                    ),
+                )
+            )
+            result = await session.execute(query)
+            candidate_ids = [str(row[0]) for row in result.all()]
+            if not candidate_ids:
+                return []
+            await session.execute(delete(MemoryCandidate).where(MemoryCandidate.id.in_(candidate_ids)))
+            return candidate_ids

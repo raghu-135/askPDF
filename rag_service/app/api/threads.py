@@ -68,6 +68,7 @@ from app.models.requests import (
 )
 from app.rag.indexer import trigger_reembed_for_missing_sources
 from app.services.file_cleanup_service import cleanup_detached_file
+from app.services.memory_service import hard_delete_thread_memory_resources
 from app.services.thread_management_service import (
     ForkMessageNotFoundError,
     SourceThreadNotFoundError,
@@ -131,6 +132,7 @@ async def _delete_thread_resources(thread_id: str) -> bool:
 
     db = get_vector_db()
     await db.delete_thread_data(thread_id)
+    await hard_delete_thread_memory_resources(thread_id, embedding_model=thread.embedding_model)
 
     deleted = await delete_thread(thread_id)
     if not deleted:

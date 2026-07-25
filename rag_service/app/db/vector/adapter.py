@@ -331,6 +331,19 @@ class WeaviateAdapter:
             logger.error(f"Unexpected error during insert into '{collection_name}': {e}")
             raise VectorDBInsertError(f"Unexpected error inserting into '{collection_name}'") from e
 
+    async def _delete_many_from_collection(self, collection, filt, *, description: str) -> bool:
+        """Delete objects from a Weaviate collection with consistent logging/error handling."""
+        try:
+            await asyncio.to_thread(collection.data.delete_many, where=filt)
+            logger.info("Deleted %s", description)
+            return True
+        except WeaviateBaseError as e:
+            logger.error("Failed to delete %s: %s", description, e)
+            return False
+        except Exception as e:
+            logger.error("Unexpected error deleting %s: %s", description, e)
+            return False
+
     async def delete_thread_data(self, thread_id: str) -> bool:
         """Delete only thread-scoped chat-memory and web-search vectors for a thread.
         
@@ -343,18 +356,17 @@ class WeaviateAdapter:
         _validate_not_empty(thread_id, "thread_id")
         filt = wvc.query.Filter.by_property("thread_id").equal(thread_id)
         
-        try:
-            for name in [CollectionNames.CHAT_MEMORY, CollectionNames.WEB_SEARCH]:
-                col = self.client.collections.use(name)
-                await asyncio.to_thread(col.data.delete_many, where=filt)
-            logger.info(f"Deleted thread data for thread '{thread_id}'")
-            return True
-        except WeaviateBaseError as e:
-            logger.error(f"Failed to delete thread data for '{thread_id}': {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error deleting thread data for '{thread_id}': {e}")
-            return False
+        deleted = []
+        for name in [CollectionNames.CHAT_MEMORY, CollectionNames.WEB_SEARCH]:
+            col = self.client.collections.use(name)
+            deleted.append(
+                await self._delete_many_from_collection(
+                    col,
+                    filt,
+                    description=f"{name} thread data for thread '{thread_id}'",
+                )
+            )
+        return all(deleted)
 
     async def index_pdf_chunks(
         self,
@@ -670,6 +682,34 @@ class WeaviateAdapter:
                 }
             )
         return out
+
+    async def delete_memory_vectors(self, memory_id: str, embedding_model: str) -> bool:
+        """Delete vector rows for a single durable memory in a model-aware collection."""
+        _validate_not_empty(memory_id, "memory_id")
+        _validate_not_empty(embedding_model, "embedding_model")
+        col = await self.collection_manager.get_collection(CollectionNames.MEMORY, embedding_model)
+        filt = wvc.query.Filter.by_property("memory_id").equal(memory_id)
+        return await self._delete_many_from_collection(
+            col,
+            filt,
+            description=f"memory vectors for memory '{memory_id}', model '{embedding_model}'",
+        )
+
+    async def delete_memory_vectors_for_scope(self, scope_type: str, scope_id: str, embedding_model: str) -> bool:
+        """Delete vector rows for all durable memories in one scope and model-aware collection."""
+        _validate_not_empty(scope_type, "scope_type")
+        _validate_not_empty(scope_id, "scope_id")
+        _validate_not_empty(embedding_model, "embedding_model")
+        col = await self.collection_manager.get_collection(CollectionNames.MEMORY, embedding_model)
+        filt = (
+            wvc.query.Filter.by_property("scope_type").equal(scope_type)
+            & wvc.query.Filter.by_property("scope_id").equal(scope_id)
+        )
+        return await self._delete_many_from_collection(
+            col,
+            filt,
+            description=f"memory vectors for scope '{scope_type}:{scope_id}', model '{embedding_model}'",
+        )
 
     async def search_knowledge_sources(
         self,
@@ -1035,16 +1075,11 @@ class WeaviateAdapter:
             & wvc.query.Filter.by_property("message_id").equal(message_id)
         )
         
-        try:
-            await asyncio.to_thread(col.data.delete_many, where=filt)
-            logger.info(f"Deleted chat memory for message '{message_id}' in thread '{thread_id}'")
-            return True
-        except WeaviateBaseError as e:
-            logger.error(f"Failed to delete chat memory for message '{message_id}': {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error deleting chat memory for message '{message_id}': {e}")
-            return False
+        return await self._delete_many_from_collection(
+            col,
+            filt,
+            description=f"chat memory for message '{message_id}' in thread '{thread_id}'",
+        )
 
     async def delete_web_chunks_by_urls(self, thread_id: str, urls: List[str], embedding_model: str) -> int:
         """Delete web-search chunks for a thread whose URLs match any provided URL.
@@ -1069,16 +1104,12 @@ class WeaviateAdapter:
             wvc.query.Filter.by_property("thread_id").equal(thread_id)
             & wvc.query.Filter.by_property("url").contains_any(urls)
         )
-        try:
-            await asyncio.to_thread(col.data.delete_many, where=filt)
-            logger.info(f"Deleted web chunks for {len(urls)} URLs in thread '{thread_id}'")
-            return len(urls)
-        except WeaviateBaseError as e:
-            logger.error(f"Failed to delete web chunks by URLs: {e}")
-            return 0
-        except Exception as e:
-            logger.error(f"Unexpected error deleting web chunks by URLs: {e}")
-            return 0
+        deleted = await self._delete_many_from_collection(
+            col,
+            filt,
+            description=f"web chunks for {len(urls)} URLs in thread '{thread_id}'",
+        )
+        return len(urls) if deleted else 0
 
     async def delete_document_vectors_by_file_hash_and_model(self, file_hash: str, embedding_model: str) -> bool:
         """Delete all document vectors for a file hash and embedding model.
@@ -1097,16 +1128,11 @@ class WeaviateAdapter:
         col = await self.collection_manager.get_collection(CollectionNames.DOCUMENT, embedding_model)
         
         filt = wvc.query.Filter.by_property("file_hash").equal(file_hash)
-        try:
-            await asyncio.to_thread(col.data.delete_many, where=filt)
-            logger.info(f"Deleted document vectors for file '{file_hash}', model '{embedding_model}'")
-            return True
-        except WeaviateBaseError as e:
-            logger.error(f"Failed to delete document vectors: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error deleting document vectors: {e}")
-            return False
+        return await self._delete_many_from_collection(
+            col,
+            filt,
+            description=f"document vectors for file '{file_hash}', model '{embedding_model}'",
+        )
 
     async def has_file_indexed(self, thread_id: str, file_hash: str, embedding_model: str) -> bool:
         """Return whether document chunks exist for a file hash + embedding model.

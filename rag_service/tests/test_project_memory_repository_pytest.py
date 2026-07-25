@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.enums import MemoryCandidateStatus, MemoryScopeType, MemoryStatus, MemoryType
-from app.db.models_sqlmodel import MemoryEvent, Thread
+from app.db.models_sqlmodel import Memory, MemoryCandidate, MemoryEvent, Thread
 from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
 from app.db.repositories.project_repo_sqlmodel import DEFAULT_PROJECT_NAME, ProjectRepository
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
+from app.time_utils import utc_now
 from app.services.memory_promotion_service import extract_memory_candidates_from_text
 
 
@@ -109,6 +112,65 @@ async def test_memory_repository_rejects_invalid_memory_values(repo_sessionmaker
 
 
 @pytest.mark.asyncio
+async def test_memory_repository_hard_deletes_memory_and_events(repo_sessionmaker):
+    repo = MemoryRepository()
+
+    memory = await repo.create_memory(
+        scope_type=MemoryScopeType.THREAD.value,
+        scope_id="thread-1",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Delete this durable memory.",
+        created_by="tester",
+    )
+    deleted = await repo.delete_memory(memory.id)
+
+    assert deleted is True
+    assert await repo.get_memory(memory.id) is None
+    async with repo_sessionmaker() as session:
+        event_result = await session.execute(select(MemoryEvent).where(MemoryEvent.memory_id == memory.id))
+        assert list(event_result.scalars().all()) == []
+
+
+@pytest.mark.asyncio
+async def test_memory_repository_deletes_scope_and_expired_memories(repo_sessionmaker):
+    repo = MemoryRepository()
+    now = utc_now()
+
+    scoped = await repo.create_memory(
+        scope_type=MemoryScopeType.THREAD.value,
+        scope_id="thread-cleanup",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Thread cleanup memory.",
+    )
+    expired = await repo.create_memory(
+        scope_type=MemoryScopeType.PROJECT.value,
+        scope_id="project-cleanup",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Expired cleanup memory.",
+        expires_at=now - timedelta(minutes=1),
+    )
+    fresh = await repo.create_memory(
+        scope_type=MemoryScopeType.PROJECT.value,
+        scope_id="project-cleanup",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Fresh memory.",
+        expires_at=now + timedelta(minutes=1),
+    )
+
+    scoped_ids = await repo.delete_memories_for_scope(
+        scope_type=MemoryScopeType.THREAD.value,
+        scope_id="thread-cleanup",
+    )
+    expired_rows = await repo.delete_expired_memories(now=now)
+
+    assert scoped_ids == [scoped.id]
+    assert [memory.id for memory in expired_rows] == [expired.id]
+    async with repo_sessionmaker() as session:
+        remaining = (await session.execute(select(Memory))).scalars().all()
+        assert [memory.id for memory in remaining] == [fresh.id]
+
+
+@pytest.mark.asyncio
 async def test_memory_candidate_resolution(repo_sessionmaker):
     repo = MemoryRepository()
 
@@ -124,6 +186,39 @@ async def test_memory_candidate_resolution(repo_sessionmaker):
     )
 
     assert resolved.status == MemoryCandidateStatus.REJECTED.value
+
+
+@pytest.mark.asyncio
+async def test_memory_repository_hard_deletes_candidates(repo_sessionmaker):
+    repo = MemoryRepository()
+
+    direct = await repo.create_candidate(
+        proposed_scope_type=MemoryScopeType.PROJECT.value,
+        proposed_scope_id="project-1",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Candidate to delete.",
+    )
+    thread_source = await repo.create_candidate(
+        proposed_scope_type=MemoryScopeType.PROJECT.value,
+        proposed_scope_id="project-1",
+        source_thread_id="thread-1",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Thread sourced candidate.",
+    )
+    thread_scope = await repo.create_candidate(
+        proposed_scope_type=MemoryScopeType.THREAD.value,
+        proposed_scope_id="thread-1",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Thread scoped candidate.",
+    )
+
+    assert await repo.delete_candidate(direct.id) is True
+    deleted_thread_candidates = await repo.delete_candidates_for_thread("thread-1")
+
+    assert set(deleted_thread_candidates) == {thread_source.id, thread_scope.id}
+    async with repo_sessionmaker() as session:
+        remaining = (await session.execute(select(MemoryCandidate))).scalars().all()
+        assert remaining == []
 
 
 @pytest.mark.asyncio
