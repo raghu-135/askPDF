@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.future import select
@@ -13,6 +15,7 @@ from app.db.repositories.project_repo_sqlmodel import DEFAULT_PROJECT_NAME, Proj
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
 from app.time_utils import utc_now
 from app.services.memory_promotion_service import extract_memory_candidates_from_text
+from app.db.vector.config import VectorDBInsertError
 
 
 @pytest.fixture
@@ -72,6 +75,71 @@ async def test_memory_repository_index_lifecycle_and_audit(repo_sessionmaker):
     async with repo_sessionmaker() as session:
         event_result = await session.execute(select(MemoryEvent).where(MemoryEvent.memory_id == memory.id))
         assert len(list(event_result.scalars().all())) == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_index_failure_is_retryable_without_duplicate_canonical_record(
+    repo_sessionmaker,
+    monkeypatch,
+):
+    from app.services import memory_service
+
+    repo = MemoryRepository()
+    memory = await repo.create_memory(
+        scope_type=MemoryScopeType.PROJECT.value,
+        scope_id="project-1",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="The project codename is Atlas.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="atlas-retry-hash",
+        confidence=0.9,
+        created_by="test",
+    )
+    embedding_client = SimpleNamespace(
+        aembed_query=AsyncMock(return_value=[0.1, 0.2, 0.3])
+    )
+    vector_db = SimpleNamespace(
+        index_memory=AsyncMock(
+            side_effect=[
+                VectorDBInsertError("Weaviate rejected 1 of 1 model-aware batch objects"),
+                1,
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        memory_service,
+        "require_embedding_model_ready",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        memory_service,
+        "get_embedding_model",
+        lambda _model: embedding_client,
+    )
+    monkeypatch.setattr(memory_service, "get_vector_db", lambda: vector_db)
+
+    with pytest.raises(VectorDBInsertError):
+        await memory_service.index_memory_record(memory)
+
+    failed = await repo.get_memory(memory.id)
+    assert failed.index_status == "failed"
+    assert failed.index_attempts == 1
+    assert "Weaviate rejected 1 of 1" in failed.index_error
+    assert failed.indexed_at is None
+
+    await memory_service.index_memory_record(failed)
+
+    indexed = await repo.get_memory(memory.id)
+    assert indexed.index_status == "indexed"
+    assert indexed.index_attempts == 2
+    assert indexed.index_error is None
+    assert indexed.indexed_at is not None
+    async with repo_sessionmaker() as session:
+        memories = (
+            await session.execute(select(Memory).where(Memory.id == memory.id))
+        ).scalars().all()
+    assert [row.id for row in memories] == [memory.id]
+    assert vector_db.index_memory.await_count == 2
 
 
 @pytest.mark.asyncio

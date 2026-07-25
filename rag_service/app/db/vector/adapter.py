@@ -263,8 +263,6 @@ class WeaviateAdapter:
             logger.debug("No points to insert into collection")
             return 0
         
-        inserted_count = 0
-        
         try:
             # Use batch insert for better performance
             batch = collection.batch.dynamic()
@@ -278,12 +276,38 @@ class WeaviateAdapter:
                             vector=p["vector"],
                             uuid=p.get("uuid") or str(uuid.uuid4()),
                         )
-                    return len(points)
-            
+                failed_objects = list(collection.batch.failed_objects or [])
+                if failed_objects:
+                    failed_refs = []
+                    for failed in failed_objects[:3]:
+                        failed_uuid = getattr(failed, "original_uuid", None)
+                        if failed_uuid is None:
+                            failed_uuid = getattr(getattr(failed, "object_", None), "uuid", None)
+                        if failed_uuid is not None:
+                            failed_refs.append(str(failed_uuid))
+                    summary = (
+                        f"; object_refs={','.join(failed_refs)}"
+                        if failed_refs
+                        else "; object details withheld"
+                    )
+                    logger.error(
+                        "Weaviate rejected %d of %d model-aware batch objects%s",
+                        len(failed_objects),
+                        len(points),
+                        summary,
+                    )
+                    raise VectorDBInsertError(
+                        f"Weaviate rejected {len(failed_objects)} of "
+                        f"{len(points)} model-aware batch objects{summary}"
+                    )
+                return len(points)
+
             inserted_count = await asyncio.to_thread(_sync_batch_insert)
             
             logger.info(f"Inserted {inserted_count} points into model-aware collection")
             return inserted_count
+        except VectorDBInsertError:
+            raise
         except WeaviateBaseError as e:
             logger.error(f"Failed to insert points into model-aware collection: {e}")
             raise VectorDBInsertError("Could not insert points into model-aware collection") from e
