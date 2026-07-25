@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -17,6 +16,7 @@ from app.db import (
     delete_memory_candidates_for_thread,
     get_memory,
     get_thread,
+    list_expired_memories,
     list_memories,
 )
 from app.db.vector import get_vector_db
@@ -25,15 +25,16 @@ from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z
 
 
-logger = logging.getLogger(__name__)
-
-
 DEFAULT_MEMORY_SETTINGS = {
     "global_memory_enabled": False,
     "project_reads_user_memory": False,
     "thread_reads_project_memory": True,
     "thread_reads_user_memory": False,
 }
+
+
+class MemoryVectorCleanupError(RuntimeError):
+    """Raised when a required memory vector cleanup operation fails."""
 
 
 def _normalize_allowed_scopes(raw: Optional[List[str]]) -> set[str]:
@@ -110,41 +111,37 @@ async def _embedding_model_for_memory(memory, embedding_model: Optional[str] = N
     return thread.embedding_model if thread is not None else None
 
 
-async def _best_effort_delete_memory_vectors(memory, embedding_model: Optional[str]) -> bool:
+async def _delete_memory_vectors(memory, embedding_model: Optional[str]) -> str:
     model = await _embedding_model_for_memory(memory, embedding_model)
     if not model:
-        return False
-    try:
-        await get_vector_db().delete_memory_vectors(memory.id, model)
-        return True
-    except Exception:
-        logger.exception("Failed to delete memory vectors for memory %s", memory.id)
-        return False
+        return "skipped"
+    deleted = await get_vector_db().delete_memory_vectors(memory.id, model)
+    if not deleted:
+        raise MemoryVectorCleanupError(f"Failed to delete memory vectors for memory {memory.id}")
+    return "deleted"
 
 
-async def _best_effort_delete_scope_memory_vectors(
+async def _delete_scope_memory_vectors(
     *,
     scope_type: str,
     scope_id: str,
     embedding_model: Optional[str],
-) -> bool:
+) -> str:
     if not embedding_model:
-        return False
-    try:
-        await get_vector_db().delete_memory_vectors_for_scope(scope_type, scope_id, embedding_model)
-        return True
-    except Exception:
-        logger.exception("Failed to delete memory vectors for scope %s:%s", scope_type, scope_id)
-        return False
+        return "skipped"
+    deleted = await get_vector_db().delete_memory_vectors_for_scope(scope_type, scope_id, embedding_model)
+    if not deleted:
+        raise MemoryVectorCleanupError(f"Failed to delete memory vectors for scope {scope_type}:{scope_id}")
+    return "deleted"
 
 
 async def hard_delete_memory(memory_id: str, *, embedding_model: Optional[str] = None) -> Dict[str, Any]:
-    """Hard-delete one memory and best-effort remove its vector row."""
+    """Hard-delete one memory after required vector cleanup, when the vector target is known."""
 
     memory = await get_memory(memory_id)
     if memory is None:
-        return {"deleted": False, "vector_cleanup": False}
-    vector_cleanup = await _best_effort_delete_memory_vectors(memory, embedding_model)
+        return {"deleted": False, "vector_cleanup": "not_found"}
+    vector_cleanup = await _delete_memory_vectors(memory, embedding_model)
     deleted = await delete_memory(memory_id)
     return {"deleted": deleted, "vector_cleanup": vector_cleanup}
 
@@ -158,17 +155,23 @@ async def hard_delete_memory_candidate(candidate_id: str) -> Dict[str, Any]:
 async def hard_delete_thread_memory_resources(thread_id: str, *, embedding_model: str) -> Dict[str, Any]:
     """Delete durable memory records and candidates owned by a thread."""
 
-    deleted_memory_ids = await delete_memories_for_scope(
+    memories = await list_memories(
         scope_type=MemoryScopeType.THREAD.value,
         scope_id=thread_id,
+        status="",
+        limit=500,
     )
-    vector_cleanup = False
-    if deleted_memory_ids:
-        vector_cleanup = await _best_effort_delete_scope_memory_vectors(
+    vector_cleanup = "skipped"
+    if memories:
+        vector_cleanup = await _delete_scope_memory_vectors(
             scope_type=MemoryScopeType.THREAD.value,
             scope_id=thread_id,
             embedding_model=embedding_model,
         )
+    deleted_memory_ids = await delete_memories_for_scope(
+        scope_type=MemoryScopeType.THREAD.value,
+        scope_id=thread_id,
+    )
     deleted_candidate_ids = await delete_memory_candidates_for_thread(thread_id)
     return {
         "deleted_memory_ids": deleted_memory_ids,
@@ -182,16 +185,17 @@ async def hard_delete_expired_memories(
     now: Optional[datetime] = None,
     embedding_model: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Hard-delete expired memories and best-effort remove their vector rows."""
+    """Hard-delete expired memories after required vector cleanup, when vector targets are known."""
 
-    expired = await delete_expired_memories(now=now)
-    cleaned_vectors = 0
+    expired = await list_expired_memories(now=now)
+    vector_cleanup = {"deleted": 0, "skipped": 0}
     for memory in expired:
-        if await _best_effort_delete_memory_vectors(memory, embedding_model):
-            cleaned_vectors += 1
+        cleanup_result = await _delete_memory_vectors(memory, embedding_model)
+        vector_cleanup[cleanup_result] = vector_cleanup.get(cleanup_result, 0) + 1
+    deleted = await delete_expired_memories(now=now)
     return {
-        "deleted_memory_ids": [memory.id for memory in expired],
-        "vector_cleanup_count": cleaned_vectors,
+        "deleted_memory_ids": [memory.id for memory in deleted],
+        "vector_cleanup": vector_cleanup,
     }
 
 

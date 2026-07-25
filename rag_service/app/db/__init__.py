@@ -516,6 +516,11 @@ async def delete_expired_memories(**kwargs):
     return await get_memory_repo().delete_expired_memories(**kwargs)
 
 
+async def list_expired_memories(**kwargs):
+    """List expired durable memories."""
+    return await get_memory_repo().list_expired_memories(**kwargs)
+
+
 async def create_memory_candidate(**kwargs):
     """Create a memory promotion candidate."""
     return await get_memory_repo().create_candidate(**kwargs)
@@ -642,6 +647,7 @@ __all__ = [
     "delete_memory",
     "delete_memories_for_scope",
     "delete_expired_memories",
+    "list_expired_memories",
     "create_memory_candidate",
     "list_memory_candidates",
     "resolve_memory_candidate",

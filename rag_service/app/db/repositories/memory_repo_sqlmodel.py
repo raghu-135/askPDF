@@ -214,6 +214,19 @@ class MemoryRepository:
             await session.execute(delete(Memory).where(Memory.id.in_(memory_ids)))
             return memories
 
+    async def list_expired_memories(self, *, now: Optional[datetime] = None, limit: int = 500) -> list[Memory]:
+        cutoff = now or utc_now()
+        bounded_limit = max(1, min(int(limit), 500))
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(Memory)
+                .where(Memory.expires_at.is_not(None), Memory.expires_at <= cutoff)
+                .order_by(Memory.expires_at.asc())
+                .limit(bounded_limit)
+            )
+            return list(result.scalars().all())
+
     async def create_candidate(
         self,
         *,

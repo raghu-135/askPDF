@@ -21,6 +21,7 @@ from app.models.requests import (
     MemoryStatusUpdateRequest,
 )
 from app.services.memory_service import (
+    MemoryVectorCleanupError,
     create_and_index_memory,
     hard_delete_memory,
     hard_delete_memory_candidate,
@@ -137,7 +138,10 @@ async def delete_memory_endpoint(
     memory_id: str,
     embedding_model: Optional[str] = Query(default=None),
 ):
-    result = await hard_delete_memory(memory_id, embedding_model=embedding_model)
+    try:
+        result = await hard_delete_memory(memory_id, embedding_model=embedding_model)
+    except MemoryVectorCleanupError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not result["deleted"]:
         raise HTTPException(status_code=404, detail="Memory not found")
     return {"status": "deleted", "memory_id": memory_id, "vector_cleanup": result["vector_cleanup"]}
