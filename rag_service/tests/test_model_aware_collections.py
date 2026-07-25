@@ -314,7 +314,7 @@ class TestProactiveCollectionCreation:
     
     @pytest.mark.asyncio
     async def test_ensure_collections_for_thread_creates_all_types(self, collection_manager, mock_client):
-        """Test that ensure_collections_for_thread creates all three collection types."""
+        """Test that ensure_collections_for_thread creates all collection types."""
         # Mock registry to return dimensions
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
             registry = EmbeddingModelRegistry()
@@ -329,11 +329,12 @@ class TestProactiveCollectionCreation:
             # Call ensure_collections_for_thread
             await collection_manager.ensure_collections_for_thread("test-model")
             
-            # Should attempt to create all three collection types
+            # Should attempt to create every model-aware collection type.
             expected_calls = [
                 "DocumentChunk_test_model_384",
-                "ChatMemoryChunk_test_model_384", 
-                "WebSearchChunk_test_model_384"
+                "ChatMemoryChunk_test_model_384",
+                "WebSearchChunk_test_model_384",
+                "MemoryChunk_test_model_384",
             ]
             
             actual_calls = [call[0][0] for call in mock_client.collections.exists.call_args_list]
@@ -351,12 +352,17 @@ class TestProactiveCollectionCreation:
             
             # Mock one collection to fail creation
             mock_client.collections.exists.return_value = False
-            mock_client.collections.create.side_effect = [None, Exception("Creation failed"), None]
+            mock_client.collections.create.side_effect = [
+                None,
+                Exception("Creation failed"),
+                None,
+                None,
+            ]
             mock_client.collections.use.return_value = AsyncMock()
             
             # Partial failures are logged and deferred until first use.
             await collection_manager.ensure_collections_for_thread("test-model")
-            assert mock_client.collections.create.call_count == 3
+            assert mock_client.collections.create.call_count == 4
     
     @pytest.mark.asyncio
     async def test_ensure_collections_skips_existing(self, collection_manager, mock_client):
@@ -377,7 +383,7 @@ class TestProactiveCollectionCreation:
             mock_client.collections.create.assert_not_called()
             
             # Should still use all collections
-            assert mock_client.collections.use.call_count == 3
+            assert mock_client.collections.use.call_count == 4
 
 
 class TestBackwardCompatibility:

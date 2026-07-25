@@ -29,7 +29,7 @@ class TestJSONBOperations:
     """Test PostgreSQL JSONB field operations."""
 
     @pytest.mark.asyncio
-    async def test_jsonb_insert_query(self, session):
+    async def test_jsonb_insert_query(self, session, test_model_project):
         """Test JSONB insert operations."""
         import uuid
         settings = {
@@ -40,6 +40,7 @@ class TestJSONBOperations:
         
         thread = Thread(
             id=str(uuid.uuid4()),
+            project_id=test_model_project.id,
             name="JSONB Insert Test",
             embedding_model="test-model",
             settings=settings,
@@ -169,7 +170,7 @@ class TestJSONBOperations:
         assert isinstance(thread.settings, dict)
 
     @pytest.mark.asyncio
-    async def test_jsonb_index_performance(self, session):
+    async def test_jsonb_index_performance(self, session, test_model_project):
         """Basic performance test for JSONB queries."""
         import time
         import uuid
@@ -179,6 +180,7 @@ class TestJSONBOperations:
         for i in range(100):
             thread = Thread(
                 id=str(uuid.uuid4()),
+                project_id=test_model_project.id,
                 name=f"Perf Thread {i}",
                 embedding_model="test-model",
                 settings={"index": i, "data": f"value-{i}"},

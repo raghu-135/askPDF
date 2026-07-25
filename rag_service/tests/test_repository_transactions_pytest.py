@@ -26,7 +26,7 @@ class TestRepositoryTransactions:
     """Test transaction behavior and rollback."""
 
     @pytest.mark.asyncio
-    async def test_transaction_commit(self, session):
+    async def test_transaction_commit(self, session, test_model_project):
         """Verify commit persists changes."""
         import uuid
         thread_id = str(uuid.uuid4())
@@ -34,6 +34,7 @@ class TestRepositoryTransactions:
         # Create thread in transaction
         thread = Thread(
             id=thread_id,
+            project_id=test_model_project.id,
             name="Commit Test",
             embedding_model="test-model",
             settings={},
@@ -53,7 +54,7 @@ class TestRepositoryTransactions:
         assert persisted.name == "Commit Test"
 
     @pytest.mark.asyncio
-    async def test_transaction_rollback_on_error(self, session):
+    async def test_transaction_rollback_on_error(self, session, test_model_project):
         """Verify rollback on exception."""
         import uuid
         thread_id = str(uuid.uuid4())
@@ -61,6 +62,7 @@ class TestRepositoryTransactions:
         # Create thread
         thread = Thread(
             id=thread_id,
+            project_id=test_model_project.id,
             name="Rollback Test",
             embedding_model="test-model",
             settings={},
@@ -80,13 +82,14 @@ class TestRepositoryTransactions:
         assert persisted is None
 
     @pytest.mark.asyncio
-    async def test_nested_transaction_behavior(self, session):
+    async def test_nested_transaction_behavior(self, session, test_model_project):
         """Test nested transaction handling."""
         import uuid
         
         # Outer transaction
         thread = Thread(
             id=str(uuid.uuid4()),
+            project_id=test_model_project.id,
             name="Outer Thread",
             embedding_model="test-model",
             settings={},
@@ -116,7 +119,7 @@ class TestRepositoryTransactions:
         assert result.scalar_one_or_none() is not None
 
     @pytest.mark.asyncio
-    async def test_concurrent_thread_creation(self, session):
+    async def test_concurrent_thread_creation(self, session, test_model_project):
         """Test sequential thread creation (no conflicts)."""
         import uuid
         
@@ -124,6 +127,7 @@ class TestRepositoryTransactions:
         for i in range(5):
             thread = Thread(
                 id=str(uuid.uuid4()),
+                project_id=test_model_project.id,
                 name=f"Concurrent Thread {i}",
                 embedding_model="test-model",
                 settings={},
@@ -197,7 +201,7 @@ class TestRepositoryTransactions:
             assert "unique" in str(e).lower() or "duplicate" in str(e).lower()
 
     @pytest.mark.asyncio
-    async def test_transaction_isolation(self, session):
+    async def test_transaction_isolation(self, session, test_model_project):
         """Test that transactions are isolated."""
         import uuid
         thread_id = str(uuid.uuid4())
@@ -205,6 +209,7 @@ class TestRepositoryTransactions:
         # Create thread in transaction
         thread = Thread(
             id=thread_id,
+            project_id=test_model_project.id,
             name="Isolation Test",
             embedding_model="test-model",
             settings={},
@@ -228,7 +233,7 @@ class TestRepositoryTransactions:
         assert result.scalar_one_or_none() is not None
 
     @pytest.mark.asyncio
-    async def test_rollback_partial_changes(self, session):
+    async def test_rollback_partial_changes(self, session, test_model_project):
         """Test rollback with multiple changes."""
         import uuid
         thread_id = str(uuid.uuid4())
@@ -237,6 +242,7 @@ class TestRepositoryTransactions:
         # Make multiple changes
         thread = Thread(
             id=thread_id,
+            project_id=test_model_project.id,
             name="Rollback Thread",
             embedding_model="test-model",
             settings={},
@@ -265,13 +271,15 @@ class TestRepositoryTransactions:
         assert result.scalar_one_or_none() is None
 
     @pytest.mark.asyncio
-    async def test_commit_after_rollback(self, session):
+    async def test_commit_after_rollback(self, session, test_model_project):
         """Test that commit works after rollback."""
         import uuid
+        project_id = test_model_project.id
         
         # First operation - rollback
         thread1 = Thread(
             id=str(uuid.uuid4()),
+            project_id=project_id,
             name="Rollback Thread",
             embedding_model="test-model",
             settings={},
@@ -283,6 +291,7 @@ class TestRepositoryTransactions:
         # Second operation - commit
         thread2 = Thread(
             id=str(uuid.uuid4()),
+            project_id=project_id,
             name="Commit Thread",
             embedding_model="test-model",
             settings={},
@@ -343,7 +352,7 @@ class TestRepositoryTransactions:
         assert result.scalar_one_or_none() is None
 
     @pytest.mark.asyncio
-    async def test_batch_operations_in_transaction(self, session):
+    async def test_batch_operations_in_transaction(self, session, test_model_project):
         """Test multiple operations in single transaction."""
         import uuid
         
@@ -352,6 +361,7 @@ class TestRepositoryTransactions:
         for i in range(10):
             thread = Thread(
                 id=str(uuid.uuid4()),
+                project_id=test_model_project.id,
                 name=f"Batch Thread {i}",
                 embedding_model="test-model",
                 settings={},

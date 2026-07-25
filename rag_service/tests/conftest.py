@@ -255,6 +255,21 @@ async def sample_thread(session, thread_data):
     return thread
 
 
+@pytest_asyncio.fixture
+async def test_model_project(session):
+    """Create the project required by tests that use the synthetic test model."""
+
+    project = Project(
+        id=str(uuid.uuid4()),
+        name="Test Model Project",
+        embedding_model="test-model",
+    )
+    session.add(project)
+    await session.commit()
+    await session.refresh(project)
+    return project
+
+
 # Test data fixtures for File model
 @pytest.fixture
 def file_data():
