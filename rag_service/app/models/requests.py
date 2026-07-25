@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
@@ -24,6 +24,7 @@ class ThreadCreateRequest(BaseModel):
         default=LOCAL_EMBEDDING_MODEL,
         validation_alias=AliasChoices("embedding_model", "embed_model"),
     )
+    project_id: Optional[str] = None
 
 
 class ThreadUpdateRequest(BaseModel):
@@ -65,6 +66,86 @@ class ThreadForkRequest(BaseModel):
 
     message_id: Optional[str] = None
     name: Optional[str] = None
+    target_project_id: Optional[str] = None
+    memory_copy_mode: Optional[str] = None
+
+
+class ThreadProjectUpdateRequest(BaseModel):
+    """Request body for moving a thread into a project."""
+
+    project_id: str
+
+
+class ProjectCreateRequest(BaseModel):
+    """Request body for creating a project."""
+
+    name: str
+    description: str = ""
+    settings_json: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectUpdateRequest(BaseModel):
+    """Request body for updating a project."""
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+    settings_json: Optional[Dict[str, Any]] = None
+
+
+class MemoryCreateRequest(BaseModel):
+    """Request body for creating a canonical memory."""
+
+    scope_type: str
+    scope_id: str
+    memory_type: str = "semantic"
+    content: str
+    summary: str = ""
+    source_refs_json: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    visibility: str = "private"
+    created_by: Optional[str] = None
+    embedding_model: Optional[str] = None
+
+
+class MemoryStatusUpdateRequest(BaseModel):
+    """Request body for changing memory lifecycle status."""
+
+    status: str
+    actor_id: Optional[str] = None
+    payload_json: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MemorySearchRequest(BaseModel):
+    """Request body for read-only scoped memory retrieval."""
+
+    query: str
+    allowed_scopes: Optional[List[str]] = None
+    max_results: int = Field(default=10, ge=1, le=50)
+    embedding_model: Optional[str] = None
+
+
+class MemoryCandidateCreateRequest(BaseModel):
+    """Request body for creating a memory promotion candidate."""
+
+    proposed_scope_type: str
+    proposed_scope_id: str
+    memory_type: str = "semantic"
+    content: str
+    source_thread_id: Optional[str] = None
+    source_project_id: Optional[str] = None
+    source_agent_run_id: Optional[str] = None
+    source_turn_id: Optional[str] = None
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reason: str = ""
+    created_by: Optional[str] = None
+
+
+class MemoryCandidateResolveRequest(BaseModel):
+    """Request body for resolving a promotion candidate."""
+
+    status: str
+    embedding_model: Optional[str] = None
+    actor_id: Optional[str] = None
 
 
 class ThreadFileRequest(BaseModel):

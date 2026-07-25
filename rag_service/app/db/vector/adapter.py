@@ -182,6 +182,22 @@ class WeaviateAdapter:
                 ("web_search_performed_at", wvc.config.DataType.TEXT),
             ],
         )
+        self._ensure_collection(
+            CollectionNames.MEMORY,
+            [
+                ("memory_id", wvc.config.DataType.TEXT),
+                ("scope_type", wvc.config.DataType.TEXT),
+                ("scope_id", wvc.config.DataType.TEXT),
+                ("memory_type", wvc.config.DataType.TEXT),
+                ("status", wvc.config.DataType.TEXT),
+                ("visibility", wvc.config.DataType.TEXT),
+                ("content", wvc.config.DataType.TEXT),
+                ("summary", wvc.config.DataType.TEXT),
+                ("metadata_json", wvc.config.DataType.TEXT),
+                ("created_at", wvc.config.DataType.TEXT),
+                ("updated_at", wvc.config.DataType.TEXT),
+            ],
+        )
         logger.info("All Weaviate collections ensured")
 
     def _ensure_collection(self, name: str, properties: List[tuple[str, Any]]) -> None:
@@ -531,6 +547,129 @@ class WeaviateAdapter:
         # Use model-aware collection manager
         collection = await self.collection_manager.get_collection(CollectionNames.WEB_SEARCH, embedding_model)
         return await self._insert_many_model_aware(collection, points)
+
+    async def index_memory(
+        self,
+        *,
+        memory_id: str,
+        scope_type: str,
+        scope_id: str,
+        memory_type: str,
+        content: str,
+        embedding: List[float],
+        embedding_model: str,
+        summary: str = "",
+        status: str = "active",
+        visibility: str = "private",
+        metadata: Optional[Dict[str, Any]] = None,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> int:
+        """Index one durable memory into model-aware memory vectors."""
+        _validate_not_empty(memory_id, "memory_id")
+        _validate_not_empty(scope_type, "scope_type")
+        _validate_not_empty(scope_id, "scope_id")
+        _validate_not_empty(content, "content")
+        _validate_not_empty(embedding_model, "embedding_model")
+        if not await self.collection_manager.validate_vectors_for_model([embedding], embedding_model):
+            raise ValueError(f"Vector dimensions do not match expected dimensions for model '{embedding_model}'")
+
+        collection = await self.collection_manager.get_collection(CollectionNames.MEMORY, embedding_model)
+        return await self._insert_many_model_aware(
+            collection,
+            [
+                {
+                    "vector": embedding,
+                    "properties": {
+                        "memory_id": memory_id,
+                        "scope_type": scope_type,
+                        "scope_id": scope_id,
+                        "memory_type": memory_type,
+                        "status": status,
+                        "visibility": visibility,
+                        "content": content,
+                        "summary": summary or "",
+                        "metadata_json": _metadata_json(metadata or {}),
+                        "created_at": created_at or "",
+                        "updated_at": updated_at or "",
+                    },
+                }
+            ],
+        )
+
+    async def search_memory(
+        self,
+        *,
+        query_vector: List[float],
+        embedding_model: str,
+        scope_filters: List[Dict[str, str]],
+        limit: int = 10,
+        query_text: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search durable memory vectors across explicit scope filters."""
+        _validate_not_empty(query_vector, "query_vector")
+        _validate_not_empty(embedding_model, "embedding_model")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if not scope_filters:
+            return []
+
+        col = await self.collection_manager.get_collection(CollectionNames.MEMORY, embedding_model)
+        filt = wvc.query.Filter.by_property("status").equal("active")
+        scope_filter = None
+        for scope in scope_filters:
+            current = (
+                wvc.query.Filter.by_property("scope_type").equal(str(scope.get("scope_type") or ""))
+                & wvc.query.Filter.by_property("scope_id").equal(str(scope.get("scope_id") or ""))
+            )
+            scope_filter = current if scope_filter is None else scope_filter | current
+        if scope_filter is not None:
+            filt = filt & scope_filter
+
+        kwargs = {
+            "filters": filt,
+            "limit": limit,
+            "return_metadata": wvc.query.MetadataQuery(score=True),
+        }
+        try:
+            if query_text:
+                response = await asyncio.to_thread(
+                    col.query.hybrid,
+                    query=query_text,
+                    vector=query_vector,
+                    alpha=self.hybrid_alpha,
+                    **kwargs,
+                )
+            else:
+                response = await asyncio.to_thread(
+                    col.query.near_vector,
+                    near_vector=query_vector,
+                    **kwargs,
+                )
+        except WeaviateBaseError as e:
+            logger.error(f"Failed to search memory: {e}")
+            raise VectorDBQueryError("Could not search memory") from e
+
+        out: List[Dict[str, Any]] = []
+        for obj in response.objects:
+            p = obj.properties
+            out.append(
+                {
+                    "memory_id": p.get("memory_id"),
+                    "scope_type": p.get("scope_type"),
+                    "scope_id": p.get("scope_id"),
+                    "memory_type": p.get("memory_type"),
+                    "status": p.get("status"),
+                    "visibility": p.get("visibility"),
+                    "content": p.get("content", ""),
+                    "summary": p.get("summary", ""),
+                    "metadata": _parse_metadata(p.get("metadata_json")),
+                    "created_at": p.get("created_at"),
+                    "updated_at": p.get("updated_at"),
+                    "score": _score(obj),
+                }
+            )
+        return out
 
     async def search_knowledge_sources(
         self,

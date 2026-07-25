@@ -13,12 +13,21 @@ from app.db.models_sqlmodel import (
     ChatTurnStatus,
     WorkflowVisibility,
     AgentRunStatus,
+    MemoryCandidateStatus,
+    MemoryScopeType,
+    MemoryStatus,
+    MemoryType,
+    MemoryVisibility,
+    Project,
     Thread,
     File,
     ThreadFile,
     ChatTurn,
     AgentWorkflow,
     AgentRun,
+    Memory,
+    MemoryEvent,
+    MemoryCandidate,
 )
 from app.db.enums import (
     EmbeddingReadinessStatus,
@@ -57,6 +66,8 @@ _message_repo = None
 _thread_file_repo = None
 _stats_repo = None
 _agent_workflow_repo = None
+_project_repo = None
+_memory_repo = None
 
 
 def get_thread_repo():
@@ -113,10 +124,64 @@ def get_agent_workflow_repo():
     return _agent_workflow_repo
 
 
+def get_project_repo():
+    """Get the project repository instance."""
+    global _project_repo
+    if _project_repo is None:
+        from app.db.repositories.project_repo_sqlmodel import ProjectRepository
+        _project_repo = ProjectRepository()
+    return _project_repo
+
+
+def get_memory_repo():
+    """Get the memory repository instance."""
+    global _memory_repo
+    if _memory_repo is None:
+        from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
+        _memory_repo = MemoryRepository()
+    return _memory_repo
+
+
+# Project operations
+async def ensure_default_project():
+    """Create the default project and attach orphan threads."""
+    return await get_project_repo().ensure_default_project()
+
+
+async def create_project(name: str, description: str = "", settings_json: dict = None):
+    """Create a project."""
+    return await get_project_repo().create(name=name, description=description, settings_json=settings_json)
+
+
+async def get_project(project_id: str):
+    """Get a project by ID."""
+    return await get_project_repo().get(project_id)
+
+
+async def list_projects():
+    """List projects."""
+    return await get_project_repo().list_all()
+
+
+async def update_project(project_id: str, name: str = None, description: str = None, settings_json: dict = None):
+    """Update a project."""
+    return await get_project_repo().update(
+        project_id,
+        name=name,
+        description=description,
+        settings_json=settings_json,
+    )
+
+
+async def assign_thread_to_project(thread_id: str, project_id: str):
+    """Move a thread into a project."""
+    return await get_project_repo().assign_thread(thread_id, project_id)
+
+
 # Thread operations
-async def create_thread(name: str, embedding_model: str):
+async def create_thread(name: str, embedding_model: str, project_id: str = None):
     """Create a new thread."""
-    return await get_thread_repo().create(name, embedding_model)
+    return await get_thread_repo().create(name, embedding_model, project_id=project_id)
 
 
 async def get_thread(thread_id: str):
@@ -142,6 +207,11 @@ async def list_threads():
 async def update_thread(thread_id: str, name: str):
     """Update a thread's name."""
     return await get_thread_repo().update(thread_id, name)
+
+
+async def update_thread_project(thread_id: str, project_id: str):
+    """Update a thread's project."""
+    return await get_thread_repo().update_project(thread_id, project_id)
 
 
 async def delete_thread(thread_id: str):
@@ -410,6 +480,42 @@ async def get_thread_shape(thread_id: str):
     return await get_stats_repo().get_thread_shape(thread_id)
 
 
+# Memory operations
+async def create_memory(**kwargs):
+    """Create a canonical durable memory."""
+    return await get_memory_repo().create_memory(**kwargs)
+
+
+async def get_memory(memory_id: str):
+    """Get a memory by ID."""
+    return await get_memory_repo().get_memory(memory_id)
+
+
+async def list_memories(**kwargs):
+    """List memories."""
+    return await get_memory_repo().list_memories(**kwargs)
+
+
+async def update_memory_status(memory_id: str, **kwargs):
+    """Update a memory lifecycle status and append an audit event."""
+    return await get_memory_repo().update_memory_status(memory_id, **kwargs)
+
+
+async def create_memory_candidate(**kwargs):
+    """Create a memory promotion candidate."""
+    return await get_memory_repo().create_candidate(**kwargs)
+
+
+async def list_memory_candidates(**kwargs):
+    """List memory promotion candidates."""
+    return await get_memory_repo().list_candidates(**kwargs)
+
+
+async def resolve_memory_candidate(candidate_id: str, **kwargs):
+    """Resolve a memory promotion candidate."""
+    return await get_memory_repo().resolve_candidate(candidate_id, **kwargs)
+
+
 __all__ = [
     # Models
     "ProcessStatus",
@@ -418,17 +524,26 @@ __all__ = [
     "ChatTurnStatus",
     "WorkflowVisibility",
     "AgentRunStatus",
+    "MemoryCandidateStatus",
+    "MemoryScopeType",
+    "MemoryStatus",
+    "MemoryType",
+    "MemoryVisibility",
     "EmbeddingReadinessStatus",
     "FileStatusSection",
     "OperationResultStatus",
     "ReasoningFormat",
     "ThreadCloneMode",
+    "Project",
     "Thread",
     "File",
     "ThreadFile",
     "ChatTurn",
     "AgentWorkflow",
     "AgentRun",
+    "Memory",
+    "MemoryEvent",
+    "MemoryCandidate",
     # Config
     "init_db",
     # Status
@@ -480,10 +595,26 @@ __all__ = [
     "get_message_count",
     # Agent workflow operations
     "get_agent_workflow_repo",
+    # Project operations
+    "ensure_default_project",
+    "create_project",
+    "get_project",
+    "list_projects",
+    "update_project",
+    "assign_thread_to_project",
+    "update_thread_project",
     # Stats operations
     "remove_document_from_stats",
     "upsert_document_in_stats",
     "increment_qa_stats",
     "recompute_qa_stats",
     "get_thread_shape",
+    # Memory operations
+    "create_memory",
+    "get_memory",
+    "list_memories",
+    "update_memory_status",
+    "create_memory_candidate",
+    "list_memory_candidates",
+    "resolve_memory_candidate",
 ]

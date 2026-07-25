@@ -31,13 +31,14 @@ class ThreadRepository:
             return self._session
         return async_session_maker()
 
-    async def create(self, name: str, embedding_model: str) -> Thread:
+    async def create(self, name: str, embedding_model: str, project_id: Optional[str] = None) -> Thread:
         """Create a new thread with default settings."""
         thread_id = str(uuid.uuid4())
         created_at = utc_now()
 
         thread = Thread(
             id=thread_id,
+            project_id=project_id,
             name=name,
             embedding_model=embedding_model,
             settings={},
@@ -144,6 +145,7 @@ class ThreadRepository:
                 thread = row[0]
                 threads.append({
                     "id": thread.id,
+                    "project_id": thread.project_id,
                     "name": thread.name,
                     "embedding_model": thread.embedding_model,
                     "settings": thread.settings if thread.settings else {},
@@ -168,6 +170,21 @@ class ThreadRepository:
                 return None
 
             thread.name = name
+            await session.flush()
+            await session.refresh(thread)
+        return thread
+
+    async def update_project(self, thread_id: str, project_id: str) -> Optional[Thread]:
+        """Move a thread into a project."""
+        session = await self._get_session()
+        async with session.begin():
+            result = await session.execute(
+                select(Thread).where(Thread.id == thread_id)
+            )
+            thread = result.scalar_one_or_none()
+            if not thread:
+                return None
+            thread.project_id = project_id
             await session.flush()
             await session.refresh(thread)
         return thread

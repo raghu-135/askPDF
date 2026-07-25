@@ -18,7 +18,7 @@ from app.db import (
 )
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import ChatTurn, Thread, ThreadFile
+from app.db.models_sqlmodel import ChatTurn, Memory, MemoryEvent, Project, Thread, ThreadFile
 from app.db.repositories.message_repo_sqlmodel import turn_id_from_message_id
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z, utc_now
@@ -42,6 +42,8 @@ async def fork_thread(
     source_thread_id: str,
     message_id: str | None = None,
     name: str | None = None,
+    target_project_id: str | None = None,
+    memory_copy_mode: str | None = None,
 ) -> Dict[str, Any]:
     """Create an independent fork of a thread with soft lineage metadata."""
     forked_at = utc_now()
@@ -56,6 +58,10 @@ async def fork_thread(
             source_thread = source_result.scalar_one_or_none()
             if not source_thread:
                 raise SourceThreadNotFoundError("Source thread not found")
+            if target_project_id:
+                target_project = await session.get(Project, target_project_id)
+                if target_project is None:
+                    raise SourceThreadNotFoundError("Target project not found")
 
             turns_result = await session.execute(
                 select(ChatTurn)
@@ -86,14 +92,25 @@ async def fork_thread(
                     "source_message_id": message_id if source_turn else None,
                     "source_message_created_at": iso_utc_z(source_turn.created_at) if source_turn else None,
                     "mode": mode,
+                    "memory_copy_mode": memory_copy_mode,
                 }
             }
+            target_project = target_project_id or source_thread.project_id
+            resolved_memory_copy_mode = memory_copy_mode
+            if not resolved_memory_copy_mode:
+                resolved_memory_copy_mode = (
+                    "project_snapshot"
+                    if target_project and target_project != source_thread.project_id
+                    else "thread_snapshot"
+                )
+            fork_metadata["fork"]["memory_copy_mode"] = resolved_memory_copy_mode
             source_metadata = copy.deepcopy(source_thread.thread_metadata or {})
             source_metadata.pop("fork_children", None)
             source_metadata.update(fork_metadata)
 
             forked_thread = Thread(
                 id=new_thread_id,
+                project_id=target_project,
                 name=(name or "").strip() or f"{source_thread.name} (Fork)",
                 embedding_model=source_thread.embedding_model,
                 settings=copy.deepcopy(source_thread.settings or {}),
@@ -137,6 +154,111 @@ async def fork_thread(
                         annotations_updated_at=association.annotations_updated_at,
                     )
                 )
+
+            memory_cutoff = source_turn.created_at if source_turn else forked_at
+            copied_memory_ids: list[str] = []
+
+            if resolved_memory_copy_mode in {"thread_snapshot", "all"}:
+                thread_memories_result = await session.execute(
+                    select(Memory).where(
+                        Memory.scope_type == "thread",
+                        Memory.scope_id == source_thread_id,
+                        Memory.status == "active",
+                        Memory.created_at <= memory_cutoff,
+                    )
+                )
+                for memory in thread_memories_result.scalars().all():
+                    copied_id = str(uuid.uuid4())
+                    copied_memory = Memory(
+                        id=copied_id,
+                        scope_type="thread",
+                        scope_id=new_thread_id,
+                        memory_type=memory.memory_type,
+                        content=memory.content,
+                        summary=memory.summary,
+                        source_refs_json=copy.deepcopy(memory.source_refs_json or {}),
+                        confidence=memory.confidence,
+                        status=memory.status,
+                        visibility=memory.visibility,
+                        created_by=memory.created_by,
+                        created_at=forked_at,
+                        updated_at=forked_at,
+                        expires_at=memory.expires_at,
+                        fork_origin_json={
+                            "source_memory_id": memory.id,
+                            "source_thread_id": source_thread_id,
+                            "forked_thread_id": new_thread_id,
+                            "forked_at": forked_at_iso,
+                            "copy_mode": resolved_memory_copy_mode,
+                        },
+                    )
+                    session.add(copied_memory)
+                    session.add(
+                        MemoryEvent(
+                            memory_id=copied_id,
+                            event_type="fork_snapshot",
+                            actor_id=None,
+                            payload_json=copy.deepcopy(copied_memory.fork_origin_json or {}),
+                            created_at=forked_at,
+                        )
+                    )
+                    copied_memory_ids.append(copied_id)
+
+            if (
+                resolved_memory_copy_mode in {"project_snapshot", "all"}
+                and target_project
+                and source_thread.project_id
+                and target_project != source_thread.project_id
+            ):
+                project_memories_result = await session.execute(
+                    select(Memory).where(
+                        Memory.scope_type == "project",
+                        Memory.scope_id == source_thread.project_id,
+                        Memory.status == "active",
+                    )
+                )
+                for memory in project_memories_result.scalars().all():
+                    copied_id = str(uuid.uuid4())
+                    copied_memory = Memory(
+                        id=copied_id,
+                        scope_type="project",
+                        scope_id=target_project,
+                        memory_type=memory.memory_type,
+                        content=memory.content,
+                        summary=memory.summary,
+                        source_refs_json=copy.deepcopy(memory.source_refs_json or {}),
+                        confidence=memory.confidence,
+                        status=memory.status,
+                        visibility=memory.visibility,
+                        created_by=memory.created_by,
+                        created_at=forked_at,
+                        updated_at=forked_at,
+                        expires_at=memory.expires_at,
+                        fork_origin_json={
+                            "source_memory_id": memory.id,
+                            "source_project_id": source_thread.project_id,
+                            "target_project_id": target_project,
+                            "forked_thread_id": new_thread_id,
+                            "forked_at": forked_at_iso,
+                            "copy_mode": resolved_memory_copy_mode,
+                        },
+                    )
+                    session.add(copied_memory)
+                    session.add(
+                        MemoryEvent(
+                            memory_id=copied_id,
+                            event_type="fork_snapshot",
+                            actor_id=None,
+                            payload_json=copy.deepcopy(copied_memory.fork_origin_json or {}),
+                            created_at=forked_at,
+                        )
+                    )
+                    copied_memory_ids.append(copied_id)
+
+            if copied_memory_ids:
+                child_metadata = copy.deepcopy(forked_thread.thread_metadata or {})
+                child_metadata.setdefault("fork", {})["copied_memory_ids"] = copied_memory_ids
+                replace_jsonb_field(forked_thread, "thread_metadata", child_metadata)
 
             await session.flush()
             await session.refresh(forked_thread)

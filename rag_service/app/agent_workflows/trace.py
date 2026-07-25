@@ -194,6 +194,7 @@ def refs_from_artifacts(artifacts: Any) -> Dict[str, Any]:
     web = refs_from_web(data.get("web_sources"))
     messages = refs_from_messages(data.get("used_chat_ids"))
     timeline = refs_from_timeline(data.get("timeline_events"))
+    memories = [item for item in (data.get("memory_refs") or []) if isinstance(item, dict)]
     if documents:
         refs["document_matches"] = documents
     if web:
@@ -202,6 +203,8 @@ def refs_from_artifacts(artifacts: Any) -> Dict[str, Any]:
         refs["messages"] = messages
     if timeline:
         refs["timeline_events"] = timeline
+    if memories:
+        refs["memories"] = memories
     return refs
 
 
@@ -214,6 +217,7 @@ def artifact_summary(artifacts: Any) -> Dict[str, int]:
             "web_sources": data.get("web_sources"),
             "used_chat_ids": data.get("used_chat_ids"),
             "timeline_events": data.get("timeline_events"),
+            "memory_refs": data.get("memory_refs"),
         }.items()
         if isinstance(value, list)
     }

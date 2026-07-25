@@ -35,12 +35,15 @@ from fastapi.staticfiles import StaticFiles
 
 # Import modular components after logging is configured so app.* loggers emit in Docker.
 from app.api.threads import router as threads_router
+from app.api.projects import router as projects_router
+from app.api.memories import router as memories_router
 from app.api.files import router as files_router
 from app.api.messages import router as messages_router
 from app.api.models import router as models_router
 from app.api.agent_workflows import router as agent_workflows_router
 from app.api.tools import router as tools_router
 from app.agent_workflows.repository import AgentWorkflowRepository
+from app.db import ensure_default_project
 from app.db.connection_sqlmodel import init_db, close_db
 from app.db.vector import close_vector_db, get_vector_db
 
@@ -54,6 +57,7 @@ async def lifespan(app: FastAPI):
     try:
         logger.info("Initializing PostgreSQL database with SQLModel...")
         await init_db()
+        await ensure_default_project()
         await AgentWorkflowRepository().seed_builtin_workflows()
         logger.info("Database initialization complete.")
     except Exception as e:
@@ -102,6 +106,8 @@ app.add_middleware(
 
 # Register modular routes
 app.include_router(threads_router, prefix="/api")
+app.include_router(projects_router, prefix="/api")
+app.include_router(memories_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(messages_router, prefix="/api")
 app.include_router(models_router, prefix="/api")

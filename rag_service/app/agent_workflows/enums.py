@@ -79,6 +79,7 @@ class WorkflowNodeType(str, Enum):
     PLANNER = "planner"
     RETRIEVAL_WORKER = "retrieval_worker"
     MEMORY_WORKER = "memory_worker"
+    LONG_TERM_MEMORY_WORKER = "long_term_memory_worker"
     TIMELINE_WORKER = "timeline_worker"
     WEB_WORKER = "web_worker"
     EVIDENCE_EVALUATOR = "evidence_evaluator"
@@ -94,6 +95,7 @@ class ToolName(str, Enum):
     SEARCH_DOCUMENTS = "search_documents"
     SEARCH_DOCUMENT_BY_ID = "search_document_by_id"
     SEARCH_CONVERSATION_HISTORY = "search_conversation_history"
+    SEARCH_LONG_TERM_MEMORY = "search_long_term_memory"
     SEARCH_THREAD_TIMELINE = "search_thread_timeline"
     SEARCH_WEB = "search_web"
     WIKIPEDIA = "wikipedia"
@@ -128,6 +130,7 @@ class NodeCategory(str, Enum):
 class EvidenceKind(str, Enum):
     DOCUMENT = "document"
     MEMORY = "memory"
+    LONG_TERM_MEMORY = "long_term_memory"
     TIMELINE = "timeline"
     WEB = "web"
 
@@ -234,6 +237,7 @@ class ToolContractId(str, Enum):
     DOCUMENT_EVIDENCE = "document_evidence"
     FOCUSED_DOCUMENT_EVIDENCE = "focused_document_evidence"
     DEEP_MEMORY = "deep_memory"
+    MEMORY_RECALL = "memory_recall"
     THREAD_TIMELINE = "thread_timeline"
     LIVE_WEB_RECON = "live_web_recon"
     WIKIPEDIA_REFERENCE = "wikipedia_reference"

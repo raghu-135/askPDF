@@ -35,6 +35,7 @@ class ToolWarningCode(str, Enum):
     MISSING_THREAD_ID = "missing_thread_id"
     NO_RELEVANT_CONTENT = "no_relevant_content"
     NO_RELEVANT_CONVERSATION_HISTORY = "no_relevant_conversation_history"
+    NO_RELEVANT_MEMORY = "no_relevant_memory"
     NO_THREAD_DOCUMENTS = "no_thread_documents"
     NO_TIMELINE_EVENTS = "no_timeline_events"
     NO_USABLE_WEB_RESULTS = "no_usable_web_results"

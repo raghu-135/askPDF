@@ -35,6 +35,7 @@ def test_router_rag_allowed_tool_ids_are_contract_ids():
 
 def test_tool_contract_metadata_exposes_graph_integration_fields():
     document_contract = get_tool_contract_metadata("search_documents")
+    memory_contract = get_tool_contract_metadata("search_long_term_memory")
     web_contract = get_tool_contract_metadata("search_web")
     records = list_tool_contract_metadata()
 
@@ -43,6 +44,11 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
     assert document_contract["allowed_caller_nodes"] == ["retrieval_worker"]
     assert document_contract["artifact_keys"] == ["document_sources", "web_sources"]
     assert "missing_thread_context" in document_contract["warning_codes"]
+
+    assert memory_contract["id"] == "memory_recall"
+    assert memory_contract["allowed_caller_nodes"] == ["long_term_memory_worker"]
+    assert memory_contract["artifact_keys"] == ["memory_refs", "memory_scopes"]
+    assert "no_relevant_memory" in memory_contract["warning_codes"]
 
     assert web_contract["id"] == "live_web_recon"
     assert web_contract["allowed_caller_nodes"] == ["web_worker"]
@@ -82,6 +88,7 @@ def test_tool_contract_records_are_schema_like():
 def test_tool_call_validation_enforces_allowed_caller_nodes():
     validate_tool_call_allowed("search_documents", "retrieval_worker")
     validate_tool_call_allowed("search_conversation_history", "memory_worker")
+    validate_tool_call_allowed("search_long_term_memory", "long_term_memory_worker")
     validate_tool_call_allowed("search_thread_timeline", "timeline_worker")
     validate_tool_call_allowed("search_web", "web_worker")
 
@@ -113,5 +120,7 @@ def test_tool_contracts_endpoint(api_client):
     assert by_name["search_documents"]["allowed_caller_nodes"] == ["retrieval_worker"]
     assert by_name["search_documents"]["artifact_keys"] == ["document_sources", "web_sources"]
     assert "missing_thread_context" in by_name["search_documents"]["warning_codes"]
+    assert by_name["search_long_term_memory"]["id"] == "memory_recall"
+    assert by_name["search_long_term_memory"]["allowed_caller_nodes"] == ["long_term_memory_worker"]
     assert by_name["search_web"]["category"] == "web"
     assert "web_search_disabled" in by_name["search_web"]["warning_codes"]

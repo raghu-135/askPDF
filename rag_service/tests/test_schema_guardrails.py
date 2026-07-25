@@ -11,8 +11,12 @@ from app.db import models_sqlmodel
 
 
 EXPECTED_MODEL_TABLES = {
+    "projects",
     "chat_turns",
     "files",
+    "memories",
+    "memory_candidates",
+    "memory_events",
     "thread_files",
     "threads",
 }

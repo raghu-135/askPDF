@@ -10,6 +10,7 @@ from app.agent_workflows.trace import compact_preview
 WORKER_NODE_ORDER = [
     WorkflowNodeType.RETRIEVAL_WORKER.value,
     WorkflowNodeType.MEMORY_WORKER.value,
+    WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value,
     WorkflowNodeType.TIMELINE_WORKER.value,
     WorkflowNodeType.WEB_WORKER.value,
 ]
@@ -30,6 +31,14 @@ MEMORY_PLAN_RE = re.compile(
     r"\b("
     r"previously|prior|earlier\s+(answer|conversation|chat|discussion)|"
     r"remember|discussed|talked\s+about|said\s+before|you\s+said|we\s+(said|discussed|talked)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+LONG_TERM_MEMORY_PLAN_RE = re.compile(
+    r"\b("
+    r"remembered|memory|preference|profile|project\s+(memory|context|fact)|"
+    r"what\s+(do|did)\s+you\s+know\s+about\s+me|saved\s+(memory|context)"
     r")\b",
     re.IGNORECASE,
 )
@@ -66,6 +75,8 @@ def infer_required_plan_steps(question: Optional[str]) -> List[str]:
         and WorkflowNodeType.TIMELINE_WORKER.value not in required
     ):
         required.append(WorkflowNodeType.MEMORY_WORKER.value)
+    if LONG_TERM_MEMORY_PLAN_RE.search(text) and WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value not in required:
+        required.append(WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value)
     if DOCUMENT_PLAN_RE.search(text) and WorkflowNodeType.RETRIEVAL_WORKER.value not in required:
         required.append(WorkflowNodeType.RETRIEVAL_WORKER.value)
     return required

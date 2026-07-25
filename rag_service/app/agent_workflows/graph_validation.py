@@ -286,6 +286,7 @@ class GenericGraphValidator:
         worker_types = {
             "retrieval_worker",
             "memory_worker",
+            "long_term_memory_worker",
             "timeline_worker",
             "web_worker",
         }
@@ -572,6 +573,7 @@ class GenericGraphValidator:
                 {
                     "retrieval_worker",
                     "memory_worker",
+                    "long_term_memory_worker",
                     "timeline_worker",
                     "web_worker",
                 },
@@ -585,6 +587,7 @@ class GenericGraphValidator:
                     {
                         "retrieval_worker",
                         "memory_worker",
+                        "long_term_memory_worker",
                         "timeline_worker",
                         "web_worker",
                     },
@@ -762,7 +765,7 @@ class GenericGraphValidator:
                 for worker_id in component:
                     if (
                         node_types_by_id.get(worker_id)
-                        in {"retrieval_worker", "memory_worker", "timeline_worker", "web_worker"}
+                        in {"retrieval_worker", "memory_worker", "long_term_memory_worker", "timeline_worker", "web_worker"}
                         and limits[worker_id] < limits[replanner_id] + 1
                     ):
                         errors.append(

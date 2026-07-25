@@ -22,6 +22,7 @@ NODE_ROUTER = WorkflowNodeType.ROUTER.value
 NODE_PLANNER = WorkflowNodeType.PLANNER.value
 NODE_RETRIEVAL_WORKER = WorkflowNodeType.RETRIEVAL_WORKER.value
 NODE_MEMORY_WORKER = WorkflowNodeType.MEMORY_WORKER.value
+NODE_LONG_TERM_MEMORY_WORKER = WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value
 NODE_TIMELINE_WORKER = WorkflowNodeType.TIMELINE_WORKER.value
 NODE_WEB_WORKER = WorkflowNodeType.WEB_WORKER.value
 NODE_EVIDENCE_EVALUATOR = WorkflowNodeType.EVIDENCE_EVALUATOR.value
@@ -49,6 +50,7 @@ TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
 TOOL_DOCUMENT_EVIDENCE = ToolContractId.DOCUMENT_EVIDENCE.value
 TOOL_FOCUSED_DOCUMENT_EVIDENCE = ToolContractId.FOCUSED_DOCUMENT_EVIDENCE.value
 TOOL_DEEP_MEMORY = ToolContractId.DEEP_MEMORY.value
+TOOL_MEMORY_RECALL = ToolContractId.MEMORY_RECALL.value
 TOOL_THREAD_TIMELINE = ToolContractId.THREAD_TIMELINE.value
 TOOL_LIVE_WEB_RECON = ToolContractId.LIVE_WEB_RECON.value
 TOOL_WIKIPEDIA_REFERENCE = ToolContractId.WIKIPEDIA_REFERENCE.value
@@ -64,6 +66,7 @@ TOOL_NAME_GET_THREAD_SHAPE = ToolName.GET_THREAD_SHAPE.value
 TOOL_NAME_SEARCH_DOCUMENTS = ToolName.SEARCH_DOCUMENTS.value
 TOOL_NAME_SEARCH_DOCUMENT_BY_ID = ToolName.SEARCH_DOCUMENT_BY_ID.value
 TOOL_NAME_SEARCH_CONVERSATION_HISTORY = ToolName.SEARCH_CONVERSATION_HISTORY.value
+TOOL_NAME_SEARCH_LONG_TERM_MEMORY = ToolName.SEARCH_LONG_TERM_MEMORY.value
 TOOL_NAME_SEARCH_THREAD_TIMELINE = ToolName.SEARCH_THREAD_TIMELINE.value
 TOOL_NAME_SEARCH_WEB = ToolName.SEARCH_WEB.value
 TOOL_NAME_WIKIPEDIA = ToolName.WIKIPEDIA.value
@@ -82,8 +85,8 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
     TOOL_NAME_GET_THREAD_SHAPE: {
         "id": TOOL_THREAD_SHAPE,
         "category": CAT_CONTEXT,
-        "allowed_caller_nodes": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_TIMELINE_WORKER],
-        "allowed_node_types": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_TIMELINE_WORKER],
+        "allowed_caller_nodes": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER],
+        "allowed_node_types": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER],
         "required_node_capabilities": [CAP_CONTEXT_PREFETCH, CAP_ROUTE_INTENT, CAP_RETRIEVAL_DOCUMENT, CAP_RETRIEVAL_MEMORY, CAP_RETRIEVAL_TIMELINE],
         "artifact_keys": [TOOL_THREAD_SHAPE],
         "warning_codes": [ToolWarningCode.MISSING_THREAD_ID],
@@ -119,6 +122,15 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "required_node_capabilities": [CAP_RETRIEVAL_MEMORY],
         "artifact_keys": ["used_chat_ids"],
         "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_RELEVANT_CONVERSATION_HISTORY],
+    },
+    TOOL_NAME_SEARCH_LONG_TERM_MEMORY: {
+        "id": TOOL_MEMORY_RECALL,
+        "category": CAT_MEMORY,
+        "allowed_caller_nodes": [NODE_LONG_TERM_MEMORY_WORKER],
+        "allowed_node_types": [NODE_LONG_TERM_MEMORY_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_MEMORY],
+        "artifact_keys": ["memory_refs", "memory_scopes"],
+        "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_RELEVANT_MEMORY],
     },
     TOOL_NAME_SEARCH_THREAD_TIMELINE: {
         "id": TOOL_THREAD_TIMELINE,
@@ -365,9 +377,15 @@ TOOL_FRIENDLY_CONFIG = {
     },
     TOOL_NAME_SEARCH_CONVERSATION_HISTORY: {
         "id": TOOL_DEEP_MEMORY,
-        "display_name": "Deep Memory",
+        "display_name": "Conversation History",
         "description": "Semantic search across past Q/A pairs in this thread when the user asks what was previously discussed or decided. Use this for topical recall where ordering is not the main question. Do not use it for first/latest/earlier/since/before/after questions; use search_thread_timeline for temporal reasoning.",
         "default_prompt": "Use for non-temporal recall of prior discussion, decisions, or answers about a topic. Avoid using it merely to reread recent turns already present in prefetch. Prefer search_thread_timeline for chronological questions.",
+    },
+    TOOL_NAME_SEARCH_LONG_TERM_MEMORY: {
+        "id": TOOL_MEMORY_RECALL,
+        "display_name": "Long-Term Memory",
+        "description": "Policy-scoped search across durable user, project, and thread memories. Use this when shared project facts, durable preferences, or remembered instructions may answer the request. This does not search raw chat turns.",
+        "default_prompt": "Use for durable remembered facts and preferences across the thread/project/user scopes allowed by settings. Prefer conversation history when the user asks what was said earlier in this exact thread.",
     },
     TOOL_NAME_SEARCH_THREAD_TIMELINE: {
         "id": TOOL_THREAD_TIMELINE,

@@ -5,7 +5,8 @@ const FALLBACK_NODE_LABELS = {
   evidence_evaluator: 'Evidence Evaluator',
   replanner: 'Replanner',
   retrieval_worker: 'Document Retrieval',
-  memory_worker: 'Memory Retrieval',
+  memory_worker: 'Conversation History',
+  long_term_memory_worker: 'Long-Term Memory',
   timeline_worker: 'Timeline Retrieval',
   web_approval_gate: 'Web Approval',
   web_worker: 'Web Retrieval',
@@ -38,4 +39,3 @@ export const formatNodeLabel = (id, type, catalog) => (
 export const formatNodeInstanceLabel = (id, type) => (
   type && id !== type ? `${id} · ${type}` : id
 );
-

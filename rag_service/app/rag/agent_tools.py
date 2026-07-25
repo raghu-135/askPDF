@@ -487,6 +487,86 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
         ).to_json()
 
 
+@tool
+async def search_long_term_memory(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
+    """
+    Policy-scoped search across durable user/project/thread memories.
+    Returns active app-owned memory records, not raw chat history.
+    """
+    started = tool_started()
+    tool_name = "search_long_term_memory"
+    try:
+        conf = config.get("configurable", {}) if config else {}
+        thread_id = conf.get("app_thread_id") or conf.get("thread_id")
+        embedding_model = conf.get("embedding_model")
+
+        if not thread_id or not embedding_model:
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No thread context found.",
+                config=config,
+                started=started,
+                warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
+            ).to_json()
+
+        from app.services.memory_service import search_thread_memory
+
+        result = await search_thread_memory(
+            thread_id=thread_id,
+            query=query,
+            embedding_model=embedding_model,
+            max_results=max_results,
+        )
+        memories = result.get("memories", []) if isinstance(result, dict) else []
+
+        if not memories:
+            return make_tool_result(
+                tool_name=tool_name,
+                content="No relevant long-term memories found.",
+                config=config,
+                started=started,
+                warnings=[ToolWarningCode.NO_RELEVANT_MEMORY],
+            ).to_json()
+
+        lines = ["[LONG-TERM MEMORY]"]
+        memory_refs = []
+        scopes = []
+        for index, item in enumerate(memories, start=1):
+            memory = item.get("memory") or {}
+            scope_type = memory.get("scope_type") or "unknown"
+            scope_id = memory.get("scope_id") or "unknown"
+            memory_type = memory.get("memory_type") or "semantic"
+            content = memory.get("summary") or memory.get("content") or ""
+            lines.append(f"{index}. {scope_type}:{scope_id} | {memory_type}: {_short_excerpt(content, limit=500)}")
+            memory_refs.append({
+                "memory_id": memory.get("id"),
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+                "memory_type": memory_type,
+                "score": item.get("score"),
+            })
+            scope_key = {"scope_type": scope_type, "scope_id": scope_id}
+            if scope_key not in scopes:
+                scopes.append(scope_key)
+
+        return make_tool_result(
+            tool_name=tool_name,
+            content="\n".join(lines),
+            config=config,
+            started=started,
+            artifacts={"memory_refs": memory_refs, "memory_scopes": result.get("scopes", scopes) if isinstance(result, dict) else scopes},
+        ).to_json()
+    except Exception as e:
+        logger.error("Error in search_long_term_memory: %s", e, exc_info=True)
+        return make_tool_error_result(
+            tool_name=tool_name,
+            error=e,
+            config=config,
+            started=started,
+            user_message=f"Error retrieving long-term memory: {e}",
+        ).to_json()
+
+
 @tool(args_schema=ThreadTimelineSearchInput)
 async def search_thread_timeline(
     query: str,

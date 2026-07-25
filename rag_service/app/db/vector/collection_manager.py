@@ -127,6 +127,20 @@ class ModelAwareCollectionManager:
                 wvc.config.Property(name="title", data_type=wvc.config.DataType.TEXT),
                 wvc.config.Property(name="web_search_performed_at", data_type=wvc.config.DataType.TEXT),
             ]
+        elif base_name == CollectionNames.MEMORY:
+            return [
+                wvc.config.Property(name="memory_id", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="scope_type", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="scope_id", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="memory_type", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="status", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="visibility", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="content", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="summary", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="metadata_json", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="created_at", data_type=wvc.config.DataType.TEXT),
+                wvc.config.Property(name="updated_at", data_type=wvc.config.DataType.TEXT),
+            ]
         else:
             raise ValueError(f"Unknown base collection type: {base_name}")
 
@@ -191,7 +205,8 @@ class ModelAwareCollectionManager:
         collection_types = {
             CollectionNames.DOCUMENT: "document chunks",
             CollectionNames.CHAT_MEMORY: "chat memory", 
-            CollectionNames.WEB_SEARCH: "web search results"
+            CollectionNames.WEB_SEARCH: "web search results",
+            CollectionNames.MEMORY: "durable memory",
         }
         
         tasks = []

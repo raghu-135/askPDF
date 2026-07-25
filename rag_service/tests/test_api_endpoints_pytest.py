@@ -55,6 +55,7 @@ class TestThreadEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert "id" in data
+        assert "project_id" in data
         assert data["name"] == "Test Thread"
         assert data["embedding_model"] == "BAAI/bge-m3"
 
@@ -94,6 +95,103 @@ class TestThreadEndpoints:
         data = response.json()
         assert "threads" in data
         assert isinstance(data["threads"], list)
+        assert "project_id" in data["threads"][0]
+
+    def test_create_project_and_thread_in_project(self, client):
+        project_response = client.post(
+            "/api/projects",
+            json={"name": "Research", "description": "Shared research context"},
+        )
+        assert project_response.status_code == 200
+        project = project_response.json()
+
+        thread_response = client.post(
+            f"/api/projects/{project['id']}/threads",
+            json={"name": "Project Thread", "embedding_model": "BAAI/bge-m3"},
+        )
+        assert thread_response.status_code == 200
+        thread = thread_response.json()
+        assert thread["project_id"] == project["id"]
+
+    def test_move_thread_to_project(self, client):
+        project_response = client.post("/api/projects", json={"name": "Target"})
+        thread_response = client.post(
+            "/api/threads",
+            json={"name": "Movable", "embedding_model": "BAAI/bge-m3"},
+        )
+        project_id = project_response.json()["id"]
+        thread_id = thread_response.json()["id"]
+
+        move_response = client.put(
+            f"/api/threads/{thread_id}/project",
+            json={"project_id": project_id},
+        )
+        assert move_response.status_code == 200
+        assert move_response.json()["project_id"] == project_id
+
+    def test_memory_create_archive_and_candidate_approval(self, client):
+        project_response = client.post("/api/projects", json={"name": "Memory Project"})
+        project_id = project_response.json()["id"]
+
+        memory_response = client.post(
+            "/api/memories",
+            json={
+                "scope_type": "project",
+                "scope_id": project_id,
+                "memory_type": "semantic",
+                "content": "The project codename is Atlas.",
+                "confidence": 0.9,
+            },
+        )
+        assert memory_response.status_code == 200
+        memory = memory_response.json()
+        assert memory["status"] == "active"
+
+        archive_response = client.put(
+            f"/api/memories/{memory['id']}/status",
+            json={"status": "archived", "actor_id": "tester"},
+        )
+        assert archive_response.status_code == 200
+        assert archive_response.json()["status"] == "archived"
+
+        candidate_response = client.post(
+            "/api/memory-candidates",
+            json={
+                "proposed_scope_type": "project",
+                "proposed_scope_id": project_id,
+                "memory_type": "semantic",
+                "content": "Use concise project summaries.",
+                "confidence": 0.8,
+            },
+        )
+        assert candidate_response.status_code == 200
+        candidate = candidate_response.json()
+
+        resolve_response = client.post(
+            f"/api/memory-candidates/{candidate['id']}/resolve",
+            json={"status": "approved", "actor_id": "tester"},
+        )
+        assert resolve_response.status_code == 200
+        resolved = resolve_response.json()
+        assert resolved["memory_candidate"]["status"] == "approved"
+        assert resolved["memory"]["scope_id"] == project_id
+
+        user_candidate_response = client.post(
+            "/api/memory-candidates",
+            json={
+                "proposed_scope_type": "user",
+                "proposed_scope_id": "user-1",
+                "memory_type": "semantic",
+                "content": "Prefers concise answers.",
+                "confidence": 0.95,
+            },
+        )
+        assert user_candidate_response.status_code == 200
+        auto_response = client.post(
+            f"/api/memory-candidates/{user_candidate_response.json()['id']}/resolve",
+            json={"status": "auto_approved", "actor_id": "tester"},
+        )
+        assert auto_response.status_code == 400
 
     def test_get_thread(self, client):
         """Test getting a specific thread."""
@@ -440,6 +538,8 @@ class TestThreadEndpoints:
             source_thread_id="source-thread",
             message_id="message-1",
             name=None,
+            target_project_id=None,
+            memory_copy_mode=None,
         )
         create_task.assert_called_once()
 

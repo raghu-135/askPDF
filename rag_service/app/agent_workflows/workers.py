@@ -6,7 +6,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.external_research_tools import search_web
-from app.rag.agent_tools import search_conversation_history, search_documents, search_thread_timeline
+from app.rag.agent_tools import search_conversation_history, search_documents, search_long_term_memory, search_thread_timeline
 from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from app.agent_workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
 from app.agent_workflows.state import runtime_node_id
@@ -44,11 +44,29 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
         node_name=WorkflowNodeType.MEMORY_WORKER.value,
         tool_name=ToolName.SEARCH_CONVERSATION_HISTORY.value,
         evidence_kind=EvidenceKind.MEMORY.value,
-        evidence_label="Memory evidence",
+        evidence_label="Conversation history evidence",
         tool=search_conversation_history,
         tool_input=lambda current: {"query": current["question"], "max_results": 10},
         state_update=lambda current, _payload, artifacts, _evidence, _packets: {
             "used_chat_ids": [*current.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])],
+        },
+    ),
+    WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value: ToolWorkerSpec(
+        node_name=WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value,
+        tool_name=ToolName.SEARCH_LONG_TERM_MEMORY.value,
+        evidence_kind=EvidenceKind.LONG_TERM_MEMORY.value,
+        evidence_label="Long-term memory evidence",
+        tool=search_long_term_memory,
+        tool_input=lambda current: {"query": current["question"], "max_results": 10},
+        state_update=lambda current, _payload, artifacts, _evidence, _packets: {
+            "used_memory_ids": [
+                *current.get("used_memory_ids", []),
+                *[
+                    item.get("memory_id")
+                    for item in artifacts.get("memory_refs", [])
+                    if isinstance(item, dict) and item.get("memory_id")
+                ],
+            ],
         },
     ),
     WorkflowNodeType.TIMELINE_WORKER.value: ToolWorkerSpec(
@@ -181,6 +199,8 @@ async def run_tool_worker(
         data["web_source_count"] = len(update["web_sources"])
     if "used_chat_ids" in update:
         data["used_chat_id_count"] = len(update["used_chat_ids"])
+    if "used_memory_ids" in update:
+        data["used_memory_id_count"] = len(update["used_memory_ids"])
     if "timeline_event_count" in update:
         data["timeline_event_count"] = update["timeline_event_count"]
 

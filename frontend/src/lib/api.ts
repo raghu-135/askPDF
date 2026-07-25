@@ -151,6 +151,7 @@ export async function getParsedSentences(fileHash: string, threadId: string): Pr
 export interface Thread {
   id: string;
   name: string;
+  project_id?: string | null;
   embeddingModel: string;
   settings?: ThreadSettings;
   thread_metadata?: ThreadMetadata;
@@ -163,6 +164,7 @@ export interface Thread {
 interface RawThread {
   id: string;
   name: string;
+  project_id?: string | null;
   embedding_model: string;
   settings?: ThreadSettings;
   thread_metadata?: ThreadMetadata;
@@ -175,6 +177,7 @@ interface RawThread {
 const mapThread = (raw: RawThread): Thread => ({
   id: raw.id,
   name: raw.name,
+  project_id: raw.project_id,
   embeddingModel: raw.embedding_model,
   settings: raw.settings,
   thread_metadata: raw.thread_metadata,
@@ -214,6 +217,33 @@ export interface ThreadSettings {
   agent_workflow?: {
     workflow_id: string;
   };
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string | null;
+  settings_json?: Record<string, any>;
+  created_at: string;
+  updated_at?: string | null;
+}
+
+export interface MemoryCandidate {
+  id: string;
+  source_thread_id?: string | null;
+  source_project_id?: string | null;
+  source_agent_run_id?: string | null;
+  source_turn_id?: string | null;
+  proposed_scope_type: string;
+  proposed_scope_id: string;
+  memory_type: string;
+  content: string;
+  confidence: number;
+  reason?: string;
+  status: string;
+  created_by?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 // ============ Agent Workflow Builder API ============
@@ -726,14 +756,73 @@ export interface AgentRunSummary {
   [key: string]: any;
 }
 
-export async function createThread(name: string, embeddingModel: string): Promise<Thread> {
+export async function listProjects(): Promise<{ projects: Project[] }> {
+  const res = await fetch(`${API_BASE}/api/projects`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createProject(name: string, description?: string): Promise<Project> {
+  const res = await fetch(`${API_BASE}/api/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, description })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createThread(name: string, embeddingModel: string, projectId?: string | null): Promise<Thread> {
   const res = await fetch(`${API_BASE}/api/threads`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, embedding_model: embeddingModel, project_id: projectId || undefined })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return mapThread(await res.json());
+}
+
+export async function createProjectThread(projectId: string, name: string, embeddingModel: string): Promise<Thread> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/threads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name, embedding_model: embeddingModel })
   });
   if (!res.ok) throw new Error(await res.text());
   return mapThread(await res.json());
+}
+
+export async function listMemoryCandidates(options: {
+  status?: string;
+  sourceProjectId?: string | null;
+  limit?: number;
+} = {}): Promise<{ memory_candidates: MemoryCandidate[] }> {
+  const params = new URLSearchParams();
+  if (options.status) params.set("status", options.status);
+  if (options.sourceProjectId) params.set("source_project_id", options.sourceProjectId);
+  if (options.limit) params.set("limit", String(options.limit));
+  const query = params.toString();
+  const res = await fetch(`${API_BASE}/api/memory-candidates${query ? `?${query}` : ""}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function resolveMemoryCandidate(
+  candidateId: string,
+  status: "approved" | "rejected",
+  options: { embeddingModel?: string; actorId?: string } = {}
+): Promise<{ memory_candidate: MemoryCandidate; memory?: any | null }> {
+  const res = await fetch(`${API_BASE}/api/memory-candidates/${encodeURIComponent(candidateId)}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      status,
+      embedding_model: options.embeddingModel,
+      actor_id: options.actorId,
+    })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function listThreads(): Promise<{ threads: Thread[] }> {
@@ -773,7 +862,7 @@ export async function updateThread(threadId: string, name: string): Promise<Thre
 
 export async function forkThread(
   threadId: string,
-  options: { messageId?: string; name?: string } = {}
+  options: { messageId?: string; name?: string; targetProjectId?: string; memoryCopyMode?: string } = {}
 ): Promise<Thread> {
   const res = await fetch(`${API_BASE}/api/threads/${threadId}/fork`, {
     method: "POST",
@@ -781,6 +870,8 @@ export async function forkThread(
     body: JSON.stringify({
       message_id: options.messageId,
       name: options.name,
+      target_project_id: options.targetProjectId,
+      memory_copy_mode: options.memoryCopyMode,
     }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -1256,6 +1347,8 @@ export interface ThreadChatResponse {
   agent_run_sequence?: number | null;
   agent_trace_refs?: AgentTraceRefs | null;
   pending_interrupt?: AgentRunPendingInterrupt | null;
+  memory_candidate_ids?: string[];
+  memory_candidates?: MemoryCandidate[];
   agent_workflow_id?: string;
   route?: string;
   agent_route?: string;

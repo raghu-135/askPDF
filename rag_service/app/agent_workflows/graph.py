@@ -118,6 +118,7 @@ class NodeRegistry:
             WorkflowNodeType.ROUTER.value: self.router,
             WorkflowNodeType.RETRIEVAL_WORKER.value: self.retrieval_worker,
             WorkflowNodeType.MEMORY_WORKER.value: self.memory_worker,
+            WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value: self.long_term_memory_worker,
             WorkflowNodeType.TIMELINE_WORKER.value: self.timeline_worker,
             WorkflowNodeType.WEB_WORKER.value: self.web_worker,
             WorkflowNodeType.EVIDENCE_EVALUATOR.value: self.evidence_evaluator,
@@ -469,6 +470,9 @@ class NodeRegistry:
 
     async def memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         return await self._tool_worker(WorkflowNodeType.MEMORY_WORKER.value, state, config)
+
+    async def long_term_memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        return await self._tool_worker(WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value, state, config)
 
     async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         return await self._tool_worker(WorkflowNodeType.TIMELINE_WORKER.value, state, config)

@@ -17,6 +17,11 @@ from app.db.enums import (
     AgentRunStatus,
     ChatTurnStatus,
     FileSourceType,
+    MemoryCandidateStatus,
+    MemoryScopeType,
+    MemoryStatus,
+    MemoryType,
+    MemoryVisibility,
     MessageRole,
     ProcessStatus,
     WorkflowVisibility,
@@ -57,11 +62,45 @@ class ThreadFile(SQLModel, table=True):
 # Main Tables
 # ============================================================================
 
+class Project(SQLModel, table=True):
+    """Project container for shared thread context and memory."""
+    __tablename__ = "projects"
+
+    id: str = Field(primary_key=True)
+    name: str = Field(index=True)
+    description: str = ""
+    settings_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), onupdate=func.now())
+    )
+
+    threads: List["Thread"] = Relationship(
+        back_populates="project",
+        sa_relationship_kwargs={"passive_deletes": True}
+    )
+
+    __table_args__ = (
+        Index("idx_project_created_at", "created_at"),
+    )
+
+
 class Thread(SQLModel, table=True):
     """Chat thread entity."""
     __tablename__ = "threads"
     
     id: str = Field(primary_key=True)
+    project_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String, ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True)
+    )
     name: str = Field(index=True)
     embedding_model: str = Field(index=True)
     settings: Dict[str, Any] = Field(
@@ -97,6 +136,7 @@ class Thread(SQLModel, table=True):
     )
     
     # Relationships
+    project: Optional["Project"] = Relationship(back_populates="threads")
     chat_turns: List["ChatTurn"] = Relationship(
         back_populates="thread",
         sa_relationship_kwargs={"passive_deletes": True, "cascade": "all, delete-orphan"}
@@ -328,3 +368,103 @@ class AgentRun(SQLModel, table=True):
         else:
             metadata["workflow_version"] = int(value)
         self.run_metadata_json = metadata
+
+
+class Memory(SQLModel, table=True):
+    """Canonical durable memory owned by the app, independent of agent framework."""
+    __tablename__ = "memories"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    scope_type: str = Field(default=MemoryScopeType.THREAD.value, index=True)
+    scope_id: str = Field(index=True)
+    memory_type: str = Field(default=MemoryType.SEMANTIC.value, index=True)
+    content: str
+    summary: str = ""
+    source_refs_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+    confidence: float = Field(default=1.0, sa_column=Column(Float, nullable=False, server_default="1"))
+    status: str = Field(default=MemoryStatus.ACTIVE.value, index=True)
+    visibility: str = Field(default=MemoryVisibility.PRIVATE.value, index=True)
+    created_by: Optional[str] = Field(default=None, index=True)
+    expires_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True))
+    )
+    fork_origin_json: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSONB)
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), onupdate=func.now())
+    )
+
+    events: List["MemoryEvent"] = Relationship(
+        back_populates="memory",
+        sa_relationship_kwargs={"passive_deletes": True, "cascade": "all, delete-orphan"}
+    )
+
+    __table_args__ = (
+        Index("idx_memory_scope_status", "scope_type", "scope_id", "status"),
+        Index("idx_memory_created_at", "created_at"),
+    )
+
+
+class MemoryEvent(SQLModel, table=True):
+    """Audit event for durable memory changes."""
+    __tablename__ = "memory_events"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    memory_id: str = Field(
+        sa_column=Column(String, ForeignKey("memories.id", ondelete="CASCADE"), index=True)
+    )
+    event_type: str = Field(index=True)
+    actor_id: Optional[str] = Field(default=None, index=True)
+    payload_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, default=dict)
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+
+    memory: Optional["Memory"] = Relationship(back_populates="events")
+
+
+class MemoryCandidate(SQLModel, table=True):
+    """Memory promotion candidate generated from chat/run context."""
+    __tablename__ = "memory_candidates"
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
+    source_thread_id: Optional[str] = Field(default=None, index=True)
+    source_project_id: Optional[str] = Field(default=None, index=True)
+    source_agent_run_id: Optional[str] = Field(default=None, index=True)
+    source_turn_id: Optional[str] = Field(default=None, index=True)
+    proposed_scope_type: str = Field(default=MemoryScopeType.THREAD.value, index=True)
+    proposed_scope_id: str = Field(index=True)
+    memory_type: str = Field(default=MemoryType.SEMANTIC.value, index=True)
+    content: str
+    confidence: float = Field(default=0.0, sa_column=Column(Float, nullable=False, server_default="0"))
+    reason: str = ""
+    status: str = Field(default=MemoryCandidateStatus.PENDING.value, index=True)
+    created_by: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), onupdate=func.now())
+    )
+
+    __table_args__ = (
+        Index("idx_memory_candidate_scope_status", "proposed_scope_type", "proposed_scope_id", "status"),
+        Index("idx_memory_candidate_source_thread", "source_thread_id", "created_at"),
+    )

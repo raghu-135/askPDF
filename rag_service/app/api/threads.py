@@ -35,7 +35,10 @@ from app.db import (
     EmbeddingReadinessStatus,
     ProcessStatus,
     delete_thread,
+    assign_thread_to_project,
+    ensure_default_project,
     get_file_status,
+    get_project,
     get_thread,
     get_thread_files,
     get_thread_settings,
@@ -57,6 +60,7 @@ from app.models.requests import (
     ThreadBulkDeleteResponse,
     ThreadCreateRequest,
     ThreadForkRequest,
+    ThreadProjectUpdateRequest,
     ThreadSettingsResponse,
     ThreadSettingsUpdateRequest,
     ThreadUpdateRequest,
@@ -104,6 +108,7 @@ def _public_thread_settings(settings: Optional[dict]) -> dict:
 def _thread_payload(thread) -> dict:
     return {
         "id": thread.id,
+        "project_id": getattr(thread, "project_id", None),
         "name": thread.name,
         "embedding_model": thread.embedding_model,
         "settings": _public_thread_settings(thread.settings),
@@ -201,7 +206,15 @@ async def create_thread_endpoint(req: ThreadCreateRequest):
             )
         # Create thread in database
         from app.db import create_thread
-        thread = await create_thread(req.name, embedding_model)
+        project_id = req.project_id
+        if project_id:
+            project = await get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+        else:
+            project = await ensure_default_project()
+            project_id = project.id
+        thread = await create_thread(req.name, embedding_model, project_id=project_id)
 
         return _thread_payload(thread)
     except Exception as e:
@@ -275,6 +288,8 @@ async def fork_thread_endpoint(thread_id: str, req: ThreadForkRequest):
             source_thread_id=thread_id,
             message_id=req.message_id,
             name=req.name,
+            target_project_id=req.target_project_id,
+            memory_copy_mode=req.memory_copy_mode,
         )
         thread = result["thread"]
         files = result["files"]
@@ -338,6 +353,7 @@ async def get_thread_endpoint(thread_id: str):
 
         return {
             "id": thread.id,
+            "project_id": getattr(thread, "project_id", None),
             "name": thread.name,
             "embedding_model": thread.embedding_model,
             "settings": _public_thread_settings(thread.settings),
@@ -374,6 +390,21 @@ async def update_thread_endpoint(thread_id: str, req: ThreadUpdateRequest):
         thread = await update_thread(thread_id, req.name)
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
+        return _thread_payload(thread)
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/threads/{thread_id}/project")
+async def update_thread_project_endpoint(thread_id: str, req: ThreadProjectUpdateRequest):
+    """Move a thread into a project."""
+    try:
+        thread = await assign_thread_to_project(thread_id, req.project_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread or project not found")
         return _thread_payload(thread)
     except HTTPException:
         raise

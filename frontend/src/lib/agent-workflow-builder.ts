@@ -88,6 +88,7 @@ const ROUTE_FUNCTION_BY_NODE_TYPE: Record<string, string> = {
 const REPEATABLE_NODE_TYPES = new Set([
   'retrieval_worker',
   'memory_worker',
+  'long_term_memory_worker',
   'timeline_worker',
   'web_worker',
   'evidence_evaluator',
@@ -601,6 +602,7 @@ export function createInitialBuilderState(
     nodeWithDefaultTools(catalog, 'router', 'router'),
     nodeWithDefaultTools(catalog, 'retrieval_worker', 'retrieval_worker', ['document_evidence']),
     nodeWithDefaultTools(catalog, 'memory_worker', 'memory_worker', ['deep_memory']),
+    nodeWithDefaultTools(catalog, 'long_term_memory_worker', 'long_term_memory_worker', ['memory_recall']),
     nodeWithDefaultTools(catalog, 'timeline_worker', 'timeline_worker', ['thread_timeline']),
     nodeWithDefaultTools(catalog, 'web_worker', 'web_worker', ['live_web_recon']),
     nodeWithDefaultTools(catalog, 'direct_answer', 'direct_answer'),
@@ -620,6 +622,7 @@ export function createInitialBuilderState(
         routes: {
           document: 'retrieval_worker',
           memory: 'memory_worker',
+          long_term_memory: 'long_term_memory_worker',
           timeline: 'timeline_worker',
           web: 'web_worker',
           direct: 'direct_answer',
@@ -628,6 +631,7 @@ export function createInitialBuilderState(
       },
       { from: 'retrieval_worker', to: 'synthesizer' },
       { from: 'memory_worker', to: 'synthesizer' },
+      { from: 'long_term_memory_worker', to: 'synthesizer' },
       { from: 'timeline_worker', to: 'synthesizer' },
       { from: 'web_worker', to: 'synthesizer' },
       { from: 'direct_answer', to: 'finalizer' },

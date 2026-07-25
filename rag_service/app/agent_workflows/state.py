@@ -38,6 +38,7 @@ class RouterRagState(TypedDict, total=False):
     document_sources: List[Dict[str, Any]]
     web_sources: List[Dict[str, Any]]
     used_chat_ids: List[str]
+    used_memory_ids: List[str]
     final_answer: str
     reasoning: str
     reasoning_available: bool

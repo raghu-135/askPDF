@@ -111,3 +111,45 @@ class ReasoningFormat(str, Enum):
     TAGGED_TEXT = "tagged_text"
     MARKDOWN = "markdown"
     RAW = "raw"
+
+
+class MemoryScopeType(str, Enum):
+    """Scopes that can own durable app memory."""
+
+    USER = "user"
+    PROJECT = "project"
+    THREAD = "thread"
+
+
+class MemoryType(str, Enum):
+    """Durable memory content categories."""
+
+    SEMANTIC = "semantic"
+    EPISODIC = "episodic"
+    PROCEDURAL = "procedural"
+
+
+class MemoryStatus(str, Enum):
+    """Durable memory lifecycle statuses."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    DELETED = "deleted"
+    REJECTED = "rejected"
+
+
+class MemoryVisibility(str, Enum):
+    """Durable memory visibility boundaries."""
+
+    PRIVATE = "private"
+    PROJECT = "project"
+    INTERNAL = "internal"
+
+
+class MemoryCandidateStatus(str, Enum):
+    """Promotion candidate lifecycle statuses."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    AUTO_APPROVED = "auto_approved"

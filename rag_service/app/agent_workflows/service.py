@@ -43,6 +43,33 @@ class AgentRunService:
         self.repository = repository or AgentWorkflowRepository()
         self.resolver = resolver or WorkflowResolver()
 
+    async def _promote_memory_candidates(self, *, thread_id: str, result: Dict[str, Any], run_id: str) -> list[Dict[str, Any]]:
+        if result.get("status") != AgentRunStatus.COMPLETED.value:
+            return []
+        turn_id = result.get("chat_turn_id")
+        if not isinstance(turn_id, str) or not turn_id:
+            return []
+        try:
+            from app.services.memory_promotion_service import extract_candidates_for_completed_turn
+
+            candidates = await extract_candidates_for_completed_turn(
+                thread_id=thread_id,
+                turn_id=turn_id,
+                agent_run_id=run_id,
+            )
+            if candidates:
+                result["memory_candidate_ids"] = [candidate["id"] for candidate in candidates if candidate.get("id")]
+                result["memory_candidates"] = candidates
+            return candidates
+        except Exception:
+            logger.exception(
+                "Memory candidate extraction skipped after chat turn | thread_id=%s run_id=%s turn_id=%s",
+                thread_id,
+                run_id,
+                turn_id,
+            )
+            return []
+
     async def run_thread_chat(
         self,
         thread_id: str,
@@ -333,6 +360,7 @@ class AgentRunService:
                 metrics_json=metrics,
                 error_json=error_json,
             )
+            await self._promote_memory_candidates(thread_id=thread_id, result=result, run_id=run.id)
             if completed_run is not None:
                 debug_payload = trace_recorder.finalize(
                     run=completed_run,
@@ -500,6 +528,11 @@ class AgentRunService:
             )
             if completed_run is None:
                 return resolution
+            await self._promote_memory_candidates(
+                thread_id=resolution.run.thread_id,
+                result=result,
+                run_id=resolution.run.id,
+            )
             resume_debug_payload = resume_trace_recorder.finalize(
                 run=completed_run,
                 chat_turn_id=result.get("chat_turn_id"),
