@@ -28,6 +28,8 @@ const edgeLabel = (edge: BuilderEdgeState) => {
   return `${edge.from} -> ${edge.to}`;
 };
 
+const INITIAL_EDITOR_HEIGHT = 800;
+
 export default function BuilderGraphEditor({
   catalog,
   state,
@@ -72,7 +74,7 @@ export default function BuilderGraphEditor({
   onGraphElementsCollapsedChange: (collapsed: boolean) => void;
 }) {
   const editorRef = useRef<HTMLDivElement | null>(null);
-  const [editorHeight, setEditorHeight] = useState(800);
+  const [editorHeight, setEditorHeight] = useState(INITIAL_EDITOR_HEIGHT);
   const graphElementsResolvedRatio = clampPanelRatio(graphElementsRatio, PANEL_RATIOS.graphElements);
   const graphElementsHeight = Math.round(editorHeight * graphElementsResolvedRatio);
   const graphElementsMinHeight = Math.max(72, Math.round(editorHeight * PANEL_RATIOS.graphElements.min));

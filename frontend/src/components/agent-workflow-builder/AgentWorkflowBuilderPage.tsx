@@ -98,11 +98,8 @@ const readBuilderLayout = () => {
   if (typeof window === 'undefined') return DEFAULT_BUILDER_LAYOUT;
   try {
     const stored = JSON.parse(window.localStorage.getItem(BUILDER_LAYOUT_STORAGE_KEY) || '{}');
-    const legacyHeightRatio = Number.isFinite(Number(stored.graphElementsHeight))
-      ? Number(stored.graphElementsHeight) / 800
-      : PANEL_RATIOS.graphElements.default;
     return {
-      graphElementsRatio: clampPanelRatio(Number(stored.graphElementsRatio) || legacyHeightRatio, PANEL_RATIOS.graphElements),
+      graphElementsRatio: clampPanelRatio(Number(stored.graphElementsRatio) || PANEL_RATIOS.graphElements.default, PANEL_RATIOS.graphElements),
       graphElementsCollapsed: Boolean(stored.graphElementsCollapsed),
     };
   } catch {
