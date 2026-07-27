@@ -77,6 +77,7 @@ import type { ResolvedWorkbenchPlacement } from '../../lib/workbench-layout';
 import ThreadSidebar, { type ThreadSidebarHeaderState } from '../ThreadSidebar';
 import ChatInterface, { type ChatTraceDescriptor } from '../ChatInterface';
 import { buildDocumentWorkspaceTabs, type PdfTab } from '../../lib/document-tabs';
+import { clampPanelRatio, PANEL_RATIOS } from '../../lib/panel-ratio';
 import { getThread } from '../../lib/api';
 import { loadThreadTabs } from '../../lib/thread-utils';
 import { getActiveTab, getActiveTabData } from '../../lib/pdf-utils';
@@ -89,23 +90,20 @@ type ContextualNodeRequest =
 
 const BUILDER_LAYOUT_STORAGE_KEY = 'askpdf.agentWorkflowBuilder.layout.v1';
 const DEFAULT_BUILDER_LAYOUT = {
-  sidebarWidth: 360,
-  palettePercent: 40,
-  graphElementsHeight: 104,
+  graphElementsRatio: PANEL_RATIOS.graphElements.default,
   graphElementsCollapsed: false,
-  inspectorCollapsed: false,
 };
 
 const readBuilderLayout = () => {
   if (typeof window === 'undefined') return DEFAULT_BUILDER_LAYOUT;
   try {
     const stored = JSON.parse(window.localStorage.getItem(BUILDER_LAYOUT_STORAGE_KEY) || '{}');
+    const legacyHeightRatio = Number.isFinite(Number(stored.graphElementsHeight))
+      ? Number(stored.graphElementsHeight) / 800
+      : PANEL_RATIOS.graphElements.default;
     return {
-      sidebarWidth: Math.min(560, Math.max(300, Number(stored.sidebarWidth) || 360)),
-      palettePercent: Math.min(65, Math.max(25, Number(stored.palettePercent) || 40)),
-      graphElementsHeight: Math.min(320, Math.max(72, Number(stored.graphElementsHeight) || 104)),
+      graphElementsRatio: clampPanelRatio(Number(stored.graphElementsRatio) || legacyHeightRatio, PANEL_RATIOS.graphElements),
       graphElementsCollapsed: Boolean(stored.graphElementsCollapsed),
-      inspectorCollapsed: Boolean(stored.inspectorCollapsed),
     };
   } catch {
     return DEFAULT_BUILDER_LAYOUT;
@@ -907,9 +905,9 @@ export default function AgentWorkflowBuilderPage() {
                   onUpdateNote={handleUpdateNote}
                   onRemoveNote={handleRemoveNote}
                   onPositionsChange={handlePositionsChange}
-                  graphElementsHeight={builderLayout.graphElementsHeight}
+                  graphElementsRatio={builderLayout.graphElementsRatio}
                   graphElementsCollapsed={builderLayout.graphElementsCollapsed}
-                  onGraphElementsHeightChange={(graphElementsHeight) => setBuilderLayout((previous) => ({ ...previous, graphElementsHeight }))}
+                  onGraphElementsRatioChange={(graphElementsRatio) => setBuilderLayout((previous) => ({ ...previous, graphElementsRatio }))}
                   onGraphElementsCollapsedChange={(graphElementsCollapsed) => setBuilderLayout((previous) => ({ ...previous, graphElementsCollapsed }))}
                 />
               </Box>

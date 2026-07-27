@@ -13,6 +13,7 @@ import {
 } from '@mui/material';
 import type { AgentWorkflowCatalogResponse } from '../../lib/api';
 import type { AgentWorkflowBuilderState, BuilderEdgeState } from '../../lib/agent-workflow-builder';
+import { clampPanelRatio, PANEL_RATIOS } from '../../lib/panel-ratio';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
 import WorkflowBuilderCanvas from './WorkflowBuilderCanvas';
 import BuilderResizeHandle from './BuilderResizeHandle';
@@ -44,9 +45,9 @@ export default function BuilderGraphEditor({
   onUpdateNote,
   onRemoveNote,
   onPositionsChange,
-  graphElementsHeight,
+  graphElementsRatio,
   graphElementsCollapsed,
-  onGraphElementsHeightChange,
+  onGraphElementsRatioChange,
   onGraphElementsCollapsedChange,
 }: {
   catalog: AgentWorkflowCatalogResponse;
@@ -65,14 +66,17 @@ export default function BuilderGraphEditor({
   onUpdateNote: (id: string, position: { x: number; y: number }) => void;
   onRemoveNote: (id: string) => void;
   onPositionsChange: (positions: Record<string, { x: number; y: number }>) => void;
-  graphElementsHeight: number;
+  graphElementsRatio: number;
   graphElementsCollapsed: boolean;
-  onGraphElementsHeightChange: (height: number) => void;
+  onGraphElementsRatioChange: (ratio: number) => void;
   onGraphElementsCollapsedChange: (collapsed: boolean) => void;
 }) {
   const editorRef = useRef<HTMLDivElement | null>(null);
   const [editorHeight, setEditorHeight] = useState(800);
-  const graphElementsMaxHeight = Math.max(72, Math.min(320, Math.floor(editorHeight * 0.38), editorHeight - 288));
+  const graphElementsResolvedRatio = clampPanelRatio(graphElementsRatio, PANEL_RATIOS.graphElements);
+  const graphElementsHeight = Math.round(editorHeight * graphElementsResolvedRatio);
+  const graphElementsMinHeight = Math.max(72, Math.round(editorHeight * PANEL_RATIOS.graphElements.min));
+  const graphElementsMaxHeight = Math.max(graphElementsMinHeight, Math.round(editorHeight * PANEL_RATIOS.graphElements.max));
 
   useEffect(() => {
     const element = editorRef.current;
@@ -83,8 +87,8 @@ export default function BuilderGraphEditor({
   }, []);
 
   useEffect(() => {
-    if (graphElementsHeight > graphElementsMaxHeight) onGraphElementsHeightChange(graphElementsMaxHeight);
-  }, [graphElementsHeight, graphElementsMaxHeight, onGraphElementsHeightChange]);
+    if (graphElementsRatio !== graphElementsResolvedRatio) onGraphElementsRatioChange(graphElementsResolvedRatio);
+  }, [graphElementsRatio, graphElementsResolvedRatio, onGraphElementsRatioChange]);
 
   const issueCountForSelection = useCallback((targetSelection: BuilderSelection) => (
     validationIssues.filter((issue) => {
@@ -104,7 +108,7 @@ export default function BuilderGraphEditor({
       ref={editorRef}
       sx={{
         display: 'grid',
-        gridTemplateRows: `minmax(280px, 1fr) 8px ${graphElementsCollapsed ? 42 : graphElementsHeight}px`,
+        gridTemplateRows: `minmax(48px, 1fr) 8px ${graphElementsCollapsed ? 42 : graphElementsHeight}px`,
         minHeight: 400,
         height: '100%',
         flex: '1 1 400px',
@@ -112,7 +116,7 @@ export default function BuilderGraphEditor({
         bgcolor: 'background.default',
       }}
     >
-      <Box sx={{ minHeight: 280, overflow: 'hidden' }}>
+      <Box sx={{ minHeight: 48, overflow: 'hidden' }}>
         <WorkflowBuilderCanvas
           catalog={catalog}
           state={state}
@@ -135,14 +139,14 @@ export default function BuilderGraphEditor({
       <BuilderResizeHandle
         orientation="horizontal"
         value={graphElementsHeight}
-        min={72}
+        min={graphElementsMinHeight}
         max={graphElementsMaxHeight}
-        defaultValue={104}
+        defaultValue={Math.round(editorHeight * PANEL_RATIOS.graphElements.default)}
         direction={-1}
         label="Resize Graph Elements panel"
         onChange={(height) => {
           onGraphElementsCollapsedChange(false);
-          onGraphElementsHeightChange(height);
+          onGraphElementsRatioChange(clampPanelRatio(height / Math.max(1, editorHeight), PANEL_RATIOS.graphElements));
         }}
       />
       <Box sx={{ minWidth: 0, overflow: 'hidden', bgcolor: 'background.paper' }}>

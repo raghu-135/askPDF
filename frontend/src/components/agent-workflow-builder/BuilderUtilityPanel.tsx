@@ -6,11 +6,6 @@ import {
 } from '@mui/material';
 import type { ResolvedWorkbenchPlacement } from '../../lib/workbench-layout';
 
-export type BuilderUtilityLayout = {
-  palettePercent: number;
-  inspectorCollapsed: boolean;
-};
-
 type UtilityTab = 'inspector' | 'palette';
 
 export default function BuilderUtilityPanel({
