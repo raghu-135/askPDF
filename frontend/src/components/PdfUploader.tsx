@@ -104,12 +104,7 @@ const PdfUploader = React.memo(function PdfUploader({
             
             // Check if error should stop retrying
             if (!isRetryableError(error)) {
-              if (isNotFoundError(error)) {
-                console.log('File or thread no longer exists, stopping sentences fetch');
-              } else {
-                console.log('Permanent error in sentences fetch:', error?.message);
-              }
-              // Don't retry for permanent errors
+              // Don't retry for permanent errors.
             }
           }
         }
@@ -125,11 +120,6 @@ const PdfUploader = React.memo(function PdfUploader({
         
         // Check if error should stop polling
         if (!isRetryableError(error)) {
-          if (isNotFoundError(error)) {
-            console.log('File or thread no longer exists, stopping polling');
-          } else {
-            console.log('Permanent error in file status polling:', error?.message);
-          }
           clearInterval(pollInterval);
         }
       }

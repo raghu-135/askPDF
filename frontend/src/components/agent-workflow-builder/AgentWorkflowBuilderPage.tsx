@@ -71,41 +71,26 @@ import type { BuilderSelection, BuilderValidationIssue } from './types';
 import WorkbenchShell, { useWorkbenchLayout } from '../workbench/WorkbenchShell';
 import DockMenuButton from '../workbench/DockMenuButton';
 import WorkspaceTabs, { type WorkspaceTab } from '../workbench/WorkspaceTabs';
-import DocumentWorkspaceContent from '../workbench/DocumentWorkspaceContent';
+import ThreadWorkspaceContent from '../workbench/ThreadWorkspaceContent';
 import useTraceTabs from '../workbench/useTraceTabs';
+import useStoredLayoutState from '../workbench/useStoredLayoutState';
 import type { ResolvedWorkbenchPlacement } from '../../lib/workbench-layout';
-import ThreadSidebar, { type ThreadSidebarHeaderState } from '../ThreadSidebar';
 import ChatInterface, { type ChatTraceDescriptor } from '../ChatInterface';
+import ThreadSecondaryPanel from '../ThreadSecondaryPanel';
 import { buildDocumentWorkspaceTabs, type PdfTab } from '../../lib/document-tabs';
-import { clampPanelRatio, PANEL_RATIOS } from '../../lib/panel-ratio';
 import { getThread } from '../../lib/api';
 import { loadThreadTabs } from '../../lib/thread-utils';
 import { getActiveTab, getActiveTabData } from '../../lib/pdf-utils';
 import { emptyBuilderTestSession, type BuilderTestSession } from '../../lib/builder-test-session';
-import ForumIcon from '@mui/icons-material/Forum';
+import {
+  BUILDER_LAYOUT_STORAGE_KEY,
+  DEFAULT_BUILDER_LAYOUT,
+  normalizeBuilderLayout,
+} from '../../lib/builder-layout';
 
 type ContextualNodeRequest =
   | { mode: 'after'; source: string; route?: string }
   | { mode: 'before'; target: string; incomingPaths: BuilderIncomingPath[]; selectedPathId?: string };
-
-const BUILDER_LAYOUT_STORAGE_KEY = 'askpdf.agentWorkflowBuilder.layout.v1';
-const DEFAULT_BUILDER_LAYOUT = {
-  graphElementsRatio: PANEL_RATIOS.graphElements.default,
-  graphElementsCollapsed: false,
-};
-
-const readBuilderLayout = () => {
-  if (typeof window === 'undefined') return DEFAULT_BUILDER_LAYOUT;
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(BUILDER_LAYOUT_STORAGE_KEY) || '{}');
-    return {
-      graphElementsRatio: clampPanelRatio(Number(stored.graphElementsRatio) || PANEL_RATIOS.graphElements.default, PANEL_RATIOS.graphElements),
-      graphElementsCollapsed: Boolean(stored.graphElementsCollapsed),
-    };
-  } catch {
-    return DEFAULT_BUILDER_LAYOUT;
-  }
-};
 
 const collectNodeToolIds = (nodes: BuilderNodeState[]) => (
   Array.from(new Set(nodes.flatMap((node) => node.tool_contract_ids || []))).sort()
@@ -229,9 +214,12 @@ export default function AgentWorkflowBuilderPage() {
   const [workspace, setWorkspace] = useState<'build' | 'test'>('build');
   const [buildTab, setBuildTab] = useState<'canvas-tab' | 'spec-tab'>('canvas-tab');
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
-  const [builderLayout, setBuilderLayout] = useState(DEFAULT_BUILDER_LAYOUT);
+  const [builderLayout, setBuilderLayout] = useStoredLayoutState(
+    BUILDER_LAYOUT_STORAGE_KEY,
+    DEFAULT_BUILDER_LAYOUT,
+    normalizeBuilderLayout,
+  );
   const utilityRailRef = useRef<HTMLDivElement | null>(null);
-  const layoutHydrated = useRef(false);
   const [buildWorkbenchLayout, setBuildWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.builder.build');
   const [testWorkbenchLayout, setTestWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.builder.test');
   const [resolvedPlacement, setResolvedPlacement] = useState<ResolvedWorkbenchPlacement>('right');
@@ -243,7 +231,6 @@ export default function AgentWorkflowBuilderPage() {
   const [testActiveTabId, setTestActiveTabId] = useState<string | null>(null);
   const [testThreadLoading, setTestThreadLoading] = useState(false);
   const [testSidebarVersion, setTestSidebarVersion] = useState(0);
-  const [testThreadHeaderState, setTestThreadHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
   const {
     traceTabs: testTraceTabs,
     activeTraceId: testActiveTraceId,
@@ -253,23 +240,6 @@ export default function AgentWorkflowBuilderPage() {
     clearTraces: clearTestTraces,
   } = useTraceTabs();
   const [testSession, setTestSession] = useState<BuilderTestSession>(() => emptyBuilderTestSession());
-
-  useEffect(() => {
-    setBuilderLayout(readBuilderLayout());
-  }, []);
-
-  useEffect(() => {
-    if (!layoutHydrated.current) {
-      layoutHydrated.current = true;
-      return;
-    }
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(BUILDER_LAYOUT_STORAGE_KEY, JSON.stringify(builderLayout));
-    } catch {
-      // Layout persistence is best-effort and must never block authoring.
-    }
-  }, [builderLayout]);
 
   useEffect(() => {
     let cancelled = false;
@@ -853,7 +823,7 @@ export default function AgentWorkflowBuilderPage() {
               testThreadLoading ? (
                 <Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>
               ) : (
-                <DocumentWorkspaceContent
+                <ThreadWorkspaceContent
                   activeTabId={testActiveTabId}
                   activeDocument={testActiveDocument}
                   documentSentences={testActiveDocumentData.pdfSentences}
@@ -910,71 +880,58 @@ export default function AgentWorkflowBuilderPage() {
               </Box>
             )
           }
-          secondaryHeader={
+          secondaryHeader={workspace === 'build' ? (
             <Box sx={{ minHeight: 44, px: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
-              {workspace === 'build' ? (
-                <Box sx={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Agent Workflow Builder</Typography>
-                  {builderState ? (
-                    <Chip
-                      size="small"
-                      variant="outlined"
-                      label={`${builderState.nodes.length} nodes · ${builderState.edges.length} edges · ${builderState.allowed_tool_ids.length} tools`}
-                      sx={{ height: 22, fontSize: '0.68rem' }}
-                    />
-                  ) : null}
-                </Box>
-              ) : testThread ? (
-                <Box sx={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Button size="small" startIcon={<ForumIcon />} onClick={() => void handleTestThreadSelect(null)} sx={{ flexShrink: 0 }}>All threads</Button>
-                  <Typography variant="subtitle2" noWrap title={testThread.name || testThread.id}>
-                    {testThread.name || testThread.id}
-                  </Typography>
-                </Box>
-              ) : (
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <ForumIcon color="primary" fontSize="small" />
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Threads</Typography>
-                  {testThreadHeaderState && <Typography variant="caption" color="text.secondary">{testThreadHeaderState.threadCount}</Typography>}
-                </Box>
-              )}
+              <Box sx={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Agent Workflow Builder</Typography>
+                {builderState ? (
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={`${builderState.nodes.length} nodes · ${builderState.edges.length} edges · ${builderState.allowed_tool_ids.length} tools`}
+                    sx={{ height: 22, fontSize: '0.68rem' }}
+                  />
+                ) : null}
+              </Box>
             </Box>
-          }
+          ) : undefined}
           secondaryContent={
             !catalog || !builderState ? <Box /> : workspace === 'test' ? (
-              testThread && spec ? (
-                <ChatInterface
-                  activeThread={testThread}
-                  chatSentences={[]}
-                  setChatSentences={() => undefined}
-                  currentChatId={null}
-                  activeSource="chat"
-                  onJump={() => undefined}
-                  onOpenTrace={handleOpenTestTrace}
-                  darkMode={darkMode}
-                  testRuntime={{
-                    kind: 'builder-test',
-                    persistent: false,
-                    historyReadOnly: true,
-                    spec,
-                    baseWorkflowId,
-                    session: testSession,
-                    onSessionChange: setTestSession,
-                  }}
-                />
-              ) : (
-                <Box sx={{ height: '100%', overflow: 'auto' }}>
-                  <ThreadSidebar
-                    key={testSidebarVersion}
-                    activeThreadId={null}
-                    onThreadSelect={(thread) => void handleTestThreadSelect(thread)}
-                    hideHeader
-                    selectionOnly
-                    onHeaderStateChange={setTestThreadHeaderState}
+              <ThreadSecondaryPanel
+                activeThread={testThread}
+                sidebarKey={testSidebarVersion}
+                selectionOnly
+                activeThreadId={null}
+                onThreadSelect={(thread) => void handleTestThreadSelect(thread)}
+                onClearThread={() => void handleTestThreadSelect(null)}
+                darkMode={darkMode}
+                renderSelectedTitle={(thread) => (
+                  <Typography variant="subtitle2" noWrap title={thread.name || thread.id}>
+                    {thread.name || thread.id}
+                  </Typography>
+                )}
+                renderConversation={(thread) => spec ? (
+                  <ChatInterface
+                    activeThread={thread}
+                    chatSentences={[]}
+                    setChatSentences={() => undefined}
+                    currentChatId={null}
+                    activeSource="chat"
+                    onJump={() => undefined}
+                    onOpenTrace={handleOpenTestTrace}
                     darkMode={darkMode}
+                    testRuntime={{
+                      kind: 'builder-test',
+                      persistent: false,
+                      historyReadOnly: true,
+                      spec,
+                      baseWorkflowId,
+                      session: testSession,
+                      onSessionChange: setTestSession,
+                    }}
                   />
-                </Box>
-              )
+                ) : null}
+              />
             ) : (
               <BuilderUtilityPanel
                 placement={resolvedPlacement}

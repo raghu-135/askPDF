@@ -94,14 +94,11 @@ export function deriveBBoxes(sentence: BackendSentence): BBox[] {
  * Transform backend sentences to frontend format by deriving bboxes from bbox
  */
 export function transformSentences(backendSentences: BackendSentence[]): Array<Omit<BackendSentence, 'bboxes'> & { bboxes: BBox[] }> {
-  console.log('[bbox-derivation] Transforming sentences:', backendSentences.length);
-  const transformed = backendSentences.map(sentence => {
+  return backendSentences.map(sentence => {
     const { bboxes: _originalBboxes, ...rest } = sentence;
     return {
       ...rest,
       bboxes: deriveBBoxes(sentence),
     };
   });
-  console.log('[bbox-derivation] Sample transformed sentence:', transformed[0]);
-  return transformed;
 }

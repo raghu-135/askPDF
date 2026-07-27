@@ -157,6 +157,88 @@ type PendingHumanReview = {
     localAssistantMessageId: string;
 };
 
+type NormalThreadRuntimeState = {
+    kind: 'normal-thread';
+    persistent: true;
+    historyReadOnly: false;
+};
+
+type BuilderTestRuntimeState = {
+    kind: 'builder-test';
+    persistent: false;
+    historyReadOnly: true;
+    sessionIdRef: React.MutableRefObject<string>;
+    updateMessage: (
+        messageId: string,
+        patch: Partial<BuilderTestSession['messages'][number]>,
+    ) => void;
+};
+
+type RuntimeState = NormalThreadRuntimeState | BuilderTestRuntimeState;
+
+const createBuilderTestSessionId = () => (
+    globalThis.crypto?.randomUUID?.() || `builder-${Date.now()}`
+);
+
+const builderTestMessageToChatMessage = (
+    message: BuilderTestSession['messages'][number],
+    baseWorkflowId: string,
+): ChatMessage => ({
+    id: message.id,
+    role: message.role === 'user' ? MessageRole.User : MessageRole.Assistant,
+    content: message.content,
+    created_at: message.createdAt,
+    agent_run_id: message.runId,
+    agent_workflow_id: baseWorkflowId,
+    pending_human_review: message.status === 'review',
+});
+
+const useNormalThreadChatRuntime = (): NormalThreadRuntimeState => useMemo(() => ({
+    kind: 'normal-thread',
+    persistent: true,
+    historyReadOnly: false,
+}), []);
+
+const useBuilderTestChatRuntime = (
+    testRuntime: BuilderTestConversationRuntime | undefined,
+    setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
+): BuilderTestRuntimeState | null => {
+    const sessionIdRef = useRef(createBuilderTestSessionId());
+
+    useEffect(() => {
+        if (!testRuntime) return;
+        const temporary = testRuntime.session.messages.map((message) => (
+            builderTestMessageToChatMessage(message, testRuntime.baseWorkflowId)
+        ));
+        setMessages((current) => [
+            ...current.filter((message) => !message.id.startsWith('test-')),
+            ...temporary,
+        ]);
+    }, [setMessages, testRuntime?.baseWorkflowId, testRuntime?.session.messages]);
+
+    const updateMessage = useCallback((
+        messageId: string,
+        patch: Partial<BuilderTestSession['messages'][number]>,
+    ) => {
+        if (!testRuntime) return;
+        testRuntime.onSessionChange((current) => ({
+            ...current,
+            messages: current.messages.map((message) => (
+                message.id === messageId ? { ...message, ...patch } : message
+            )),
+        }));
+    }, [testRuntime]);
+
+    if (!testRuntime) return null;
+    return {
+        kind: 'builder-test',
+        persistent: false,
+        historyReadOnly: true,
+        sessionIdRef,
+        updateMessage,
+    };
+};
+
 const normalizeAgentWorkflowForUi = (workflowId?: string | null) => (
     workflowId ? String(workflowId) : ''
 );
@@ -226,7 +308,6 @@ export type ChatTraceDescriptor = {
 };
 
 const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
-    ragApiUrl: ragApiUrlProp,
     activeThread,
     chatSentences,
     setChatSentences,
@@ -252,10 +333,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const theme = useTheme();
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
-    const isTestRuntime = testRuntime?.kind === 'builder-test';
-    const builderTestSessionIdRef = useRef(
-        globalThis.crypto?.randomUUID?.() || `builder-${Date.now()}`
-    );
+    const normalRuntime = useNormalThreadChatRuntime();
+    const builderRuntime = useBuilderTestChatRuntime(testRuntime, setMessages);
+    const conversationRuntime: RuntimeState = builderRuntime || normalRuntime;
+    const isTestRuntime = conversationRuntime.kind === 'builder-test';
 
     const [indexingStatus, setIndexingStatus] = useState<ChatComposerIndexingStatusValue>(ChatComposerIndexingStatus.Checking);
     const [useWebSearch, setUseWebSearch] = useState(false);
@@ -573,37 +654,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 agent_route: m.agent_route ?? m.metadata?.agent_route,
                 agent_route_reason: m.agent_route_reason ?? m.metadata?.agent_route_reason,
             }));
-            const temporary = testRuntime?.session.messages.map((message) => ({
-                id: message.id,
-                role: message.role === 'user' ? MessageRole.User : MessageRole.Assistant,
-                content: message.content,
-                created_at: message.createdAt,
-                agent_run_id: message.runId,
-                agent_workflow_id: testRuntime.baseWorkflowId,
-                pending_human_review: message.status === 'review',
-            } satisfies ChatMessage)) || [];
+            const temporary = testRuntime?.session.messages.map((message) => (
+                builderTestMessageToChatMessage(message, testRuntime.baseWorkflowId)
+            )) || [];
             setMessages([...persisted, ...temporary]);
         } catch (error) {
             console.error('Failed to load messages:', error);
         }
     };
-
-    useEffect(() => {
-        if (!testRuntime) return;
-        const temporary = testRuntime.session.messages.map((message) => ({
-            id: message.id,
-            role: message.role === 'user' ? MessageRole.User : MessageRole.Assistant,
-            content: message.content,
-            created_at: message.createdAt,
-            agent_run_id: message.runId,
-            agent_workflow_id: testRuntime.baseWorkflowId,
-            pending_human_review: message.status === 'review',
-        } satisfies ChatMessage));
-        setMessages((current) => [
-            ...current.filter((message) => !message.id.startsWith('test-')),
-            ...temporary,
-        ]);
-    }, [testRuntime?.baseWorkflowId, testRuntime?.session.messages]);
 
     const recoverPendingHumanReview = async (threadId: string) => {
         try {
@@ -992,7 +1050,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     // Handle different error types
                     if (result.resourceNotFound) {
                         // Thread was deleted - reset to initial state
-                        console.log('Thread no longer exists, stopping polling');
                         setIndexingStatus(ChatComposerIndexingStatus.Checking);
                         setIsEmbeddingModelValid(false);
                     } else {
@@ -1074,18 +1131,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setClarificationOptions(null);
     };
 
-    const updateBuilderTestMessage = (
-        messageId: string,
-        patch: Partial<BuilderTestSession['messages'][number]>,
-    ) => {
-        if (!testRuntime) return;
-        testRuntime.onSessionChange((current) => ({
-            ...current,
-            messages: current.messages.map((message) => (
-                message.id === messageId ? { ...message, ...patch } : message
-            )),
-        }));
-    };
+    const updateBuilderTestMessage = builderRuntime?.updateMessage || (() => undefined);
 
     const builderTestRequestContext = () => ({
         thread_id: activeThread!.id,
@@ -1109,7 +1155,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     });
 
     const handleBuilderTestSend = async (question: string) => {
-        if (!testRuntime || !activeThread || loading) return;
+        if (!testRuntime || !builderRuntime || !activeThread || loading) return;
         const now = new Date().toISOString();
         const stamp = Date.now();
         const userId = `test-user-${stamp}`;
@@ -1137,7 +1183,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         try {
             await streamAgentWorkflowBuilderTest({
                 ...builderTestRequestContext(),
-                builder_session_id: builderTestSessionIdRef.current,
+                builder_session_id: builderRuntime.sessionIdRef.current,
                 base_workflow_id: testRuntime.baseWorkflowId,
                 spec: testRuntime.spec,
                 question,
@@ -1172,7 +1218,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 });
             });
             const runDetails = await getLatestAgentWorkflowBuilderTest(
-                builderTestSessionIdRef.current,
+                builderRuntime.sessionIdRef.current,
                 testRuntime.baseWorkflowId,
             );
             const answer = finalAnswer
@@ -1221,7 +1267,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!pendingHumanReview || !activeThread) return false;
         const interrupt = pendingHumanReview.interrupt;
         if (!interrupt.interrupt_id) return false;
-        if (testRuntime) {
+        if (testRuntime && builderRuntime) {
             setHumanReviewSubmitting(action);
             setHumanReviewError(null);
             resetLiveExecutionEvents();
@@ -1254,7 +1300,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     });
                 });
                 const refreshed = await getLatestAgentWorkflowBuilderTest(
-                    builderTestSessionIdRef.current,
+                    builderRuntime.sessionIdRef.current,
                     testRuntime.baseWorkflowId,
                 );
                 const answer = String(

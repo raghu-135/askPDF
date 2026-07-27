@@ -6,7 +6,7 @@ import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 
 const PdfViewer = dynamic(() => import('../PdfViewer'), { ssr: false });
 
-export default function DocumentWorkspaceContent({
+export default function ThreadWorkspaceContent({
   activeTabId,
   activeDocument,
   documentSentences,

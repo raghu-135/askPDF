@@ -1,14 +1,11 @@
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { Typography, Box, Button, CssBaseline, IconButton, Tooltip, CircularProgress, Chip, Checkbox } from "@mui/material";
+import { Typography, Box, CssBaseline, IconButton, Tooltip, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../theme';
 import { useAppThemeMode } from '../hooks/useAppThemeMode';
-import ForumIcon from '@mui/icons-material/Forum';
-import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
-import ClearIcon from '@mui/icons-material/Clear';
 import AutoAwesomeSharpIcon from '@mui/icons-material/AutoAwesomeSharp';
 
 declare const process: {
@@ -18,13 +15,13 @@ import PdfUploader from "../components/PdfUploader";
 
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
-import ThreadSidebar, { ThreadSidebarHeaderState } from "../components/ThreadSidebar";
+import ThreadSecondaryPanel from "../components/ThreadSecondaryPanel";
 import { buildDocumentWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
 import { WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
 import WorkspaceTabs from '../components/workbench/WorkspaceTabs';
-import DocumentWorkspaceContent from '../components/workbench/DocumentWorkspaceContent';
+import ThreadWorkspaceContent from '../components/workbench/ThreadWorkspaceContent';
 import useTraceTabs from '../components/workbench/useTraceTabs';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
 import { Thread, removeSourceFromThread, getParsedSentences, captureBrowserPage, pollForFileReady, getThread, deleteThread, listThreads } from "../lib/api";
@@ -58,12 +55,8 @@ export default function Home() {
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
 
-  // Right panel tab state (0 = Threads, 1 = Chat)
-  const [rightPanelTab, setRightPanelTab] = useState(0);
-
   // Sidebar refresh trigger
   const [sidebarVersion, setSidebarVersion] = useState(0);
-  const [threadListHeaderState, setThreadListHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
   const [isDeletingActiveThread, setIsDeletingActiveThread] = useState(false);
   const [rightPanelLineageThreads, setRightPanelLineageThreads] = useState<Thread[]>([]);
 
@@ -128,19 +121,14 @@ export default function Home() {
   const handleThreadForked = useCallback(async (thread: Thread) => {
     setSidebarVersion(v => v + 1);
     await handleThreadSelect(thread);
-    setRightPanelTab(1);
   }, [handleThreadSelect]);
 
   const handleThreadSelectFromList = useCallback((thread: Thread | null) => {
     handleThreadSelect(thread);
-    if (thread) {
-      setRightPanelTab(1);
-    }
   }, [handleThreadSelect]);
 
   const handleOpenThreadInChat = useCallback((thread: Thread) => {
     handleThreadSelect(thread);
-    setRightPanelTab(1);
   }, [handleThreadSelect]);
 
   const handleThreadUpdated = async () => {
@@ -156,7 +144,6 @@ export default function Home() {
   };
 
   const handleShowAllThreads = useCallback(async () => {
-    setRightPanelTab(0);
     await handleThreadSelect(null);
   }, [handleThreadSelect]);
 
@@ -169,7 +156,6 @@ export default function Home() {
       await deleteThread(activeThread.id);
       setSidebarVersion(v => v + 1);
       await handleThreadSelect(null);
-      setRightPanelTab(0);
     } catch (error) {
       console.error('Failed to delete active thread:', error);
       alert('Failed to delete thread.');
@@ -266,10 +252,8 @@ export default function Home() {
         }
         // If sentences is null, undefined, not an array, or empty, parsing is still pending - continue polling
       } catch (error: any) {
-        // Log error but don't crash - file may not be ready yet
-        if (error?.message?.includes('not attached')) {
-          console.log(`File ${activeTab.fileHash} not yet attached to thread, will retry...`);
-        } else {
+        // Don't crash while a newly attached file is still becoming visible.
+        if (!error?.message?.includes('not attached')) {
           console.error("Failed to fetch parsed sentences:", error);
         }
         // Continue polling - don't throw
@@ -408,203 +392,6 @@ export default function Home() {
     ? rightPanelLineageThreadsById.get(activeThread.id) || activeThread
     : null;
 
-  const renderAllThreadsHeaderActions = () => {
-    if (!threadListHeaderState) return null;
-
-    if (threadListHeaderState.isSelectionMode) {
-      return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <Tooltip title={threadListHeaderState.allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
-            <Checkbox
-              size="small"
-              checked={threadListHeaderState.allThreadsSelected}
-              indeterminate={threadListHeaderState.someThreadsSelected}
-              onChange={(event) => threadListHeaderState.toggleAllThreads(event.target.checked)}
-              disabled={threadListHeaderState.isBulkDeleting}
-              sx={{ p: 0.5 }}
-            />
-          </Tooltip>
-          <Tooltip title="Shift-click threads to select a range">
-            <Chip label={`${threadListHeaderState.selectedCount} selected`} size="small" color="primary" />
-          </Tooltip>
-          <Tooltip title="Clear selection">
-            <IconButton size="small" onClick={threadListHeaderState.clearSelection} disabled={threadListHeaderState.isBulkDeleting}>
-              <ClearIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Delete selected threads">
-            <span>
-              <IconButton
-                size="small"
-                color="error"
-                onClick={threadListHeaderState.deleteSelectedThreads}
-                disabled={threadListHeaderState.isBulkDeleting || threadListHeaderState.selectedCount === 0}
-              >
-                {threadListHeaderState.isBulkDeleting ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
-              </IconButton>
-            </span>
-          </Tooltip>
-        </Box>
-      );
-    }
-
-    return (
-      <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
-        <span>
-          <IconButton
-            size="small"
-            color="error"
-            onClick={threadListHeaderState.enterSelectionMode}
-            disabled={!threadListHeaderState.hasThreads}
-          >
-            <DeleteIcon fontSize="small" />
-          </IconButton>
-        </span>
-      </Tooltip>
-    );
-  };
-
-  const renderRightPanelHeader = () => {
-    const isThreadMode = rightPanelTab === 1 && activeThread;
-
-    return (
-      <Box
-        sx={{
-          minHeight: 49,
-          borderBottom: 1,
-          borderColor: 'divider',
-          bgcolor: 'background.paper',
-          display: 'flex',
-          alignItems: 'stretch',
-          flexShrink: 0,
-        }}
-      >
-        {isThreadMode ? (
-          <>
-            <Box
-              sx={{
-                width: 132,
-                flex: '0 0 132px',
-                px: 1,
-                display: 'flex',
-                alignItems: 'center',
-                minWidth: 0,
-              }}
-            >
-              <Button
-                size="small"
-                startIcon={<ForumIcon fontSize="small" />}
-                onClick={handleShowAllThreads}
-                sx={{ textTransform: 'none', minWidth: 0 }}
-              >
-                All threads
-              </Button>
-            </Box>
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                px: 1.5,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 1,
-              }}
-            >
-              <Tooltip
-                title={
-                  <ThreadLineageTooltipContent
-                    thread={activeThreadForTooltip || activeThread}
-                    threadsById={rightPanelLineageThreadsById}
-                    onOpenThread={handleOpenThreadInChat}
-                  />
-                }
-                arrow
-                enterDelay={300}
-                leaveDelay={150}
-                disableInteractive={false}
-              >
-                <Box
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    alignSelf: 'stretch',
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor: 'default',
-                  }}
-                >
-                  <Typography
-                    variant="subtitle2"
-                    fontWeight={700}
-                    noWrap
-                    sx={{ minWidth: 0 }}
-                  >
-                    {activeThread.name}
-                  </Typography>
-                </Box>
-              </Tooltip>
-              <Tooltip title="Delete current thread">
-                <span>
-                  <IconButton
-                    size="small"
-                    color="error"
-                    onClick={handleDeleteActiveThread}
-                    disabled={isDeletingActiveThread}
-                  >
-                    {isDeletingActiveThread ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </Box>
-          </>
-        ) : (
-          <>
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                px: 1.5,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-              }}
-            >
-              <ForumIcon fontSize="small" color="primary" />
-              <Typography variant="subtitle1" fontWeight={700} noWrap>
-                Threads
-              </Typography>
-              <Chip label={threadListHeaderState?.threadCount ?? 0} size="small" />
-              <Tooltip title="Create new thread">
-                <span>
-                  <IconButton
-                    size="small"
-                    color="primary"
-                    onClick={threadListHeaderState?.openCreateDialog}
-                    disabled={!threadListHeaderState}
-                  >
-                    <AddIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </Box>
-            <Box
-              sx={{
-                flex: '0 0 auto',
-                px: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'flex-end',
-              }}
-            >
-              {renderAllThreadsHeaderActions()}
-            </Box>
-          </>
-        )}
-      </Box>
-    );
-  };
-
   const workspaceTabs = useMemo(() => buildDocumentWorkspaceTabs({
     enabled: Boolean(activeThread),
     documents: pdfTabs,
@@ -654,7 +441,7 @@ export default function Home() {
                     <AutoAwesomeSharpIcon fontSize="small" />
                   </IconButton>
                 </Tooltip>
-                {activeThread && rightPanelTab === 1 && (
+                {activeThread && (
                   <PlayerControls
                     sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
                     currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
@@ -695,7 +482,7 @@ export default function Home() {
             ) : null
           }
           primaryContent={
-            <DocumentWorkspaceContent
+            <ThreadWorkspaceContent
               activeTabId={activeTabId}
               activeDocument={activeTab}
               documentSentences={pdfSentences}
@@ -717,46 +504,78 @@ export default function Home() {
               emptyDescription="Select or create a thread, then upload a PDF or open the browser."
             />
           }
-          secondaryHeader={renderRightPanelHeader()}
           secondaryContent={
-            <Box sx={{ height: '100%', overflow: 'hidden' }}>
-              <Box sx={{ height: '100%', display: rightPanelTab === 0 ? 'block' : 'none', overflow: 'auto' }}>
-                <ThreadSidebar
-                  key={sidebarVersion}
-                  activeThreadId={activeThread?.id || null}
-                  onThreadSelect={handleThreadSelectFromList}
-                  onThreadForked={handleThreadForked}
-                  hideHeader
-                  onHeaderStateChange={setThreadListHeaderState}
-                  darkMode={pdfDarkMode}
-                />
-              </Box>
-              <Box sx={{ height: '100%', display: rightPanelTab === 1 ? 'flex' : 'none', flexDirection: 'column' }}>
-                {activeThread ? (
-                  <ChatInterface
-                    activeThread={activeThread}
-                    chatSentences={chatSentences}
-                    setChatSentences={setChatSentences}
-                    currentChatId={currentChatId}
-                    activeSource={activeSource}
-                    onJump={(id) => { setActiveSource('chat'); setCurrentChatId(id); setPlayRequestId(id); }}
-                    onResetChatId={() => { setCurrentChatId(null); setPlayRequestId(null); }}
-                    onThreadForked={handleThreadForked}
-                    onThreadUpdate={handleThreadUpdated}
-                    onOpenThread={handleOpenThreadInChat}
-                    onOpenTrace={handleOpenTrace}
-                    hideInlineLineage
-                    darkMode={pdfDarkMode}
-                    autoScroll={autoScroll}
-                    isPanelResizing={isResizing}
-                  />
-                ) : (
-                  <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3 }}>
-                    <Typography color="text.secondary" textAlign="center">Select or create a thread to start chatting</Typography>
+            <ThreadSecondaryPanel
+              activeThread={activeThread}
+              sidebarKey={sidebarVersion}
+              onThreadSelect={handleThreadSelectFromList}
+              onThreadForked={handleThreadForked}
+              onClearThread={handleShowAllThreads}
+              darkMode={pdfDarkMode}
+              renderSelectedTitle={(thread) => (
+                <Tooltip
+                  title={
+                    <ThreadLineageTooltipContent
+                      thread={activeThreadForTooltip || thread}
+                      threadsById={rightPanelLineageThreadsById}
+                      onOpenThread={handleOpenThreadInChat}
+                    />
+                  }
+                  arrow
+                  enterDelay={300}
+                  leaveDelay={150}
+                  disableInteractive={false}
+                >
+                  <Box
+                    sx={{
+                      flex: 1,
+                      minWidth: 0,
+                      alignSelf: 'stretch',
+                      display: 'flex',
+                      alignItems: 'center',
+                      cursor: 'default',
+                    }}
+                  >
+                    <Typography variant="subtitle2" fontWeight={700} noWrap sx={{ minWidth: 0 }}>
+                      {thread.name}
+                    </Typography>
                   </Box>
-                )}
-              </Box>
-            </Box>
+                </Tooltip>
+              )}
+              selectedActions={(
+                <Tooltip title="Delete current thread">
+                  <span>
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={handleDeleteActiveThread}
+                      disabled={isDeletingActiveThread}
+                    >
+                      {isDeletingActiveThread ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+              renderConversation={(thread) => (
+                <ChatInterface
+                  activeThread={thread}
+                  chatSentences={chatSentences}
+                  setChatSentences={setChatSentences}
+                  currentChatId={currentChatId}
+                  activeSource={activeSource}
+                  onJump={(id) => { setActiveSource('chat'); setCurrentChatId(id); setPlayRequestId(id); }}
+                  onResetChatId={() => { setCurrentChatId(null); setPlayRequestId(null); }}
+                  onThreadForked={handleThreadForked}
+                  onThreadUpdate={handleThreadUpdated}
+                  onOpenThread={handleOpenThreadInChat}
+                  onOpenTrace={handleOpenTrace}
+                  hideInlineLineage
+                  darkMode={pdfDarkMode}
+                  autoScroll={autoScroll}
+                  isPanelResizing={isResizing}
+                />
+              )}
+            />
           }
         />
       </Box>
