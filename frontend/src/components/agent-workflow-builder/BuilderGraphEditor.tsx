@@ -109,9 +109,10 @@ export default function BuilderGraphEditor({
         height: '100%',
         flex: '1 1 400px',
         overflow: 'hidden',
+        bgcolor: 'background.default',
       }}
     >
-      <Box sx={{ minHeight: 280, border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+      <Box sx={{ minHeight: 280, overflow: 'hidden' }}>
         <WorkflowBuilderCanvas
           catalog={catalog}
           state={state}
@@ -144,7 +145,7 @@ export default function BuilderGraphEditor({
           onGraphElementsHeightChange(height);
         }}
       />
-      <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, minWidth: 0, overflow: 'hidden', bgcolor: 'background.paper' }}>
+      <Box sx={{ minWidth: 0, overflow: 'hidden', bgcolor: 'background.paper' }}>
         <Box sx={{ height: 40, px: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: graphElementsCollapsed ? 0 : 1, borderColor: 'divider' }}>
           <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontWeight: 700 }}>
             <AccountTreeIcon fontSize="small" /> Graph Elements

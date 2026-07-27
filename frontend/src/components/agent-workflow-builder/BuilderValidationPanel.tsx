@@ -30,8 +30,8 @@ export default function BuilderValidationPanel({
   const hasWarnings = issues.some((issue) => issue.severity === 'warning');
 
   return (
-    <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, mb: 1, bgcolor: 'background.paper' }}>
-      <Box sx={{ p: 1 }}>
+    <Box sx={{ flexShrink: 0, bgcolor: 'background.paper' }}>
+      <Box sx={{ px: 1.25, py: 1 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
             {hasErrors ? <ErrorOutlineIcon fontSize="small" color="error" /> : workflowIsValid ? <CheckCircleIcon fontSize="small" color="success" /> : null}

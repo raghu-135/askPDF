@@ -880,7 +880,7 @@ export default function AgentWorkflowBuilderPage() {
             ) : buildTab === 'spec-tab' && spec ? (
               <BuilderSpecPanel spec={spec} />
             ) : (
-              <Box sx={{ height: '100%', minHeight: 0, overflow: 'auto', p: 1.5, display: 'flex', flexDirection: 'column' }}>
+              <Box sx={{ height: '100%', minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', bgcolor: 'background.default' }}>
                 {spec && (
                   <BuilderValidationPanel
                     validation={validation}
