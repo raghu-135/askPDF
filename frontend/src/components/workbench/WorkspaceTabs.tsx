@@ -62,6 +62,12 @@ const statusColor = (status?: TraceWorkspaceTab['status']) => {
   return 'default';
 };
 
+const commonTabSx = {
+  '&.Mui-selected': {
+    bgcolor: 'action.selected',
+  },
+};
+
 export default React.memo(function WorkspaceTabs({
   tabs,
   activeTabId,
@@ -90,14 +96,23 @@ export default React.memo(function WorkspaceTabs({
         variant="scrollable"
         scrollButtons="auto"
         aria-label="Workspace content"
-        sx={{ minHeight: 40, '& .MuiTab-root': { minHeight: 40, textTransform: 'none', fontSize: '0.875rem', py: 0, px: 1.5 } }}
+        sx={{
+          minHeight: 40,
+          '& .MuiTab-root': {
+            minHeight: 40,
+            textTransform: 'none',
+            fontSize: '0.875rem',
+            py: 0,
+            px: 1.5,
+          },
+        }}
       >
         {tabs.map((tab) => {
           if (tab.kind === 'canvas') {
-            return <Tab key={tab.id} icon={<Badge color="error" badgeContent={tab.issueCount || 0}><AccountTreeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} />;
+            return <Tab key={tab.id} icon={<Badge color="error" badgeContent={tab.issueCount || 0}><AccountTreeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
           }
           if (tab.kind === 'spec') {
-            return <Tab key={tab.id} icon={<Badge color="primary" variant={tab.dirty ? 'dot' : 'standard'}><CodeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} />;
+            return <Tab key={tab.id} icon={<Badge color="primary" variant={tab.dirty ? 'dot' : 'standard'}><CodeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
           }
           if (tab.kind === 'trace') {
             return (
@@ -106,6 +121,7 @@ export default React.memo(function WorkspaceTabs({
                 icon={<Badge color={statusColor(tab.status)} variant={tab.status === 'running' ? 'dot' : 'standard'} badgeContent={tab.status === 'running' ? undefined : tab.count} max={99}><RouteIcon fontSize="small" /></Badge>}
                 iconPosition="start"
                 label={tab.label}
+                sx={commonTabSx}
               />
             );
           }
@@ -129,6 +145,7 @@ export default React.memo(function WorkspaceTabs({
                     )}
                   </Box>
                 }
+                sx={commonTabSx}
               />
             );
           }
@@ -148,11 +165,46 @@ export default React.memo(function WorkspaceTabs({
               key={tab.id}
               label={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  {isBrowserDocument ? <LanguageIcon fontSize="small" color="primary" /> : <PictureAsPdfIcon fontSize="small" sx={{ color: 'error.main', opacity: 0.7 }} />}
-                  <Tooltip title={fullTitle}><Typography component="span" noWrap sx={{ maxWidth: 120 }}>{label}</Typography></Tooltip>
+                  {isBrowserDocument ? (
+                    <Tooltip title="Open source webpage">
+                      <Box
+                        component="span"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (tab.sourceUrl) {
+                            window.open(tab.sourceUrl, '_blank', 'noopener,noreferrer');
+                          }
+                        }}
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          cursor: tab.sourceUrl ? 'pointer' : 'default',
+                          p: '2px',
+                          borderRadius: 1,
+                          color: 'primary.main',
+                        }}
+                      >
+                        <LanguageIcon fontSize="small" />
+                      </Box>
+                    </Tooltip>
+                  ) : <PictureAsPdfIcon fontSize="small" sx={{ color: 'error.main', opacity: 0.7 }} />}
+                  <Tooltip title={fullTitle} placement="bottom">
+                    <Typography
+                      component="span"
+                      sx={{
+                        maxWidth: 120,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {label}
+                    </Typography>
+                  </Tooltip>
                   {onDocumentRemove && (
                     <Tooltip title="Remove from thread">
-                      <IconButton size="small" onClick={(event) => { event.stopPropagation(); onDocumentRemove(tab.id); }} sx={{ p: 0.2, color: 'error.main', opacity: 0.7 }}>
+                      <IconButton className="tab-remove-btn" size="small" onClick={(event) => { event.stopPropagation(); onDocumentRemove(tab.id); }} sx={{ p: 0.2, color: 'error.main', opacity: 0 }}>
                         <DeleteIcon sx={{ fontSize: 14 }} />
                       </IconButton>
                     </Tooltip>
@@ -164,10 +216,16 @@ export default React.memo(function WorkspaceTabs({
                       </IconButton>
                     </Tooltip>
                   )}
-                </Box>
-              }
-            />
-          );
+                  </Box>
+                }
+                sx={{
+                  ...commonTabSx,
+                  '&:hover .tab-remove-btn': {
+                    opacity: 0.7,
+                  },
+                }}
+              />
+            );
         })}
       </Tabs>
     </Box>
