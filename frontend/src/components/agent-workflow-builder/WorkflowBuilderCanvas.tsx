@@ -3,11 +3,9 @@ import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import {
   Background,
   Connection,
-  Controls,
   Edge,
   FinalConnectionState,
   MarkerType,
-  MiniMap,
   Node,
   OnConnectStartParams,
   Panel,
@@ -17,12 +15,14 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import ELK from 'elkjs/lib/elk.bundled.js';
-import { Alert, Button } from '@mui/material';
+import { Alert, Box, Button } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import '@xyflow/react/dist/style.css';
 
 import type { AgentWorkflowCatalogResponse } from '../../lib/api';
 import type { AgentGraphNode as AgentGraphNodeModel } from '../agent-graph/agent-graph-types';
 import AgentGraphNode from '../agent-graph/AgentGraphNode';
+import ReactFlowViewportChrome, { reactFlowChromeSx } from '../agent-graph/ReactFlowViewportChrome';
 import {
   canConnectNodes,
   getAllowedRouteFunctionsForNode,
@@ -112,6 +112,7 @@ function Canvas({
   const didInitialLayout = useRef(false);
   const [connecting, setConnecting] = useState<{ source: string; route?: string } | null>(null);
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
+  const theme = useTheme();
   const { screenToFlowPosition, fitView } = useReactFlow();
   useEffect(() => {
     if (!connecting) return;
@@ -319,7 +320,10 @@ function Canvas({
     window.requestAnimationFrame(() => fitView({ padding: 0.16, duration: 300 }));
   };
 
+  const canvasBg = theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.65)';
+
   return (
+    <Box sx={{ width: '100%', height: '100%', bgcolor: canvasBg, ...reactFlowChromeSx(theme, canvasBg) }}>
     <ReactFlow
       nodes={flowNodes}
       edges={graphEdges}
@@ -386,16 +390,15 @@ function Canvas({
       proOptions={{ hideAttribution: true }}
     >
       <Background gap={24} size={1} />
-      <Controls />
-      <MiniMap pannable zoomable />
+      <ReactFlowViewportChrome miniMapPosition="top-left" />
       {connecting ? (
-        <Panel position="top-left">
+        <Panel position="top-left" style={{ marginTop: 132 }}>
           <Alert severity="info" variant="outlined" sx={{ py: 0 }}>
             Choose a compatible destination · Esc to cancel
           </Alert>
         </Panel>
       ) : connectionMessage ? (
-        <Panel position="top-left">
+        <Panel position="top-left" style={{ marginTop: 132 }}>
           <Alert severity="warning" variant="outlined" onClose={() => setConnectionMessage(null)} sx={{ py: 0 }}>
             {connectionMessage}
           </Alert>
@@ -405,6 +408,7 @@ function Canvas({
         <Button size="small" variant="outlined" startIcon={<AutoFixHighIcon />} onClick={tidy}>Tidy up</Button>
       </Panel>
     </ReactFlow>
+    </Box>
   );
 }
 

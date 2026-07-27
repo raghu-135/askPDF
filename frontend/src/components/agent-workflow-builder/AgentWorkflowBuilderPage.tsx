@@ -16,6 +16,7 @@ import {
 } from '@mui/material';
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../../theme';
+import { useAppThemeMode } from '../../hooks/useAppThemeMode';
 import {
   saveInternalAgentWorkflow,
   deleteInternalAgentWorkflow,
@@ -86,7 +87,6 @@ type ContextualNodeRequest =
   | { mode: 'before'; target: string; incomingPaths: BuilderIncomingPath[]; selectedPathId?: string };
 
 const BUILDER_LAYOUT_STORAGE_KEY = 'askpdf.agentWorkflowBuilder.layout.v1';
-const BUILDER_DARK_MODE_STORAGE_KEY = 'askpdf.agentWorkflowBuilder.darkMode.v1';
 const DEFAULT_BUILDER_LAYOUT = {
   sidebarWidth: 360,
   palettePercent: 40,
@@ -203,23 +203,8 @@ const buildValidationIssues = (
   ];
 };
 
-const useBuilderDarkMode = () => {
-  const [darkMode, setDarkMode] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    const stored = window.localStorage.getItem(BUILDER_DARK_MODE_STORAGE_KEY);
-    if (stored === 'dark') return true;
-    if (stored === 'light') return false;
-    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
-  });
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(BUILDER_DARK_MODE_STORAGE_KEY, darkMode ? 'dark' : 'light');
-  }, [darkMode]);
-  return [darkMode, setDarkMode] as const;
-};
-
 export default function AgentWorkflowBuilderPage() {
-  const [darkMode, setDarkMode] = useBuilderDarkMode();
+  const { darkMode, toggleDarkMode, hydrated: themeHydrated } = useAppThemeMode();
   const theme = useMemo(() => getTheme(darkMode), [darkMode]);
   const [catalog, setCatalog] = useState<AgentWorkflowCatalogResponse | null>(null);
   const [customWorkflows, setCustomWorkflows] = useState<AgentWorkflow[]>([]);
@@ -822,6 +807,8 @@ export default function AgentWorkflowBuilderPage() {
     }
   };
 
+  if (!themeHydrated) return null;
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -859,7 +846,7 @@ export default function AgentWorkflowBuilderPage() {
                 clearTestTraces();
               }}
               darkMode={darkMode}
-              onToggleDarkMode={() => setDarkMode((current) => !current)}
+              onToggleDarkMode={toggleDarkMode}
               layoutControl={
                 <DockMenuButton
                   value={activeWorkbenchLayout}

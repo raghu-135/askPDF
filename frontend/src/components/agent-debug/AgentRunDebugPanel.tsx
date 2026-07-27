@@ -311,6 +311,7 @@ function AgentRunDebugPanel({
             running={running}
             focusedTraceRefs={traceRefs}
             suspended={suspendHeavyContent}
+            defaultGraphOpen
             defaultFinalAnswerOpen={false}
             chatMode
             detailsAvailable={executionDetailsAvailable}

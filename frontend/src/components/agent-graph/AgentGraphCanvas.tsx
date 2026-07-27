@@ -3,7 +3,6 @@ import { Box, Chip, Typography, useTheme } from '@mui/material';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import {
   Background,
-  Controls,
   Edge,
   MarkerType,
   Node,
@@ -18,6 +17,7 @@ import '@xyflow/react/dist/style.css';
 
 import AgentGraphInspector from './AgentGraphInspector';
 import AgentGraphNode from './AgentGraphNode';
+import ReactFlowViewportChrome, { reactFlowChromeSx } from './ReactFlowViewportChrome';
 import { applyTraceFocusToGraph, buildAgentGraph, getAgentGraphSpec } from './agent-graph-mapper';
 import type { TraceRunView } from '../agent-debug/agent-trace-projection';
 import type {
@@ -346,28 +346,7 @@ function AgentGraphCanvasInner({
           overflow: 'hidden',
           resize: mode === 'run-debug' ? 'vertical' : 'none',
           bgcolor: canvasBg,
-          '& .react-flow__controls': {
-            overflow: 'hidden',
-            border: 1,
-            borderColor: 'divider',
-            borderRadius: 1,
-            boxShadow: theme.shadows[2],
-            bgcolor: canvasBg,
-          },
-          '& .react-flow__controls-button': {
-            width: 30,
-            height: 30,
-            bgcolor: canvasBg,
-            color: 'text.primary',
-            borderBottom: 1,
-            borderBottomColor: 'divider',
-          },
-          '& .react-flow__controls-button:hover': {
-            bgcolor: 'action.hover',
-          },
-          '& .react-flow__controls-button svg': {
-            fill: 'currentColor',
-          },
+          ...reactFlowChromeSx(theme, canvasBg),
         }}
       >
         <AgentGraphErrorBoundary fallback={<AgentGraphFallback graph={graph} />}>
@@ -392,7 +371,7 @@ function AgentGraphCanvasInner({
             proOptions={{ hideAttribution: true }}
           >
             <Background gap={24} size={1} />
-            <Controls showInteractive={false} />
+            <ReactFlowViewportChrome showInteractive={false} miniMapPosition="top-left" />
           </ReactFlow>
         </AgentGraphErrorBoundary>
       </Box>

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Typography, Box, Button, CssBaseline, IconButton, Tooltip, CircularProgress, Chip, Checkbox } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../theme';
+import { useAppThemeMode } from '../hooks/useAppThemeMode';
 import ForumIcon from '@mui/icons-material/Forum';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -52,28 +53,7 @@ export default function Home() {
 
   // Highlight toggle
   const [highlightEnabled, setHighlightEnabled] = useState(true);
-  // PDF dark mode toggle, SSR-safe: initialize as undefined, set after mount
-  const [pdfDarkMode, setPdfDarkMode] = useState<boolean | undefined>(undefined);
-
-  // On mount, set dark mode from browser preference
-  useEffect(() => {
-    if (typeof window !== 'undefined' && window.matchMedia) {
-      setPdfDarkMode(window.matchMedia('(prefers-color-scheme: dark)').matches);
-    } else {
-      setPdfDarkMode(false);
-    }
-  }, []);
-
-  // Listen for browser color scheme changes
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const handler = (e: MediaQueryListEvent) => {
-      setPdfDarkMode(e.matches);
-    };
-    media.addEventListener('change', handler);
-    return () => media.removeEventListener('change', handler);
-  }, []);
+  const { darkMode: pdfDarkMode, toggleDarkMode, hydrated: themeHydrated } = useAppThemeMode();
 
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
@@ -645,8 +625,8 @@ export default function Home() {
   // Memoize theme to prevent recreation on every render
   const theme = useMemo(() => getTheme(pdfDarkMode), [pdfDarkMode]);
 
-  // Don't render until pdfDarkMode is determined (prevents hydration mismatch)
-  if (pdfDarkMode === undefined) return null;
+  // Don't render until theme mode is determined (prevents hydration mismatch)
+  if (!themeHydrated) return null;
 
   return (
     <ThemeProvider theme={theme}>
@@ -693,7 +673,7 @@ export default function Home() {
               </Box>
               <WorkbenchToolbarTrailingActions>
                 <Tooltip title={pdfDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
-                  <IconButton color={pdfDarkMode ? 'primary' : 'default'} onClick={() => setPdfDarkMode((value) => !value)} size="small">
+                  <IconButton color={pdfDarkMode ? 'primary' : 'default'} onClick={toggleDarkMode} size="small">
                     {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
                   </IconButton>
                 </Tooltip>

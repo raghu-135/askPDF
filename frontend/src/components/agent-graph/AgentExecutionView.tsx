@@ -422,7 +422,7 @@ function AgentExecutionView({
           </Box>
         )}
       </Paper>
-      {!(chatMode && running) && <Paper variant="outlined" sx={{ px: 1, py: 0.4 }}>
+      <Paper variant="outlined" sx={{ px: 1, py: 0.4 }}>
         <Box component="details" open={graphOpen} onToggle={(event) => setGraphOpen(event.currentTarget.open)}>
           <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
             Execution graph
@@ -440,7 +440,7 @@ function AgentExecutionView({
             </Box>
           )}
         </Box>
-      </Paper>}
+      </Paper>
     </Stack>
   );
 }
