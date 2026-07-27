@@ -8,6 +8,7 @@ import {
   Tooltip,
 } from '@mui/material';
 import OpenWithIcon from '@mui/icons-material/OpenWith';
+import ViewSidebarIcon from '@mui/icons-material/ViewSidebar';
 import KeyboardDoubleArrowDownIcon from '@mui/icons-material/KeyboardDoubleArrowDown';
 import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
@@ -50,7 +51,7 @@ export default function DockMenuButton({
     <>
       <Tooltip title={`${label}: ${value.visible ? labels[value.placement] : 'Hidden'}`}>
         <IconButton
-          color="primary"
+          color={value.visible ? 'primary' : 'default'}
           size="small"
           aria-label={label}
           aria-controls={anchorEl ? 'workbench-dock-menu' : undefined}
@@ -58,7 +59,7 @@ export default function DockMenuButton({
           aria-expanded={Boolean(anchorEl)}
           onClick={(event) => setAnchorEl(event.currentTarget)}
         >
-          {value.visible ? placementIcon(value.placement === 'auto' ? 'auto' : resolvedPlacement) : <VisibilityOffIcon fontSize="small" />}
+          <ViewSidebarIcon fontSize="small" />
         </IconButton>
       </Tooltip>
       <Menu
