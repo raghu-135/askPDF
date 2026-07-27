@@ -1,11 +1,9 @@
-import AutoStoriesIcon from '@mui/icons-material/AutoStories';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, CircularProgress, Chip, Checkbox } from "@mui/material";
+import { Typography, Box, Button, CssBaseline, IconButton, Tooltip, CircularProgress, Chip, Checkbox } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../theme';
-import EditNoteIcon from '@mui/icons-material/EditNote';
 import ForumIcon from '@mui/icons-material/Forum';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -15,10 +13,8 @@ import AutoAwesomeSharpIcon from '@mui/icons-material/AutoAwesomeSharp';
 declare const process: {
   env: Record<string, string | undefined>;
 };
-import dynamic from "next/dynamic";
 import PdfUploader from "../components/PdfUploader";
 
-const PdfViewer = dynamic(() => import("../components/PdfViewer"), { ssr: false });
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
 import ThreadSidebar, { ThreadSidebarHeaderState } from "../components/ThreadSidebar";
@@ -27,14 +23,14 @@ import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/Work
 import DockMenuButton from '../components/workbench/DockMenuButton';
 import { WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
 import WorkspaceTabs from '../components/workbench/WorkspaceTabs';
-import TraceWorkspace, { type TraceRunTab } from '../components/workbench/TraceWorkspace';
+import DocumentWorkspaceContent from '../components/workbench/DocumentWorkspaceContent';
+import useTraceTabs from '../components/workbench/useTraceTabs';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
-import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage, pollForFileReady, getThread, deleteThread, listThreads } from "../lib/api";
+import { Thread, removeSourceFromThread, getParsedSentences, captureBrowserPage, pollForFileReady, getThread, deleteThread, listThreads } from "../lib/api";
 import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
 import { ProcessStatus } from "../lib/enums";
-import { closeTraceTab, upsertTraceTab } from '../lib/trace-tabs';
 import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 
 export default function Home() {
@@ -99,8 +95,14 @@ export default function Home() {
   const [workbenchLayout, setWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.normal');
   const [resolvedPlacement, setResolvedPlacement] = useState<ResolvedWorkbenchPlacement>('right');
   const [isResizing, setIsResizing] = useState(false);
-  const [traceTabs, setTraceTabs] = useState<TraceRunTab[]>([]);
-  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
+  const {
+    traceTabs,
+    activeTraceId,
+    setActiveTraceId,
+    openTrace,
+    closeTrace,
+    clearTraces,
+  } = useTraceTabs();
 
 
   // Handle thread selection
@@ -113,8 +115,7 @@ export default function Home() {
     setPlayRequestId(null);
     setActiveSource('pdf');
     setChatSentences([]);
-    setTraceTabs([]);
-    setActiveTraceId(null);
+    clearTraces();
     
     // Reset browser state when leaving thread context
     setIsBrowserActive(false);
@@ -142,7 +143,7 @@ export default function Home() {
     } else {
       setActiveThread(null);
     }
-  }, []);
+  }, [clearTraces]);
 
   const handleThreadForked = useCallback(async (thread: Thread) => {
     setSidebarVersion(v => v + 1);
@@ -636,19 +637,10 @@ export default function Home() {
   }, []);
 
   const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
-    setTraceTabs((current) => upsertTraceTab(current, trace));
-    setActiveTraceId(trace.id);
+    openTrace(trace);
     setActiveTabId('trace-tab');
     setIsBrowserActive(false);
-  }, []);
-
-  const handleCloseTrace = useCallback((runId: string) => {
-    setTraceTabs((current) => {
-      const result = closeTraceTab(current, activeTraceId, runId);
-      setActiveTraceId(result.activeId);
-      return result.tabs;
-    });
-  }, [activeTraceId]);
+  }, [openTrace]);
 
   // Memoize theme to prevent recreation on every render
   const theme = useMemo(() => getTheme(pdfDarkMode), [pdfDarkMode]);
@@ -723,44 +715,27 @@ export default function Home() {
             ) : null
           }
           primaryContent={
-            <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
-              {activeTabId === 'trace-tab' ? (
-                <TraceWorkspace
-                  tabs={traceTabs}
-                  activeRunId={activeTraceId}
-                  onActiveRunChange={setActiveTraceId}
-                  onClose={handleCloseTrace}
-                  suspendHeavyContent={isResizing}
-                />
-              ) : isBrowserActive || activeTabId === 'browser-tab' ? (
-                <iframe src="http://localhost:8090" style={{ width: '100%', height: '100%', border: 'none' }} title="Browser" allow="camera; microphone; clipboard-read; clipboard-write" />
-              ) : isPdfLoading ? (
-                <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
-                  <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
-                  <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
-                </Box>
-              ) : downloadUrl ? (
-                <PdfViewer
-                  downloadUrl={downloadUrl}
-                  sentences={pdfSentences}
-                  currentId={activeSource === 'pdf' ? currentPdfId : null}
-                  onJump={(id) => { setActiveSource('pdf'); setCurrentPdfId(id); setPlayRequestId(id); }}
-                  autoScroll={autoScroll}
-                  isResizing={isResizing}
-                  highlightEnabled={highlightEnabled}
-                  darkMode={pdfDarkMode}
-                  threadId={activeThread?.id ?? null}
-                  fileHash={activeTab?.fileHash ?? null}
-                />
-              ) : (
-                <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit', p: 4 }}>
-                  <Box>
-                    <Typography variant="h5" gutterBottom>Welcome to AskPDF</Typography>
-                    <Typography color="text.secondary">Select or create a thread, then upload a PDF or open the browser.</Typography>
-                  </Box>
-                </Box>
-              )}
-            </Box>
+            <DocumentWorkspaceContent
+              activeTabId={activeTabId}
+              activeDocument={activeTab}
+              documentSentences={pdfSentences}
+              documentDownloadUrl={downloadUrl}
+              traceTabs={traceTabs}
+              activeTraceId={activeTraceId}
+              onActiveTraceChange={setActiveTraceId}
+              onCloseTrace={closeTrace}
+              isBrowserActive={isBrowserActive}
+              isLoading={isPdfLoading}
+              isResizing={isResizing}
+              darkMode={pdfDarkMode}
+              currentDocumentSentenceId={activeSource === 'pdf' ? currentPdfId : null}
+              onDocumentJump={(id) => { setActiveSource('pdf'); setCurrentPdfId(id); setPlayRequestId(id); }}
+              autoScroll={autoScroll}
+              highlightEnabled={highlightEnabled}
+              threadId={activeThread?.id ?? null}
+              emptyTitle="Welcome to AskPDF"
+              emptyDescription="Select or create a thread, then upload a PDF or open the browser."
+            />
           }
           secondaryHeader={renderRightPanelHeader()}
           secondaryContent={

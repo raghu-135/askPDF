@@ -1,8 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
   Alert,
   Box,
   Button,
@@ -12,16 +9,11 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  Divider,
-  IconButton,
   List,
   ListItemButton,
   ListItemText,
-  Tooltip,
   Typography,
 } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../../theme';
 import {
@@ -72,21 +64,20 @@ import BuilderPersistencePanel, {
 } from './BuilderPersistencePanel';
 import BuilderValidationPanel from './BuilderValidationPanel';
 import BuilderSpecPanel from './BuilderSpecPanel';
-import BuilderResizeHandle from './BuilderResizeHandle';
+import BuilderUtilityPanel from './BuilderUtilityPanel';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
 import WorkbenchShell, { useWorkbenchLayout } from '../workbench/WorkbenchShell';
 import DockMenuButton from '../workbench/DockMenuButton';
 import WorkspaceTabs, { type WorkspaceTab } from '../workbench/WorkspaceTabs';
-import TraceWorkspace, { type TraceRunTab } from '../workbench/TraceWorkspace';
+import DocumentWorkspaceContent from '../workbench/DocumentWorkspaceContent';
+import useTraceTabs from '../workbench/useTraceTabs';
 import type { ResolvedWorkbenchPlacement } from '../../lib/workbench-layout';
 import ThreadSidebar, { type ThreadSidebarHeaderState } from '../ThreadSidebar';
 import ChatInterface, { type ChatTraceDescriptor } from '../ChatInterface';
-import PdfViewer from '../PdfViewer';
 import { buildDocumentWorkspaceTabs, type PdfTab } from '../../lib/document-tabs';
 import { getThread } from '../../lib/api';
 import { loadThreadTabs } from '../../lib/thread-utils';
 import { getActiveTab, getActiveTabData } from '../../lib/pdf-utils';
-import { closeTraceTab, upsertTraceTab } from '../../lib/trace-tabs';
 import { emptyBuilderTestSession, type BuilderTestSession } from '../../lib/builder-test-session';
 import ForumIcon from '@mui/icons-material/Forum';
 
@@ -272,8 +263,14 @@ export default function AgentWorkflowBuilderPage() {
   const [testThreadLoading, setTestThreadLoading] = useState(false);
   const [testSidebarVersion, setTestSidebarVersion] = useState(0);
   const [testThreadHeaderState, setTestThreadHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
-  const [testTraceTabs, setTestTraceTabs] = useState<TraceRunTab[]>([]);
-  const [testActiveTraceId, setTestActiveTraceId] = useState<string | null>(null);
+  const {
+    traceTabs: testTraceTabs,
+    activeTraceId: testActiveTraceId,
+    setActiveTraceId: setTestActiveTraceId,
+    openTrace: openTestTrace,
+    closeTrace: closeTestTrace,
+    clearTraces: clearTestTraces,
+  } = useTraceTabs();
   const [testSession, setTestSession] = useState<BuilderTestSession>(() => emptyBuilderTestSession());
 
   useEffect(() => {
@@ -711,10 +708,9 @@ export default function AgentWorkflowBuilderPage() {
     if (previousTestWorkflowId.current !== baseWorkflowId) {
       previousTestWorkflowId.current = baseWorkflowId;
       setTestSession(emptyBuilderTestSession(testThread?.id || null));
-      setTestTraceTabs([]);
-      setTestActiveTraceId(null);
+      clearTestTraces();
     }
-  }, [baseWorkflowId, testThread?.id]);
+  }, [baseWorkflowId, clearTestTraces, testThread?.id]);
 
   const testActiveDocument = getActiveTab(testPdfTabs, testActiveTabId);
   const testActiveDocumentData = getActiveTabData(testActiveDocument);
@@ -730,8 +726,7 @@ export default function AgentWorkflowBuilderPage() {
       setTestPdfTabs([]);
       setTestActiveTabId(null);
       setTestSession(emptyBuilderTestSession());
-      setTestTraceTabs([]);
-      setTestActiveTraceId(null);
+      clearTestTraces();
       return;
     }
     setTestThreadLoading(true);
@@ -742,26 +737,16 @@ export default function AgentWorkflowBuilderPage() {
       setTestPdfTabs(tabs);
       setTestActiveTabId(tabs[0]?.id || 'browser-tab');
       setTestSession(emptyBuilderTestSession(detailed.id));
-      setTestTraceTabs([]);
-      setTestActiveTraceId(null);
+      clearTestTraces();
     } finally {
       setTestThreadLoading(false);
     }
-  }, []);
+  }, [clearTestTraces]);
 
   const handleOpenTestTrace = useCallback((trace: ChatTraceDescriptor) => {
-    setTestTraceTabs((current) => upsertTraceTab(current, trace));
-    setTestActiveTraceId(trace.id);
+    openTestTrace(trace);
     setTestActiveTabId('trace-tab');
-  }, []);
-
-  const handleCloseTestTrace = useCallback((runId: string) => {
-    setTestTraceTabs((current) => {
-      const result = closeTraceTab(current, testActiveTraceId, runId);
-      setTestActiveTraceId(result.activeId);
-      return result.tabs;
-    });
-  }, [testActiveTraceId]);
+  }, [openTestTrace]);
 
   const updatePersistenceForm = (patch: Partial<BuilderPersistenceState>) => {
     setPersistenceForm((previous) => ({ ...previous, ...patch }));
@@ -871,8 +856,7 @@ export default function AgentWorkflowBuilderPage() {
               hasTestSession={testSession.messages.length > 0}
               onClearTestSession={() => {
                 setTestSession(emptyBuilderTestSession(testThread?.id || null));
-                setTestTraceTabs([]);
-                setTestActiveTraceId(null);
+                clearTestTraces();
               }}
               darkMode={darkMode}
               onToggleDarkMode={() => setDarkMode((current) => !current)}
@@ -912,36 +896,26 @@ export default function AgentWorkflowBuilderPage() {
             ) : workspace === 'test' ? (
               testThreadLoading ? (
                 <Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>
-              ) : testActiveTabId === 'trace-tab' ? (
-                <TraceWorkspace
-                  tabs={testTraceTabs}
-                  activeRunId={testActiveTraceId}
-                  onActiveRunChange={setTestActiveTraceId}
-                  onClose={handleCloseTestTrace}
-                  suspendHeavyContent={isWorkbenchResizing}
-                />
-              ) : testActiveTabId === 'browser-tab' ? (
-                <iframe src="http://localhost:8090" style={{ width: '100%', height: '100%', border: 'none' }} title="Browser" allow="camera; microphone; clipboard-read; clipboard-write" />
-              ) : testActiveDocumentData.downloadUrl ? (
-                <PdfViewer
-                  downloadUrl={testActiveDocumentData.downloadUrl}
-                  sentences={testActiveDocumentData.pdfSentences}
-                  currentId={null}
-                  onJump={() => undefined}
-                  autoScroll={false}
-                  isResizing={isWorkbenchResizing}
-                  highlightEnabled
-                  darkMode={darkMode}
-                  threadId={testThread?.id || null}
-                  fileHash={testActiveDocument?.fileHash || null}
-                />
               ) : (
-                <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3 }}>
-                  <Box sx={{ textAlign: 'center' }}>
-                    <Typography variant="h6">{testThread ? 'Choose a workspace tab' : 'Select a thread to test'}</Typography>
-                    <Typography color="text.secondary">{testThread ? 'Open a PDF, Browser, or Debug Trace.' : 'Use the project-grouped thread browser in the secondary panel.'}</Typography>
-                  </Box>
-                </Box>
+                <DocumentWorkspaceContent
+                  activeTabId={testActiveTabId}
+                  activeDocument={testActiveDocument}
+                  documentSentences={testActiveDocumentData.pdfSentences}
+                  documentDownloadUrl={testActiveDocumentData.downloadUrl}
+                  traceTabs={testTraceTabs}
+                  activeTraceId={testActiveTraceId}
+                  onActiveTraceChange={setTestActiveTraceId}
+                  onCloseTrace={closeTestTrace}
+                  isResizing={isWorkbenchResizing}
+                  darkMode={darkMode}
+                  currentDocumentSentenceId={null}
+                  onDocumentJump={() => undefined}
+                  autoScroll={false}
+                  highlightEnabled
+                  threadId={testThread?.id || null}
+                  emptyTitle={testThread ? 'Choose a workspace tab' : 'Select a thread to test'}
+                  emptyDescription={testThread ? 'Open a PDF, Browser, or Debug Trace.' : 'Use the project-grouped thread browser in the secondary panel.'}
+                />
               )
             ) : buildTab === 'spec-tab' && spec ? (
               <BuilderSpecPanel spec={spec} />
@@ -1035,60 +1009,24 @@ export default function AgentWorkflowBuilderPage() {
                   />
                 </Box>
               )
-            ) : resolvedPlacement === 'bottom' ? (
-              <Box sx={{ height: '100%', overflow: 'auto', p: 1 }}>
-                <Accordion defaultExpanded disableGutters>
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="subtitle2">Inspector</Typography></AccordionSummary>
-                  <AccordionDetails>
-                    <BuilderInspector
-                      catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
-                      onUpdateNode={handleUpdateNode} onUpdateHitlBypass={handleUpdateHitlBypass} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
-                      onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
-                      onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
-                    />
-                  </AccordionDetails>
-                </Accordion>
-                <Accordion defaultExpanded disableGutters>
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="subtitle2">Node Palette</Typography></AccordionSummary>
-                  <AccordionDetails><BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} /></AccordionDetails>
-                </Accordion>
-              </Box>
             ) : (
-              <Box ref={utilityRailRef} sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: builderLayout.inspectorCollapsed ? '44px minmax(180px, 1fr)' : `minmax(240px, ${100 - builderLayout.palettePercent}fr) 8px minmax(180px, ${builderLayout.palettePercent}fr)` }}>
-                <Box sx={{ minHeight: 0, overflow: 'hidden', borderBottom: builderLayout.inspectorCollapsed ? 1 : 0, borderColor: 'divider' }}>
-                  <Box sx={{ height: 44, px: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: builderLayout.inspectorCollapsed ? 0 : 1, borderColor: 'divider' }}>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Inspector</Typography>
-                    <Tooltip title={builderLayout.inspectorCollapsed ? 'Expand Inspector' : 'Collapse Inspector'}>
-                      <IconButton size="small" onClick={() => setBuilderLayout((previous) => ({ ...previous, inspectorCollapsed: !previous.inspectorCollapsed }))}>
-                        {builderLayout.inspectorCollapsed ? <ExpandMoreIcon /> : <ExpandLessIcon />}
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                  {!builderLayout.inspectorCollapsed && (
-                    <Box sx={{ height: 'calc(100% - 44px)', overflow: 'auto', p: 1.5 }}>
-                      <BuilderInspector
-                        catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
-                        onUpdateNode={handleUpdateNode} onUpdateHitlBypass={handleUpdateHitlBypass} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
-                        onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
-                        onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
-                      />
-                      <Divider sx={{ my: 1.5 }} />
-                      <Typography variant="caption" color="text.secondary">Nodes: {builderState.nodes.length} · Edges: {builderState.edges.length} · Tools: {builderState.allowed_tool_ids.length}</Typography>
-                    </Box>
-                  )}
-                </Box>
-                {!builderLayout.inspectorCollapsed && (
-                  <BuilderResizeHandle
-                    orientation="horizontal" value={builderLayout.palettePercent} min={25} max={65} defaultValue={40} step={2} direction={-1}
-                    label="Resize Inspector and Node Palette"
-                    getDragScale={() => 100 / Math.max(1, utilityRailRef.current?.clientHeight || 700)}
-                    onChange={(palettePercent) => setBuilderLayout((previous) => ({ ...previous, palettePercent }))}
+              <BuilderUtilityPanel
+                placement={resolvedPlacement}
+                layout={builderLayout}
+                utilityRailRef={utilityRailRef}
+                inspector={
+                  <BuilderInspector
+                    catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
+                    onUpdateNode={handleUpdateNode} onUpdateHitlBypass={handleUpdateHitlBypass} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
+                    onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
+                    onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
                   />
-                )}
-                <Box sx={{ minHeight: 0, overflow: 'auto', p: 1.5 }}>
-                  <BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} />
-                </Box>
-              </Box>
+                }
+                palette={<BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} />}
+                stats={<Typography variant="caption" color="text.secondary">Nodes: {builderState.nodes.length} · Edges: {builderState.edges.length} · Tools: {builderState.allowed_tool_ids.length}</Typography>}
+                onPalettePercentChange={(palettePercent) => setBuilderLayout((previous) => ({ ...previous, palettePercent }))}
+                onInspectorCollapsedChange={(inspectorCollapsed) => setBuilderLayout((previous) => ({ ...previous, inspectorCollapsed }))}
+              />
             )
           }
         />
