@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Box, Button, Stack, TextField, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
+import { Box, Button, InputAdornment, Stack, TextField, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DownloadIcon from '@mui/icons-material/Download';
 import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
@@ -42,7 +42,24 @@ export default function BuilderSpecPanel({ spec }: { spec: AgentWorkflowBuilderS
           <ToggleButton value="structured">Structured</ToggleButton>
           <ToggleButton value="raw">Raw</ToggleButton>
         </ToggleButtonGroup>
-        <TextField size="small" label="Search JSON" value={search} onChange={(event) => setSearch(event.target.value)} helperText={matches === null ? ' ' : `${matches} matches`} />
+        <TextField
+          size="small"
+          label="Search JSON"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          sx={{ width: { xs: '100%', sm: 240 }, '& .MuiInputBase-root': { height: 40 } }}
+          slotProps={{
+            input: {
+              endAdornment: matches !== null ? (
+                <InputAdornment position="end">
+                  <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                    {matches}
+                  </Typography>
+                </InputAdornment>
+              ) : undefined,
+            },
+          }}
+        />
         <Button size="small" startIcon={<ContentCopyIcon />} onClick={() => void navigator.clipboard.writeText(serialized)}>Copy</Button>
         <Button size="small" startIcon={<DownloadIcon />} onClick={download}>Download</Button>
       </Stack>
