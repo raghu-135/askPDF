@@ -92,8 +92,15 @@ export default function BuilderNodePalette({
             {entries.map(([nodeType, entry]) => {
               const compatibility = canAddNodeType(catalog, state, nodeType);
               const unavailable = disabled || !compatibility.ok;
+              const displayName = entry.display_name || nodeType;
+              const summary = entry.ui?.summary || nodeType;
+              const tooltipTitle = disabled
+                ? 'Authoring is disabled.'
+                : compatibility.ok
+                  ? `${displayName}: ${summary}`
+                  : compatibility.reason || 'Not available';
               return (
-                <Tooltip key={nodeType} title={disabled ? 'Authoring is disabled.' : compatibility.ok ? '' : compatibility.reason || 'Not available'}>
+                <Tooltip key={nodeType} title={tooltipTitle}>
                   <Box
                     role="button"
                     tabIndex={unavailable ? -1 : 0}
@@ -130,10 +137,20 @@ export default function BuilderNodePalette({
                     <AddIcon fontSize="small" color={unavailable ? 'disabled' : 'primary'} />
                     <Box sx={{ minWidth: 0 }}>
                       <Typography variant="body2" noWrap sx={{ fontWeight: 700, lineHeight: 1.1 }}>
-                        {entry.display_name || nodeType}
+                        {displayName}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', lineHeight: 1.15 }}>
-                        {entry.ui?.summary || nodeType}
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{
+                          display: '-webkit-box',
+                          overflow: 'hidden',
+                          WebkitBoxOrient: 'vertical',
+                          WebkitLineClamp: 2,
+                          lineHeight: 1.18,
+                        }}
+                      >
+                        {summary}
                       </Typography>
                     </Box>
                     {entry.max_instances ? (
