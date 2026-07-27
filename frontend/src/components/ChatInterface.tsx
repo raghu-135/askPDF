@@ -16,12 +16,10 @@ import {
     Tooltip,
     Chip,
     CircularProgress,
-    ToggleButton,
-    ToggleButtonGroup,
 } from '@mui/material';
 import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
 import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
-import WifiFindTwoToneIcon from '@mui/icons-material/WifiFindTwoTone';
+import WifiPasswordIcon from '@mui/icons-material/WifiPassword';
 import SendIcon from '@mui/icons-material/Send';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -888,11 +886,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             ? 'ask'
             : 'on';
 
-    const handleWebSearchModeChange = async (
-        _event: React.MouseEvent<HTMLElement>,
-        nextMode: WebSearchMode | null,
-    ) => {
-        if (!nextMode || nextMode === webSearchMode || savingWebSearchMode) return;
+    const handleWebSearchModeChange = async () => {
+        if (savingWebSearchMode) return;
+        const nextMode: WebSearchMode = webSearchMode === 'off'
+            ? 'ask'
+            : webSearchMode === 'ask'
+                ? 'on'
+                : 'off';
         const previousUseWebSearch = useWebSearch;
         const previousHitlWebApproval = hitlWebApproval;
         const nextUseWebSearch = nextMode !== 'off';
@@ -922,6 +922,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setSavingWebSearchMode(false);
         }
     };
+
+    const webSearchModeLabel = webSearchMode === 'on'
+        ? 'Internet Search On'
+        : webSearchMode === 'ask'
+            ? 'Ask me every time before internet search'
+            : 'Internet Search Off';
+    const nextWebSearchModeLabel = webSearchMode === 'off'
+        ? 'Ask me every time'
+        : webSearchMode === 'ask'
+            ? 'Internet Search On'
+            : 'Internet Search Off';
 
     // Polling for indexing and embedding model status
     useEffect(() => {
@@ -2005,37 +2016,31 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     )}
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
-                    <ToggleButtonGroup
-                        exclusive
-                        size="small"
-                        value={webSearchMode}
-                        onChange={handleWebSearchModeChange}
-                        disabled={savingWebSearchMode}
-                        aria-label="Internet search mode"
-                        sx={{
-                            flexShrink: 0,
-                            '& .MuiToggleButton-root': {
-                                p: 0.5,
-                                border: 0,
-                            },
-                        }}
+                    <Tooltip
+                        title={`${webSearchModeLabel}. Click to switch to ${nextWebSearchModeLabel}.`}
+                        placement="top"
                     >
-                        <ToggleButton value="on" aria-label="Internet Search On">
-                            <Tooltip title="Internet Search On" placement="top">
-                                <WifiTwoToneIcon fontSize="small" />
-                            </Tooltip>
-                        </ToggleButton>
-                        <ToggleButton value="ask" aria-label="Ask me every time before internet search">
-                            <Tooltip title="Ask me every time before internet search" placement="top">
-                                <WifiFindTwoToneIcon fontSize="small" />
-                            </Tooltip>
-                        </ToggleButton>
-                        <ToggleButton value="off" aria-label="Internet Search Off">
-                            <Tooltip title="Internet Search Off" placement="top">
-                                <WifiOffTwoToneIcon fontSize="small" />
-                            </Tooltip>
-                        </ToggleButton>
-                    </ToggleButtonGroup>
+                        <span>
+                            <IconButton
+                                aria-label={webSearchModeLabel}
+                                color={webSearchMode === 'on'
+                                    ? 'primary'
+                                    : webSearchMode === 'ask'
+                                        ? 'warning'
+                                        : 'default'}
+                                onClick={handleWebSearchModeChange}
+                                disabled={savingWebSearchMode}
+                                size="small"
+                                sx={{ p: 0.5 }}
+                            >
+                                {webSearchMode === 'on'
+                                    ? <WifiTwoToneIcon />
+                                    : webSearchMode === 'ask'
+                                        ? <WifiPasswordIcon />
+                                        : <WifiOffTwoToneIcon />}
+                            </IconButton>
+                        </span>
+                    </Tooltip>
                     <Tooltip
                         title={
                             <Box sx={{ p: 0.5 }}>
