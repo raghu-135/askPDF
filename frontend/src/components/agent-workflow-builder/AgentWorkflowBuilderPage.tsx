@@ -3,6 +3,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   CssBaseline,
   Dialog,
@@ -917,7 +918,17 @@ export default function AgentWorkflowBuilderPage() {
           secondaryHeader={
             <Box sx={{ minHeight: 44, px: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
               {workspace === 'build' ? (
-                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Agent Workflow Builder</Typography>
+                <Box sx={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Agent Workflow Builder</Typography>
+                  {builderState ? (
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label={`${builderState.nodes.length} nodes · ${builderState.edges.length} edges · ${builderState.allowed_tool_ids.length} tools`}
+                      sx={{ height: 22, fontSize: '0.68rem' }}
+                    />
+                  ) : null}
+                </Box>
               ) : testThread ? (
                 <Box sx={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Button size="small" startIcon={<ForumIcon />} onClick={() => void handleTestThreadSelect(null)} sx={{ flexShrink: 0 }}>All threads</Button>
@@ -972,8 +983,14 @@ export default function AgentWorkflowBuilderPage() {
             ) : (
               <BuilderUtilityPanel
                 placement={resolvedPlacement}
-                layout={builderLayout}
                 utilityRailRef={utilityRailRef}
+                selectionKey={
+                  selection?.kind === 'node'
+                    ? `node:${selection.nodeId}`
+                    : selection?.kind === 'edge'
+                      ? `edge:${selection.edgeIndex}`
+                      : null
+                }
                 inspector={
                   <BuilderInspector
                     catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
@@ -983,9 +1000,6 @@ export default function AgentWorkflowBuilderPage() {
                   />
                 }
                 palette={<BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} />}
-                stats={<Typography variant="caption" color="text.secondary">Nodes: {builderState.nodes.length} · Edges: {builderState.edges.length} · Tools: {builderState.allowed_tool_ids.length}</Typography>}
-                onPalettePercentChange={(palettePercent) => setBuilderLayout((previous) => ({ ...previous, palettePercent }))}
-                onInspectorCollapsedChange={(inspectorCollapsed) => setBuilderLayout((previous) => ({ ...previous, inspectorCollapsed }))}
               />
             )
           }

@@ -4,9 +4,8 @@ import StickyNote2OutlinedIcon from '@mui/icons-material/StickyNote2Outlined';
 import DashboardCustomizeOutlinedIcon from '@mui/icons-material/DashboardCustomizeOutlined';
 import {
   Box,
-  Button,
   Chip,
-  Divider,
+  IconButton,
   Tooltip,
   Typography,
   TextField,
@@ -48,86 +47,101 @@ export default function BuilderNodePalette({
   }, [catalog.node_catalog, query]);
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Node Palette
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          Catalog-backed node types
-        </Typography>
+    <Box sx={{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', gap: 1, minWidth: 0, height: '100%' }}>
+      <Box
+        sx={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 2,
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) auto auto',
+          gap: 0.5,
+          alignItems: 'center',
+          bgcolor: 'background.paper',
+          pb: 0.5,
+        }}
+      >
+        <TextField
+          size="small"
+          label="Search nodes"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          sx={{ '& .MuiInputBase-root': { height: 36 } }}
+        />
+        <Tooltip title="Add canvas note">
+          <span>
+            <IconButton size="small" disabled={disabled} onClick={onAddNote} aria-label="Add canvas note">
+              <StickyNote2OutlinedIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Group current nodes">
+          <span>
+            <IconButton size="small" disabled={disabled || state.nodes.length === 0} onClick={onAddGroup} aria-label="Group current nodes">
+              <DashboardCustomizeOutlinedIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
       </Box>
-      <Divider />
-      <TextField size="small" label="Search nodes" value={query} onChange={(event) => setQuery(event.target.value)} />
-      <Button
-        size="small"
-        variant="outlined"
-        startIcon={<StickyNote2OutlinedIcon />}
-        disabled={disabled}
-        onClick={onAddNote}
-      >
-        Add canvas note
-      </Button>
-      <Button
-        size="small"
-        variant="outlined"
-        startIcon={<DashboardCustomizeOutlinedIcon />}
-        disabled={disabled || state.nodes.length === 0}
-        onClick={onAddGroup}
-      >
-        Group current nodes
-      </Button>
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, overflow: 'auto', pr: 0.5 }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, overflow: 'auto', pr: 0.5 }}>
         {groupedNodes.map(([category, entries]) => (
-          <Box key={category} sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-            <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase' }}>
+          <Box key={category} sx={{ display: 'flex', flexDirection: 'column', gap: 0.35 }}>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.3, fontSize: '0.68rem' }}>
               {category.replace(/_/g, ' ')}
             </Typography>
             {entries.map(([nodeType, entry]) => {
               const compatibility = canAddNodeType(catalog, state, nodeType);
-              const button = (
-                <span>
-                  <Button
-                    fullWidth
-                    size="small"
-                    variant="outlined"
-                    startIcon={<AddIcon fontSize="small" />}
-                    disabled={disabled || !compatibility.ok}
-                    onClick={() => onAddNodeType(nodeType)}
-                    draggable={!disabled && compatibility.ok}
+              const unavailable = disabled || !compatibility.ok;
+              return (
+                <Tooltip key={nodeType} title={disabled ? 'Authoring is disabled.' : compatibility.ok ? '' : compatibility.reason || 'Not available'}>
+                  <Box
+                    role="button"
+                    tabIndex={unavailable ? -1 : 0}
+                    aria-disabled={unavailable}
+                    draggable={!unavailable}
+                    onClick={() => !unavailable && onAddNodeType(nodeType)}
+                    onKeyDown={(event) => {
+                      if (unavailable || (event.key !== 'Enter' && event.key !== ' ')) return;
+                      event.preventDefault();
+                      onAddNodeType(nodeType);
+                    }}
                     onDragStart={(event) => {
+                      if (unavailable) return;
                       event.dataTransfer.setData('application/askpdf-node-type', nodeType);
                       event.dataTransfer.effectAllowed = 'move';
                     }}
                     sx={{
-                      justifyContent: 'flex-start',
-                      textAlign: 'left',
                       minHeight: 38,
+                      px: 0.75,
+                      py: 0.45,
+                      display: 'grid',
+                      gridTemplateColumns: '22px minmax(0, 1fr) auto',
+                      alignItems: 'center',
+                      gap: 0.55,
                       borderRadius: 1,
-                      textTransform: 'none',
+                      color: unavailable ? 'text.disabled' : 'text.primary',
+                      cursor: unavailable ? 'not-allowed' : 'grab',
+                      opacity: unavailable ? 0.58 : 1,
+                      boxShadow: unavailable ? 'inset 0 0 0 1px transparent' : 'inset 0 0 0 1px transparent',
+                      '&:hover': unavailable ? {} : { bgcolor: 'action.hover', boxShadow: 'inset 0 0 0 1px currentColor', color: 'primary.main' },
+                      '&:focus-visible': { outline: '2px solid', outlineColor: 'primary.main', outlineOffset: 1 },
                     }}
                   >
+                    <AddIcon fontSize="small" color={unavailable ? 'disabled' : 'primary'} />
                     <Box sx={{ minWidth: 0 }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
+                      <Typography variant="body2" noWrap sx={{ fontWeight: 700, lineHeight: 1.1 }}>
                         {entry.display_name || nodeType}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
+                      <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block', lineHeight: 1.15 }}>
                         {entry.ui?.summary || nodeType}
                       </Typography>
                     </Box>
-                  </Button>
-                </span>
-              );
-              return (
-                <Tooltip key={nodeType} title={disabled ? 'Authoring is disabled.' : compatibility.ok ? '' : compatibility.reason || 'Not available'}>
-                  <Box>
-                    {button}
                     {entry.max_instances ? (
                       <Chip
                         size="small"
                         variant="outlined"
                         label={`max ${entry.max_instances}`}
-                        sx={{ mt: 0.5, height: 20, fontSize: '0.68rem' }}
+                        sx={{ height: 20, fontSize: '0.68rem' }}
                       />
                     ) : null}
                   </Box>

@@ -1,21 +1,20 @@
 import React, { useMemo, useState } from 'react';
+import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import PersonAddAltIcon from '@mui/icons-material/PersonAddAlt';
 import {
   Box,
-  Button,
   Chip,
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
-  Divider,
   FormControl,
+  IconButton,
   InputLabel,
   MenuItem,
   Select,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
@@ -39,6 +38,14 @@ const asArrayValue = (value: unknown): string[] => (
 const nodeLabel = (node?: BuilderNodeState) => (
   node ? `${node.id} · ${node.type}` : ''
 );
+
+const sectionLabelSx = {
+  fontWeight: 700,
+  color: 'text.secondary',
+  textTransform: 'uppercase',
+  letterSpacing: 0.3,
+  fontSize: '0.68rem',
+} as const;
 
 const targetOptionsForSource = (
   catalog: AgentWorkflowCatalogResponse,
@@ -92,21 +99,50 @@ function NodeInspector({
   const continueWithoutTarget = hitlRoutes[AgentRunResumeAction.ContinueWithout] || '';
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Node Inspector
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          {nodeLabel(node)}
-        </Typography>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 0.5, alignItems: 'start' }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="subtitle2" noWrap sx={{ fontWeight: 700 }}>
+            Node Inspector
+          </Typography>
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+            {nodeLabel(node)}
+          </Typography>
+        </Box>
+        {!isHitl ? (
+          <Tooltip title="Add HITL Gate">
+            <span>
+              <IconButton
+                size="small"
+                color="primary"
+                onClick={() => onAddHitlGate(node.id)}
+                disabled={disabled || !catalog.node_catalog[BuiltinAgentNodeType.HitlGate]}
+                aria-label="Add HITL Gate"
+              >
+                <PersonAddAltIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        ) : null}
+        <Tooltip title="Remove node">
+          <span>
+            <IconButton
+              size="small"
+              color="error"
+              onClick={() => onRemoveNode(node.id)}
+              disabled={disabled}
+              aria-label="Remove node"
+            >
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
       </Box>
-      <Divider />
       {entry?.ui?.summary ? (
-        <Box sx={{ p: 1, borderRadius: 1, bgcolor: 'action.hover' }}>
+        <Box sx={{ px: 1, py: 0.75, borderRadius: 1, bgcolor: 'action.hover' }}>
           <Typography variant="body2" sx={{ fontWeight: 700 }}>{entry.display_name || node.type}</Typography>
-          <Typography variant="body2" sx={{ mt: 0.5 }}>{entry.ui.summary}</Typography>
-          {entry.ui.use_when ? <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{entry.ui.use_when}</Typography> : null}
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>{entry.ui.summary}</Typography>
+          {entry.ui.use_when ? <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>{entry.ui.use_when}</Typography> : null}
         </Box>
       ) : null}
       <TextField
@@ -125,16 +161,14 @@ function NodeInspector({
         disabled={disabled}
         onChange={(event) => onUpdateNode(node.id, { description: event.target.value })}
       />
-      <Accordion disableGutters elevation={0} sx={{ border: 1, borderColor: 'divider', borderRadius: 1 }}>
-        <AccordionSummary><Typography variant="caption" sx={{ fontWeight: 700 }}>Advanced catalog details</Typography></AccordionSummary>
-        <AccordionDetails>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.65 }}>
+        <Typography variant="caption" sx={sectionLabelSx}>Catalog details</Typography>
         <TextField
           fullWidth
           size="small"
           label="Node ID"
           value={node.id}
           slotProps={{ input: { readOnly: true } }}
-          sx={{ mb: 1 }}
         />
         <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', rowGap: 0.5 }}>
           <Chip size="small" variant="outlined" label={entry?.display_name || node.type} />
@@ -155,8 +189,7 @@ function NodeInspector({
           </Typography>
         ) : null}
         <JsonPreview value={node} maxHeight={220} />
-        </AccordionDetails>
-      </Accordion>
+      </Box>
       <FormControl size="small" disabled={disabled || allowedTools.length === 0}>
         <InputLabel id={`node-tools-${node.id}`}>Tool contracts</InputLabel>
         <Select<string[]>
@@ -288,29 +321,7 @@ function NodeInspector({
             </Select>
           </FormControl>
         </Box>
-      ) : (
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<PersonAddAltIcon />}
-          onClick={() => onAddHitlGate(node.id)}
-          disabled={disabled || !catalog.node_catalog[BuiltinAgentNodeType.HitlGate]}
-          sx={{ borderRadius: 1 }}
-        >
-          Add HITL Gate
-        </Button>
-      )}
-      <Button
-        size="small"
-        color="error"
-        variant="outlined"
-        startIcon={<DeleteIcon />}
-        onClick={() => onRemoveNode(node.id)}
-        disabled={disabled}
-        sx={{ borderRadius: 1 }}
-      >
-        Remove Node
-      </Button>
+      ) : null}
     </Box>
   );
 }
@@ -379,16 +390,30 @@ function EdgeInspector({
   };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, minWidth: 0 }}>
-      <Box>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Edge Inspector
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          {edge.conditional ? 'Conditional route edge' : 'Sequential edge'}
-        </Typography>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+      <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 0.5, alignItems: 'start' }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="subtitle2" noWrap sx={{ fontWeight: 700 }}>
+            Edge Inspector
+          </Typography>
+          <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+            {edge.conditional ? 'Conditional route edge' : 'Sequential edge'}
+          </Typography>
+        </Box>
+        <Tooltip title="Remove edge">
+          <span>
+            <IconButton
+              size="small"
+              color="error"
+              onClick={() => onRemoveEdge(edgeIndex)}
+              disabled={disabled}
+              aria-label="Remove edge"
+            >
+              <DeleteIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
       </Box>
-      <Divider />
       {edge.conditional ? (
         <>
           <TextField size="small" label="Source" value={edge.from} slotProps={{ input: { readOnly: true } }} />
@@ -434,9 +459,13 @@ function EdgeInspector({
                     ))}
                   </Select>
                 </FormControl>
-                <Button size="small" color="error" disabled={disabled} onClick={() => removeRoute(route)}>
-                  Remove
-                </Button>
+                <Tooltip title="Remove route">
+                  <span>
+                    <IconButton size="small" color="error" disabled={disabled} onClick={() => removeRoute(route)} aria-label={`Remove ${route} route`}>
+                      <DeleteIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
               </Box>
             ))}
             {missingRouteLabels.length > 0 ? (
@@ -467,18 +496,22 @@ function EdgeInspector({
                     ))}
                   </Select>
                 </FormControl>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  disabled={disabled || !routeToAdd}
-                  onClick={() => {
-                    updateRouteTarget(routeToAdd, routeTarget);
-                    setRouteToAdd('');
-                  }}
-                  sx={{ borderRadius: 1 }}
-                >
-                  Add
-                </Button>
+                <Tooltip title="Add route target">
+                  <span>
+                    <IconButton
+                      size="small"
+                      color="primary"
+                      disabled={disabled || !routeToAdd}
+                      onClick={() => {
+                        updateRouteTarget(routeToAdd, routeTarget);
+                        setRouteToAdd('');
+                      }}
+                      aria-label="Add route target"
+                    >
+                      <AddIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
               </Box>
             ) : null}
           </Box>
@@ -523,17 +556,6 @@ function EdgeInspector({
           />
         </>
       )}
-      <Button
-        size="small"
-        color="error"
-        variant="outlined"
-        startIcon={<DeleteIcon />}
-        onClick={() => onRemoveEdge(edgeIndex)}
-        disabled={disabled}
-        sx={{ borderRadius: 1 }}
-      >
-        Remove Edge
-      </Button>
     </Box>
   );
 }
@@ -598,22 +620,32 @@ export default function BuilderInspector({
   }
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-      <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontWeight: 700 }}>
-        <FactCheckIcon fontSize="small" /> Inspector
-      </Typography>
-      <Typography variant="body2" color="text.secondary">
-        Select a node or edge from the canvas or graph element list.
-      </Typography>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.85, minWidth: 0 }}>
+      <Box>
+        <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontWeight: 700 }}>
+          <FactCheckIcon fontSize="small" /> No selection
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          Select a graph item to edit it.
+        </Typography>
+      </Box>
       <TextField
         size="small"
         type="number"
-        label="Maximum replan attempts"
+        label="Max replan attempts"
         value={state.extraConfig?.replans || 1}
         disabled={disabled}
-        slotProps={{ htmlInput: { min: 1, max: 5 } }}
+        slotProps={{
+          htmlInput: { min: 1, max: 5 },
+          input: {
+            endAdornment: (
+              <Tooltip title="Bounds retry loops for workflows that support replanning.">
+                <InfoOutlinedIcon fontSize="small" color="action" />
+              </Tooltip>
+            ),
+          },
+        }}
         onChange={(event) => onUpdateSettings({ replans: Math.max(1, Math.min(5, Number(event.target.value) || 1)) })}
-        helperText="Bounds retry loops for workflows that support replanning."
       />
     </Box>
   );
