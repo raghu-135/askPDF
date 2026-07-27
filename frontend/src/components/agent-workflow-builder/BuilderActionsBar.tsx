@@ -13,8 +13,8 @@ import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import {
   Box,
-  Button,
   Chip,
+  CircularProgress,
   Divider,
   FormControl,
   IconButton,
@@ -93,28 +93,21 @@ export default function BuilderActionsBar({
     <Box
       sx={{
         display: 'flex',
-        alignItems: { xs: 'stretch', md: 'center' },
-        justifyContent: 'space-between',
-        gap: 1,
-        flexWrap: 'wrap',
-        px: 2,
-        py: 1.25,
+        alignItems: 'center',
+        gap: 0.75,
+        minHeight: 48,
+        px: 1,
+        py: 0.5,
         borderBottom: 1,
         borderColor: 'divider',
         bgcolor: 'background.paper',
+        overflowX: 'auto',
+        overflowY: 'hidden',
       }}
     >
-      <Box sx={{ minWidth: 0 }}>
-        <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-          Agent Workflow Builder
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          Build, connect, validate, and test an agent workflow {dirty ? '· Unsaved changes' : '· Saved'}
-        </Typography>
-      </Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap', minWidth: 'max-content' }}>
         {validationChip}
-        <FormControl size="small" disabled={disabled} sx={{ minWidth: 190 }}>
+        <FormControl size="small" disabled={disabled} sx={{ minWidth: 180 }}>
           <InputLabel id="builder-starter-label">Workflow</InputLabel>
           <Select
             labelId="builder-starter-label"
@@ -133,28 +126,22 @@ export default function BuilderActionsBar({
             ))}
           </Select>
         </FormControl>
-        <Button size="small" startIcon={<UndoIcon />} onClick={onUndo} disabled={disabled || !canUndo}>Undo</Button>
-        <Button size="small" startIcon={<RedoIcon />} onClick={onRedo} disabled={disabled || !canRedo}>Redo</Button>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<RestartAltIcon />}
-          onClick={onReset}
-          disabled={disabled}
-          sx={{ borderRadius: 1 }}
-        >
-          Reset
-        </Button>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={<PlayArrowIcon />}
-          onClick={onValidate}
-          disabled={validating}
-          sx={{ borderRadius: 1 }}
-        >
-          {validating ? 'Validating' : 'Validate'}
-        </Button>
+        <Tooltip title="Undo">
+          <span><IconButton size="small" aria-label="Undo" onClick={onUndo} disabled={disabled || !canUndo}><UndoIcon fontSize="small" /></IconButton></span>
+        </Tooltip>
+        <Tooltip title="Redo">
+          <span><IconButton size="small" aria-label="Redo" onClick={onRedo} disabled={disabled || !canRedo}><RedoIcon fontSize="small" /></IconButton></span>
+        </Tooltip>
+        <Tooltip title="Reset workflow">
+          <span><IconButton size="small" aria-label="Reset workflow" onClick={onReset} disabled={disabled}><RestartAltIcon fontSize="small" /></IconButton></span>
+        </Tooltip>
+        <Tooltip title={validating ? 'Validating workflow' : 'Validate workflow'}>
+          <span>
+            <IconButton size="small" aria-label="Validate workflow" onClick={onValidate} disabled={validating}>
+              {validating ? <CircularProgress size={18} /> : <PlayArrowIcon fontSize="small" />}
+            </IconButton>
+          </span>
+        </Tooltip>
         <Box sx={{ minWidth: 0, display: { xs: 'none', sm: 'block' }, maxWidth: 180 }}>
           <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }} noWrap>
             {workflowName || 'Untitled workflow'}
@@ -163,33 +150,24 @@ export default function BuilderActionsBar({
             {savedWorkflowId ? `Saved · ${savedWorkflowId}` : dirty ? 'Unsaved changes' : 'Not saved yet'}
           </Typography>
         </Box>
-        <Button
-          size="small"
-          variant="contained"
-          startIcon={<SaveIcon />}
-          onClick={onOpenSave}
-          disabled={disabled || saveBusy}
-          sx={{ borderRadius: 1 }}
-        >
-          {saveBusy ? 'Saving' : 'Save'}
-        </Button>
-        <Button
-          size="small"
-          variant="outlined"
-          startIcon={testMode ? <ArrowBackIcon /> : <ScienceIcon />}
-          onClick={onToggleTest}
-          sx={{ borderRadius: 1 }}
-        >
-          {testMode ? 'Back to Builder' : 'Test'}
-        </Button>
+        <Tooltip title={saveBusy ? 'Saving workflow' : 'Save workflow'}>
+          <span>
+            <IconButton color="primary" size="small" aria-label="Save workflow" onClick={onOpenSave} disabled={disabled || saveBusy}>
+              {saveBusy ? <CircularProgress size={18} /> : <SaveIcon fontSize="small" />}
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title={testMode ? 'Back to Builder' : 'Test workflow'}>
+          <IconButton size="small" color={testMode ? 'default' : 'primary'} aria-label={testMode ? 'Back to Builder' : 'Test workflow'} onClick={onToggleTest}>
+            {testMode ? <ArrowBackIcon fontSize="small" /> : <ScienceIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
         {testMode && hasTestSession && onClearTestSession && (
-          <Button
-            size="small"
-            startIcon={<DeleteSweepIcon />}
-            onClick={onClearTestSession}
-          >
-            Clear test
-          </Button>
+          <Tooltip title="Clear test session">
+            <IconButton size="small" aria-label="Clear test session" onClick={onClearTestSession}>
+              <DeleteSweepIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         )}
         <Tooltip title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
           <IconButton

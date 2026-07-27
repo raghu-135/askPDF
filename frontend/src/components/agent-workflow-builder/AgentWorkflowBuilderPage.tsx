@@ -993,7 +993,7 @@ export default function AgentWorkflowBuilderPage() {
           secondaryHeader={
             <Box sx={{ minHeight: 44, px: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
               {workspace === 'build' ? (
-                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Builder utilities</Typography>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Agent Workflow Builder</Typography>
               ) : testThread ? (
                 <Box sx={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Button size="small" startIcon={<ForumIcon />} onClick={() => void handleTestThreadSelect(null)} sx={{ flexShrink: 0 }}>All threads</Button>
