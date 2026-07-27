@@ -250,6 +250,19 @@ class NodeRegistry:
                 use_web_search=state.get("use_web_search", False),
                 use_reranker=state.get("use_reranker", True),
             )
+            transient_history = str(state.get("transient_history_text") or "").strip()
+            if transient_history:
+                persisted_history = str(bundle.get("recent_history_text") or "").strip()
+                bundle = {
+                    **bundle,
+                    "recent_history_text": "\n\n".join(
+                        part for part in (
+                            persisted_history,
+                            f"Current workflow test session:\n{transient_history}",
+                        )
+                        if part
+                    ),
+                }
         except Exception as exc:
             _append_failed_node_event(state, config, WorkflowNodeType.CONTEXT_LOADER.value, started, exc)
             raise

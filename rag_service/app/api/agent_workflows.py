@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -102,11 +102,18 @@ class AgentRunCancelRequest(BaseModel):
     thread_id: str = Field(..., min_length=1)
 
 
+class BuilderTransientMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=20000)
+
+
 class BuilderTestRunRequest(ThreadChatRequest):
     builder_session_id: str = Field(..., min_length=1, max_length=200)
     base_workflow_id: str = Field(..., min_length=1)
     spec: Dict[str, Any] = Field(default_factory=dict)
     allow_external_tools: bool = False
+    transient_messages: list[BuilderTransientMessage] = Field(default_factory=list, max_length=100)
+    workflow_spec_fingerprint: Optional[str] = Field(default=None, max_length=128)
 
 
 class BuilderTestRunResumeRequest(AgentRunResumeRequest):
@@ -372,6 +379,7 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
             "builder_session_id": req.builder_session_id,
             "base_workflow_id": req.base_workflow_id,
             "spec_fingerprint": spec_fingerprint(resolved),
+            "client_spec_fingerprint": req.workflow_spec_fingerprint,
         },
     )
 

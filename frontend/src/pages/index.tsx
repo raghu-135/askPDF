@@ -1,9 +1,7 @@
 import AutoStoriesIcon from '@mui/icons-material/AutoStories';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
-import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
-import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { Container, Stack, Typography, Box, Button, FormControl, InputLabel, Select, MenuItem, CssBaseline, IconButton, Tooltip, CircularProgress, Chip, Checkbox } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../theme';
@@ -22,16 +20,21 @@ import PdfUploader from "../components/PdfUploader";
 
 const PdfViewer = dynamic(() => import("../components/PdfViewer"), { ssr: false });
 import PlayerControls from "../components/PlayerControls";
-import ChatInterface from "../components/ChatInterface";
+import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
 import ThreadSidebar, { ThreadSidebarHeaderState } from "../components/ThreadSidebar";
-import PdfTabs, { PdfTab } from "../components/PdfTabs";
+import type { PdfTab } from "../components/PdfTabs";
+import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
+import DockMenuButton from '../components/workbench/DockMenuButton';
+import WorkspaceTabs, { type WorkspaceTab } from '../components/workbench/WorkspaceTabs';
+import TraceWorkspace, { type TraceRunTab } from '../components/workbench/TraceWorkspace';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
 import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage, pollForFileReady, getThread, deleteThread, listThreads } from "../lib/api";
 import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
 import { ProcessStatus } from "../lib/enums";
-import { clampPanelRatio, PANEL_RATIOS } from "../lib/panel-ratio";
+import { closeTraceTab, upsertTraceTab } from '../lib/trace-tabs';
+import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -92,12 +95,11 @@ export default function Home() {
   const [isBrowserActive, setIsBrowserActive] = useState(false);
   const [isBrowserCapturing, setIsBrowserCapturing] = useState(false);
 
-  // Resizable chat panel
-  const [chatWidthRatio, setChatWidthRatio] = useState(PANEL_RATIOS.chat.default);
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  const [workbenchLayout, setWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.normal');
+  const [resolvedPlacement, setResolvedPlacement] = useState<ResolvedWorkbenchPlacement>('right');
   const [isResizing, setIsResizing] = useState(false);
-  const chatWidthRatioRef = useRef(PANEL_RATIOS.chat.default);
-  const rafIdRef = useRef<number | null>(null);
+  const [traceTabs, setTraceTabs] = useState<TraceRunTab[]>([]);
+  const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
 
 
   // Handle thread selection
@@ -110,6 +112,8 @@ export default function Home() {
     setPlayRequestId(null);
     setActiveSource('pdf');
     setChatSentences([]);
+    setTraceTabs([]);
+    setActiveTraceId(null);
     
     // Reset browser state when leaving thread context
     setIsBrowserActive(false);
@@ -125,6 +129,9 @@ export default function Home() {
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
           setActiveTabId(loadedTabs[0].id);
+        } else {
+          setActiveTabId('browser-tab');
+          setIsBrowserActive(true);
         }
       } catch (err) {
         console.error('Failed to load thread files:', err);
@@ -387,55 +394,6 @@ export default function Home() {
     }
   };
 
-  // Handle resize with optimized performance
-  const handleMouseDown = useCallback(() => {
-    setIsResizing(true);
-    chatWidthRatioRef.current = chatWidthRatio;
-  }, [chatWidthRatio]);
-
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (rafIdRef.current) {
-      cancelAnimationFrame(rafIdRef.current);
-    }
-
-    rafIdRef.current = requestAnimationFrame(() => {
-      const nextRatio = (window.innerWidth - e.clientX) / window.innerWidth;
-      const constrainedRatio = clampPanelRatio(nextRatio, PANEL_RATIOS.chat);
-      chatWidthRatioRef.current = constrainedRatio;
-      document.documentElement.style.setProperty('--chat-width-ratio', `${constrainedRatio}`);
-    });
-  }, []);
-
-  const handleMouseUp = useCallback(() => {
-    setIsResizing(false);
-    setChatWidthRatio(chatWidthRatioRef.current);
-    if (rafIdRef.current) {
-      cancelAnimationFrame(rafIdRef.current);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isResizing) {
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-    } else {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    }
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      if (rafIdRef.current) {
-        cancelAnimationFrame(rafIdRef.current);
-      }
-    };
-  }, [isResizing, handleMouseMove, handleMouseUp]);
-
-  const canDisplayRightPanel = true; // Always show right panel for threads
-  const rightPanelWidth = isRightPanelOpen
-    ? (isResizing ? `calc(100vw * var(--chat-width-ratio, ${chatWidthRatio}))` : `calc(100vw * ${chatWidthRatio})`)
-    : 0;
-
   useEffect(() => {
     if (!activeThread) {
       setRightPanelLineageThreads([]);
@@ -665,6 +623,45 @@ export default function Home() {
     );
   };
 
+  const workspaceTabs = useMemo<WorkspaceTab[]>(() => {
+    if (!activeThread) return [];
+    return [
+      { kind: 'browser', id: 'browser-tab', label: 'Browser' },
+      ...pdfTabs.map((tab) => ({ ...tab, kind: 'document' as const })),
+      {
+        kind: 'trace',
+        id: 'trace-tab',
+        label: 'Debug Trace',
+        count: traceTabs.length,
+        status: traceTabs.some((tab) => tab.error)
+          ? 'failed' as const
+          : traceTabs.some((tab) => tab.running)
+            ? 'running' as const
+            : 'idle' as const,
+      },
+    ];
+  }, [activeThread, pdfTabs, traceTabs]);
+
+  const handleWorkspaceTabChange = useCallback((tabId: string) => {
+    setActiveTabId(tabId);
+    setIsBrowserActive(tabId === 'browser-tab');
+  }, []);
+
+  const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
+    setTraceTabs((current) => upsertTraceTab(current, trace));
+    setActiveTraceId(trace.id);
+    setActiveTabId('trace-tab');
+    setIsBrowserActive(false);
+  }, []);
+
+  const handleCloseTrace = useCallback((runId: string) => {
+    setTraceTabs((current) => {
+      const result = closeTraceTab(current, activeTraceId, runId);
+      setActiveTraceId(result.activeId);
+      return result.tabs;
+    });
+  }, [activeTraceId]);
+
   // Memoize theme to prevent recreation on every render
   const theme = useMemo(() => getTheme(pdfDarkMode), [pdfDarkMode]);
 
@@ -674,240 +671,113 @@ export default function Home() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box sx={{ height: "100vh", display: "flex", flexDirection: "row", overflow: "hidden", bgcolor: 'background.default' }}>
-
-        {/* Left Column: PDF Content & Controls */}
-        <Box sx={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          minWidth: 0,
-          borderRight: 1,
-          borderColor: 'divider'
-        }}>
-          {/* Top Controls Bar */}
-          <Box sx={{
-            px: 1.5,
-            py: 0.75,
-            minHeight: 49,
-            borderBottom: 1,
-            borderColor: 'divider',
-            bgcolor: pdfDarkMode ? '#222' : 'background.paper',
-            color: pdfDarkMode ? '#eee' : 'inherit',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 1,
-            flexWrap: 'wrap',
-            overflow: 'visible'
-          }}>
-            {/* Left side controls */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
-              {/* PDF Uploader */}
-              <PdfUploader
-                threadId={activeThread?.id ?? null}
-                onUploaded={handlePdfUploaded}
-                onIndexingComplete={handleIndexingComplete}
-                onParsingComplete={handleParsingComplete}
-                disabled={!activeThread}
-                tooltipText={!activeThread ? "Select or create a thread first" : undefined}
-              />
-
-              <Tooltip title="Agent workflow builder">
-                <IconButton
-                  color="primary"
-                  size="small"
-                  onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}
-                >
-                  <AutoAwesomeSharpIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-
-              {/* Player Controls */}
-              {activeThread && rightPanelTab === 1 && (
-                <PlayerControls
-                  sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
-                  currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
-                  onCurrentChange={(id) => {
-                    if (activeSource === 'pdf') {
-                      setCurrentPdfId(id);
-                    } else {
-                      setCurrentChatId(id);
-                    }
-                    setPlayRequestId(null);
-                  }}
-                  playRequestId={playRequestId}
-                  autoScroll={autoScroll}
-                  onAutoScrollChange={setAutoScroll}
-                  highlightEnabled={highlightEnabled}
-                  onHighlightEnabledChange={setHighlightEnabled}
+      <Box sx={{ height: '100vh', overflow: 'hidden', bgcolor: 'background.default' }}>
+        <WorkbenchShell
+          layout={workbenchLayout}
+          onLayoutChange={setWorkbenchLayout}
+          onResolvedPlacementChange={setResolvedPlacement}
+          onResizingChange={setIsResizing}
+          secondaryLabel="Threads and chat"
+          primaryToolbar={
+            <Box sx={{ px: 1.5, py: 0.75, minHeight: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
+                <PdfUploader
+                  threadId={activeThread?.id ?? null}
+                  onUploaded={handlePdfUploaded}
+                  onIndexingComplete={handleIndexingComplete}
+                  onParsingComplete={handleParsingComplete}
+                  disabled={!activeThread}
+                  tooltipText={!activeThread ? 'Select or create a thread first' : undefined}
                 />
+                <Tooltip title="Agent workflow builder">
+                  <IconButton color="primary" size="small" onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}>
+                    <AutoAwesomeSharpIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                {activeThread && rightPanelTab === 1 && (
+                  <PlayerControls
+                    sentences={activeSource === 'pdf' ? pdfSentences : chatSentences}
+                    currentId={activeSource === 'pdf' ? currentPdfId : currentChatId}
+                    onCurrentChange={(id) => {
+                      if (activeSource === 'pdf') setCurrentPdfId(id);
+                      else setCurrentChatId(id);
+                      setPlayRequestId(null);
+                    }}
+                    playRequestId={playRequestId}
+                    autoScroll={autoScroll}
+                    onAutoScrollChange={setAutoScroll}
+                    highlightEnabled={highlightEnabled}
+                    onHighlightEnabledChange={setHighlightEnabled}
+                  />
+                )}
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 'auto' }}>
+                <Tooltip title={pdfDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
+                  <IconButton color={pdfDarkMode ? 'primary' : 'default'} onClick={() => setPdfDarkMode((value) => !value)} size="small">
+                    {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+                  </IconButton>
+                </Tooltip>
+                <DockMenuButton value={workbenchLayout} resolvedPlacement={resolvedPlacement} onChange={setWorkbenchLayout} label="Threads and chat layout" />
+              </Box>
+            </Box>
+          }
+          primaryTabs={
+            activeThread ? (
+              <WorkspaceTabs
+                tabs={workspaceTabs}
+                activeTabId={activeTabId}
+                onTabChange={handleWorkspaceTabChange}
+                onTabClose={handleTabClose}
+                onDocumentRemove={handleTabRemove}
+                onAddBrowserToThread={handleAddBrowserToThread}
+                isBrowserCapturing={isBrowserCapturing}
+              />
+            ) : null
+          }
+          primaryContent={
+            <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
+              {activeTabId === 'trace-tab' ? (
+                <TraceWorkspace
+                  tabs={traceTabs}
+                  activeRunId={activeTraceId}
+                  onActiveRunChange={setActiveTraceId}
+                  onClose={handleCloseTrace}
+                  suspendHeavyContent={isResizing}
+                />
+              ) : isBrowserActive || activeTabId === 'browser-tab' ? (
+                <iframe src="http://localhost:8090" style={{ width: '100%', height: '100%', border: 'none' }} title="Browser" allow="camera; microphone; clipboard-read; clipboard-write" />
+              ) : isPdfLoading ? (
+                <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
+                  <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
+                  <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
+                </Box>
+              ) : downloadUrl ? (
+                <PdfViewer
+                  downloadUrl={downloadUrl}
+                  sentences={pdfSentences}
+                  currentId={activeSource === 'pdf' ? currentPdfId : null}
+                  onJump={(id) => { setActiveSource('pdf'); setCurrentPdfId(id); setPlayRequestId(id); }}
+                  autoScroll={autoScroll}
+                  isResizing={isResizing}
+                  highlightEnabled={highlightEnabled}
+                  darkMode={pdfDarkMode}
+                  threadId={activeThread?.id ?? null}
+                  fileHash={activeTab?.fileHash ?? null}
+                />
+              ) : (
+                <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit', p: 4 }}>
+                  <Box>
+                    <Typography variant="h5" gutterBottom>Welcome to AskPDF</Typography>
+                    <Typography color="text.secondary">Select or create a thread, then upload a PDF or open the browser.</Typography>
+                  </Box>
+                </Box>
               )}
             </Box>
-
-            {/* Right side icons */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flex: '0 0 auto', ml: 'auto' }}>
-              {/* PDF Dark Mode Toggle */}
-              <Tooltip title={pdfDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
-                <IconButton
-                  color={pdfDarkMode ? "primary" : "default"}
-                  onClick={() => setPdfDarkMode(d => !d)}
-                  size="small"
-                >
-                  {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
-                </IconButton>
-              </Tooltip>
-
-              {/* Right Panel Toggle - Always visible on extreme right */}
-              <Tooltip title={isRightPanelOpen ? "Hide Threads" : "Show Threads"}>
-                <IconButton
-                  color="primary"
-                  size="small"
-                  onClick={() => setIsRightPanelOpen(open => !open)}
-                >
-                  {isRightPanelOpen ? <KeyboardDoubleArrowRightIcon fontSize="small" /> : <KeyboardDoubleArrowLeftIcon fontSize="small" />}
-                </IconButton>
-              </Tooltip>
-            </Box>
-          </Box>
-
-          {/* PDF Tabs */}
-          {(pdfTabs.length > 0 || activeThread) && (
-            <PdfTabs
-              tabs={pdfTabs}
-              activeTabId={activeTabId}
-              onTabChange={handleTabChange}
-              onTabClose={handleTabClose}
-              onTabRemove={activeThread ? handleTabRemove : undefined}
-              darkMode={pdfDarkMode}
-              showBrowserTab={!!activeThread}
-              onBrowserTabClick={() => {
-                setIsBrowserActive(true);
-                setActiveTabId('browser-tab');
-              }}
-              onAddBrowserToThread={activeThread ? handleAddBrowserToThread : undefined}
-              isBrowserCapturing={isBrowserCapturing}
-            />
-          )}
-
-          {/* PDF Viewer Area - unified for both PDFs and web-converted PDFs */}
-          <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            {isBrowserActive ? (
-              <iframe
-                src="http://localhost:8090"
-                style={{ width: '100%', height: '100%', border: 'none' }}
-                title="Browser"
-                allow="camera; microphone; clipboard-read; clipboard-write"
-              />
-            ) : isPdfLoading ? (
-              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit' }}>
-                <CircularProgress color={pdfDarkMode ? 'inherit' : 'primary'} />
-                <Typography sx={{ ml: 2 }}>Loading documents...</Typography>
-              </Box>
-            ) : downloadUrl ? (
-              <PdfViewer
-                downloadUrl={downloadUrl}
-                sentences={pdfSentences}
-                currentId={activeSource === 'pdf' ? currentPdfId : null}
-                onJump={(id) => {
-                  setActiveSource('pdf');
-                  setCurrentPdfId(id);
-                  setPlayRequestId(id);
-                }}
-                autoScroll={autoScroll}
-                isResizing={isResizing}
-                highlightEnabled={highlightEnabled}
-                darkMode={pdfDarkMode}
-                threadId={activeThread?.id ?? null}
-                fileHash={activeTab?.fileHash ?? null}
-              />
-            ) : (
-              <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: pdfDarkMode ? '#222' : 'grey.50', color: pdfDarkMode ? '#eee' : 'inherit', p: 4 }}>
-                <Box>
-                  <Typography variant="h5" sx={{ color: pdfDarkMode ? '#eee' : 'textSecondary' }} gutterBottom>
-                    Welcome to AskPDF
-                  </Typography>
-                  <Typography sx={{ mb: 2, color: pdfDarkMode ? '#ccc' : 'textSecondary' }}>
-                    To get started:
-                  </Typography>
-                  <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
-                    <li>Use the <b>Threads</b> tab on the right to create a new thread with an embedding model.</li>
-                    <li>Click <b>Upload PDF</b> to add PDF documents to your thread.</li>
-                    <li>Switch to the <b>Chat</b> tab to ask questions about your sources using AI.</li>
-                    <li>The AI remembers your conversations - relevant past Q&A pairs are recalled automatically.</li>
-                    <li>Select text and click the read-aloud icon to start audio playback from that point.</li>
-                  </ul>
-                  <Typography sx={{ mt: 2, mb: 1, color: pdfDarkMode ? '#ccc' : 'textSecondary' }}>
-                    Settings tips:
-                  </Typography>
-                  <ul style={{ color: pdfDarkMode ? '#bbb' : '#888', margin: 0, paddingLeft: 20, fontSize: 16 }}>
-                    <li>Open the <b>Chat</b> tab and click the <b>gear icon</b> to configure AI prompt settings for the current thread.</li>
-                    <li>Choose an <b>Agent workflow</b> for Router RAG or Plan-and-Execute behavior.</li>
-                    <li>Enable <b>Reranker</b> to improve ordering of retrieved chunks.</li>
-                    <li>Customize <b>Tools</b> to control which capabilities the assistant can use.</li>
-                    <li>Edit the <b>System role</b> to change the assistant's behavior and tone.</li>
-                    <li>Use <b>Prompt preview</b> to see the exact prompt that will be sent to the model.</li>
-                  </ul>
-                  <Typography sx={{ mt: 2, fontSize: 14, color: pdfDarkMode ? '#aaa' : 'textSecondary' }}>
-                    <b>Note:</b> The embedding model is locked once a thread is created. Create a new thread to use a different model.
-                  </Typography>
-                </Box>
-              </Box>
-            )}
-          </Box>
-        </Box>
-
-        {/* Resizable Divider */}
-        {canDisplayRightPanel && isRightPanelOpen && (
-          <Box
-            onMouseDown={handleMouseDown}
-            sx={{
-              width: '12px',
-              mx: '-6px',
-              cursor: 'col-resize',
-              position: 'relative',
-              zIndex: 10,
-              display: 'flex',
-              justifyContent: 'center',
-              '&:hover .divider-line, &:active .divider-line': {
-                backgroundColor: 'primary.main',
-                width: '4px',
-              },
-            }}
-          >
-            <Box className="divider-line" sx={{
-              width: '2px',
-              height: '100%',
-              backgroundColor: isResizing ? 'primary.main' : 'divider',
-              transition: 'all 0.2s',
-            }} />
-          </Box>
-        )}
-
-        {/* Right Column: Threads & Chat Interface */}
-        {canDisplayRightPanel && (
-          <Box sx={{
-            width: rightPanelWidth,
-            minWidth: 0,
-            height: '100%',
-            display: 'flex',
-            flexDirection: 'column',
-            transition: isResizing || !isRightPanelOpen ? 'none' : 'width 0.1s ease-out',
-            bgcolor: 'background.paper',
-            visibility: isRightPanelOpen ? 'visible' : 'hidden',
-            pointerEvents: isRightPanelOpen ? 'auto' : 'none',
-            overflow: 'hidden'
-          }}>
-            {renderRightPanelHeader()}
-
-            {/* Tab Content */}
-            <Box sx={{ flex: 1, overflow: 'hidden' }}>
-              {/* Threads Tab */}
-              <Box sx={{
-                height: '100%',
-                display: rightPanelTab === 0 ? 'block' : 'none',
-                overflow: 'auto'
-              }}>
+          }
+          secondaryHeader={renderRightPanelHeader()}
+          secondaryContent={
+            <Box sx={{ height: '100%', overflow: 'hidden' }}>
+              <Box sx={{ height: '100%', display: rightPanelTab === 0 ? 'block' : 'none', overflow: 'auto' }}>
                 <ThreadSidebar
                   key={sidebarVersion}
                   activeThreadId={activeThread?.id || null}
@@ -918,13 +788,7 @@ export default function Home() {
                   darkMode={pdfDarkMode}
                 />
               </Box>
-
-              {/* Chat Tab */}
-              <Box sx={{
-                height: '100%',
-                display: rightPanelTab === 1 ? 'flex' : 'none',
-                flexDirection: 'column'
-              }}>
+              <Box sx={{ height: '100%', display: rightPanelTab === 1 ? 'flex' : 'none', flexDirection: 'column' }}>
                 {activeThread ? (
                   <ChatInterface
                     activeThread={activeThread}
@@ -932,52 +796,26 @@ export default function Home() {
                     setChatSentences={setChatSentences}
                     currentChatId={currentChatId}
                     activeSource={activeSource}
-                    onJump={(id) => {
-                      setActiveSource('chat');
-                      setCurrentChatId(id);
-                      setPlayRequestId(id);
-                    }}
-                    onResetChatId={() => {
-                      setCurrentChatId(null);
-                      setPlayRequestId(null);
-                    }}
+                    onJump={(id) => { setActiveSource('chat'); setCurrentChatId(id); setPlayRequestId(id); }}
+                    onResetChatId={() => { setCurrentChatId(null); setPlayRequestId(null); }}
                     onThreadForked={handleThreadForked}
                     onThreadUpdate={handleThreadUpdated}
                     onOpenThread={handleOpenThreadInChat}
+                    onOpenTrace={handleOpenTrace}
                     hideInlineLineage
                     darkMode={pdfDarkMode}
                     autoScroll={autoScroll}
                     isPanelResizing={isResizing}
                   />
                 ) : (
-                  <Box sx={{
-                    flex: 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    p: 3
-                  }}>
-                    <Typography color="text.secondary" textAlign="center">
-                      Select or create a thread to start chatting
-                    </Typography>
+                  <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3 }}>
+                    <Typography color="text.secondary" textAlign="center">Select or create a thread to start chatting</Typography>
                   </Box>
                 )}
               </Box>
             </Box>
-          </Box>
-        )}
-
-        {/* Global Drag Mask */}
-        {isResizing && (
-          <Box sx={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 9999,
-            cursor: 'col-resize',
-            userSelect: 'none',
-            backgroundColor: 'transparent',
-          }} />
-        )}
+          }
+        />
       </Box>
     </ThemeProvider>
   );

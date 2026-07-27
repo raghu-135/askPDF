@@ -81,6 +81,7 @@ interface ThreadSidebarProps {
   hideHeader?: boolean;
   onHeaderStateChange?: (state: ThreadSidebarHeaderState | null) => void;
   darkMode?: boolean;
+  selectionOnly?: boolean;
 }
 
 const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
@@ -91,6 +92,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   hideHeader = false,
   onHeaderStateChange,
   darkMode = false,
+  selectionOnly = false,
 }) => {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -440,8 +442,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     allThreadsSelected,
     someThreadsSelected,
     isBulkDeleting,
-    openCreateDialog: handleOpenCreateDialog,
-    enterSelectionMode: enterThreadSelectionMode,
+    openCreateDialog: selectionOnly ? () => undefined : handleOpenCreateDialog,
+    enterSelectionMode: selectionOnly ? () => undefined : enterThreadSelectionMode,
     clearSelection: clearThreadSelection,
     deleteSelectedThreads: handleBulkDeleteThreads,
     toggleAllThreads: handleToggleAllThreadsChecked,
@@ -457,6 +459,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     selectedCount,
     someThreadsSelected,
     threads.length,
+    selectionOnly,
   ]);
 
   useEffect(() => {
@@ -690,7 +693,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               Threads
             </Typography>
             <Chip label={threads.length} size="small" />
-            <Tooltip title="Create new thread">
+            {!selectionOnly && <Tooltip title="Create new thread">
               <IconButton
                 size="small"
                 color="primary"
@@ -698,9 +701,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               >
                 <AddIcon fontSize="small" />
               </IconButton>
-            </Tooltip>
+            </Tooltip>}
           </Box>
-          {isSelectionMode ? (
+          {!selectionOnly && (isSelectionMode ? (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
               <Tooltip title={allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
                 <Checkbox
@@ -748,7 +751,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                 </span>
               </Tooltip>
             </Box>
-          )}
+          ))}
         </Box>
       )}
 
@@ -763,14 +766,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             <Typography variant="body2" color="text.secondary">
               No threads yet
             </Typography>
-            <Button
-              size="small"
-              startIcon={<AddIcon />}
-              onClick={handleOpenCreateDialog}
-              sx={{ mt: 1 }}
-            >
-              Create Thread
-            </Button>
+            {!selectionOnly && (
+              <Button size="small" startIcon={<AddIcon />} onClick={handleOpenCreateDialog} sx={{ mt: 1 }}>
+                Create Thread
+              </Button>
+            )}
           </Box>
         ) : (
           <List dense sx={{ p: 0 }}>
@@ -833,7 +833,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         },
                       }}
                     >
-                      {isSelectionMode && (
+                      {isSelectionMode && !selectionOnly && (
                         <Checkbox
                           edge="start"
                           size="small"
@@ -890,7 +890,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                       )}
                     </ListItemButton>
 
-                    {!isSelectionMode && (
+                    {!isSelectionMode && !selectionOnly && (
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flex: '0 0 auto', px: 1 }}>
                         <Tooltip title="Fork thread">
                           <span>

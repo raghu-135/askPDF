@@ -32,6 +32,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
+import RouteIcon from '@mui/icons-material/Route';
 import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
@@ -65,7 +66,12 @@ import {
     AgentWorkflow,
     streamResumeAgentRun,
     cancelChatAgentRun,
+    cancelAgentWorkflowBuilderTest,
+    getLatestAgentWorkflowBuilderTest,
+    resumeAgentWorkflowBuilderTest,
+    streamAgentWorkflowBuilderTest,
     resolveMemoryCandidate,
+    type BuilderTestStreamEnvelope,
     type MemoryCandidate,
     type Project,
     type ThreadChatResponse,
@@ -87,9 +93,14 @@ import {
 import ChatSettingsDialog from './ChatSettingsDialog';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
-import AgentRunDebugPanel from './agent-debug/AgentRunDebugPanel';
-import { buildLiveTraceView } from './agent-debug/agent-trace-projection';
+import { buildLiveTraceView, buildRunTraceView } from './agent-debug/agent-trace-projection';
+import type { TraceRunView } from './agent-debug/agent-trace-projection';
 import useBatchedExecutionEvents from './agent-graph/useBatchedExecutionEvents';
+import {
+    transientMessagesForRequest,
+    workflowSpecFingerprint,
+    type BuilderTestSession,
+} from '../lib/builder-test-session';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -151,7 +162,29 @@ const workflowSupportsReplans = (workflows: AgentWorkflow[], workflowId?: string
     Boolean(workflows.find((workflow) => workflow.id === workflowId)?.supports_replans)
 );
 
-interface ChatInterfaceProps {
+export interface ConversationRuntime {
+    kind: 'normal-thread' | 'builder-test';
+    persistent: boolean;
+    historyReadOnly: boolean;
+}
+
+export interface NormalThreadConversationRuntime extends ConversationRuntime {
+    kind: 'normal-thread';
+    persistent: true;
+    historyReadOnly: false;
+}
+
+export interface BuilderTestConversationRuntime extends ConversationRuntime {
+    kind: 'builder-test';
+    persistent: false;
+    historyReadOnly: true;
+    spec: Record<string, any>;
+    baseWorkflowId: string;
+    session: BuilderTestSession;
+    onSessionChange: React.Dispatch<React.SetStateAction<BuilderTestSession>>;
+}
+
+export interface ChatInterfaceProps {
     ragApiUrl?: string;
     activeThread: Thread | null;
     chatSentences: any[];
@@ -167,9 +200,25 @@ interface ChatInterfaceProps {
     darkMode?: boolean;
     autoScroll?: boolean;
     isPanelResizing?: boolean;
+    onOpenTrace?: (trace: ChatTraceDescriptor) => void;
+    testRuntime?: BuilderTestConversationRuntime;
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({
+export type ChatTraceDescriptor = {
+    id: string;
+    messageId: string;
+    label: string;
+    status?: string;
+    routeReason?: string;
+    traceRefs?: AgentTraceRefs | null;
+    runDetails?: AgentRunDetails;
+    liveTraceView?: TraceRunView;
+    loading?: boolean;
+    error?: string;
+    running?: boolean;
+};
+
+const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     ragApiUrl: ragApiUrlProp,
     activeThread,
     chatSentences,
@@ -185,6 +234,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     darkMode = false,
     autoScroll = true,
     isPanelResizing = false,
+    onOpenTrace,
+    testRuntime,
 }) => {
     const ragApiUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!ragApiUrl) {
@@ -194,6 +245,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const theme = useTheme();
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
+    const isTestRuntime = testRuntime?.kind === 'builder-test';
+    const builderTestSessionIdRef = useRef(
+        globalThis.crypto?.randomUUID?.() || `builder-${Date.now()}`
+    );
 
     const [indexingStatus, setIndexingStatus] = useState<ChatComposerIndexingStatusValue>(ChatComposerIndexingStatus.Checking);
     const [useWebSearch, setUseWebSearch] = useState(false);
@@ -240,6 +295,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [agentRunLoading, setAgentRunLoading] = useState<Record<string, boolean>>({});
     const [agentRunErrors, setAgentRunErrors] = useState<Record<string, string>>({});
     const [openAgentRunIds, setOpenAgentRunIds] = useState<Set<string>>(new Set());
+    const [workspaceTraceMessageId, setWorkspaceTraceMessageId] = useState<string | null>(null);
     const [liveExecution, setLiveExecution] = useState<LiveChatExecution | null>(null);
     const { events: liveExecutionEvents, append: appendLiveExecutionEvent, reset: resetLiveExecutionEvents } = useBatchedExecutionEvents();
     const liveTraceView = useMemo(() => buildLiveTraceView(liveExecutionEvents), [liveExecutionEvents]);
@@ -305,7 +361,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }, []);
 
     const loadPendingMemoryCandidates = useCallback(async () => {
-        if (!activeThread) {
+        if (!activeThread || isTestRuntime) {
             setPendingMemoryCandidates([]);
             return;
         }
@@ -325,7 +381,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         } catch (error: any) {
             setMemoryCandidateError(error?.message || 'Unable to load memory candidates.');
         }
-    }, [activeThread?.id, activeThread?.project_id]);
+    }, [activeThread?.id, activeThread?.project_id, isTestRuntime]);
 
     const handleResolveMemoryCandidate = useCallback(async (candidate: MemoryCandidate, status: 'approved' | 'rejected') => {
         if (!activeThread) return;
@@ -366,8 +422,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (activeThread) {
             applyThreadSettingsToState(activeThread.settings);
             loadMessages();
-            loadPendingMemoryCandidates();
-            recoverPendingHumanReview(activeThread.id);
+            if (!isTestRuntime) {
+                loadPendingMemoryCandidates();
+                recoverPendingHumanReview(activeThread.id);
+            }
             checkIndexStatus();
             loadThreadSettings();
             checkEmbeddingModelStatus();
@@ -381,7 +439,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setPendingMemoryCandidates([]);
             setMemoryCandidateError(null);
         }
-    }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState, loadPendingMemoryCandidates]);
+    }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState, isTestRuntime, loadPendingMemoryCandidates]);
 
     useEffect(() => {
         if (activeThread) {
@@ -492,7 +550,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         if (!activeThread) return;
         try {
             const response = await getThreadMessages(activeThread.id);
-            setMessages(response.messages.map(m => ({
+            const persisted = response.messages.map(m => ({
                 ...m,
                 content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
                 isRecollected: false,
@@ -503,13 +561,40 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 agent_run_sequence: m.agent_run_sequence,
                 agent_trace_refs: m.agent_trace_refs,
                 agent_workflow_id: m.agent_workflow_id ?? m.metadata?.agent_workflow_id,
-                                agent_route: m.agent_route ?? m.metadata?.agent_route,
+                agent_route: m.agent_route ?? m.metadata?.agent_route,
                 agent_route_reason: m.agent_route_reason ?? m.metadata?.agent_route_reason,
-            })));
+            }));
+            const temporary = testRuntime?.session.messages.map((message) => ({
+                id: message.id,
+                role: message.role === 'user' ? MessageRole.User : MessageRole.Assistant,
+                content: message.content,
+                created_at: message.createdAt,
+                agent_run_id: message.runId,
+                agent_workflow_id: testRuntime.baseWorkflowId,
+                pending_human_review: message.status === 'review',
+            } satisfies ChatMessage)) || [];
+            setMessages([...persisted, ...temporary]);
         } catch (error) {
             console.error('Failed to load messages:', error);
         }
     };
+
+    useEffect(() => {
+        if (!testRuntime) return;
+        const temporary = testRuntime.session.messages.map((message) => ({
+            id: message.id,
+            role: message.role === 'user' ? MessageRole.User : MessageRole.Assistant,
+            content: message.content,
+            created_at: message.createdAt,
+            agent_run_id: message.runId,
+            agent_workflow_id: testRuntime.baseWorkflowId,
+            pending_human_review: message.status === 'review',
+        } satisfies ChatMessage));
+        setMessages((current) => [
+            ...current.filter((message) => !message.id.startsWith('test-')),
+            ...temporary,
+        ]);
+    }, [testRuntime?.baseWorkflowId, testRuntime?.session.messages]);
 
     const recoverPendingHumanReview = async (threadId: string) => {
         try {
@@ -937,10 +1022,222 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         setClarificationOptions(null);
     };
 
+    const updateBuilderTestMessage = (
+        messageId: string,
+        patch: Partial<BuilderTestSession['messages'][number]>,
+    ) => {
+        if (!testRuntime) return;
+        testRuntime.onSessionChange((current) => ({
+            ...current,
+            messages: current.messages.map((message) => (
+                message.id === messageId ? { ...message, ...patch } : message
+            )),
+        }));
+    };
+
+    const builderTestRequestContext = () => ({
+        thread_id: activeThread!.id,
+        llm_model: llmModel,
+        use_web_search: useWebSearch,
+        use_reranker: useReranker,
+        context_window: contextWindow,
+        allow_external_tools: false,
+        client_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        client_locale: navigator.language,
+        client_now_iso: new Date().toISOString(),
+    });
+
+    const handleBuilderTestSend = async (question: string) => {
+        if (!testRuntime || !activeThread || loading) return;
+        const now = new Date().toISOString();
+        const stamp = Date.now();
+        const userId = `test-user-${stamp}`;
+        const assistantId = `test-assistant-${stamp}`;
+        const fingerprint = workflowSpecFingerprint(testRuntime.spec);
+        const priorMessages = testRuntime.session.messages;
+        testRuntime.onSessionChange({
+            threadId: activeThread.id,
+            messages: [
+                ...priorMessages,
+                { id: userId, role: 'user', content: question, createdAt: now, status: 'completed', specFingerprint: fingerprint },
+                { id: assistantId, role: 'assistant', content: '', createdAt: now, status: 'sending', specFingerprint: fingerprint },
+            ],
+        });
+        setInput('');
+        setLoading(true);
+        resetLiveExecutionEvents();
+        setPendingHumanReview(null);
+        setHumanReviewError(null);
+        let currentRunId = assistantId;
+        let finalAnswer = '';
+        let terminalError: string | undefined;
+        const events: BuilderTestStreamEnvelope[] = [];
+        setLiveExecution({ messageId: assistantId, running: true });
+        try {
+            await streamAgentWorkflowBuilderTest({
+                ...builderTestRequestContext(),
+                builder_session_id: builderTestSessionIdRef.current,
+                base_workflow_id: testRuntime.baseWorkflowId,
+                spec: testRuntime.spec,
+                question,
+                transient_messages: transientMessagesForRequest(priorMessages),
+                workflow_spec_fingerprint: fingerprint,
+            }, (event) => {
+                if (event.event !== 'heartbeat') {
+                    events.push(event);
+                    appendLiveExecutionEvent(event as AgentExecutionStreamEnvelope);
+                }
+                if (event.data?.run_id) currentRunId = String(event.data.run_id);
+                if (event.event === 'run.completed') {
+                    finalAnswer = String(event.data?.answer || event.data?.final_output?.answer || '');
+                }
+                if (event.event === 'run.failed') {
+                    terminalError = String(event.data?.error?.raw_message || event.data?.error || 'Workflow test failed.');
+                }
+                setLiveExecution({
+                    messageId: assistantId,
+                    runId: currentRunId,
+                    running: !['run.completed', 'run.failed', 'run.cancelled'].includes(event.event),
+                    error: terminalError,
+                });
+                onOpenTrace?.({
+                    id: currentRunId,
+                    messageId: assistantId,
+                    label: `Test · ${fingerprint}`,
+                    status: terminalError ? 'failed' : event.event === 'interrupt.created' ? 'review' : 'running',
+                    liveTraceView: buildLiveTraceView(events),
+                    running: !['run.completed', 'run.failed', 'run.cancelled'].includes(event.event),
+                    error: terminalError,
+                });
+            });
+            const runDetails = await getLatestAgentWorkflowBuilderTest(
+                builderTestSessionIdRef.current,
+                testRuntime.baseWorkflowId,
+            );
+            const answer = finalAnswer
+                || String(runDetails?.result_json?.answer || runDetails?.result_json?.final_answer || 'The workflow completed without a final answer.');
+            updateBuilderTestMessage(assistantId, {
+                content: answer,
+                runId: runDetails?.id || currentRunId,
+                status: runDetails?.pending_interrupt ? 'review' : 'completed',
+            });
+            if (runDetails) {
+                setAgentRunDetails((current) => ({ ...current, [runDetails.id]: runDetails }));
+                if (runDetails.pending_interrupt) {
+                    setPendingHumanReview({
+                        runId: runDetails.id,
+                        interrupt: runDetails.pending_interrupt,
+                        localUserMessageId: userId,
+                        localAssistantMessageId: assistantId,
+                    });
+                    setHumanReviewEditText(runDetails.pending_interrupt.proposed_final_answer || '');
+                }
+                onOpenTrace?.({
+                    id: runDetails.id,
+                    messageId: assistantId,
+                    label: `Test · ${fingerprint}`,
+                    status: runDetails.status,
+                    runDetails,
+                    liveTraceView: buildRunTraceView(runDetails),
+                    running: false,
+                });
+            }
+        } catch (error: any) {
+            const cancelled = error?.name === 'AbortError';
+            const message = cancelled ? 'Workflow test cancelled.' : error?.message || terminalError || 'Workflow test failed.';
+            updateBuilderTestMessage(assistantId, {
+                content: message,
+                runId: currentRunId,
+                status: cancelled ? 'cancelled' : 'failed',
+            });
+        } finally {
+            setLiveExecution(null);
+            setLoading(false);
+        }
+    };
+
     const handleHumanReviewAction = async (action: AgentRunResumeAction, selectedOptionIds?: string[]): Promise<boolean> => {
         if (!pendingHumanReview || !activeThread) return false;
         const interrupt = pendingHumanReview.interrupt;
         if (!interrupt.interrupt_id) return false;
+        if (testRuntime) {
+            setHumanReviewSubmitting(action);
+            setHumanReviewError(null);
+            resetLiveExecutionEvents();
+            setLiveExecution({
+                messageId: pendingHumanReview.localAssistantMessageId,
+                runId: pendingHumanReview.runId,
+                running: true,
+            });
+            try {
+                const events: BuilderTestStreamEnvelope[] = [];
+                await resumeAgentWorkflowBuilderTest(pendingHumanReview.runId, {
+                    ...builderTestRequestContext(),
+                    action,
+                    interrupt_id: interrupt.interrupt_id,
+                    resume_token: interrupt.resume_token || undefined,
+                    resume_version: interrupt.resume_version || undefined,
+                    selected_option_ids: selectedOptionIds,
+                }, (event) => {
+                    if (event.event !== 'heartbeat') {
+                        events.push(event);
+                        appendLiveExecutionEvent(event as AgentExecutionStreamEnvelope);
+                    }
+                    onOpenTrace?.({
+                        id: pendingHumanReview.runId,
+                        messageId: pendingHumanReview.localAssistantMessageId,
+                        label: `Test · ${workflowSpecFingerprint(testRuntime.spec)}`,
+                        status: event.event === 'run.failed' ? 'failed' : event.event === 'interrupt.created' ? 'review' : 'running',
+                        liveTraceView: buildLiveTraceView(events),
+                        running: !['run.completed', 'run.failed', 'run.cancelled'].includes(event.event),
+                    });
+                });
+                const refreshed = await getLatestAgentWorkflowBuilderTest(
+                    builderTestSessionIdRef.current,
+                    testRuntime.baseWorkflowId,
+                );
+                const answer = String(
+                    refreshed?.result_json?.answer
+                    || refreshed?.result_json?.final_answer
+                    || 'The workflow test completed.',
+                );
+                updateBuilderTestMessage(pendingHumanReview.localAssistantMessageId, {
+                    content: answer,
+                    runId: refreshed?.id || pendingHumanReview.runId,
+                    status: refreshed?.pending_interrupt ? 'review' : 'completed',
+                });
+                if (refreshed) {
+                    setAgentRunDetails((current) => ({ ...current, [refreshed.id]: refreshed }));
+                    onOpenTrace?.({
+                        id: refreshed.id,
+                        messageId: pendingHumanReview.localAssistantMessageId,
+                        label: `Test · ${workflowSpecFingerprint(testRuntime.spec)}`,
+                        status: refreshed.status,
+                        runDetails: refreshed,
+                        liveTraceView: buildRunTraceView(refreshed),
+                        running: false,
+                    });
+                }
+                if (refreshed?.pending_interrupt) {
+                    setPendingHumanReview((current) => current ? {
+                        ...current,
+                        runId: refreshed.id,
+                        interrupt: refreshed.pending_interrupt as AgentRunPendingInterrupt,
+                    } : current);
+                    setHumanReviewEditText(refreshed.pending_interrupt.proposed_final_answer || '');
+                } else {
+                    setPendingHumanReview(null);
+                    setHumanReviewEditText('');
+                }
+                return true;
+            } catch (error: any) {
+                setHumanReviewError(error?.message || 'Unable to submit the test review decision.');
+                return false;
+            } finally {
+                setLiveExecution(null);
+                setHumanReviewSubmitting(null);
+            }
+        }
         const submissionKey = `${pendingHumanReview.runId}:${interrupt.interrupt_id}:${interrupt.resume_version ?? 1}:${action}`;
         if (humanReviewSubmissionKeyRef.current) return false;
 
@@ -1026,6 +1323,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             return;
         }
         if (!llmModel || !activeThread) return;
+        if (testRuntime) {
+            await handleBuilderTestSend(textToSend);
+            return;
+        }
 
         if (isEditingQuestion && textToSend === editOriginalText) {
             cancelQuestionEdit();
@@ -1304,6 +1605,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             ? { ...current, canceling: true, error: undefined }
             : current);
         try {
+            if (testRuntime) {
+                await cancelAgentWorkflowBuilderTest(execution.runId);
+                return;
+            }
             const result = await cancelChatAgentRun(execution.runId, activeThread.id);
             if (result.status === 'already_terminal') {
                 setLiveExecution((current) => current?.runId === execution.runId
@@ -1484,17 +1789,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const handleAgentRunToggle = async (msg: ChatMessage, event: React.SyntheticEvent<HTMLDetailsElement>) => {
-        const details = event.currentTarget;
+    const handleOpenAgentRun = async (msg: ChatMessage) => {
         const runId = msg.agent_run_id;
-        if ((event.nativeEvent as Event).isTrusted) manuallyToggledAgentRunsRef.current.add(msg.id);
-        setOpenAgentRunIds(prev => {
-            const next = new Set(prev);
-            if (details.open) next.add(msg.id);
-            else next.delete(msg.id);
-            return next;
-        });
-        if (!runId || !activeThread || !details.open || agentRunDetails[runId] || agentRunLoading[runId]) return;
+        setWorkspaceTraceMessageId(msg.id);
+        if (!runId || !activeThread || agentRunDetails[runId] || agentRunLoading[runId]) return;
 
         setAgentRunLoading(prev => ({ ...prev, [runId]: true }));
         setAgentRunErrors(prev => {
@@ -1514,6 +1812,36 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             setAgentRunLoading(prev => ({ ...prev, [runId]: false }));
         }
     };
+
+    useEffect(() => {
+        if (!workspaceTraceMessageId || !onOpenTrace) return;
+        const msg = messages.find((candidate) => candidate.id === workspaceTraceMessageId);
+        if (!msg) return;
+        const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
+        const runId = msg.agent_run_id || liveForMessage?.runId || msg.id;
+        onOpenTrace({
+            id: runId,
+            messageId: msg.id,
+            label: `${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`,
+            status: liveForMessage?.running ? 'running' : agentRunDetails[runId]?.status,
+            routeReason: msg.agent_route_reason,
+            traceRefs: msg.agent_trace_refs,
+            runDetails: agentRunDetails[runId],
+            liveTraceView: liveForMessage ? liveTraceView : undefined,
+            loading: Boolean(agentRunLoading[runId]),
+            error: liveForMessage?.error || agentRunErrors[runId],
+            running: Boolean(liveForMessage?.running),
+        });
+    }, [
+        agentRunDetails,
+        agentRunErrors,
+        agentRunLoading,
+        liveExecution,
+        liveTraceView,
+        messages,
+        onOpenTrace,
+        workspaceTraceMessageId,
+    ]);
 
     const handleAgentRunDetailsChange = useCallback((run: AgentRunDetails) => {
         setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
@@ -1542,7 +1870,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const childThreadIds = Array.isArray(activeThread.thread_metadata?.fork_children)
         ? activeThread.thread_metadata.fork_children.filter((id): id is string => typeof id === 'string' && id.length > 0)
         : [];
-    const hasLineage = !hideInlineLineage && Boolean(forkInfo || childThreadIds.length > 0);
+    const hasLineage = !isTestRuntime && !hideInlineLineage && Boolean(forkInfo || childThreadIds.length > 0);
     const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
     const headerSelectOutlineSx = {
         '& fieldset': {
@@ -1843,7 +2171,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             <VolumeUpIcon fontSize="small" />
                                         </IconButton>
                                     </Tooltip>
-                                    {!isUser && (
+                                    {!isTestRuntime && !isUser && (
                                         <Tooltip title="Fork from here">
                                             <span>
                                                 <IconButton
@@ -1861,7 +2189,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             </span>
                                         </Tooltip>
                                     )}
-                                    {isUser && (
+                                    {!isTestRuntime && isUser && (
                                         <Tooltip title={editTooltip}>
                                             <span>
                                                 <IconButton
@@ -1879,61 +2207,42 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             </span>
                                         </Tooltip>
                                     )}
-                                    <Tooltip title="Delete message">
-                                        <span>
-                                            <IconButton
-                                                size="small"
-                                                onClick={(e) => handleDeleteMessage(msg.id, e)}
-                                                disabled={loading || isEditingThisMessage}
-                                                sx={{
-                                                    color: 'inherit',
-                                                    p: 0.5,
-                                                    '&:hover': { color: 'error.main' },
-                                                    '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                                                }}
-                                            >
-                                                <DeleteIcon fontSize="small" />
-                                            </IconButton>
-                                        </span>
-                                    </Tooltip>
+                                    {!isTestRuntime && (
+                                        <Tooltip title="Delete message">
+                                            <span>
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={(e) => handleDeleteMessage(msg.id, e)}
+                                                    disabled={loading || isEditingThisMessage}
+                                                    sx={{
+                                                        color: 'inherit',
+                                                        p: 0.5,
+                                                        '&:hover': { color: 'error.main' },
+                                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                                    }}
+                                                >
+                                                    <DeleteIcon fontSize="small" />
+                                                </IconButton>
+                                            </span>
+                                        </Tooltip>
+                                    )}
                                 </Box>
 
                                 {showAgentRunDebug && (
-                                    <Box sx={{ mb: 1, width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
-                                        <details style={{ width: '100%', maxWidth: '100%', overflow: 'hidden' }} open={openAgentRunIds.has(msg.id)} onToggle={(event) => handleAgentRunToggle(msg, event)}>
-                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                {liveForMessage?.canceling ? 'Stopping after current step…' : liveForMessage?.running ? 'Live progress' : 'Debug Trace'}
-                                                {!liveForMessage && `: ${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` - ${msg.agent_route}` : ''}`}
-                                            </summary>
-                                            {openAgentRunIds.has(msg.id) && <Box
-                                                sx={{
-                                                    mt: 0.75,
-                                                    p: 0.75,
-                                                    borderRadius: 1,
-                                                    bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                                                    width: '100%',
-                                                    minWidth: 0,
-                                                    maxWidth: '100%',
-                                                    overflowX: 'hidden',
-                                                }}
-                                            >
-                                                <AgentRunDebugPanel
-                                                    runId={msg.agent_run_id || liveForMessage?.runId || msg.id}
-                                                    routeReason={msg.agent_route_reason}
-                                                    traceRefs={msg.agent_trace_refs}
-                                                    runDetails={msg.agent_run_id ? agentRunDetails[msg.agent_run_id] : undefined}
-                                                    loading={msg.agent_run_id ? agentRunLoading[msg.agent_run_id] : false}
-                                                    error={liveForMessage?.error || (msg.agent_run_id ? agentRunErrors[msg.agent_run_id] : undefined)}
-                                                    liveTraceView={liveForMessage ? liveTraceView : undefined}
-                                                    running={Boolean(liveForMessage?.running)}
-                                                    suspendHeavyContent={isPanelResizing}
-                                                    onRunDetailsChange={handleAgentRunDetailsChange}
-                                                    onResumeAction={pendingHumanReview?.runId === (msg.agent_run_id || liveForMessage?.runId)
-                                                        ? handleHumanReviewAction
-                                                        : undefined}
-                                                />
-                                            </Box>}
-                                        </details>
+                                    <Box sx={{ mb: 1 }}>
+                                        <Button
+                                            size="small"
+                                            variant="text"
+                                            startIcon={<RouteIcon fontSize="small" />}
+                                            onClick={() => void handleOpenAgentRun(msg)}
+                                            sx={{ minHeight: 26, px: 0.5, textTransform: 'none' }}
+                                        >
+                                            {liveForMessage?.canceling
+                                                ? 'Stopping after current step…'
+                                                : liveForMessage?.running
+                                                    ? 'Open live trace'
+                                                    : `Open trace · ${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`}
+                                        </Button>
                                     </Box>
                                 )}
                                 {msg.role === MessageRole.Assistant && msg.reasoning_available && msg.reasoning && (
@@ -2427,21 +2736,23 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 {composerState.busy ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
                             </IconButton>
                         )}
-                        <Tooltip title="AI prompt settings for this thread" placement="top">
-                            <IconButton
-                                size="medium"
-                                onClick={handleOpenThreadSettings}
-                                sx={{
-                                    color: 'text.secondary',
-                                    '&:hover': {
-                                        bgcolor: 'action.hover',
-                                        color: 'text.primary',
-                                    },
-                                }}
-                            >
-                                <SettingsIcon fontSize="medium" />
-                            </IconButton>
-                        </Tooltip>
+                        {!isTestRuntime && (
+                            <Tooltip title="AI prompt settings for this thread" placement="top">
+                                <IconButton
+                                    size="medium"
+                                    onClick={handleOpenThreadSettings}
+                                    sx={{
+                                        color: 'text.secondary',
+                                        '&:hover': {
+                                            bgcolor: 'action.hover',
+                                            color: 'text.primary',
+                                        },
+                                    }}
+                                >
+                                    <SettingsIcon fontSize="medium" />
+                                </IconButton>
+                            </Tooltip>
+                        )}
                     </Box>
                 </Box>
             </Box>
@@ -2495,6 +2806,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             />
         </Paper>
     );
+};
+
+const ChatInterface: React.FC<ChatInterfaceProps> = (props) => {
+    return <PersistentChatInterface {...props} />;
 };
 
 export default ChatInterface;

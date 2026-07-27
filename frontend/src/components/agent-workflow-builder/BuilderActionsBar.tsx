@@ -6,6 +6,9 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import UndoIcon from '@mui/icons-material/Undo';
 import RedoIcon from '@mui/icons-material/Redo';
 import SaveIcon from '@mui/icons-material/Save';
+import ScienceIcon from '@mui/icons-material/Science';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import {
   Box,
   Button,
@@ -39,6 +42,10 @@ export default function BuilderActionsBar({
   saveBusy,
   savedWorkflowId,
   workflowName,
+  testMode,
+  onToggleTest,
+  hasTestSession,
+  onClearTestSession,
 }: {
   starter: string;
   customWorkflows?: AgentWorkflow[];
@@ -57,6 +64,10 @@ export default function BuilderActionsBar({
   saveBusy?: boolean;
   savedWorkflowId?: string;
   workflowName?: string;
+  testMode?: boolean;
+  onToggleTest: () => void;
+  hasTestSession?: boolean;
+  onClearTestSession?: () => void;
 }) {
   const validationChip = validation ? (
     <Chip
@@ -152,6 +163,24 @@ export default function BuilderActionsBar({
         >
           {saveBusy ? 'Saving' : 'Save'}
         </Button>
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={testMode ? <ArrowBackIcon /> : <ScienceIcon />}
+          onClick={onToggleTest}
+          sx={{ borderRadius: 1 }}
+        >
+          {testMode ? 'Back to Builder' : 'Test'}
+        </Button>
+        {testMode && hasTestSession && onClearTestSession && (
+          <Button
+            size="small"
+            startIcon={<DeleteSweepIcon />}
+            onClick={onClearTestSession}
+          >
+            Clear test
+          </Button>
+        )}
       </Box>
     </Box>
   );

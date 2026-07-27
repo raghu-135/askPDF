@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
@@ -8,57 +8,35 @@ import {
   Button,
   Chip,
   Divider,
-  Tab,
-  Tabs,
   Typography,
 } from '@mui/material';
 import type {
   AgentWorkflowValidationReport,
 } from '../../lib/api';
-import type { AgentWorkflowBuilderSpec } from '../../lib/api';
-import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
 
 export default function BuilderValidationPanel({
-  spec,
   validation,
   issues,
   onSelectIssue,
   onApplyFix,
 }: {
-  spec: AgentWorkflowBuilderSpec;
   validation: AgentWorkflowValidationReport | null;
   issues: BuilderValidationIssue[];
   onSelectIssue: (selection: BuilderSelection) => void;
   onApplyFix: (issue: BuilderValidationIssue) => void;
 }) {
-  const [tab, setTab] = useState<'validation' | 'spec'>('validation');
   const hasErrors = issues.some((issue) => issue.severity === 'error');
   const hasWarnings = issues.some((issue) => issue.severity === 'warning');
 
   return (
     <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, mb: 1, bgcolor: 'background.paper' }}>
-      <Box sx={{ px: 1, borderBottom: 1, borderColor: 'divider' }}>
-        <Tabs
-          value={tab}
-          onChange={(_, value) => setTab(value)}
-          sx={{ minHeight: 34, '& .MuiTab-root': { minHeight: 34, py: 0, fontSize: '0.78rem' } }}
-        >
-          <Tab
-            value="validation"
-            label={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                {hasErrors ? <ErrorOutlineIcon fontSize="small" color="error" /> : validation?.valid ? <CheckCircleIcon fontSize="small" color="success" /> : null}
-                Validation
-              </Box>
-            }
-          />
-          <Tab value="spec" label="Spec Preview" />
-        </Tabs>
-      </Box>
       <Box sx={{ p: 1 }}>
-        {tab === 'validation' ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {hasErrors ? <ErrorOutlineIcon fontSize="small" color="error" /> : validation?.valid ? <CheckCircleIcon fontSize="small" color="success" /> : null}
+            Validation
+          </Typography>
             {!validation ? (
               <Alert severity="info">Run validation to check the assembled graph against the backend validator.</Alert>
             ) : validation.valid && issues.length === 0 ? (
@@ -113,16 +91,7 @@ export default function BuilderValidationPanel({
                 </Box>
               </>
             )}
-          </Box>
-        ) : null}
-        {tab === 'spec' ? (
-          <Box>
-            <Typography variant="caption" color="text.secondary">
-              Assembled schema v2 custom workflow spec sent to validation/save endpoints.
-            </Typography>
-            <JsonPreview value={spec} maxHeight={360} />
-          </Box>
-        ) : null}
+        </Box>
       </Box>
     </Box>
   );

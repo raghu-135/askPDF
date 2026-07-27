@@ -272,6 +272,7 @@ test('creates a router starter spec with canonical node ids and route function m
     'router',
     'retrieval_worker',
     'memory_worker',
+    'long_term_memory_worker',
     'timeline_worker',
     'web_worker',
     'direct_answer',
@@ -286,6 +287,7 @@ test('creates a router starter spec with canonical node ids and route function m
   assert.deepEqual(spec.config.graph.edges.find((edge) => edge.from === 'router')?.routes, {
     document: 'retrieval_worker',
     memory: 'memory_worker',
+    long_term_memory: 'long_term_memory_worker',
     timeline: 'timeline_worker',
     web: 'web_worker',
     direct: 'direct_answer',

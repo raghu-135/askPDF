@@ -156,6 +156,12 @@ def initial_studio_state(
     embedding_model: str,
 ) -> Dict[str, Any]:
     config = spec.get("config") if isinstance(spec.get("config"), dict) else {}
+    transient_messages = getattr(request, "transient_messages", None) or []
+    transient_history = "\n".join(
+        f"{str(getattr(message, 'role', '')).capitalize()}: {str(getattr(message, 'content', '')).strip()}"
+        for message in transient_messages
+        if str(getattr(message, "content", "")).strip()
+    )
     return {
         "agent_run_id": run_id,
         "workflow_id": spec.get("workflow_id"),
@@ -183,6 +189,7 @@ def initial_studio_state(
         "client_timezone": request.client_timezone,
         "client_locale": request.client_locale,
         "client_now_iso": request.client_now_iso,
+        "transient_history_text": transient_history,
         "document_sources": [],
         "web_sources": [],
         "used_chat_ids": [],

@@ -42,6 +42,7 @@ from app.agent_workflows.node_catalog import collect_node_catalog_errors, get_no
 from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInterruptError
 from app.agent_workflows.route_registry import collect_route_function_registry_errors, get_route_function_registry
 from app.agent_workflows.service import AgentRunService
+from app.agent_workflows.studio_runtime import initial_studio_state
 from app.agent_workflows.execution_stream import AgentExecutionEventSink
 from app.agent_workflows.builtin_workflows import load_builtin_workflows
 from app.agent_workflows.hitl_materializer import materialize_hitl_gates
@@ -65,6 +66,42 @@ EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 2
 ROUTER_RAG_AGENT_V2_VERSION = 2
 PLAN_EXECUTE_RAG_AGENT_V2_VERSION = 2
 EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION = 2
+
+
+def test_builder_test_initial_state_includes_only_transient_request_history():
+    request = SimpleNamespace(
+        question="Follow-up question",
+        llm_model="test-model",
+        context_window=4096,
+        use_web_search=False,
+        use_reranker=True,
+        system_role_override=None,
+        tool_instructions_override=None,
+        custom_instructions_override=None,
+        replans=1,
+        client_timezone="America/Chicago",
+        client_locale="en-US",
+        client_now_iso="2026-07-27T12:00:00Z",
+        transient_messages=[
+            SimpleNamespace(role="user", content="First temporary question"),
+            SimpleNamespace(role="assistant", content="First temporary answer"),
+        ],
+    )
+
+    state = initial_studio_state(
+        run_id="run-temporary",
+        thread_id="thread-read-only",
+        spec={"workflow_id": "custom", "config": {}},
+        request=request,
+        embedding_model="test-embedding",
+    )
+
+    assert state["transient_history_text"] == (
+        "User: First temporary question\n"
+        "Assistant: First temporary answer"
+    )
+    assert state["question"] == "Follow-up question"
+    assert "chat_turn_id" not in state
 
 
 def _builtin_spec(builtin_key: str) -> dict:

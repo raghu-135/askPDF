@@ -1294,6 +1294,8 @@ export interface BuilderTestRuntimeInput {
   client_timezone?: string;
   client_locale?: string;
   client_now_iso?: string;
+  transient_messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  workflow_spec_fingerprint?: string;
 }
 
 export type BuilderTestStreamEnvelope = AgentExecutionStreamEnvelope;

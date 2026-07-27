@@ -30,6 +30,7 @@ class RouterRagState(TypedDict, total=False):
     client_timezone: Optional[str]
     client_locale: Optional[str]
     client_now_iso: Optional[str]
+    transient_history_text: str
     pre_fetch_bundle: Dict[str, Any]
     route: RouterRoute | str
     route_reason: str

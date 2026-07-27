@@ -17,8 +17,6 @@ import {
   List,
   ListItemButton,
   ListItemText,
-  Tab,
-  Tabs,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -36,6 +34,7 @@ import {
   type AgentWorkflow,
   type AgentWorkflowCatalogResponse,
   type AgentWorkflowValidationReport,
+  type Thread,
 } from '../../lib/api';
 import {
   assembleAgentWorkflowSpec,
@@ -72,9 +71,24 @@ import BuilderPersistencePanel, {
   type BuilderPersistenceState,
 } from './BuilderPersistencePanel';
 import BuilderValidationPanel from './BuilderValidationPanel';
-import BuilderTestStudio from './BuilderTestStudio';
+import BuilderSpecPanel from './BuilderSpecPanel';
 import BuilderResizeHandle from './BuilderResizeHandle';
 import type { BuilderSelection, BuilderValidationIssue } from './types';
+import WorkbenchShell, { useWorkbenchLayout } from '../workbench/WorkbenchShell';
+import DockMenuButton from '../workbench/DockMenuButton';
+import WorkspaceTabs, { type WorkspaceTab } from '../workbench/WorkspaceTabs';
+import TraceWorkspace, { type TraceRunTab } from '../workbench/TraceWorkspace';
+import type { ResolvedWorkbenchPlacement } from '../../lib/workbench-layout';
+import ThreadSidebar, { type ThreadSidebarHeaderState } from '../ThreadSidebar';
+import ChatInterface, { type ChatTraceDescriptor } from '../ChatInterface';
+import PdfViewer from '../PdfViewer';
+import type { PdfTab } from '../PdfTabs';
+import { getThread } from '../../lib/api';
+import { loadThreadTabs } from '../../lib/thread-utils';
+import { getActiveTab, getActiveTabData } from '../../lib/pdf-utils';
+import { closeTraceTab, upsertTraceTab } from '../../lib/trace-tabs';
+import { emptyBuilderTestSession, type BuilderTestSession } from '../../lib/builder-test-session';
+import ForumIcon from '@mui/icons-material/Forum';
 
 type ContextualNodeRequest =
   | { mode: 'after'; source: string; route?: string }
@@ -238,10 +252,25 @@ export default function AgentWorkflowBuilderPage() {
   const [isDirty, setIsDirty] = useState(false);
   const [nodeRequest, setNodeRequest] = useState<ContextualNodeRequest | null>(null);
   const [workspace, setWorkspace] = useState<'build' | 'test'>('build');
+  const [buildTab, setBuildTab] = useState<'canvas-tab' | 'spec-tab'>('canvas-tab');
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [builderLayout, setBuilderLayout] = useState(DEFAULT_BUILDER_LAYOUT);
   const utilityRailRef = useRef<HTMLDivElement | null>(null);
   const layoutHydrated = useRef(false);
+  const [buildWorkbenchLayout, setBuildWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.builder.build');
+  const [testWorkbenchLayout, setTestWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.builder.test');
+  const [resolvedPlacement, setResolvedPlacement] = useState<ResolvedWorkbenchPlacement>('right');
+  const activeWorkbenchLayout = workspace === 'build' ? buildWorkbenchLayout : testWorkbenchLayout;
+  const setActiveWorkbenchLayout = workspace === 'build' ? setBuildWorkbenchLayout : setTestWorkbenchLayout;
+  const [testThread, setTestThread] = useState<Thread | null>(null);
+  const [testPdfTabs, setTestPdfTabs] = useState<PdfTab[]>([]);
+  const [testActiveTabId, setTestActiveTabId] = useState<string | null>(null);
+  const [testThreadLoading, setTestThreadLoading] = useState(false);
+  const [testSidebarVersion, setTestSidebarVersion] = useState(0);
+  const [testThreadHeaderState, setTestThreadHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
+  const [testTraceTabs, setTestTraceTabs] = useState<TraceRunTab[]>([]);
+  const [testActiveTraceId, setTestActiveTraceId] = useState<string | null>(null);
+  const [testSession, setTestSession] = useState<BuilderTestSession>(() => emptyBuilderTestSession());
 
   useEffect(() => {
     setBuilderLayout(readBuilderLayout());
@@ -673,6 +702,75 @@ export default function AgentWorkflowBuilderPage() {
     plan_execute: 'plan_execute_rag_agent',
     evaluator_replanner: 'evaluator_replanner_rag_agent',
   } as Record<string, string>)[starter] || String(spec?.workflow_id || 'router_rag_agent');
+  const previousTestWorkflowId = useRef(baseWorkflowId);
+  useEffect(() => {
+    if (previousTestWorkflowId.current !== baseWorkflowId) {
+      previousTestWorkflowId.current = baseWorkflowId;
+      setTestSession(emptyBuilderTestSession(testThread?.id || null));
+      setTestTraceTabs([]);
+      setTestActiveTraceId(null);
+    }
+  }, [baseWorkflowId, testThread?.id]);
+
+  const testActiveDocument = getActiveTab(testPdfTabs, testActiveTabId);
+  const testActiveDocumentData = getActiveTabData(testActiveDocument);
+  const testWorkspaceTabs = useMemo<WorkspaceTab[]>(() => {
+    if (!testThread) return [];
+    return [
+      { kind: 'browser', id: 'browser-tab', label: 'Browser' },
+      ...testPdfTabs.map((tab) => ({ ...tab, kind: 'document' as const })),
+      {
+        kind: 'trace',
+        id: 'trace-tab',
+        label: 'Debug Trace',
+        count: testTraceTabs.length,
+        status: testTraceTabs.some((tab) => tab.error)
+          ? 'failed' as const
+          : testTraceTabs.some((tab) => tab.running)
+            ? 'running' as const
+            : 'idle' as const,
+      },
+    ];
+  }, [testPdfTabs, testThread, testTraceTabs]);
+
+  const handleTestThreadSelect = useCallback(async (thread: Thread | null) => {
+    if (!thread) {
+      setTestThread(null);
+      setTestPdfTabs([]);
+      setTestActiveTabId(null);
+      setTestSession(emptyBuilderTestSession());
+      setTestTraceTabs([]);
+      setTestActiveTraceId(null);
+      return;
+    }
+    setTestThreadLoading(true);
+    try {
+      const detailed = await getThread(thread.id);
+      const tabs = await loadThreadTabs(detailed);
+      setTestThread(detailed);
+      setTestPdfTabs(tabs);
+      setTestActiveTabId(tabs[0]?.id || 'browser-tab');
+      setTestSession(emptyBuilderTestSession(detailed.id));
+      setTestTraceTabs([]);
+      setTestActiveTraceId(null);
+    } finally {
+      setTestThreadLoading(false);
+    }
+  }, []);
+
+  const handleOpenTestTrace = useCallback((trace: ChatTraceDescriptor) => {
+    setTestTraceTabs((current) => upsertTraceTab(current, trace));
+    setTestActiveTraceId(trace.id);
+    setTestActiveTabId('trace-tab');
+  }, []);
+
+  const handleCloseTestTrace = useCallback((runId: string) => {
+    setTestTraceTabs((current) => {
+      const result = closeTraceTab(current, testActiveTraceId, runId);
+      setTestActiveTraceId(result.activeId);
+      return result.tabs;
+    });
+  }, [testActiveTraceId]);
 
   const updatePersistenceForm = (patch: Partial<BuilderPersistenceState>) => {
     setPersistenceForm((previous) => ({ ...previous, ...patch }));
@@ -751,61 +849,109 @@ export default function AgentWorkflowBuilderPage() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box sx={{ height: '100vh', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
-        <BuilderActionsBar
-          starter={starter}
-          customWorkflows={customWorkflows}
-          disabled={authoringDisabled}
-          onStarterChange={handleStarterChange}
-          onReset={() => resetToStarter()}
-          onValidate={handleValidate}
-          validating={validating}
-          validation={validation}
-          dirty={isDirty}
-          canUndo={undoStack.current.length > 0}
-          canRedo={redoStack.current.length > 0}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          onOpenSave={() => setSaveDialogOpen(true)}
-          saveBusy={busyAction === 'save'}
-          savedWorkflowId={persistedWorkflow?.workflow.id}
-          workflowName={persistenceForm.name}
-        />
-        {loading ? (
-          <Box sx={{ display: 'grid', placeItems: 'center' }}>
-            <CircularProgress />
-          </Box>
-        ) : error || !catalog || !builderState ? (
-          <Box sx={{ p: 2 }}>
-            <Alert severity="error">{error || 'Agent workflow catalog is unavailable.'}</Alert>
-          </Box>
-        ) : (
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: workspace === 'test'
-                ? 'minmax(0, 1fr)'
-                : { xs: '1fr', lg: `minmax(0, 1fr) 8px ${builderLayout.sidebarWidth}px` },
-              gap: 0,
-              minHeight: 0,
-              overflow: { xs: 'auto', lg: 'hidden' },
-            }}
-          >
-            <Box sx={{ minHeight: 0, overflow: 'auto', p: 1.5, display: 'flex', flexDirection: 'column' }}>
-              <Tabs value={workspace} onChange={(_, value) => setWorkspace(value)} sx={{ mb: 1 }}>
-                <Tab value="build" label="Build" />
-                <Tab value="test" label="Test" />
-              </Tabs>
-              {workspace === 'build' && spec ? (
-                <BuilderValidationPanel
-                  spec={spec}
-                  validation={validation}
-                  issues={validationIssues}
-                  onSelectIssue={setSelection}
-                  onApplyFix={handleApplyFix}
+      <Box sx={{ height: '100vh', bgcolor: 'background.default', overflow: 'hidden' }}>
+        <WorkbenchShell
+          layout={activeWorkbenchLayout}
+          onLayoutChange={setActiveWorkbenchLayout}
+          onResolvedPlacementChange={setResolvedPlacement}
+          secondaryLabel={workspace === 'build' ? 'Node Inspector and Node Palette' : 'Workflow test controls'}
+          primaryToolbar={
+            <BuilderActionsBar
+              starter={starter}
+              customWorkflows={customWorkflows}
+              disabled={authoringDisabled}
+              onStarterChange={handleStarterChange}
+              onReset={() => resetToStarter()}
+              onValidate={handleValidate}
+              validating={validating}
+              validation={validation}
+              dirty={isDirty}
+              canUndo={undoStack.current.length > 0}
+              canRedo={redoStack.current.length > 0}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              onOpenSave={() => setSaveDialogOpen(true)}
+              saveBusy={busyAction === 'save'}
+              savedWorkflowId={persistedWorkflow?.workflow.id}
+              workflowName={persistenceForm.name}
+              testMode={workspace === 'test'}
+              onToggleTest={() => setWorkspace((current) => current === 'build' ? 'test' : 'build')}
+              hasTestSession={testSession.messages.length > 0}
+              onClearTestSession={() => {
+                setTestSession(emptyBuilderTestSession(testThread?.id || null));
+                setTestTraceTabs([]);
+                setTestActiveTraceId(null);
+              }}
+            />
+          }
+          primaryTabs={
+            workspace === 'build' ? (
+              <WorkspaceTabs
+                tabs={[
+                  { kind: 'canvas', id: 'canvas-tab', label: 'Canvas', issueCount: validationIssues.length },
+                  { kind: 'spec', id: 'spec-tab', label: 'Spec', dirty: isDirty },
+                ] satisfies WorkspaceTab[]}
+                activeTabId={buildTab}
+                onTabChange={(tabId) => setBuildTab(tabId as 'canvas-tab' | 'spec-tab')}
+              />
+            ) : testThread ? (
+              <WorkspaceTabs
+                tabs={testWorkspaceTabs}
+                activeTabId={testActiveTabId}
+                onTabChange={setTestActiveTabId}
+              />
+            ) : null
+          }
+          primaryContent={
+            loading ? (
+              <Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>
+            ) : error || !catalog || !builderState ? (
+              <Box sx={{ p: 2 }}><Alert severity="error">{error || 'Agent workflow catalog is unavailable.'}</Alert></Box>
+            ) : workspace === 'test' ? (
+              testThreadLoading ? (
+                <Box sx={{ height: '100%', display: 'grid', placeItems: 'center' }}><CircularProgress /></Box>
+              ) : testActiveTabId === 'trace-tab' ? (
+                <TraceWorkspace
+                  tabs={testTraceTabs}
+                  activeRunId={testActiveTraceId}
+                  onActiveRunChange={setTestActiveTraceId}
+                  onClose={handleCloseTestTrace}
                 />
-              ) : null}
-              {workspace === 'build' ? (
+              ) : testActiveTabId === 'browser-tab' ? (
+                <iframe src="http://localhost:8090" style={{ width: '100%', height: '100%', border: 'none' }} title="Browser" allow="camera; microphone; clipboard-read; clipboard-write" />
+              ) : testActiveDocumentData.downloadUrl ? (
+                <PdfViewer
+                  downloadUrl={testActiveDocumentData.downloadUrl}
+                  sentences={testActiveDocumentData.pdfSentences}
+                  currentId={null}
+                  onJump={() => undefined}
+                  autoScroll={false}
+                  isResizing={false}
+                  highlightEnabled
+                  darkMode={darkMode}
+                  threadId={testThread?.id || null}
+                  fileHash={testActiveDocument?.fileHash || null}
+                />
+              ) : (
+                <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', p: 3 }}>
+                  <Box sx={{ textAlign: 'center' }}>
+                    <Typography variant="h6">{testThread ? 'Choose a workspace tab' : 'Select a thread to test'}</Typography>
+                    <Typography color="text.secondary">{testThread ? 'Open a PDF, Browser, or Debug Trace.' : 'Use the project-grouped thread browser in the secondary panel.'}</Typography>
+                  </Box>
+                </Box>
+              )
+            ) : buildTab === 'spec-tab' && spec ? (
+              <BuilderSpecPanel spec={spec} />
+            ) : (
+              <Box sx={{ height: '100%', minHeight: 0, overflow: 'auto', p: 1.5, display: 'flex', flexDirection: 'column' }}>
+                {spec && (
+                  <BuilderValidationPanel
+                    validation={validation}
+                    issues={validationIssues}
+                    onSelectIssue={(nextSelection) => { setSelection(nextSelection); setBuildTab('canvas-tab'); }}
+                    onApplyFix={handleApplyFix}
+                  />
+                )}
                 <BuilderGraphEditor
                   catalog={catalog}
                   state={builderState}
@@ -828,100 +974,122 @@ export default function AgentWorkflowBuilderPage() {
                   onGraphElementsHeightChange={(graphElementsHeight) => setBuilderLayout((previous) => ({ ...previous, graphElementsHeight }))}
                   onGraphElementsCollapsedChange={(graphElementsCollapsed) => setBuilderLayout((previous) => ({ ...previous, graphElementsCollapsed }))}
                 />
-              ) : spec ? (
-                <BuilderTestStudio spec={spec} baseWorkflowId={baseWorkflowId} />
-              ) : null}
-            </Box>
-            {workspace === 'build' ? (
-              <BuilderResizeHandle
-                orientation="vertical"
-                value={builderLayout.sidebarWidth}
-                min={300}
-                max={560}
-                defaultValue={360}
-                direction={-1}
-                label="Resize workflow utility sidebar"
-                onChange={(sidebarWidth) => setBuilderLayout((previous) => ({ ...previous, sidebarWidth }))}
-                sx={{ display: { xs: 'none', lg: 'block' } }}
-              />
-            ) : null}
-            {workspace === 'build' ? (
-              <Box ref={utilityRailRef} sx={{ minHeight: 0, overflow: { xs: 'auto', lg: 'hidden' }, borderLeft: { lg: 1 }, borderColor: 'divider' }}>
-                <Box
-                  sx={{
-                    display: { xs: 'none', lg: 'grid' },
-                    height: '100%',
-                    gridTemplateRows: builderLayout.inspectorCollapsed
-                      ? '44px minmax(180px, 1fr)'
-                      : `minmax(240px, ${100 - builderLayout.palettePercent}fr) 8px minmax(180px, ${builderLayout.palettePercent}fr)`,
-                    minHeight: 0,
-                  }}
-                >
-                  <Box sx={{ minHeight: 0, overflow: 'hidden', borderBottom: builderLayout.inspectorCollapsed ? 1 : 0, borderColor: 'divider' }}>
-                    <Box sx={{ height: 44, px: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: builderLayout.inspectorCollapsed ? 0 : 1, borderColor: 'divider' }}>
-                      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Inspector</Typography>
-                      <Tooltip title={builderLayout.inspectorCollapsed ? 'Expand Inspector' : 'Collapse Inspector'}>
-                        <IconButton
-                          size="small"
-                          aria-label={builderLayout.inspectorCollapsed ? 'Expand Inspector' : 'Collapse Inspector'}
-                          onClick={() => setBuilderLayout((previous) => ({ ...previous, inspectorCollapsed: !previous.inspectorCollapsed }))}
-                        >
-                          {builderLayout.inspectorCollapsed ? <ExpandMoreIcon /> : <ExpandLessIcon />}
-                        </IconButton>
-                      </Tooltip>
-                    </Box>
-                    {!builderLayout.inspectorCollapsed ? (
-                      <Box sx={{ height: 'calc(100% - 44px)', minHeight: 0, overflow: 'auto', p: 1.5 }}>
-                        <BuilderInspector
-                          catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
-                          onUpdateNode={handleUpdateNode} onUpdateHitlBypass={handleUpdateHitlBypass} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
-                          onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
-                          onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
-                        />
-                        <Divider sx={{ my: 1.5 }} />
-                        <Typography variant="caption" color="text.secondary">Nodes: {builderState.nodes.length} · Edges: {builderState.edges.length} · Tools: {builderState.allowed_tool_ids.length}</Typography>
-                      </Box>
-                    ) : null}
-                  </Box>
-                  {!builderLayout.inspectorCollapsed ? (
-                    <BuilderResizeHandle
-                      orientation="horizontal"
-                      value={builderLayout.palettePercent}
-                      min={25}
-                      max={65}
-                      defaultValue={40}
-                      step={2}
-                      direction={-1}
-                      label="Resize Inspector and Node Palette"
-                      getDragScale={() => 100 / Math.max(1, utilityRailRef.current?.clientHeight || 700)}
-                      onChange={(palettePercent) => setBuilderLayout((previous) => ({ ...previous, palettePercent }))}
-                    />
-                  ) : null}
-                  <Box sx={{ minHeight: 0, overflow: 'auto', p: 1.5 }}>
-                    <BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} />
-                  </Box>
+              </Box>
+            )
+          }
+          secondaryHeader={
+            <Box sx={{ minHeight: 44, px: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: 1, borderColor: 'divider' }}>
+              {workspace === 'build' ? (
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Builder utilities</Typography>
+              ) : testThread ? (
+                <Box sx={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Button size="small" startIcon={<ForumIcon />} onClick={() => void handleTestThreadSelect(null)} sx={{ flexShrink: 0 }}>All threads</Button>
+                  <Typography variant="subtitle2" noWrap title={testThread.name || testThread.id}>
+                    {testThread.name || testThread.id}
+                  </Typography>
                 </Box>
-                <Box sx={{ display: { xs: 'block', lg: 'none' }, p: 1 }}>
-                  <Accordion defaultExpanded disableGutters>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="subtitle2">Inspector</Typography></AccordionSummary>
-                    <AccordionDetails>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <ForumIcon color="primary" fontSize="small" />
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Threads</Typography>
+                  {testThreadHeaderState && <Typography variant="caption" color="text.secondary">{testThreadHeaderState.threadCount}</Typography>}
+                </Box>
+              )}
+              <DockMenuButton value={activeWorkbenchLayout} resolvedPlacement={resolvedPlacement} onChange={setActiveWorkbenchLayout} label={workspace === 'build' ? 'Builder utilities layout' : 'Test conversation layout'} />
+            </Box>
+          }
+          secondaryContent={
+            !catalog || !builderState ? <Box /> : workspace === 'test' ? (
+              testThread && spec ? (
+                <ChatInterface
+                  activeThread={testThread}
+                  chatSentences={[]}
+                  setChatSentences={() => undefined}
+                  currentChatId={null}
+                  activeSource="chat"
+                  onJump={() => undefined}
+                  onOpenTrace={handleOpenTestTrace}
+                  darkMode={darkMode}
+                  testRuntime={{
+                    kind: 'builder-test',
+                    persistent: false,
+                    historyReadOnly: true,
+                    spec,
+                    baseWorkflowId,
+                    session: testSession,
+                    onSessionChange: setTestSession,
+                  }}
+                />
+              ) : (
+                <Box sx={{ height: '100%', overflow: 'auto' }}>
+                  <ThreadSidebar
+                    key={testSidebarVersion}
+                    activeThreadId={null}
+                    onThreadSelect={(thread) => void handleTestThreadSelect(thread)}
+                    hideHeader
+                    selectionOnly
+                    onHeaderStateChange={setTestThreadHeaderState}
+                    darkMode={darkMode}
+                  />
+                </Box>
+              )
+            ) : resolvedPlacement === 'bottom' ? (
+              <Box sx={{ height: '100%', overflow: 'auto', p: 1 }}>
+                <Accordion defaultExpanded disableGutters>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="subtitle2">Inspector</Typography></AccordionSummary>
+                  <AccordionDetails>
+                    <BuilderInspector
+                      catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
+                      onUpdateNode={handleUpdateNode} onUpdateHitlBypass={handleUpdateHitlBypass} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
+                      onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
+                      onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
+                    />
+                  </AccordionDetails>
+                </Accordion>
+                <Accordion defaultExpanded disableGutters>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="subtitle2">Node Palette</Typography></AccordionSummary>
+                  <AccordionDetails><BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} /></AccordionDetails>
+                </Accordion>
+              </Box>
+            ) : (
+              <Box ref={utilityRailRef} sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: builderLayout.inspectorCollapsed ? '44px minmax(180px, 1fr)' : `minmax(240px, ${100 - builderLayout.palettePercent}fr) 8px minmax(180px, ${builderLayout.palettePercent}fr)` }}>
+                <Box sx={{ minHeight: 0, overflow: 'hidden', borderBottom: builderLayout.inspectorCollapsed ? 1 : 0, borderColor: 'divider' }}>
+                  <Box sx={{ height: 44, px: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: builderLayout.inspectorCollapsed ? 0 : 1, borderColor: 'divider' }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Inspector</Typography>
+                    <Tooltip title={builderLayout.inspectorCollapsed ? 'Expand Inspector' : 'Collapse Inspector'}>
+                      <IconButton size="small" onClick={() => setBuilderLayout((previous) => ({ ...previous, inspectorCollapsed: !previous.inspectorCollapsed }))}>
+                        {builderLayout.inspectorCollapsed ? <ExpandMoreIcon /> : <ExpandLessIcon />}
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                  {!builderLayout.inspectorCollapsed && (
+                    <Box sx={{ height: 'calc(100% - 44px)', overflow: 'auto', p: 1.5 }}>
                       <BuilderInspector
                         catalog={catalog} state={builderState} selection={selection} disabled={authoringDisabled}
                         onUpdateNode={handleUpdateNode} onUpdateHitlBypass={handleUpdateHitlBypass} onUpdateEdge={handleUpdateEdge} onRemoveNode={handleRemoveNode}
                         onRemoveEdge={handleRemoveEdge} onAddHitlGate={handleAddHitlGate}
                         onUpdateSettings={(patch) => updateState((previous) => ({ ...previous, extraConfig: { ...(previous.extraConfig || {}), ...patch } }))}
                       />
-                    </AccordionDetails>
-                  </Accordion>
-                  <Accordion defaultExpanded disableGutters>
-                    <AccordionSummary expandIcon={<ExpandMoreIcon />}><Typography variant="subtitle2">Node Palette</Typography></AccordionSummary>
-                    <AccordionDetails><BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} /></AccordionDetails>
-                  </Accordion>
+                      <Divider sx={{ my: 1.5 }} />
+                      <Typography variant="caption" color="text.secondary">Nodes: {builderState.nodes.length} · Edges: {builderState.edges.length} · Tools: {builderState.allowed_tool_ids.length}</Typography>
+                    </Box>
+                  )}
+                </Box>
+                {!builderLayout.inspectorCollapsed && (
+                  <BuilderResizeHandle
+                    orientation="horizontal" value={builderLayout.palettePercent} min={25} max={65} defaultValue={40} step={2} direction={-1}
+                    label="Resize Inspector and Node Palette"
+                    getDragScale={() => 100 / Math.max(1, utilityRailRef.current?.clientHeight || 700)}
+                    onChange={(palettePercent) => setBuilderLayout((previous) => ({ ...previous, palettePercent }))}
+                  />
+                )}
+                <Box sx={{ minHeight: 0, overflow: 'auto', p: 1.5 }}>
+                  <BuilderNodePalette catalog={catalog} state={builderState} disabled={authoringDisabled} onAddNodeType={handleAddNodeType} onAddNote={handleAddNote} onAddGroup={handleAddGroup} />
                 </Box>
               </Box>
-            ) : null}
-          </Box>
-        )}
+            )
+          }
+        />
         <Dialog open={saveDialogOpen} onClose={() => busyAction ? undefined : setSaveDialogOpen(false)} fullWidth maxWidth="sm">
           <DialogTitle>Save Workflow</DialogTitle>
           <DialogContent dividers>
