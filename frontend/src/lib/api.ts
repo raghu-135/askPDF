@@ -1291,6 +1291,10 @@ export interface BuilderTestRuntimeInput {
   context_window?: number;
   replans?: number;
   allow_external_tools?: boolean;
+  hitl_web_approval?: boolean;
+  system_role_override?: string;
+  tool_instructions_override?: Record<string, string>;
+  custom_instructions_override?: string;
   client_timezone?: string;
   client_locale?: string;
   client_now_iso?: string;

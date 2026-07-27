@@ -7148,6 +7148,46 @@ class TestAgentWorkflowApi:
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "external_tool_confirmation_required"
 
+    def test_builder_test_stream_accepts_web_toggle_confirmation_and_applies_local_approval(
+        self,
+        api_client,
+        sample_thread,
+        monkeypatch,
+    ):
+        captured = {}
+
+        async def fake_stream_builder_test(*, run, request, embedding_model, checkpointer, resume_decision=None):
+            captured["resolved_spec"] = run.resolved_spec_json
+            yield {"event": "run.completed", "data": {"run_id": run.id, "answer": "ok"}}
+
+        monkeypatch.setattr(
+            "app.api.agent_workflows.stream_builder_test",
+            fake_stream_builder_test,
+        )
+        api_client.get("/api/agent-workflows")
+        response = api_client.post(
+            "/api/internal/agent-workflows/test-runs/stream",
+            json={
+                "builder_session_id": "builder-session-web-approved",
+                "base_workflow_id": ROUTER_RAG_AGENT_ID,
+                "spec": builtin_router_rag_v2_spec(),
+                "thread_id": sample_thread.id,
+                "question": "What changed today?",
+                "llm_model": "test-model",
+                "use_web_search": True,
+                "allow_external_tools": True,
+                "hitl_web_approval": True,
+            },
+        )
+
+        assert response.status_code == 200
+        assert "run.completed" in response.text
+        gates = captured["resolved_spec"]["config"]["hitl_policy"]["gates"]
+        assert gates["web_approval_gate"]["target"] == {
+            "node_id": "web_worker",
+            "node_type": "web_worker",
+        }
+
     def test_builder_latest_test_returns_not_found_for_new_session(self, api_client):
         response = api_client.get(
             "/api/internal/agent-workflows/test-runs/latest",

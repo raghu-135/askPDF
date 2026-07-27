@@ -24,6 +24,8 @@ interface ChatSettingsDialogProps {
     onClose: () => void;
     onSave: () => void;
     saving: boolean;
+    description?: string;
+    saveLabel?: string;
     
     // Settings values
     replans: number;
@@ -62,6 +64,8 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     onClose,
     onSave,
     saving,
+    description = 'These settings are saved per thread and used by default for every message. Agent workflows are globally available.',
+    saveLabel = 'Save',
     replans,
     replansLimit,
     hitlWebApproval,
@@ -102,7 +106,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
             <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
                     <Typography variant="body2" color="text.secondary">
-                        These settings are saved per thread and used by default for every message. Agent workflows are globally available.
+                        {description}
                     </Typography>
                     <Tooltip title="Reset all settings to default">
                         <IconButton
@@ -292,7 +296,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     Cancel
                 </Button>
                 <Button onClick={onSave} variant="contained" disabled={saving}>
-                    {saving ? 'Saving...' : 'Save'}
+                    {saving ? 'Saving...' : saveLabel}
                 </Button>
             </DialogActions>
         </Dialog>

@@ -1041,7 +1041,16 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         use_web_search: useWebSearch,
         use_reranker: useReranker,
         context_window: contextWindow,
-        allow_external_tools: false,
+        replans: workflowSupportsReplans(agentWorkflows, testRuntime?.baseWorkflowId || '')
+            ? replans
+            : undefined,
+        system_role_override: systemRole,
+        tool_instructions_override: effectiveToolInstructions,
+        custom_instructions_override: customInstructions,
+        hitl_web_approval: hitlWebApproval,
+        // In Builder Test, deliberately turning on the shared internet-search
+        // control is the explicit confirmation required by the isolated runtime.
+        allow_external_tools: useWebSearch,
         client_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         client_locale: navigator.language,
         client_now_iso: new Date().toISOString(),
@@ -1701,6 +1710,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const handleSaveThreadSettings = async () => {
         if (!activeThread) return;
+        if (isTestRuntime) {
+            // Builder Test settings are intentionally local to this page session.
+            // State is already updated by the dialog controls, so applying only
+            // closes the dialog and never mutates the selected real thread.
+            setSettingsDialogOpen(false);
+            return;
+        }
         try {
             setSavingSettings(true);
             const nextSettings: Record<string, any> = {
@@ -2736,23 +2752,26 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                 {composerState.busy ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
                             </IconButton>
                         )}
-                        {!isTestRuntime && (
-                            <Tooltip title="AI prompt settings for this thread" placement="top">
-                                <IconButton
-                                    size="medium"
-                                    onClick={handleOpenThreadSettings}
-                                    sx={{
-                                        color: 'text.secondary',
-                                        '&:hover': {
-                                            bgcolor: 'action.hover',
-                                            color: 'text.primary',
-                                        },
-                                    }}
-                                >
-                                    <SettingsIcon fontSize="medium" />
-                                </IconButton>
-                            </Tooltip>
-                        )}
+                        <Tooltip
+                            title={isTestRuntime
+                                ? 'AI prompt settings for this test session'
+                                : 'AI prompt settings for this thread'}
+                            placement="top"
+                        >
+                            <IconButton
+                                size="medium"
+                                onClick={handleOpenThreadSettings}
+                                sx={{
+                                    color: 'text.secondary',
+                                    '&:hover': {
+                                        bgcolor: 'action.hover',
+                                        color: 'text.primary',
+                                    },
+                                }}
+                            >
+                                <SettingsIcon fontSize="medium" />
+                            </IconButton>
+                        </Tooltip>
                     </Box>
                 </Box>
             </Box>
@@ -2762,6 +2781,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onClose={handleCloseThreadSettings}
                 onSave={handleSaveThreadSettings}
                 saving={savingSettings}
+                description={isTestRuntime
+                    ? 'Initialized from the selected thread. Changes apply only to this temporary Builder Test session and are not saved to the thread.'
+                    : undefined}
+                saveLabel={isTestRuntime ? 'Apply to test' : undefined}
                 replans={replans}
                 replansLimit={replansLimit}
                 hitlWebApproval={hitlWebApproval}

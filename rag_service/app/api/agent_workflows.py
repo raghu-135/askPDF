@@ -112,6 +112,7 @@ class BuilderTestRunRequest(ThreadChatRequest):
     base_workflow_id: str = Field(..., min_length=1)
     spec: Dict[str, Any] = Field(default_factory=dict)
     allow_external_tools: bool = False
+    hitl_web_approval: bool = False
     transient_messages: list[BuilderTransientMessage] = Field(default_factory=list, max_length=100)
     workflow_spec_fingerprint: Optional[str] = Field(default=None, max_length=128)
 
@@ -125,6 +126,7 @@ class BuilderTestRunResumeRequest(AgentRunResumeRequest):
     system_role_override: Optional[str] = None
     tool_instructions_override: Optional[Dict[str, str]] = None
     custom_instructions_override: Optional[str] = None
+    hitl_web_approval: bool = False
     client_timezone: Optional[str] = None
     client_locale: Optional[str] = None
     client_now_iso: Optional[str] = None
@@ -364,6 +366,12 @@ async def stream_internal_agent_workflow_test(req: BuilderTestRunRequest):
         )
     try:
         candidate = dict(req.spec)
+        candidate_config = dict(candidate.get("config") or {})
+        candidate_config["hitl_policy"] = normalize_hitl_policy_for_thread_settings(
+            candidate_config.get("hitl_policy"),
+            {"hitl_web_approval": req.hitl_web_approval},
+        )
+        candidate["config"] = candidate_config
         WorkflowValidator().validate(candidate)
         resolved = WorkflowCompiler().materialize_spec(candidate)
     except WorkflowValidationError as exc:
