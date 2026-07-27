@@ -1,4 +1,4 @@
-import { PdfTab } from "../components/PdfTabs";
+import type { PdfTab } from "./document-tabs";
 import { Thread, getThread, getPdfByHash, API_BASE } from "./api";
 import { transformSentences } from "./bbox-derivation";
 import { ProcessStatus, ThreadFileSourceType } from "./enums";

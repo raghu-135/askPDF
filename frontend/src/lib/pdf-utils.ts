@@ -1,7 +1,6 @@
 import type { FormattedSelection } from "@embedpdf/plugin-selection/react";
 import type { SearchResult } from "@embedpdf/models";
-import type { PdfTab } from "../components/PdfTabs";
-import { ThreadFileSourceType } from "./enums";
+import type { PdfTab } from "./document-tabs";
 
 export type PdfSelectionBBox = {
   x: number;
@@ -40,28 +39,6 @@ export function truncateFileName(name: string, maxLen: number = 20): string {
     }
   }
   return name.substring(0, maxLen - 3) + '...';
-}
-
-/**
- * Handles switching the active PDF tab and resets related state.
- *
- * @param tabId The ID of the tab to activate.
- * @param setActiveTabId Function to set the active tab ID.
- * @param setCurrentPdfId Function to set the current PDF ID (reset to null).
- * @param setPlayRequestId Function to set the play request ID (reset to null).
- * @param setActiveSource Function to set the active source (set to 'pdf').
- */
-export function handleTabChangeUtil(
-  tabId: string,
-  setActiveTabId: (id: string | null) => void,
-  setCurrentPdfId: (id: number | null) => void,
-  setPlayRequestId: (id: number | null) => void,
-  setActiveSource: (src: 'pdf' | 'chat') => void
-) {
-  setActiveTabId(tabId);
-  setCurrentPdfId(null);
-  setPlayRequestId(null);
-  setActiveSource(ThreadFileSourceType.Pdf);
 }
 
 /**

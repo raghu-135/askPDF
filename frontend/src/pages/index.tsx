@@ -22,16 +22,16 @@ const PdfViewer = dynamic(() => import("../components/PdfViewer"), { ssr: false 
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
 import ThreadSidebar, { ThreadSidebarHeaderState } from "../components/ThreadSidebar";
-import type { PdfTab } from "../components/PdfTabs";
+import { buildDocumentWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
 import { WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
-import WorkspaceTabs, { type WorkspaceTab } from '../components/workbench/WorkspaceTabs';
+import WorkspaceTabs from '../components/workbench/WorkspaceTabs';
 import TraceWorkspace, { type TraceRunTab } from '../components/workbench/TraceWorkspace';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
 import { Thread, removeSourceFromThread, getFileStatus, getParsedSentences, ProcessStatusHelper, API_BASE, captureBrowserPage, pollForFileReady, getThread, deleteThread, listThreads } from "../lib/api";
 import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
-import { handleTabChangeUtil, handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
+import { handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
 import { ProcessStatus } from "../lib/enums";
 import { closeTraceTab, upsertTraceTab } from '../lib/trace-tabs';
@@ -624,24 +624,11 @@ export default function Home() {
     );
   };
 
-  const workspaceTabs = useMemo<WorkspaceTab[]>(() => {
-    if (!activeThread) return [];
-    return [
-      { kind: 'browser', id: 'browser-tab', label: 'Browser' },
-      ...pdfTabs.map((tab) => ({ ...tab, kind: 'document' as const })),
-      {
-        kind: 'trace',
-        id: 'trace-tab',
-        label: 'Debug Trace',
-        count: traceTabs.length,
-        status: traceTabs.some((tab) => tab.error)
-          ? 'failed' as const
-          : traceTabs.some((tab) => tab.running)
-            ? 'running' as const
-            : 'idle' as const,
-      },
-    ];
-  }, [activeThread, pdfTabs, traceTabs]);
+  const workspaceTabs = useMemo(() => buildDocumentWorkspaceTabs({
+    enabled: Boolean(activeThread),
+    documents: pdfTabs,
+    traces: traceTabs,
+  }), [activeThread, pdfTabs, traceTabs]);
 
   const handleWorkspaceTabChange = useCallback((tabId: string) => {
     setActiveTabId(tabId);

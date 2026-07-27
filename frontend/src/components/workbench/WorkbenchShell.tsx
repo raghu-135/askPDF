@@ -3,6 +3,7 @@ import { Box, type SxProps, type Theme } from '@mui/material';
 import {
   DEFAULT_WORKBENCH_LAYOUT,
   normalizeWorkbenchLayout,
+  readStoredWorkbenchLayout,
   resizeWorkbenchRatio,
   resolveWorkbenchPlacement,
   type ResolvedWorkbenchPlacement,
@@ -17,18 +18,24 @@ export const useWorkbenchLayout = (
     () => normalizeWorkbenchLayout({ ...DEFAULT_WORKBENCH_LAYOUT, ...defaults }),
     [defaults.bottomRatio, defaults.placement, defaults.sideRatio, defaults.visible],
   );
-  const [layout, setLayout] = useState<WorkbenchLayoutState>(fallback);
+  const [layout, setLayout] = useState<WorkbenchLayoutState>(() => {
+    if (typeof window === 'undefined') return fallback;
+    return readStoredWorkbenchLayout(window.localStorage.getItem.bind(window.localStorage), storageKey, fallback);
+  });
+  const hydratedStorageKeyRef = useRef(storageKey);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(storageKey);
-      setLayout(stored ? normalizeWorkbenchLayout(JSON.parse(stored)) : fallback);
-    } catch {
+    if (hydratedStorageKeyRef.current === storageKey) return;
+    hydratedStorageKeyRef.current = storageKey;
+    if (typeof window === 'undefined') {
       setLayout(fallback);
+      return;
     }
+    setLayout(readStoredWorkbenchLayout(window.localStorage.getItem.bind(window.localStorage), storageKey, fallback));
   }, [fallback, storageKey]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
     try {
       window.localStorage.setItem(storageKey, JSON.stringify(layout));
     } catch {

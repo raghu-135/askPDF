@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   DEFAULT_WORKBENCH_LAYOUT,
   normalizeWorkbenchLayout,
+  readStoredWorkbenchLayout,
   resizeWorkbenchRatio,
   resolveWorkbenchPlacement,
 } from '../src/lib/workbench-layout.ts';
@@ -31,6 +32,22 @@ test('stored and legacy values are migrated and clamped', () => {
     sideRatio: 0.8,
     bottomRatio: 0.25,
   });
+});
+
+test('stored layout is read before falling back to defaults', () => {
+  const stored = JSON.stringify({ placement: 'left', visible: false, sideRatio: 0.44, bottomRatio: 0.52 });
+  const result = readStoredWorkbenchLayout((key) => key === 'layout-key' ? stored : null, 'layout-key', DEFAULT_WORKBENCH_LAYOUT);
+  assert.deepEqual(result, {
+    placement: 'left',
+    visible: false,
+    sideRatio: 0.44,
+    bottomRatio: 0.52,
+  });
+});
+
+test('invalid stored layout safely falls back', () => {
+  const result = readStoredWorkbenchLayout(() => '{', 'layout-key', DEFAULT_WORKBENCH_LAYOUT);
+  assert.deepEqual(result, DEFAULT_WORKBENCH_LAYOUT);
 });
 
 test('pointer ratios honor placement and bounds', () => {

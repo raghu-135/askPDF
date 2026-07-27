@@ -54,6 +54,19 @@ export const normalizeWorkbenchLayout = (
   };
 };
 
+export const readStoredWorkbenchLayout = (
+  getItem: (key: string) => string | null,
+  storageKey: string,
+  fallback: WorkbenchLayoutState,
+): WorkbenchLayoutState => {
+  try {
+    const stored = getItem(storageKey);
+    return stored ? normalizeWorkbenchLayout(JSON.parse(stored)) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 export const resolveWorkbenchPlacement = (
   placement: WorkbenchPlacement,
   containerWidth: number,

@@ -82,7 +82,7 @@ import type { ResolvedWorkbenchPlacement } from '../../lib/workbench-layout';
 import ThreadSidebar, { type ThreadSidebarHeaderState } from '../ThreadSidebar';
 import ChatInterface, { type ChatTraceDescriptor } from '../ChatInterface';
 import PdfViewer from '../PdfViewer';
-import type { PdfTab } from '../PdfTabs';
+import { buildDocumentWorkspaceTabs, type PdfTab } from '../../lib/document-tabs';
 import { getThread } from '../../lib/api';
 import { loadThreadTabs } from '../../lib/thread-utils';
 import { getActiveTab, getActiveTabData } from '../../lib/pdf-utils';
@@ -263,6 +263,7 @@ export default function AgentWorkflowBuilderPage() {
   const [buildWorkbenchLayout, setBuildWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.builder.build');
   const [testWorkbenchLayout, setTestWorkbenchLayout] = useWorkbenchLayout('askpdf.workbench.builder.test');
   const [resolvedPlacement, setResolvedPlacement] = useState<ResolvedWorkbenchPlacement>('right');
+  const [isWorkbenchResizing, setIsWorkbenchResizing] = useState(false);
   const activeWorkbenchLayout = workspace === 'build' ? buildWorkbenchLayout : testWorkbenchLayout;
   const setActiveWorkbenchLayout = workspace === 'build' ? setBuildWorkbenchLayout : setTestWorkbenchLayout;
   const [testThread, setTestThread] = useState<Thread | null>(null);
@@ -717,24 +718,11 @@ export default function AgentWorkflowBuilderPage() {
 
   const testActiveDocument = getActiveTab(testPdfTabs, testActiveTabId);
   const testActiveDocumentData = getActiveTabData(testActiveDocument);
-  const testWorkspaceTabs = useMemo<WorkspaceTab[]>(() => {
-    if (!testThread) return [];
-    return [
-      { kind: 'browser', id: 'browser-tab', label: 'Browser' },
-      ...testPdfTabs.map((tab) => ({ ...tab, kind: 'document' as const })),
-      {
-        kind: 'trace',
-        id: 'trace-tab',
-        label: 'Debug Trace',
-        count: testTraceTabs.length,
-        status: testTraceTabs.some((tab) => tab.error)
-          ? 'failed' as const
-          : testTraceTabs.some((tab) => tab.running)
-            ? 'running' as const
-            : 'idle' as const,
-      },
-    ];
-  }, [testPdfTabs, testThread, testTraceTabs]);
+  const testWorkspaceTabs = useMemo(() => buildDocumentWorkspaceTabs({
+    enabled: Boolean(testThread),
+    documents: testPdfTabs,
+    traces: testTraceTabs,
+  }), [testPdfTabs, testThread, testTraceTabs]);
 
   const handleTestThreadSelect = useCallback(async (thread: Thread | null) => {
     if (!thread) {
@@ -857,6 +845,7 @@ export default function AgentWorkflowBuilderPage() {
           layout={activeWorkbenchLayout}
           onLayoutChange={setActiveWorkbenchLayout}
           onResolvedPlacementChange={setResolvedPlacement}
+          onResizingChange={setIsWorkbenchResizing}
           secondaryLabel={workspace === 'build' ? 'Node Inspector and Node Palette' : 'Workflow test controls'}
           primaryToolbar={
             <BuilderActionsBar
@@ -929,6 +918,7 @@ export default function AgentWorkflowBuilderPage() {
                   activeRunId={testActiveTraceId}
                   onActiveRunChange={setTestActiveTraceId}
                   onClose={handleCloseTestTrace}
+                  suspendHeavyContent={isWorkbenchResizing}
                 />
               ) : testActiveTabId === 'browser-tab' ? (
                 <iframe src="http://localhost:8090" style={{ width: '100%', height: '100%', border: 'none' }} title="Browser" allow="camera; microphone; clipboard-read; clipboard-write" />
@@ -939,7 +929,7 @@ export default function AgentWorkflowBuilderPage() {
                   currentId={null}
                   onJump={() => undefined}
                   autoScroll={false}
-                  isResizing={false}
+                  isResizing={isWorkbenchResizing}
                   highlightEnabled
                   darkMode={darkMode}
                   threadId={testThread?.id || null}

@@ -53,7 +53,6 @@ export type TraceWorkspaceTab = {
   count?: number;
 };
 export type WorkspaceTab = DocumentWorkspaceTab | BrowserWorkspaceTab | CanvasWorkspaceTab | SpecWorkspaceTab | TraceWorkspaceTab;
-export type WorkspaceRenderer = Partial<Record<WorkspaceTab['kind'], (tab: WorkspaceTab) => React.ReactNode>>;
 
 const statusColor = (status?: TraceWorkspaceTab['status']) => {
   if (status === 'failed') return 'error';
