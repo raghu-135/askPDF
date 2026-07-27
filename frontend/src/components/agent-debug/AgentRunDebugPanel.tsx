@@ -183,8 +183,8 @@ function AgentRunDebugPanel({
   };
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', gap: 0.75 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
+      <Box sx={{ px: 1, py: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5, bgcolor: 'background.paper', borderBottom: 1, borderColor: 'divider' }}>
         <Tooltip title={runId} arrow>
           <Typography variant="caption" color="text.secondary">
             Run …{runId.slice(-8)}
@@ -215,7 +215,7 @@ function AgentRunDebugPanel({
         </Typography>
       )}
       {loading && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, py: 0.75 }}>
           <CircularProgress size={14} />
           <Typography variant="caption" color="text.secondary">Loading run details...</Typography>
         </Box>
@@ -228,6 +228,8 @@ function AgentRunDebugPanel({
       {pendingInterrupt && (
         <Box
           sx={{
+            mx: 1,
+            my: 0.75,
             p: 1,
             borderRadius: 1,
             bgcolor: 'rgba(25, 118, 210, 0.08)',
@@ -290,12 +292,12 @@ function AgentRunDebugPanel({
         </Box>
       )}
       {!loading && !error && runDetails && !debug && (
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" color="text.secondary" sx={{ px: 1, py: 0.75 }}>
           Trace not captured for this run.
         </Typography>
       )}
       {debug && !traceView && (
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" color="text.secondary" sx={{ px: 1, py: 0.75 }}>
           Trace payload is incomplete.
         </Typography>
       )}

@@ -101,6 +101,7 @@ function AgentExecutionView({
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [detailErrors, setDetailErrors] = useState<Record<string, string>>({});
   const [revealRequest, setRevealRequest] = useState<{ key: string; token: number } | null>(null);
+  const [progressOpen, setProgressOpen] = useState(true);
   const [graphOpen, setGraphOpen] = useState(defaultGraphOpen);
   const [finalAnswerOpen, setFinalAnswerOpen] = useState(defaultFinalAnswerOpen);
   const inFlightDetailKeys = useRef(new Set<string>());
@@ -120,6 +121,7 @@ function AgentExecutionView({
       setRevealRequest(null);
       setLoadingKey(null);
       setDetailErrors({});
+      setProgressOpen(true);
       setGraphOpen(defaultGraphOpen);
       setFinalAnswerOpen(defaultFinalAnswerOpen);
       return;
@@ -225,39 +227,44 @@ function AgentExecutionView({
   }
 
   return (
-    <Stack spacing={1} sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
-      <Paper variant="outlined" sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', p: 1 }}>
-        <Stack direction="row" spacing={0.6} alignItems="center" sx={{ mb: 0.75, flexWrap: 'wrap', rowGap: 0.45 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 700, mr: 0.25 }}>{running ? 'Live progress' : 'Execution progress'}</Typography>
-          <AgentExecutionStatusIcon status={status || (running ? 'running' : 'completed')} size={17} />
-          {traceView.route && (
-            <Chip size="small" variant="outlined" label={traceView.route} aria-label={`Route: ${traceView.route}`} sx={{ height: 22 }} />
-          )}
-          {runDuration && <Chip size="small" variant="outlined" icon={<TimerOutlinedIcon />} label={runDuration} sx={{ height: 22 }} />}
-          <Tooltip title={<TraceNodesTooltip nodes={traceView.nodes} usedCount={traceView.usedNodeCount} availableCount={traceView.availableNodeCount} />} arrow>
-            <Chip aria-label={`${traceView.usedNodeCount} nodes, ${traceView.nodes.length} visits`} size="small" variant="outlined" icon={<AccountTreeOutlinedIcon />} label={`${traceView.usedNodeCount}n${traceView.nodes.length !== traceView.usedNodeCount ? ` · ${traceView.nodes.length}v` : ''}`} sx={{ height: 22 }} />
-          </Tooltip>
-          {traceView.tools.length > 0 && (
-            <Tooltip title={<TraceToolsTooltip tools={traceView.tools} />} arrow>
-              <Chip aria-label={`${traceView.tools.length} tool calls`} size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={traceView.tools.length} sx={{ height: 22 }} />
-            </Tooltip>
-          )}
-          {tokenCount && (
-            <Tooltip title={<TraceLlmUsageTooltip metrics={traceView.metrics} />} arrow>
-              <Chip size="small" variant="outlined" label={`${tokenCount} tokens`} sx={{ height: 22 }} />
-            </Tooltip>
-          )}
-          {traceView.warningCount > 0 && (
-            <Tooltip title={`${traceView.warningCount} warnings`} arrow>
-              <Chip size="small" color="warning" variant="outlined" icon={<WarningAmberIcon />} label={traceView.warningCount} sx={{ height: 22 }} />
-            </Tooltip>
-          )}
-          {traceView.errorCount > 0 && (
-            <Tooltip title={`${traceView.errorCount} errors`} arrow>
-              <Chip size="small" color="error" variant="outlined" icon={<ErrorOutlineIcon />} label={traceView.errorCount} sx={{ height: 22 }} />
-            </Tooltip>
-          )}
-        </Stack>
+    <Stack spacing={0} sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
+      <Paper elevation={0} square sx={{ width: '100%', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', p: 1, bgcolor: 'background.default' }}>
+        <Box component="details" open={progressOpen} onToggle={(event) => setProgressOpen(event.currentTarget.open)}>
+          <Box component="summary" sx={{ cursor: 'pointer', listStylePosition: 'inside', '&::marker': { fontSize: '0.78rem' } }}>
+            <Stack direction="row" spacing={0.6} alignItems="center" sx={{ display: 'inline-flex', ml: 0.5, mb: progressOpen ? 0.75 : 0, flexWrap: 'wrap', rowGap: 0.45, verticalAlign: 'middle' }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, mr: 0.25 }}>{running ? 'Live progress' : 'Execution progress'}</Typography>
+              <AgentExecutionStatusIcon status={status || (running ? 'running' : 'completed')} size={17} />
+              {traceView.route && (
+                <Chip size="small" variant="outlined" label={traceView.route} aria-label={`Route: ${traceView.route}`} sx={{ height: 22 }} />
+              )}
+              {runDuration && <Chip size="small" variant="outlined" icon={<TimerOutlinedIcon />} label={runDuration} sx={{ height: 22 }} />}
+              <Tooltip title={<TraceNodesTooltip nodes={traceView.nodes} usedCount={traceView.usedNodeCount} availableCount={traceView.availableNodeCount} />} arrow>
+                <Chip aria-label={`${traceView.usedNodeCount} nodes, ${traceView.nodes.length} visits`} size="small" variant="outlined" icon={<AccountTreeOutlinedIcon />} label={`${traceView.usedNodeCount}n${traceView.nodes.length !== traceView.usedNodeCount ? ` · ${traceView.nodes.length}v` : ''}`} sx={{ height: 22 }} />
+              </Tooltip>
+              {traceView.tools.length > 0 && (
+                <Tooltip title={<TraceToolsTooltip tools={traceView.tools} />} arrow>
+                  <Chip aria-label={`${traceView.tools.length} tool calls`} size="small" variant="outlined" icon={<BuildOutlinedIcon />} label={traceView.tools.length} sx={{ height: 22 }} />
+                </Tooltip>
+              )}
+              {tokenCount && (
+                <Tooltip title={<TraceLlmUsageTooltip metrics={traceView.metrics} />} arrow>
+                  <Chip size="small" variant="outlined" label={`${tokenCount} tokens`} sx={{ height: 22 }} />
+                </Tooltip>
+              )}
+              {traceView.warningCount > 0 && (
+                <Tooltip title={`${traceView.warningCount} warnings`} arrow>
+                  <Chip size="small" color="warning" variant="outlined" icon={<WarningAmberIcon />} label={traceView.warningCount} sx={{ height: 22 }} />
+                </Tooltip>
+              )}
+              {traceView.errorCount > 0 && (
+                <Tooltip title={`${traceView.errorCount} errors`} arrow>
+                  <Chip size="small" color="error" variant="outlined" icon={<ErrorOutlineIcon />} label={traceView.errorCount} sx={{ height: 22 }} />
+                </Tooltip>
+              )}
+            </Stack>
+          </Box>
+          {progressOpen && (
+            <>
         {memoryDebug && (memoryDebug.recalledCount > 0 || memoryDebug.candidateCount > 0 || memoryDebug.searchedScopes.length > 0) && (
           <Paper variant="outlined" sx={{ p: 0.75, mb: 0.75, bgcolor: 'background.default' }}>
             <Stack direction="row" spacing={0.6} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.45 }}>
@@ -421,14 +428,17 @@ function AgentExecutionView({
             )}
           </Box>
         )}
+            </>
+          )}
+        </Box>
       </Paper>
-      <Paper variant="outlined" sx={{ px: 1, py: 0.4 }}>
+      <Paper elevation={0} square sx={{ px: 1, py: 0.4, borderTop: 1, borderColor: 'divider', bgcolor: 'background.default' }}>
         <Box component="details" open={graphOpen} onToggle={(event) => setGraphOpen(event.currentTarget.open)}>
           <Box component="summary" sx={{ cursor: 'pointer', py: 0.35, fontSize: '0.78rem', fontWeight: 700 }}>
             Execution graph
           </Box>
           {graphOpen && (
-            <Box sx={{ minHeight: 400, mt: 0.4 }}>
+            <Box sx={{ minHeight: 400, mt: 0.4, mx: -1 }}>
               <AgentDebugCanvas
                 resolvedSpec={resolvedSpec}
                 workflowId={workflowId}

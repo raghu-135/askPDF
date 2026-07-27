@@ -69,9 +69,9 @@ export default function TraceWorkspace({
           />
         ))}
       </Tabs>
-      <Box sx={{ minHeight: 0, overflow: 'auto', p: 1.5 }}>
+      <Box sx={{ minHeight: 0, overflow: 'auto', bgcolor: 'background.default' }}>
         {activeTab.messageId && onBackToMessage && (
-          <Box sx={{ mb: 1 }}><Tooltip title="Return to the originating message"><IconButton size="small" onClick={() => onBackToMessage(activeTab.messageId!)}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip></Box>
+          <Box sx={{ px: 1, py: 0.5 }}><Tooltip title="Return to the originating message"><IconButton size="small" onClick={() => onBackToMessage(activeTab.messageId!)}><ArrowBackIcon fontSize="small" /></IconButton></Tooltip></Box>
         )}
         <AgentRunDebugPanel
           runId={activeTab.id}
