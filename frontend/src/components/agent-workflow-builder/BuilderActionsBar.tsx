@@ -1,6 +1,4 @@
 import React from 'react';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import UndoIcon from '@mui/icons-material/Undo';
@@ -13,7 +11,6 @@ import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import {
   Box,
-  Chip,
   CircularProgress,
   Divider,
   FormControl,
@@ -25,7 +22,7 @@ import {
   Typography,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
-import type { AgentWorkflow, AgentWorkflowValidationReport } from '../../lib/api';
+import type { AgentWorkflow } from '../../lib/api';
 import type { AgentWorkflowStarter } from '../../lib/agent-workflow-builder';
 import { WorkbenchToolbarTrailingActions } from '../workbench/WorkbenchToolbar';
 
@@ -37,7 +34,6 @@ export default function BuilderActionsBar({
   onReset,
   onValidate,
   validating,
-  validation,
   dirty,
   canUndo,
   canRedo,
@@ -49,6 +45,8 @@ export default function BuilderActionsBar({
   workflowName,
   testMode,
   onToggleTest,
+  testDisabled,
+  testDisabledReason,
   hasTestSession,
   onClearTestSession,
   darkMode,
@@ -62,7 +60,6 @@ export default function BuilderActionsBar({
   onReset: () => void;
   onValidate: () => void;
   validating: boolean;
-  validation: AgentWorkflowValidationReport | null;
   dirty?: boolean;
   canUndo?: boolean;
   canRedo?: boolean;
@@ -74,21 +71,16 @@ export default function BuilderActionsBar({
   workflowName?: string;
   testMode?: boolean;
   onToggleTest: () => void;
+  testDisabled?: boolean;
+  testDisabledReason?: string;
   hasTestSession?: boolean;
   onClearTestSession?: () => void;
   darkMode: boolean;
   onToggleDarkMode: () => void;
   layoutControl?: React.ReactNode;
 }) {
-  const validationChip = validation ? (
-    <Chip
-      size="small"
-      color={validation.valid ? 'success' : 'error'}
-      icon={validation.valid ? <CheckCircleIcon /> : <ErrorOutlineIcon />}
-      label={validation.valid ? 'Valid' : `${validation.errors?.length || 0} errors`}
-    />
-  ) : null;
   const customOptions = customWorkflows || [];
+  const testButtonDisabled = !testMode && Boolean(testDisabled);
 
   return (
     <Box
@@ -107,7 +99,6 @@ export default function BuilderActionsBar({
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap', minWidth: 0, flex: '1 1 auto' }}>
-        {validationChip}
         <FormControl size="small" disabled={disabled} sx={{ minWidth: 180 }}>
           <InputLabel id="builder-starter-label">Workflow</InputLabel>
           <Select
@@ -158,10 +149,18 @@ export default function BuilderActionsBar({
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={testMode ? 'Back to Builder' : 'Test workflow'}>
-          <IconButton size="small" color={testMode ? 'default' : 'primary'} aria-label={testMode ? 'Back to Builder' : 'Test workflow'} onClick={onToggleTest}>
-            {testMode ? <ArrowBackIcon fontSize="small" /> : <ScienceIcon fontSize="small" />}
-          </IconButton>
+        <Tooltip title={testMode ? 'Back to Builder' : testButtonDisabled ? testDisabledReason || 'Validate the workflow before testing' : 'Test workflow'}>
+          <span>
+            <IconButton
+              size="small"
+              color={testMode ? 'default' : 'primary'}
+              aria-label={testMode ? 'Back to Builder' : 'Test workflow'}
+              onClick={onToggleTest}
+              disabled={testButtonDisabled}
+            >
+              {testMode ? <ArrowBackIcon fontSize="small" /> : <ScienceIcon fontSize="small" />}
+            </IconButton>
+          </span>
         </Tooltip>
         {testMode && hasTestSession && onClearTestSession && (
           <Tooltip title="Clear test session">

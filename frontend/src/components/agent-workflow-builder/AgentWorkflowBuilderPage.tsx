@@ -621,40 +621,6 @@ export default function AgentWorkflowBuilderPage() {
     setSelection(null);
   };
 
-  const handleApplyFix = (issue: BuilderValidationIssue) => {
-    if (!catalog || !builderState || !issue.fix) return;
-    if (issue.fix.requires_confirmation && typeof window !== 'undefined' && !window.confirm(`Apply this suggested fix?\n\n${issue.message}`)) return;
-    if (issue.fix.kind === 'missing_start') {
-      const target = builderState.nodes.find((node) => canConnectNodes(catalog, builderState, 'START', node.id).ok);
-      if (target) handleConnectNodes('START', target.id);
-      return;
-    }
-    if (issue.fix.kind === 'missing_end') {
-      const candidates = [...builderState.nodes].reverse();
-      const source = candidates.find((node) => canConnectNodes(catalog, builderState, node.id, 'END').ok);
-      if (source) handleConnectNodes(source.id, 'END');
-      return;
-    }
-    if ((issue.fix.kind === 'incompatible_connection' || issue.fix.kind === 'invalid_edge') && issue.selection?.kind === 'edge') {
-      handleRemoveEdge(issue.selection.edgeIndex);
-      return;
-    }
-    if (issue.fix.kind === 'unreachable_node' && issue.fix.node_id) {
-      const target = String(issue.fix.node_id);
-      const sources = ['START', ...builderState.nodes.map((node) => node.id)];
-      const source = sources.find((id) => id !== target && canConnectNodes(catalog, builderState, id, target).ok);
-      if (source) handleConnectNodes(source, target);
-      return;
-    }
-    if (issue.fix.kind === 'missing_route' && issue.fix.node_id) {
-      const source = String(issue.fix.node_id);
-      const route = issue.message.match(/route[s]? ['\"]?([a-z0-9_]+)['\"]?/i)?.[1];
-      const target = [...builderState.nodes.map((node) => node.id), 'END']
-        .find((id) => id !== source && canConnectNodes(catalog, builderState, source, id).ok);
-      if (route && target) handleConnectNodes(source, target, route);
-    }
-  };
-
   const handleAddHitlGate = (targetNodeId: string) => {
     if (!catalog || authoringDisabled) return;
     updateState((previous) => createHitlGateForTarget(catalog, previous, targetNodeId));
@@ -683,6 +649,12 @@ export default function AgentWorkflowBuilderPage() {
   const validationIssues = useMemo(() => (
     buildValidationIssues(builderState, validation)
   ), [builderState, validation]);
+  const workflowIsValid = Boolean(validation?.valid) && !validationIssues.some((issue) => issue.severity === 'error');
+  const testDisabledReason = !validation
+    ? 'Validate the workflow before testing'
+    : workflowIsValid
+      ? undefined
+      : 'Fix validation errors before testing';
   const baseWorkflowId = workflowIdFromCustomStarter(starter) || ({
     router: 'router_rag_agent',
     plan_execute: 'plan_execute_rag_agent',
@@ -828,7 +800,6 @@ export default function AgentWorkflowBuilderPage() {
               onReset={() => resetToStarter()}
               onValidate={handleValidate}
               validating={validating}
-              validation={validation}
               dirty={isDirty}
               canUndo={undoStack.current.length > 0}
               canRedo={redoStack.current.length > 0}
@@ -839,7 +810,9 @@ export default function AgentWorkflowBuilderPage() {
               savedWorkflowId={persistedWorkflow?.workflow.id}
               workflowName={persistenceForm.name}
               testMode={workspace === 'test'}
-              onToggleTest={() => setWorkspace((current) => current === 'build' ? 'test' : 'build')}
+              onToggleTest={() => setWorkspace((current) => current === 'build' && !workflowIsValid ? current : current === 'build' ? 'test' : 'build')}
+              testDisabled={!workflowIsValid}
+              testDisabledReason={testDisabledReason}
               hasTestSession={testSession.messages.length > 0}
               onClearTestSession={() => {
                 setTestSession(emptyBuilderTestSession(testThread?.id || null));
@@ -912,8 +885,8 @@ export default function AgentWorkflowBuilderPage() {
                   <BuilderValidationPanel
                     validation={validation}
                     issues={validationIssues}
+                    workflowIsValid={workflowIsValid}
                     onSelectIssue={(nextSelection) => { setSelection(nextSelection); setBuildTab('canvas-tab'); }}
-                    onApplyFix={handleApplyFix}
                   />
                 )}
                 <BuilderGraphEditor

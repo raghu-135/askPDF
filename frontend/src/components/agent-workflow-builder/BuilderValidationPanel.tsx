@@ -18,13 +18,13 @@ import type { BuilderSelection, BuilderValidationIssue } from './types';
 export default function BuilderValidationPanel({
   validation,
   issues,
+  workflowIsValid,
   onSelectIssue,
-  onApplyFix,
 }: {
   validation: AgentWorkflowValidationReport | null;
   issues: BuilderValidationIssue[];
+  workflowIsValid: boolean;
   onSelectIssue: (selection: BuilderSelection) => void;
-  onApplyFix: (issue: BuilderValidationIssue) => void;
 }) {
   const hasErrors = issues.some((issue) => issue.severity === 'error');
   const hasWarnings = issues.some((issue) => issue.severity === 'warning');
@@ -34,12 +34,12 @@ export default function BuilderValidationPanel({
       <Box sx={{ p: 1 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
           <Typography variant="subtitle2" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            {hasErrors ? <ErrorOutlineIcon fontSize="small" color="error" /> : validation?.valid ? <CheckCircleIcon fontSize="small" color="success" /> : null}
+            {hasErrors ? <ErrorOutlineIcon fontSize="small" color="error" /> : workflowIsValid ? <CheckCircleIcon fontSize="small" color="success" /> : null}
             Validation
           </Typography>
             {!validation ? (
               <Alert severity="info">Run validation to check the assembled graph against the backend validator.</Alert>
-            ) : validation.valid && issues.length === 0 ? (
+            ) : workflowIsValid ? (
               <Alert severity="success">Backend validation passed.</Alert>
             ) : (
               <>
@@ -75,14 +75,10 @@ export default function BuilderValidationPanel({
                           {issue.message}
                         </Typography>
                       </Box>
-                      {issue.fix ? (
-                        <Button size="small" onClick={() => onApplyFix(issue)} sx={{ whiteSpace: 'nowrap' }}>
-                          Fix
+                      {issue.selection ? (
+                        <Button size="small" onClick={() => onSelectIssue(issue.selection)} sx={{ whiteSpace: 'nowrap' }}>
+                          Select
                         </Button>
-                      ) : issue.selection ? (
-                          <Button size="small" onClick={() => onSelectIssue(issue.selection)} sx={{ whiteSpace: 'nowrap' }}>
-                            Select
-                          </Button>
                       ) : (
                         <Chip size="small" variant="outlined" label="global" />
                       )}
