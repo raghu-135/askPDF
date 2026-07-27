@@ -16,9 +16,12 @@ import {
     Tooltip,
     Chip,
     CircularProgress,
+    ToggleButton,
+    ToggleButtonGroup,
 } from '@mui/material';
 import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
 import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
+import WifiFindTwoToneIcon from '@mui/icons-material/WifiFindTwoTone';
 import SendIcon from '@mui/icons-material/Send';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
@@ -118,6 +121,8 @@ interface ChatMessage extends Message {
     agent_route_reason?: string;
     pending_human_review?: boolean;
 }
+
+type WebSearchMode = 'on' | 'ask' | 'off';
 
 type LiveChatExecution = {
     messageId: string;
@@ -271,6 +276,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [clarificationPanelRatio, setClarificationPanelRatio] = useState(0.3);
     const [isClarificationResizing, setIsClarificationResizing] = useState(false);
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
+    const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
     const [useReranker, setUseReranker] = useState(true);
     const [defaultUseReranker, setDefaultUseReranker] = useState(true);
@@ -784,7 +790,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setSystemRole(defaultSystemRole);
         setToolInstructions(defaults);
         setCustomInstructions(defaultCustomInstructions);
-        setHitlWebApproval(defaultHitlWebApproval);
         setUseReranker(defaultUseReranker);
         setAgentWorkflowId(agentWorkflows[0]?.id || '');
     };
@@ -877,14 +882,45 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const handleWebSearchToggle = () => {
-        setUseWebSearch(prev => {
-            const next = !prev;
+    const webSearchMode: WebSearchMode = !useWebSearch
+        ? 'off'
+        : hitlWebApproval
+            ? 'ask'
+            : 'on';
+
+    const handleWebSearchModeChange = async (
+        _event: React.MouseEvent<HTMLElement>,
+        nextMode: WebSearchMode | null,
+    ) => {
+        if (!nextMode || nextMode === webSearchMode || savingWebSearchMode) return;
+        const previousUseWebSearch = useWebSearch;
+        const previousHitlWebApproval = hitlWebApproval;
+        const nextUseWebSearch = nextMode !== 'off';
+        const nextHitlWebApproval = nextMode === 'ask';
+
+        setUseWebSearch(nextUseWebSearch);
+        setHitlWebApproval(nextHitlWebApproval);
+
+        if (isTestRuntime || !activeThread) return;
+
+        if (typeof window !== 'undefined') {
+            localStorage.setItem('last_use_web_search', nextUseWebSearch ? '1' : '0');
+        }
+        setSavingWebSearchMode(true);
+        try {
+            await updateThreadSettings(activeThread.id, {
+                hitl_web_approval: nextHitlWebApproval,
+            });
+        } catch (error) {
+            console.error('Failed to update internet search mode:', error);
+            setUseWebSearch(previousUseWebSearch);
+            setHitlWebApproval(previousHitlWebApproval);
             if (typeof window !== 'undefined') {
-                localStorage.setItem('last_use_web_search', next ? '1' : '0');
+                localStorage.setItem('last_use_web_search', previousUseWebSearch ? '1' : '0');
             }
-            return next;
-        });
+        } finally {
+            setSavingWebSearchMode(false);
+        }
     };
 
     // Polling for indexing and embedding model status
@@ -1391,6 +1427,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions,
                 customInstructions,
                 Boolean(options?.bypassClarification),
+                hitlWebApproval,
                 (event: AgentExecutionStreamEnvelope) => {
                     if (event.event !== 'heartbeat') appendLiveExecutionEvent(event);
                     if (event.event === 'run.started' && event.data?.run_id) {
@@ -1968,16 +2005,37 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     )}
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
-                    <Tooltip title={useWebSearch ? "Internet Search On" : "Internet Search Off"} placement="top">
-                        <IconButton
-                            size="small"
-                            color={useWebSearch ? "primary" : "default"}
-                            onClick={handleWebSearchToggle}
-                            sx={{ p: 0.5 }}
-                        >
-                            {useWebSearch ? <WifiTwoToneIcon /> : <WifiOffTwoToneIcon />}
-                        </IconButton>
-                    </Tooltip>
+                    <ToggleButtonGroup
+                        exclusive
+                        size="small"
+                        value={webSearchMode}
+                        onChange={handleWebSearchModeChange}
+                        disabled={savingWebSearchMode}
+                        aria-label="Internet search mode"
+                        sx={{
+                            flexShrink: 0,
+                            '& .MuiToggleButton-root': {
+                                p: 0.5,
+                                border: 0,
+                            },
+                        }}
+                    >
+                        <ToggleButton value="on" aria-label="Internet Search On">
+                            <Tooltip title="Internet Search On" placement="top">
+                                <WifiTwoToneIcon fontSize="small" />
+                            </Tooltip>
+                        </ToggleButton>
+                        <ToggleButton value="ask" aria-label="Ask me every time before internet search">
+                            <Tooltip title="Ask me every time before internet search" placement="top">
+                                <WifiFindTwoToneIcon fontSize="small" />
+                            </Tooltip>
+                        </ToggleButton>
+                        <ToggleButton value="off" aria-label="Internet Search Off">
+                            <Tooltip title="Internet Search Off" placement="top">
+                                <WifiOffTwoToneIcon fontSize="small" />
+                            </Tooltip>
+                        </ToggleButton>
+                    </ToggleButtonGroup>
                     <Tooltip
                         title={
                             <Box sx={{ p: 0.5 }}>
@@ -2787,7 +2845,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 saveLabel={isTestRuntime ? 'Apply to test' : undefined}
                 replans={replans}
                 replansLimit={replansLimit}
-                hitlWebApproval={hitlWebApproval}
                 useReranker={useReranker}
                 agentWorkflowId={agentWorkflowId}
                 agentWorkflowIsCustom={!isBuiltinAgentWorkflow(agentWorkflows, agentWorkflowId)}
@@ -2799,7 +2856,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 effectiveToolInstructions={effectiveToolInstructions}
                 promptPreview={promptPreview}
                 onReplansChange={(value) => setReplans(value)}
-                onHitlWebApprovalChange={(checked) => setHitlWebApproval(checked)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
                 onAgentWorkflowChange={(value) => {
                     setAgentWorkflowId(value);

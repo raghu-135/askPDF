@@ -172,6 +172,7 @@ class ThreadChatRequest(BaseModel):
     question: str
     llm_model: str
     use_web_search: bool = False
+    hitl_web_approval: Optional[bool] = None
     use_reranker: Optional[bool] = None
     bypass_clarification: bool = False
     context_window: int = DEFAULT_TOKEN_BUDGET  # Added context window size

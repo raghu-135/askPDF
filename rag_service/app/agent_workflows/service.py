@@ -79,6 +79,12 @@ class AgentRunService:
         execution_event_sink: Any = None,
     ) -> Dict[str, Any]:
         thread_settings = await get_thread_settings(thread_id)
+        hitl_web_approval_override = getattr(req, "hitl_web_approval", None)
+        if hitl_web_approval_override is not None:
+            thread_settings = {
+                **(thread_settings if isinstance(thread_settings, dict) else {}),
+                "hitl_web_approval": bool(hitl_web_approval_override),
+            }
         agent_settings = thread_settings.get("agent_workflow") if isinstance(thread_settings, dict) else None
         agent_settings = agent_settings if isinstance(agent_settings, dict) else {}
         default_workflow_key = default_agent_workflow_key()

@@ -1396,6 +1396,7 @@ const threadChatPayload = (
   toolInstructionsOverride?: Record<string, string>,
   customInstructionsOverride?: string,
   bypassClarification: boolean = false,
+  hitlWebApproval?: boolean,
 ): Record<string, any> => {
   const payload: any = {
     thread_id: threadId,
@@ -1408,6 +1409,9 @@ const threadChatPayload = (
   };
   if (bypassClarification) {
     payload.bypass_clarification = true;
+  }
+  if (typeof hitlWebApproval === "boolean") {
+    payload.hitl_web_approval = hitlWebApproval;
   }
   if (typeof replans === "number") {
     payload.replans = replans;
@@ -1436,8 +1440,9 @@ export async function threadChat(
   toolInstructionsOverride?: Record<string, string>,
   customInstructionsOverride?: string,
   bypassClarification: boolean = false,
+  hitlWebApproval?: boolean,
 ): Promise<ThreadChatResponse> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval);
   const maxRetries = 2;
   let attempt = 0;
 
@@ -1482,10 +1487,11 @@ export async function streamThreadChat(
   toolInstructionsOverride: Record<string, string> | undefined,
   customInstructionsOverride: string | undefined,
   bypassClarification: boolean,
+  hitlWebApproval: boolean | undefined,
   onEvent: (event: AgentExecutionStreamEnvelope) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification);
+  const payload = threadChatPayload(threadId, question, llmModel, useWebSearch, useReranker, contextWindowSize, replans, systemRoleOverride, toolInstructionsOverride, customInstructionsOverride, bypassClarification, hitlWebApproval);
   const response = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(threadId)}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },

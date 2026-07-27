@@ -30,7 +30,6 @@ interface ChatSettingsDialogProps {
     // Settings values
     replans: number;
     replansLimit: number | null;
-    hitlWebApproval: boolean;
     useReranker: boolean;
     agentWorkflowId: string;
     agentWorkflowIsCustom?: boolean;
@@ -44,7 +43,6 @@ interface ChatSettingsDialogProps {
     
     // Change handlers
     onReplansChange: (value: number) => void;
-    onHitlWebApprovalChange: (checked: boolean) => void;
     onRerankerChange: (checked: boolean) => void;
     onAgentWorkflowChange: (value: string) => void;
     onAgentWorkflowMenuOpen?: () => void | Promise<void>;
@@ -68,7 +66,6 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     saveLabel = 'Save',
     replans,
     replansLimit,
-    hitlWebApproval,
     useReranker,
     agentWorkflowId,
     agentWorkflowIsCustom = false,
@@ -80,7 +77,6 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     effectiveToolInstructions,
     promptPreview,
     onReplansChange,
-    onHitlWebApprovalChange,
     onRerankerChange,
     onAgentWorkflowChange,
     onAgentWorkflowMenuOpen,
@@ -176,24 +172,6 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                     )
                 ) : null}
                 <Divider />
-                <Box>
-                    <FormControlLabel
-                        control={
-                            <Switch
-                                checked={hitlWebApproval}
-                                onChange={(e) => onHitlWebApprovalChange(e.target.checked)}
-                            />
-                        }
-                        label={
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Typography variant="body2" sx={{ fontWeight: 500 }}>Approve web search</Typography>
-                            </Box>
-                        }
-                    />
-                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5, mt: 0.25 }}>
-                        Pauses before live web search so you can approve it or continue from existing context.
-                    </Typography>
-                </Box>
                 <Box>
                     <FormControlLabel
                         control={

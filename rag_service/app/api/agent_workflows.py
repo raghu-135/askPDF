@@ -112,7 +112,6 @@ class BuilderTestRunRequest(ThreadChatRequest):
     base_workflow_id: str = Field(..., min_length=1)
     spec: Dict[str, Any] = Field(default_factory=dict)
     allow_external_tools: bool = False
-    hitl_web_approval: bool = False
     transient_messages: list[BuilderTransientMessage] = Field(default_factory=list, max_length=100)
     workflow_spec_fingerprint: Optional[str] = Field(default=None, max_length=128)
 

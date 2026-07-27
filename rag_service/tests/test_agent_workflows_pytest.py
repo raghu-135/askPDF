@@ -3596,6 +3596,47 @@ class TestAgentWorkflowRepository:
 
 @pytest.mark.skipif(not SQLMODEL_AVAILABLE, reason="SQLModel test database is not configured")
 class TestAgentRunService:
+    @pytest.mark.asyncio
+    async def test_request_hitl_web_approval_override_controls_effective_thread_settings(self, monkeypatch):
+        captured = {}
+
+        class FakeRepository:
+            async def get_workflow(self, workflow_id, include_custom=True):
+                return SimpleNamespace(id=workflow_id, spec_json={})
+
+        class CapturingResolver:
+            def resolve(self, spec, *, thread_settings, request_overrides):
+                captured["thread_settings"] = thread_settings
+                raise RuntimeError("stop after settings resolution")
+
+        async def fake_get_thread_settings(_thread_id):
+            return {
+                "agent_workflow": {"workflow_id": ROUTER_RAG_AGENT_ID},
+                "hitl_web_approval": True,
+            }
+
+        monkeypatch.setattr(
+            "app.agent_workflows.service.get_thread_settings",
+            fake_get_thread_settings,
+        )
+        request = SimpleNamespace(
+            hitl_web_approval=False,
+            use_web_search=True,
+            use_reranker=True,
+            replans=1,
+            system_role_override="",
+            tool_instructions_override={},
+            custom_instructions_override="",
+        )
+
+        with pytest.raises(RuntimeError, match="stop after settings resolution"):
+            await AgentRunService(
+                repository=FakeRepository(),
+                resolver=CapturingResolver(),
+            ).run_thread_chat("thread-1", request, "embedding-model")
+
+        assert captured["thread_settings"]["hitl_web_approval"] is False
+
     def _agent_req(self, question: str = "Needs current research?") -> SimpleNamespace:
         return SimpleNamespace(
             question=question,
