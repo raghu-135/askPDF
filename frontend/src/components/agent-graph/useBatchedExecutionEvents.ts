@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentExecutionStreamEnvelope } from '../../lib/agent-execution-stream';
+import { isLiveTraceTerminalEvent } from '../../lib/live-trace-stream';
 
 const isTerminal = (event: AgentExecutionStreamEnvelope) => (
-  event.event === 'run.completed'
-  || event.event === 'run.failed'
-  || event.event === 'run.canceled'
-  || event.event === 'interrupt.created'
+  isLiveTraceTerminalEvent(event.event)
 );
 
 export default function useBatchedExecutionEvents(initial: AgentExecutionStreamEnvelope[] = []) {
