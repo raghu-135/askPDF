@@ -95,6 +95,7 @@ type ContextualNodeRequest =
   | { mode: 'before'; target: string; incomingPaths: BuilderIncomingPath[]; selectedPathId?: string };
 
 const BUILDER_LAYOUT_STORAGE_KEY = 'askpdf.agentWorkflowBuilder.layout.v1';
+const BUILDER_DARK_MODE_STORAGE_KEY = 'askpdf.agentWorkflowBuilder.darkMode.v1';
 const DEFAULT_BUILDER_LAYOUT = {
   sidebarWidth: 360,
   palettePercent: 40,
@@ -211,21 +212,23 @@ const buildValidationIssues = (
   ];
 };
 
-const usePrefersDarkMode = () => {
-  const [darkMode, setDarkMode] = useState(false);
+const useBuilderDarkMode = () => {
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const stored = window.localStorage.getItem(BUILDER_DARK_MODE_STORAGE_KEY);
+    if (stored === 'dark') return true;
+    if (stored === 'light') return false;
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+  });
   useEffect(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return;
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    setDarkMode(media.matches);
-    const handler = (event: MediaQueryListEvent) => setDarkMode(event.matches);
-    media.addEventListener('change', handler);
-    return () => media.removeEventListener('change', handler);
-  }, []);
-  return darkMode;
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(BUILDER_DARK_MODE_STORAGE_KEY, darkMode ? 'dark' : 'light');
+  }, [darkMode]);
+  return [darkMode, setDarkMode] as const;
 };
 
 export default function AgentWorkflowBuilderPage() {
-  const darkMode = usePrefersDarkMode();
+  const [darkMode, setDarkMode] = useBuilderDarkMode();
   const theme = useMemo(() => getTheme(darkMode), [darkMode]);
   const [catalog, setCatalog] = useState<AgentWorkflowCatalogResponse | null>(null);
   const [customWorkflows, setCustomWorkflows] = useState<AgentWorkflow[]>([]);
@@ -882,6 +885,16 @@ export default function AgentWorkflowBuilderPage() {
                 setTestTraceTabs([]);
                 setTestActiveTraceId(null);
               }}
+              darkMode={darkMode}
+              onToggleDarkMode={() => setDarkMode((current) => !current)}
+              layoutControl={
+                <DockMenuButton
+                  value={activeWorkbenchLayout}
+                  resolvedPlacement={resolvedPlacement}
+                  onChange={setActiveWorkbenchLayout}
+                  label={workspace === 'build' ? 'Builder utilities layout' : 'Test conversation layout'}
+                />
+              }
             />
           }
           primaryTabs={
@@ -995,7 +1008,6 @@ export default function AgentWorkflowBuilderPage() {
                   {testThreadHeaderState && <Typography variant="caption" color="text.secondary">{testThreadHeaderState.threadCount}</Typography>}
                 </Box>
               )}
-              <DockMenuButton value={activeWorkbenchLayout} resolvedPlacement={resolvedPlacement} onChange={setActiveWorkbenchLayout} label={workspace === 'build' ? 'Builder utilities layout' : 'Test conversation layout'} />
             </Box>
           }
           secondaryContent={

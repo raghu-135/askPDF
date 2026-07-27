@@ -7,7 +7,7 @@ import {
   MenuItem,
   Tooltip,
 } from '@mui/material';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import OpenWithIcon from '@mui/icons-material/OpenWith';
 import KeyboardDoubleArrowDownIcon from '@mui/icons-material/KeyboardDoubleArrowDown';
 import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
@@ -22,7 +22,7 @@ import type {
 const placementIcon = (placement: WorkbenchPlacement | ResolvedWorkbenchPlacement) => {
   if (placement === 'left') return <KeyboardDoubleArrowLeftIcon fontSize="small" />;
   if (placement === 'bottom') return <KeyboardDoubleArrowDownIcon fontSize="small" />;
-  if (placement === 'auto') return <AutoAwesomeIcon fontSize="small" />;
+  if (placement === 'auto') return <OpenWithIcon fontSize="small" />;
   return <KeyboardDoubleArrowRightIcon fontSize="small" />;
 };
 

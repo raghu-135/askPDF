@@ -9,15 +9,19 @@ import SaveIcon from '@mui/icons-material/Save';
 import ScienceIcon from '@mui/icons-material/Science';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
+import DarkModeIcon from '@mui/icons-material/DarkMode';
+import LightModeIcon from '@mui/icons-material/LightMode';
 import {
   Box,
   Button,
   Chip,
   Divider,
   FormControl,
+  IconButton,
   InputLabel,
   MenuItem,
   Select,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import type { SelectChangeEvent } from '@mui/material/Select';
@@ -46,6 +50,9 @@ export default function BuilderActionsBar({
   onToggleTest,
   hasTestSession,
   onClearTestSession,
+  darkMode,
+  onToggleDarkMode,
+  layoutControl,
 }: {
   starter: string;
   customWorkflows?: AgentWorkflow[];
@@ -68,6 +75,9 @@ export default function BuilderActionsBar({
   onToggleTest: () => void;
   hasTestSession?: boolean;
   onClearTestSession?: () => void;
+  darkMode: boolean;
+  onToggleDarkMode: () => void;
+  layoutControl?: React.ReactNode;
 }) {
   const validationChip = validation ? (
     <Chip
@@ -181,6 +191,17 @@ export default function BuilderActionsBar({
             Clear test
           </Button>
         )}
+        <Tooltip title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
+          <IconButton
+            size="small"
+            color={darkMode ? 'primary' : 'default'}
+            onClick={onToggleDarkMode}
+            aria-label={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          >
+            {darkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
+        {layoutControl}
       </Box>
     </Box>
   );
