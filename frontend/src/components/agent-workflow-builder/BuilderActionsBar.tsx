@@ -27,6 +27,7 @@ import {
 import type { SelectChangeEvent } from '@mui/material/Select';
 import type { AgentWorkflow, AgentWorkflowValidationReport } from '../../lib/api';
 import type { AgentWorkflowStarter } from '../../lib/agent-workflow-builder';
+import { WorkbenchToolbarTrailingActions } from '../workbench/WorkbenchToolbar';
 
 export default function BuilderActionsBar({
   starter,
@@ -105,7 +106,7 @@ export default function BuilderActionsBar({
         overflowY: 'hidden',
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap', minWidth: 'max-content' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap', minWidth: 0, flex: '1 1 auto' }}>
         {validationChip}
         <FormControl size="small" disabled={disabled} sx={{ minWidth: 180 }}>
           <InputLabel id="builder-starter-label">Workflow</InputLabel>
@@ -169,6 +170,8 @@ export default function BuilderActionsBar({
             </IconButton>
           </Tooltip>
         )}
+      </Box>
+      <WorkbenchToolbarTrailingActions>
         <Tooltip title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
           <IconButton
             size="small"
@@ -180,7 +183,7 @@ export default function BuilderActionsBar({
           </IconButton>
         </Tooltip>
         {layoutControl}
-      </Box>
+      </WorkbenchToolbarTrailingActions>
     </Box>
   );
 }

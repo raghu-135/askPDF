@@ -25,6 +25,7 @@ import ThreadSidebar, { ThreadSidebarHeaderState } from "../components/ThreadSid
 import type { PdfTab } from "../components/PdfTabs";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
+import { WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
 import WorkspaceTabs, { type WorkspaceTab } from '../components/workbench/WorkspaceTabs';
 import TraceWorkspace, { type TraceRunTab } from '../components/workbench/TraceWorkspace';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
@@ -711,14 +712,14 @@ export default function Home() {
                   />
                 )}
               </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 'auto' }}>
+              <WorkbenchToolbarTrailingActions>
                 <Tooltip title={pdfDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
                   <IconButton color={pdfDarkMode ? 'primary' : 'default'} onClick={() => setPdfDarkMode((value) => !value)} size="small">
                     {pdfDarkMode ? <LightModeIcon fontSize="small" /> : <DarkModeIcon fontSize="small" />}
                   </IconButton>
                 </Tooltip>
                 <DockMenuButton value={workbenchLayout} resolvedPlacement={resolvedPlacement} onChange={setWorkbenchLayout} label="Threads and chat layout" />
-              </Box>
+              </WorkbenchToolbarTrailingActions>
             </Box>
           }
           primaryTabs={
