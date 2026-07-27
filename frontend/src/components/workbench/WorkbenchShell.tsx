@@ -234,10 +234,6 @@ export default function WorkbenchShell({
           minHeight: 0,
           overflow: 'hidden',
           bgcolor: 'background.paper',
-          borderRight: resolvedPlacement === 'left' ? 1 : 0,
-          borderLeft: resolvedPlacement === 'right' ? 1 : 0,
-          borderTop: resolvedPlacement === 'bottom' ? 1 : 0,
-          borderColor: 'divider',
         }}
       >
         {secondary}
