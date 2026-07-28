@@ -328,6 +328,13 @@ def compact_tool_event(payload: Dict[str, Any], *, tool_input: Any = None) -> Di
     summary = artifact_summary(artifacts)
     if summary:
         event["artifact_summary"] = summary
+    memory_debug_artifacts = {
+        key: artifacts[key]
+        for key in ("memory_scopes", "memory_scope_policy")
+        if key in artifacts
+    }
+    if memory_debug_artifacts:
+        event["artifacts"] = memory_debug_artifacts
     return event
 
 

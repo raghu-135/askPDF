@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from app.db import MemoryScopeType, MemoryType, create_memory_candidate, get_chat_turn, get_thread
+from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 
 
 REMEMBER_RE = re.compile(
@@ -33,7 +34,7 @@ def _clean_memory_content(raw: str) -> str:
 def _scope_from_phrase(scope: Optional[str], *, thread_id: str, project_id: Optional[str], user_id: Optional[str]) -> tuple[str, str]:
     normalized = " ".join(str(scope or "").lower().split())
     if normalized in {"me", "my profile", "global", "user"}:
-        return MemoryScopeType.USER.value, str(user_id or "default")
+        return MemoryScopeType.USER.value, LOCAL_USER_MEMORY_SCOPE_ID
     if normalized in {"this thread", "thread"}:
         return MemoryScopeType.THREAD.value, thread_id
     if project_id:

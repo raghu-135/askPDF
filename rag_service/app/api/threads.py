@@ -445,7 +445,7 @@ async def update_thread_settings_endpoint(
             raise HTTPException(status_code=404, detail="Thread not found")
 
         current = merge_thread_settings(await get_thread_settings(thread_id))
-        updates = req.dict(exclude_none=True)
+        updates = req.model_dump(exclude_none=True)
         next_settings = {**current, **updates}
         if not await _settings_workflow_supports_replans(next_settings):
             next_settings.pop("replans", None)

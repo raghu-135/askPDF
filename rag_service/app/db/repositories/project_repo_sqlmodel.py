@@ -13,6 +13,7 @@ from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import Project, Thread
 from app.time_utils import utc_now
 from app.models.llm_server_client import LOCAL_EMBEDDING_MODEL
+from app.services.memory_policy import merge_project_settings_json
 
 
 DEFAULT_PROJECT_NAME = "Personal"
@@ -69,7 +70,7 @@ class ProjectRepository:
             name=name,
             embedding_model=embedding_model,
             description=description or "",
-            settings_json=settings_json or {},
+            settings_json=merge_project_settings_json({}, settings_json),
             created_at=utc_now(),
         )
         session = await self._get_session()
@@ -108,7 +109,11 @@ class ProjectRepository:
             if description is not None:
                 project.description = description
             if settings_json is not None:
-                replace_jsonb_field(project, "settings_json", settings_json)
+                replace_jsonb_field(
+                    project,
+                    "settings_json",
+                    merge_project_settings_json(project.settings_json, settings_json),
+                )
             await session.flush()
             await session.refresh(project)
             return project

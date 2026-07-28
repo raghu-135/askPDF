@@ -115,6 +115,67 @@ class TestThreadEndpoints:
         assert thread["project_id"] == project["id"]
         assert thread["embedding_model"] == project["embedding_model"]
 
+    def test_project_global_memory_setting_create_and_update(self, client):
+        created_response = client.post(
+            "/api/projects",
+            json={
+                "name": "Consent Project",
+                "embedding_model": "BAAI/bge-m3",
+                "settings_json": {
+                    "layout": "compact",
+                    "memory": {"project_reads_user_memory": True},
+                },
+            },
+        )
+        assert created_response.status_code == 200
+        created = created_response.json()
+        assert created["settings_json"] == {
+            "layout": "compact",
+            "memory": {"project_reads_user_memory": True},
+        }
+
+        updated_response = client.put(
+            f"/api/projects/{created['id']}",
+            json={
+                "settings_json": {
+                    "memory": {"project_reads_user_memory": False},
+                }
+            },
+        )
+        assert updated_response.status_code == 200
+        assert updated_response.json()["settings_json"] == {
+            "layout": "compact",
+            "memory": {"project_reads_user_memory": False},
+        }
+
+    def test_thread_memory_settings_round_trip_and_defaults(self, client):
+        thread = client.post(
+            "/api/threads",
+            json={"name": "Memory Settings"},
+        ).json()
+
+        defaults_response = client.get(f"/api/threads/{thread['id']}/settings")
+        assert defaults_response.status_code == 200
+        assert defaults_response.json()["memory"] == {
+            "thread_reads_project_memory": True,
+            "thread_reads_user_memory": False,
+        }
+
+        updated_response = client.put(
+            f"/api/threads/{thread['id']}/settings",
+            json={
+                "memory": {
+                    "thread_reads_project_memory": False,
+                    "thread_reads_user_memory": True,
+                }
+            },
+        )
+        assert updated_response.status_code == 200
+        assert updated_response.json()["memory"] == {
+            "thread_reads_project_memory": False,
+            "thread_reads_user_memory": True,
+        }
+
     def test_move_thread_to_project(self, client):
         project_response = client.post(
             "/api/projects",
@@ -209,6 +270,18 @@ class TestThreadEndpoints:
         assert memory_response.status_code == 200
         memory = memory_response.json()
         assert memory["status"] == "active"
+
+        user_candidate_response = client.post(
+            "/api/memory-candidates",
+            json={
+                "proposed_scope_type": "user",
+                "proposed_scope_id": "legacy-user-id",
+                "memory_type": "semantic",
+                "content": "I prefer concise answers.",
+            },
+        )
+        assert user_candidate_response.status_code == 200
+        assert user_candidate_response.json()["proposed_scope_id"] == "default"
 
         archive_response = client.put(
             f"/api/memories/{memory['id']}/status",

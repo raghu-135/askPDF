@@ -33,6 +33,7 @@ from app.services.embedding_model_service import (
     require_embedding_model_ready,
     resolve_scope_embedding_model,
 )
+from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 from app.time_utils import iso_utc_z
 
 
@@ -172,9 +173,14 @@ async def list_memory_candidates_endpoint(
 @router.post("/memory-candidates")
 async def create_memory_candidate_endpoint(req: MemoryCandidateCreateRequest):
     try:
+        proposed_scope_id = (
+            LOCAL_USER_MEMORY_SCOPE_ID
+            if req.proposed_scope_type == MemoryScopeType.USER.value
+            else req.proposed_scope_id
+        )
         candidate = await create_memory_candidate(
             proposed_scope_type=req.proposed_scope_type,
-            proposed_scope_id=req.proposed_scope_id,
+            proposed_scope_id=proposed_scope_id,
             memory_type=req.memory_type,
             content=req.content,
             source_thread_id=req.source_thread_id,

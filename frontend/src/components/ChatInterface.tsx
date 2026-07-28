@@ -54,6 +54,7 @@ import {
     listThreads,
     getThreadIndexStatus,
     getThreadSettings,
+    getProject,
     updateThreadSettings,
     getPromptTools,
     getPromptPreview,
@@ -902,6 +903,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
     const [useReranker, setUseReranker] = useState(false);
     const [defaultUseReranker, setDefaultUseReranker] = useState(false);
+    const [useProjectMemory, setUseProjectMemory] = useState(true);
+    const [useGlobalMemory, setUseGlobalMemory] = useState(false);
+    const [projectAllowsGlobalMemory, setProjectAllowsGlobalMemory] = useState(false);
     const [agentWorkflowId, setAgentWorkflowId] = useState('');
     const [agentWorkflows, setAgentWorkflows] = useState<AgentWorkflow[]>([]);
 
@@ -969,6 +973,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
         setHitlWebApproval(settings?.hitl_web_approval ?? defaultHitlWebApproval);
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
+        setUseProjectMemory(settings?.memory?.thread_reads_project_memory ?? true);
+        setUseGlobalMemory(settings?.memory?.thread_reads_user_memory ?? false);
         setAgentWorkflowId(normalizeAgentWorkflowForUi(settings?.agent_workflow?.workflow_id));
     }, [
         defaultCustomInstructions,
@@ -976,6 +982,24 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         defaultHitlWebApproval,
         defaultUseReranker,
     ]);
+
+    const loadProjectMemorySettings = useCallback(async () => {
+        const projectId = activeThread?.project_id;
+        if (!projectId || isTestRuntime) {
+            setProjectAllowsGlobalMemory(false);
+            return;
+        }
+        try {
+            const project = await getProject(projectId);
+            if (activeThreadIdRef.current !== activeThread?.id) return;
+            setProjectAllowsGlobalMemory(
+                project.settings_json?.memory?.project_reads_user_memory === true
+            );
+        } catch (error) {
+            console.error('Failed to load project memory settings:', error);
+            setProjectAllowsGlobalMemory(false);
+        }
+    }, [activeThread?.id, activeThread?.project_id, isTestRuntime]);
 
     const clampClarificationRatio = (ratio: number) => Math.max(0.16, Math.min(0.58, ratio));
 
@@ -1070,6 +1094,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             }
             checkIndexStatus();
             loadThreadSettings();
+            loadProjectMemorySettings();
             checkEmbeddingModelStatus();
         } else {
             setMessages([]);
@@ -1080,8 +1105,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setIsLlmToolsSupported(null);
             setPendingMemoryCandidates([]);
             setMemoryCandidateError(null);
+            setProjectAllowsGlobalMemory(false);
         }
-    }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState, isTestRuntime, loadPendingMemoryCandidates]);
+    }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState, isTestRuntime, loadPendingMemoryCandidates, loadProjectMemorySettings]);
 
     useEffect(() => {
         if (activeThread) {
@@ -1392,6 +1418,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setToolInstructions(defaults);
         setCustomInstructions(defaultCustomInstructions);
         setUseReranker(defaultUseReranker);
+        setUseProjectMemory(true);
+        setUseGlobalMemory(false);
         setAgentWorkflowId(agentWorkflows[0]?.id || '');
     };
 
@@ -2449,6 +2477,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 custom_instructions: customInstructions,
                 hitl_web_approval: hitlWebApproval,
                 use_reranker: useReranker,
+                memory: {
+                    thread_reads_project_memory: useProjectMemory,
+                    thread_reads_user_memory: useGlobalMemory,
+                },
             };
             const normalizedWorkflowId = normalizeAgentWorkflowForUi(agentWorkflowId);
             if (normalizedWorkflowId) {
@@ -2472,6 +2504,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             applyThreadSettingsToState(activeThread.settings);
         }
         loadThreadSettings();
+        loadProjectMemorySettings();
         setSettingsDialogOpen(true);
     };
 
@@ -3511,6 +3544,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 replans={replans}
                 replansLimit={replansLimit}
                 useReranker={useReranker}
+                useProjectMemory={useProjectMemory}
+                useGlobalMemory={useGlobalMemory}
+                projectAllowsGlobalMemory={projectAllowsGlobalMemory}
                 agentWorkflowId={agentWorkflowId}
                 agentWorkflowIsCustom={!isBuiltinAgentWorkflow(agentWorkflows, agentWorkflowId)}
                 agentWorkflows={agentWorkflows}
@@ -3522,6 +3558,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 promptPreview={promptPreview}
                 onReplansChange={(value) => setReplans(value)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
+                onProjectMemoryChange={(checked) => setUseProjectMemory(checked)}
+                onGlobalMemoryChange={(checked) => setUseGlobalMemory(checked)}
                 onAgentWorkflowChange={(value) => {
                     setAgentWorkflowId(value);
                 }}

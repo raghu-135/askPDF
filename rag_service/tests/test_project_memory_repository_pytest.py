@@ -15,7 +15,16 @@ from app.db.repositories.project_repo_sqlmodel import DEFAULT_PROJECT_NAME, Proj
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
 from app.time_utils import utc_now
 from app.services.memory_promotion_service import extract_memory_candidates_from_text
-from app.services.memory_service import _rank_fuse_memory_hits
+from app.services.memory_service import (
+    _rank_fuse_memory_hits,
+    memory_scope_policy_for_thread,
+    search_thread_memory,
+)
+from app.services.memory_policy import (
+    LOCAL_USER_MEMORY_SCOPE_ID,
+    merge_project_settings_json,
+    normalize_thread_memory_settings,
+)
 from app.db.vector.config import VectorDBInsertError
 
 
@@ -51,6 +60,29 @@ async def test_thread_repository_creates_thread_in_project(repo_sessionmaker):
 
     assert thread.project_id == project.id
     assert thread.embedding_model == project.embedding_model
+
+
+@pytest.mark.asyncio
+async def test_project_memory_settings_preserve_unrelated_json(repo_sessionmaker):
+    repo = ProjectRepository()
+    project = await repo.create(
+        name="Consent",
+        embedding_model="BAAI/bge-m3",
+        settings_json={
+            "theme": "dense",
+            "memory": {"project_reads_user_memory": False},
+        },
+    )
+
+    updated = await repo.update(
+        project.id,
+        settings_json={"memory": {"project_reads_user_memory": True}},
+    )
+
+    assert updated.settings_json == {
+        "theme": "dense",
+        "memory": {"project_reads_user_memory": True},
+    }
 
 
 @pytest.mark.asyncio
@@ -333,7 +365,248 @@ def test_explicit_user_memory_extracts_user_candidate():
 
     assert len(proposals) == 1
     assert proposals[0].scope_type == MemoryScopeType.USER.value
-    assert proposals[0].scope_id == "user-1"
+    assert proposals[0].scope_id == LOCAL_USER_MEMORY_SCOPE_ID
+
+
+def test_memory_setting_normalization_removes_legacy_flags():
+    assert normalize_thread_memory_settings({
+        "memory": {
+            "global_memory_enabled": True,
+            "thread_reads_project_memory": False,
+            "thread_reads_user_memory": True,
+            "project_reads_user_memory": True,
+        }
+    }) == {
+        "thread_reads_project_memory": False,
+        "thread_reads_user_memory": True,
+    }
+    assert normalize_thread_memory_settings({
+        "memory": {
+            "global_memory_enabled": False,
+            "thread_reads_user_memory": True,
+        }
+    })["thread_reads_user_memory"] is False
+    assert merge_project_settings_json(
+        {"other": "kept", "memory": {"global_memory_enabled": True}},
+    ) == {
+        "other": "kept",
+        "memory": {"project_reads_user_memory": False},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("project_gate", "thread_gate", "expects_user", "skip_reason"),
+    [
+        (True, True, True, None),
+        (False, True, False, "project_opt_out"),
+        (True, False, False, "thread_opt_out"),
+        (False, False, False, "project_opt_out"),
+    ],
+)
+async def test_global_memory_requires_project_and_thread_consent(
+    monkeypatch,
+    project_gate,
+    thread_gate,
+    expects_user,
+    skip_reason,
+):
+    from app.services import memory_service
+
+    context = SimpleNamespace(
+        thread=SimpleNamespace(
+            id="thread-1",
+            settings={
+                "memory": {
+                    "thread_reads_project_memory": True,
+                    "thread_reads_user_memory": thread_gate,
+                }
+            },
+        ),
+        project=SimpleNamespace(
+            id="project-1",
+            settings_json={
+                "memory": {"project_reads_user_memory": project_gate}
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        memory_service,
+        "resolve_thread_embedding_context",
+        AsyncMock(return_value=context),
+    )
+
+    policy = await memory_scope_policy_for_thread("thread-1")
+
+    assert {
+        (scope["scope_type"], scope["scope_id"])
+        for scope in policy["searched_scopes"]
+    } == {
+        ("thread", "thread-1"),
+        ("project", "project-1"),
+        *(([("user", LOCAL_USER_MEMORY_SCOPE_ID)] if expects_user else [])),
+    }
+    user_skips = [
+        item for item in policy["skipped_scopes"] if item["scope_type"] == "user"
+    ]
+    if expects_user:
+        assert user_skips == []
+    else:
+        assert user_skips == [{"scope_type": "user", "reason": skip_reason}]
+
+
+@pytest.mark.asyncio
+async def test_explicit_scope_filter_is_upper_bound_and_empty_means_none(monkeypatch):
+    from app.services import memory_service
+
+    context = SimpleNamespace(
+        thread=SimpleNamespace(
+            id="thread-1",
+            settings={
+                "memory": {
+                    "thread_reads_project_memory": True,
+                    "thread_reads_user_memory": False,
+                }
+            },
+        ),
+        project=SimpleNamespace(
+            id="project-1",
+            settings_json={
+                "memory": {"project_reads_user_memory": True}
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        memory_service,
+        "resolve_thread_embedding_context",
+        AsyncMock(return_value=context),
+    )
+
+    unrestricted = await memory_scope_policy_for_thread("thread-1", None)
+    empty = await memory_scope_policy_for_thread("thread-1", [])
+    user_only = await memory_scope_policy_for_thread("thread-1", ["user"])
+
+    assert unrestricted["requested_scopes"] == ["thread", "project", "user"]
+    assert [scope["scope_type"] for scope in unrestricted["searched_scopes"]] == [
+        "thread",
+        "project",
+    ]
+    assert empty["requested_scopes"] == []
+    assert empty["searched_scopes"] == []
+    assert user_only["searched_scopes"] == []
+    assert user_only["skipped_scopes"][-1] == {
+        "scope_type": "user",
+        "reason": "thread_opt_out",
+    }
+
+
+@pytest.mark.asyncio
+async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
+    from app.services import memory_service
+
+    context = SimpleNamespace(
+        embedding_model="project-embedding-model",
+        thread=SimpleNamespace(
+            id="thread-1",
+            settings={
+                "memory": {
+                    "thread_reads_project_memory": True,
+                    "thread_reads_user_memory": True,
+                }
+            },
+        ),
+        project=SimpleNamespace(
+            id="project-1",
+            settings_json={
+                "memory": {"project_reads_user_memory": True}
+            },
+        ),
+    )
+    vector_db = SimpleNamespace(search_memory=AsyncMock())
+
+    async def fake_search_memory(*, embedding_model, **_kwargs):
+        if embedding_model == "project-embedding-model":
+            return [{
+                "memory_id": "project-memory",
+                "scope_type": "project",
+                "score": 0.77,
+            }]
+        return [{
+            "memory_id": "user-memory",
+            "scope_type": "user",
+            "score": 0.96,
+        }]
+
+    vector_db.search_memory.side_effect = fake_search_memory
+    memories = {
+        "project-memory": SimpleNamespace(
+            id="project-memory",
+            scope_type="project",
+            scope_id="project-1",
+            memory_type="semantic",
+            content="Project fact",
+            summary="",
+            source_refs_json={},
+            confidence=0.9,
+            visibility="project",
+            status="active",
+            expires_at=None,
+            created_at=None,
+            updated_at=None,
+        ),
+        "user-memory": SimpleNamespace(
+            id="user-memory",
+            scope_type="user",
+            scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
+            memory_type="semantic",
+            content="Use concise answers",
+            summary="",
+            source_refs_json={},
+            confidence=0.9,
+            visibility="private",
+            status="active",
+            expires_at=None,
+            created_at=None,
+            updated_at=None,
+        ),
+    }
+    monkeypatch.setattr(
+        memory_service,
+        "resolve_thread_embedding_context",
+        AsyncMock(return_value=context),
+    )
+    monkeypatch.setattr(
+        memory_service,
+        "require_embedding_model_ready",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        memory_service,
+        "get_embedding_model",
+        lambda model: SimpleNamespace(
+            aembed_query=AsyncMock(return_value=[float(len(model))])
+        ),
+    )
+    monkeypatch.setattr(memory_service, "get_vector_db", lambda: vector_db)
+    monkeypatch.setattr(
+        memory_service,
+        "get_memory",
+        AsyncMock(side_effect=lambda memory_id: memories[memory_id]),
+    )
+
+    result = await search_thread_memory(
+        thread_id="thread-1",
+        query="How should you answer?",
+    )
+
+    assert [item["id"] for item in result["memories"]] == [
+        "project-memory",
+        "user-memory",
+    ]
+    assert result["memories"][1]["scope_id"] == LOCAL_USER_MEMORY_SCOPE_ID
+    assert result["memories"][1]["embedding_model"] == memory_service.GLOBAL_MEMORY_EMBEDDING_MODEL
+    assert all(item["score_type"] == "rrf" for item in result["memories"])
+    assert vector_db.search_memory.await_count == 2
 
 
 def test_memory_rank_fusion_does_not_compare_raw_scores_across_models():

@@ -47,7 +47,11 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
 
     assert memory_contract["id"] == "memory_recall"
     assert memory_contract["allowed_caller_nodes"] == ["long_term_memory_worker"]
-    assert memory_contract["artifact_keys"] == ["memory_refs", "memory_scopes"]
+    assert memory_contract["artifact_keys"] == [
+        "memory_refs",
+        "memory_scopes",
+        "memory_scope_policy",
+    ]
     assert "no_relevant_memory" in memory_contract["warning_codes"]
 
     assert web_contract["id"] == "live_web_recon"

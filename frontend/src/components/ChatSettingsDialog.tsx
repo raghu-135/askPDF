@@ -31,6 +31,9 @@ interface ChatSettingsDialogProps {
     replans: number;
     replansLimit: number | null;
     useReranker: boolean;
+    useProjectMemory: boolean;
+    useGlobalMemory: boolean;
+    projectAllowsGlobalMemory: boolean;
     agentWorkflowId: string;
     agentWorkflowIsCustom?: boolean;
     agentWorkflows: AgentWorkflow[];
@@ -44,6 +47,8 @@ interface ChatSettingsDialogProps {
     // Change handlers
     onReplansChange: (value: number) => void;
     onRerankerChange: (checked: boolean) => void;
+    onProjectMemoryChange: (checked: boolean) => void;
+    onGlobalMemoryChange: (checked: boolean) => void;
     onAgentWorkflowChange: (value: string) => void;
     onAgentWorkflowMenuOpen?: () => void | Promise<void>;
     onSystemRoleChange: (value: string) => void;
@@ -67,6 +72,9 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     replans,
     replansLimit,
     useReranker,
+    useProjectMemory,
+    useGlobalMemory,
+    projectAllowsGlobalMemory,
     agentWorkflowId,
     agentWorkflowIsCustom = false,
     agentWorkflows,
@@ -78,6 +86,8 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     promptPreview,
     onReplansChange,
     onRerankerChange,
+    onProjectMemoryChange,
+    onGlobalMemoryChange,
     onAgentWorkflowChange,
     onAgentWorkflowMenuOpen,
     onSystemRoleChange,
@@ -171,6 +181,37 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                         <Typography variant="caption" color="error">Replan limit not loaded from server.</Typography>
                     )
                 ) : null}
+                <Divider />
+                <Box>
+                    <Typography variant="subtitle2">Memory</Typography>
+                    <FormControlLabel
+                        control={
+                            <Switch
+                                checked={useProjectMemory}
+                                onChange={(event) => onProjectMemoryChange(event.target.checked)}
+                            />
+                        }
+                        label="Use project memory"
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5 }}>
+                        Recall shared memories from this project.
+                    </Typography>
+                    <FormControlLabel
+                        control={
+                            <Switch
+                                checked={useGlobalMemory}
+                                disabled={!projectAllowsGlobalMemory}
+                                onChange={(event) => onGlobalMemoryChange(event.target.checked)}
+                            />
+                        }
+                        label="Use global memory"
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5 }}>
+                        {projectAllowsGlobalMemory
+                            ? 'Recall memories saved for you across projects.'
+                            : 'Enable global memory in project settings before this thread can use it.'}
+                    </Typography>
+                </Box>
                 <Divider />
                 <Box>
                     <FormControlLabel

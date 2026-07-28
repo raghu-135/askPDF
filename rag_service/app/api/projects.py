@@ -15,6 +15,7 @@ from app.db import (
 )
 from app.models.requests import ProjectCreateRequest, ProjectUpdateRequest, ThreadCreateRequest
 from app.time_utils import iso_utc_z
+from app.services.memory_policy import merge_project_settings_json
 
 
 router = APIRouter(tags=["projects"])
@@ -26,7 +27,7 @@ def _project_payload(project) -> Dict[str, Any]:
         "name": project.name,
         "description": project.description,
         "embedding_model": project.embedding_model,
-        "settings_json": project.settings_json if isinstance(project.settings_json, dict) else {},
+        "settings_json": merge_project_settings_json(project.settings_json),
         "created_at": iso_utc_z(project.created_at) if project.created_at else None,
         "updated_at": iso_utc_z(project.updated_at) if project.updated_at else None,
     }

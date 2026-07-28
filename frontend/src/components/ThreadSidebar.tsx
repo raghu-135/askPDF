@@ -29,6 +29,8 @@ import {
   Collapse,
   CircularProgress,
   Checkbox,
+  FormControlLabel,
+  Switch,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -41,6 +43,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import ClearIcon from '@mui/icons-material/Clear';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
+import SettingsIcon from '@mui/icons-material/Settings';
 
 import {
   Project,
@@ -52,6 +55,7 @@ import {
   bulkDeleteThreads,
   forkThread,
   updateThread,
+  updateProject,
 } from '../lib/api';
 import { fetchAvailableEmbeddingModels, checkEmbeddingModelReady } from '../lib/models-api';
 import { formatDate } from '../lib/date-utils';
@@ -109,6 +113,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectEmbeddingModel, setNewProjectEmbeddingModel] = useState('');
+  const [newProjectReadsUserMemory, setNewProjectReadsUserMemory] = useState(false);
+  const [settingsProject, setSettingsProject] = useState<Project | null>(null);
+  const [settingsProjectReadsUserMemory, setSettingsProjectReadsUserMemory] = useState(false);
   const [availableEmbeddingModels, setAvailableEmbeddingModels] = useState<{
     local_embedding_models: string[];
     embedding_models: string[];
@@ -163,7 +170,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const threadVirtualizer = useVirtualizer({
     count: virtualThreadRows.length,
     getScrollElement: () => threadListRef.current,
-    estimateSize: (index) => virtualThreadRows[index]?.kind === 'group' ? 31 : 64,
+    estimateSize: (index) => virtualThreadRows[index]?.kind === 'group' ? 40 : 64,
     overscan: 10,
     getItemKey: (index) => virtualThreadRows[index]?.id ?? index,
   });
@@ -240,15 +247,50 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       const project = await createProject(
         newProjectName.trim(),
         newProjectEmbeddingModel,
-        newProjectDescription.trim()
+        newProjectDescription.trim(),
+        {
+          memory: {
+            project_reads_user_memory: newProjectReadsUserMemory,
+          },
+        }
       );
       setProjects(prev => [...prev, project]);
       setNewThreadProjectId(project.id);
       setCreateProjectDialogOpen(false);
       setNewProjectName('');
       setNewProjectDescription('');
+      setNewProjectReadsUserMemory(false);
     } catch (error) {
       console.error('Failed to create project:', error);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleOpenProjectSettings = (project: Project) => {
+    setSettingsProject(project);
+    setSettingsProjectReadsUserMemory(
+      project.settings_json?.memory?.project_reads_user_memory === true
+    );
+  };
+
+  const handleSaveProjectSettings = async () => {
+    if (!settingsProject) return;
+    try {
+      setCreating(true);
+      const updated = await updateProject(settingsProject.id, {
+        settings_json: {
+          memory: {
+            project_reads_user_memory: settingsProjectReadsUserMemory,
+          },
+        },
+      });
+      setProjects((current) => current.map((project) => (
+        project.id === updated.id ? updated : project
+      )));
+      setSettingsProject(null);
+    } catch (error) {
+      console.error('Failed to update project memory settings:', error);
     } finally {
       setCreating(false);
     }
@@ -819,9 +861,22 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         borderColor: 'divider',
                       }}
                     >
-                      <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>
-                        {row.group.project?.name || 'Unassigned'}
-                      </Typography>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
+                        <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>
+                          {row.group.project?.name || 'Unassigned'}
+                        </Typography>
+                        {row.group.project && !selectionOnly ? (
+                          <Tooltip title="Project settings">
+                            <IconButton
+                              size="small"
+                              onClick={() => handleOpenProjectSettings(row.group.project as Project)}
+                              sx={{ width: 24, height: 24 }}
+                            >
+                              <SettingsIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                        ) : null}
+                      </Box>
                     </Box>
                   );
                 }
@@ -1141,7 +1196,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           <Button
             size="small"
             startIcon={<AddIcon />}
-            onClick={() => setCreateProjectDialogOpen(true)}
+            onClick={() => {
+              setNewProjectReadsUserMemory(false);
+              setCreateProjectDialogOpen(true);
+            }}
             sx={{ mt: 1 }}
           >
             Create project
@@ -1170,8 +1228,39 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         </DialogActions>
       </Dialog>
       <Dialog
+        open={Boolean(settingsProject)}
+        onClose={() => !creating && setSettingsProject(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>{settingsProject?.name || 'Project'} Settings</DialogTitle>
+        <DialogContent>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={settingsProjectReadsUserMemory}
+                onChange={(event) => setSettingsProjectReadsUserMemory(event.target.checked)}
+              />
+            }
+            label="Allow global memory"
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            Applies immediately. Each thread keeps its own global-memory preference.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSettingsProject(null)} disabled={creating}>Cancel</Button>
+          <Button onClick={handleSaveProjectSettings} variant="contained" disabled={creating}>
+            {creating ? <CircularProgress size={20} /> : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
         open={createProjectDialogOpen}
-        onClose={() => setCreateProjectDialogOpen(false)}
+        onClose={() => {
+          setCreateProjectDialogOpen(false);
+          setNewProjectReadsUserMemory(false);
+        }}
         maxWidth="xs"
         fullWidth
       >
@@ -1209,6 +1298,19 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               ))}
             </Select>
           </FormControl>
+          <FormControlLabel
+            sx={{ mt: 1 }}
+            control={
+              <Switch
+                checked={newProjectReadsUserMemory}
+                onChange={(event) => setNewProjectReadsUserMemory(event.target.checked)}
+              />
+            }
+            label="Allow global memory"
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            Threads must also opt in before this project can recall global memory.
+          </Typography>
           {isCheckingEmbeddingModel && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
               <CircularProgress size={20} />
@@ -1228,7 +1330,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateProjectDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => {
+            setCreateProjectDialogOpen(false);
+            setNewProjectReadsUserMemory(false);
+          }}>Cancel</Button>
           <Button
             onClick={handleCreateProject}
             variant="contained"

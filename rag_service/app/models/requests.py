@@ -189,6 +189,13 @@ class ThreadChatRequest(BaseModel):
     client_now_iso: Optional[str] = Field(default=None, max_length=80)
 
 
+class ThreadMemorySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    thread_reads_project_memory: bool = True
+    thread_reads_user_memory: bool = False
+
+
 class ThreadSettingsResponse(BaseModel):
     replans: int = Field(default=1, ge=1, le=REPLANS_LIMIT)
     system_role: str = Field(default="", max_length=MAX_SYSTEM_ROLE_CHARS)
@@ -199,6 +206,7 @@ class ThreadSettingsResponse(BaseModel):
     hitl_web_approval: bool = False
     use_reranker: bool = False
     agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
+    memory: ThreadMemorySettings = Field(default_factory=ThreadMemorySettings)
 
 
 class ThreadSettingsUpdateRequest(BaseModel):
@@ -211,6 +219,7 @@ class ThreadSettingsUpdateRequest(BaseModel):
     hitl_web_approval: Optional[bool] = None
     use_reranker: Optional[bool] = None
     agent_workflow: Optional[Dict[str, str]] = None
+    memory: Optional[ThreadMemorySettings] = None
 
 
 class ToolCatalogEntry(BaseModel):

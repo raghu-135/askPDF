@@ -217,6 +217,10 @@ export interface ThreadSettings {
   agent_workflow?: {
     workflow_id: string;
   };
+  memory: {
+    thread_reads_project_memory: boolean;
+    thread_reads_user_memory: boolean;
+  };
 }
 
 export interface Project {
@@ -786,11 +790,40 @@ export async function listProjects(): Promise<{ projects: Project[] }> {
   return { projects: (raw.projects || []).map(mapProject) };
 }
 
-export async function createProject(name: string, embeddingModel: string, description?: string): Promise<Project> {
+export async function getProject(projectId: string): Promise<Project> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`);
+  if (!res.ok) throw new Error(await res.text());
+  return mapProject(await res.json());
+}
+
+export async function createProject(
+  name: string,
+  embeddingModel: string,
+  description?: string,
+  settingsJson?: Record<string, any>
+): Promise<Project> {
   const res = await fetch(`${API_BASE}/api/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, embedding_model: embeddingModel, description })
+    body: JSON.stringify({
+      name,
+      embedding_model: embeddingModel,
+      description,
+      settings_json: settingsJson,
+    })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return mapProject(await res.json());
+}
+
+export async function updateProject(
+  projectId: string,
+  updates: { name?: string; description?: string; settings_json?: Record<string, any> }
+): Promise<Project> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
   });
   if (!res.ok) throw new Error(await res.text());
   return mapProject(await res.json());

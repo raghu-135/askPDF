@@ -16,7 +16,6 @@ from app.db import (
     delete_memory_candidate,
     delete_memory_candidates_for_thread,
     get_memory,
-    get_thread,
     list_memories_for_index_retry,
     list_expired_memories,
     list_memories,
@@ -29,10 +28,16 @@ from app.models.llm_server_client import get_embedding_model
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z
 from app.services.embedding_model_service import (
+    EmbeddingModelResolutionError,
     GLOBAL_MEMORY_EMBEDDING_MODEL,
     require_embedding_model_ready,
     resolve_scope_embedding_model,
     resolve_thread_embedding_context,
+)
+from app.services.memory_policy import (
+    LOCAL_USER_MEMORY_SCOPE_ID,
+    normalize_project_memory_settings,
+    normalize_thread_memory_settings,
 )
 
 
@@ -46,50 +51,81 @@ _MEMORY_SCOPE_PRIORITY = {
 }
 
 
-DEFAULT_MEMORY_SETTINGS = {
-    "global_memory_enabled": False,
-    "project_reads_user_memory": False,
-    "thread_reads_project_memory": True,
-    "thread_reads_user_memory": False,
-}
-
-
 class MemoryVectorCleanupError(RuntimeError):
     """Raised when a required memory vector cleanup operation fails."""
 
 
 def _normalize_allowed_scopes(raw: Optional[List[str]]) -> set[str]:
-    values = {str(item) for item in (raw or []) if item}
-    if not values:
-        return {MemoryScopeType.THREAD.value, MemoryScopeType.PROJECT.value}
-    return values
+    if raw is None:
+        return {
+            MemoryScopeType.THREAD.value,
+            MemoryScopeType.PROJECT.value,
+            MemoryScopeType.USER.value,
+        }
+    return {str(item) for item in raw if item}
+
+
+async def memory_scope_policy_for_thread(
+    thread_id: str,
+    allowed_scopes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Resolve requested scopes against project and thread consent gates."""
+
+    try:
+        context = await resolve_thread_embedding_context(thread_id)
+    except EmbeddingModelResolutionError:
+        return {"requested_scopes": [], "searched_scopes": [], "skipped_scopes": []}
+
+    thread = context.thread
+    project = context.project
+    thread_settings = normalize_thread_memory_settings(thread.settings)
+    project_settings = normalize_project_memory_settings(project.settings_json)
+    allowed = _normalize_allowed_scopes(allowed_scopes)
+    scopes: List[Dict[str, str]] = []
+    skipped: List[Dict[str, str]] = []
+    ordered_scope_types = [
+        MemoryScopeType.THREAD.value,
+        MemoryScopeType.PROJECT.value,
+        MemoryScopeType.USER.value,
+    ]
+    requested = [scope_type for scope_type in ordered_scope_types if scope_type in allowed]
+
+    if MemoryScopeType.THREAD.value not in allowed:
+        skipped.append({"scope_type": MemoryScopeType.THREAD.value, "reason": "not_requested"})
+    else:
+        scopes.append({"scope_type": MemoryScopeType.THREAD.value, "scope_id": thread.id})
+
+    if MemoryScopeType.PROJECT.value not in allowed:
+        skipped.append({"scope_type": MemoryScopeType.PROJECT.value, "reason": "not_requested"})
+    elif not thread_settings["thread_reads_project_memory"]:
+        skipped.append({"scope_type": MemoryScopeType.PROJECT.value, "reason": "thread_opt_out"})
+    else:
+        scopes.append({"scope_type": MemoryScopeType.PROJECT.value, "scope_id": project.id})
+
+    if MemoryScopeType.USER.value not in allowed:
+        skipped.append({"scope_type": MemoryScopeType.USER.value, "reason": "not_requested"})
+    elif not project_settings["project_reads_user_memory"]:
+        skipped.append({"scope_type": MemoryScopeType.USER.value, "reason": "project_opt_out"})
+    elif not thread_settings["thread_reads_user_memory"]:
+        skipped.append({"scope_type": MemoryScopeType.USER.value, "reason": "thread_opt_out"})
+    else:
+        scopes.append({
+            "scope_type": MemoryScopeType.USER.value,
+            "scope_id": LOCAL_USER_MEMORY_SCOPE_ID,
+        })
+
+    return {
+        "requested_scopes": requested,
+        "searched_scopes": scopes,
+        "skipped_scopes": skipped,
+    }
 
 
 async def scopes_for_thread(thread_id: str, allowed_scopes: Optional[List[str]] = None) -> List[Dict[str, str]]:
-    """Return explicitly allowed memory scopes for a thread."""
+    """Return policy-eligible memory scopes for a thread."""
 
-    thread = await get_thread(thread_id)
-    if thread is None:
-        return []
-    settings = {**DEFAULT_MEMORY_SETTINGS, **(thread.settings or {}).get("memory", {})}
-    allowed = _normalize_allowed_scopes(allowed_scopes)
-    scopes: List[Dict[str, str]] = []
-    if MemoryScopeType.THREAD.value in allowed:
-        scopes.append({"scope_type": MemoryScopeType.THREAD.value, "scope_id": thread.id})
-    if (
-        MemoryScopeType.PROJECT.value in allowed
-        and thread.project_id
-        and settings.get("thread_reads_project_memory", True)
-    ):
-        scopes.append({"scope_type": MemoryScopeType.PROJECT.value, "scope_id": thread.project_id})
-    if (
-        MemoryScopeType.USER.value in allowed
-        and settings.get("global_memory_enabled")
-        and settings.get("thread_reads_user_memory")
-    ):
-        user_id = (thread.thread_metadata or {}).get("user_id") or "default"
-        scopes.append({"scope_type": MemoryScopeType.USER.value, "scope_id": str(user_id)})
-    return scopes
+    policy = await memory_scope_policy_for_thread(thread_id, allowed_scopes)
+    return policy["searched_scopes"]
 
 
 def memory_content_hash(content: str) -> str:
@@ -174,6 +210,8 @@ async def index_memory_record(memory) -> int:
 async def create_and_index_memory(**kwargs):
     """Create canonical memory, then incrementally index it without losing PG state on failure."""
 
+    if kwargs["scope_type"] == MemoryScopeType.USER.value:
+        kwargs["scope_id"] = LOCAL_USER_MEMORY_SCOPE_ID
     embedding_model = await resolve_scope_embedding_model(
         kwargs["scope_type"], kwargs["scope_id"]
     )
@@ -286,9 +324,10 @@ async def search_thread_memory(
 ) -> Dict[str, Any]:
     """Search durable memory for a thread using scope policy."""
 
-    scopes = await scopes_for_thread(thread_id, allowed_scopes)
+    policy = await memory_scope_policy_for_thread(thread_id, allowed_scopes)
+    scopes = policy["searched_scopes"]
     if not scopes:
-        return {"memories": [], "scopes": []}
+        return {"memories": [], "scopes": [], "scope_policy": policy}
     context = await resolve_thread_embedding_context(thread_id)
     scopes_by_model: Dict[str, List[Dict[str, str]]] = {}
     for scope in scopes:
@@ -348,7 +387,7 @@ async def search_thread_memory(
         )
         if len(memories) >= max_results:
             break
-    return {"memories": memories, "scopes": scopes}
+    return {"memories": memories, "scopes": scopes, "scope_policy": policy}
 
 
 async def retry_memory_index(memory_id: str):

@@ -12,6 +12,10 @@ from openai import BaseModel as OpenAIBaseModel
 
 from app.agent_workflows.workflow_runtime import default_agent_workflow_key
 from app.prompts.defaults import DEFAULT_SYSTEM_ROLE
+from app.services.memory_policy import (
+    DEFAULT_THREAD_MEMORY_SETTINGS,
+    normalize_thread_memory_settings,
+)
 
 try:
     from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -190,6 +194,7 @@ def default_thread_settings():
         "hitl_web_approval": False,
         "use_reranker": False,
         "agent_workflow": {"workflow_id": default_agent_workflow_key()},
+        "memory": dict(DEFAULT_THREAD_MEMORY_SETTINGS),
     }
 
 
@@ -213,6 +218,7 @@ def merge_thread_settings(overrides=None):
         merged["agent_workflow"] = {"workflow_id": str(workflow_id)}
     else:
         merged["agent_workflow"] = {"workflow_id": default_agent_workflow_key()}
+    merged["memory"] = normalize_thread_memory_settings(overrides)
     return merged
 
 

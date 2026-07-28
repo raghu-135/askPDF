@@ -29,9 +29,17 @@ function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
     || detail.event?.artifact_refs?.memories
     || detail.output?.memory_refs
     || detail.output?.refs?.memories;
+  const memoryToolEvent = Array.isArray(detail.output?.tool_events)
+    ? detail.output.tool_events.find((event: Record<string, any>) => event?.tool_name === 'search_long_term_memory')
+    : undefined;
   const memoryScopes = detail.output?.memory_scopes
     || detail.output?.artifacts?.memory_scopes
-    || detail.event?.artifact_refs?.memory_scopes;
+    || detail.event?.artifact_refs?.memory_scopes
+    || memoryToolEvent?.artifacts?.memory_scopes;
+  const memoryScopePolicy = detail.output?.memory_scope_policy
+    || detail.output?.artifacts?.memory_scope_policy
+    || detail.event?.artifact_refs?.memory_scope_policy
+    || memoryToolEvent?.artifacts?.memory_scope_policy;
   const errorText = typeof detail.error === 'string'
     ? detail.error
     : detail.error && typeof detail.error === 'object'
@@ -77,10 +85,11 @@ function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
         )}
       </Section>}
       {Array.isArray(detail.tools) && detail.tools.length > 0 && <Section title="Tools"><JsonPreview value={detail.tools} maxHeight={440} /></Section>}
-      {(hasData(memoryRefs) || hasData(memoryScopes)) && (
+      {(hasData(memoryRefs) || hasData(memoryScopes) || hasData(memoryScopePolicy)) && (
         <Section title="Memory refs" defaultOpen>
           {hasData(memoryRefs) && <JsonPreview value={{ memories: memoryRefs }} maxHeight={220} />}
           {hasData(memoryScopes) && <JsonPreview value={{ scopes: memoryScopes }} maxHeight={220} />}
+          {hasData(memoryScopePolicy) && <JsonPreview value={{ policy: memoryScopePolicy }} maxHeight={220} />}
         </Section>
       )}
       {hasData(detail.output) && <Section title="Node output"><JsonPreview value={detail.output} maxHeight={440} /></Section>}

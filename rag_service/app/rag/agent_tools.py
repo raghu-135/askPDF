@@ -515,6 +515,8 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
             max_results=max_results,
         )
         memories = result.get("memories", []) if isinstance(result, dict) else []
+        memory_scopes = result.get("scopes", []) if isinstance(result, dict) else []
+        memory_scope_policy = result.get("scope_policy", {}) if isinstance(result, dict) else {}
 
         if not memories:
             return make_tool_result(
@@ -523,6 +525,11 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                 config=config,
                 started=started,
                 warnings=[ToolWarningCode.NO_RELEVANT_MEMORY],
+                artifacts={
+                    "memory_refs": [],
+                    "memory_scopes": memory_scopes,
+                    "memory_scope_policy": memory_scope_policy,
+                },
             ).to_json()
 
         lines = ["[LONG-TERM MEMORY]"]
@@ -554,7 +561,11 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
             content="\n".join(lines),
             config=config,
             started=started,
-            artifacts={"memory_refs": memory_refs, "memory_scopes": result.get("scopes", scopes) if isinstance(result, dict) else scopes},
+            artifacts={
+                "memory_refs": memory_refs,
+                "memory_scopes": memory_scopes or scopes,
+                "memory_scope_policy": memory_scope_policy,
+            },
         ).to_json()
     except Exception as e:
         logger.error("Error in search_long_term_memory: %s", e, exc_info=True)

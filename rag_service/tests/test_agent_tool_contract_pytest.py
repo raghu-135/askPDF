@@ -149,6 +149,11 @@ class TestAskPdfToolContract:
                 }
             ],
             "scopes": [{"scope_type": "project", "scope_id": "project-1"}],
+            "scope_policy": {
+                "requested_scopes": ["thread", "project", "user"],
+                "searched_scopes": [{"scope_type": "project", "scope_id": "project-1"}],
+                "skipped_scopes": [{"scope_type": "user", "reason": "thread_opt_out"}],
+            },
         }
         with patch(
             "app.services.memory_service.search_thread_memory",
@@ -174,3 +179,41 @@ class TestAskPdfToolContract:
                 "embedding_model": "BAAI/bge-m3",
             }
         ]
+        assert payload["artifacts"]["memory_scope_policy"]["skipped_scopes"] == [
+            {"scope_type": "user", "reason": "thread_opt_out"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_long_term_memory_tool_reports_policy_when_no_memory_matches(self):
+        search_result = {
+            "memories": [],
+            "scopes": [{"scope_type": "thread", "scope_id": "thread-1"}],
+            "scope_policy": {
+                "requested_scopes": ["thread", "project", "user"],
+                "searched_scopes": [{"scope_type": "thread", "scope_id": "thread-1"}],
+                "skipped_scopes": [
+                    {"scope_type": "project", "reason": "thread_opt_out"},
+                    {"scope_type": "user", "reason": "project_opt_out"},
+                ],
+            },
+        }
+        with patch(
+            "app.services.memory_service.search_thread_memory",
+            new_callable=AsyncMock,
+            return_value=search_result,
+        ):
+            raw = await search_long_term_memory.ainvoke(
+                {"query": "preference"},
+                config={"configurable": {"app_thread_id": "thread-1"}},
+            )
+
+        payload = normalize_tool_result(raw, tool_name="search_long_term_memory")
+        assert payload["artifacts"]["memory_refs"] == []
+        assert payload["artifacts"]["memory_scopes"] == search_result["scopes"]
+        assert payload["artifacts"]["memory_scope_policy"] == search_result["scope_policy"]
+        event = compact_tool_event(payload)
+        assert event["artifacts"] == {
+            "memory_scopes": search_result["scopes"],
+            "memory_scope_policy": search_result["scope_policy"],
+        }
+        assert "memory_refs" not in event["artifacts"]

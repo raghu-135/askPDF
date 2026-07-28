@@ -129,7 +129,7 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "allowed_caller_nodes": [NODE_LONG_TERM_MEMORY_WORKER],
         "allowed_node_types": [NODE_LONG_TERM_MEMORY_WORKER],
         "required_node_capabilities": [CAP_RETRIEVAL_MEMORY],
-        "artifact_keys": ["memory_refs", "memory_scopes"],
+        "artifact_keys": ["memory_refs", "memory_scopes", "memory_scope_policy"],
         "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_RELEVANT_MEMORY],
     },
     TOOL_NAME_SEARCH_THREAD_TIMELINE: {

@@ -108,12 +108,16 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
         error_count = max(error_count, len(errors))
     memory_refs: List[Dict[str, Any]] = []
     memory_scopes: List[Dict[str, Any]] = []
+    memory_scope_policies: List[Dict[str, Any]] = []
     for tool in tools:
         raw = _as_dict(tool.get("raw"))
         refs = _as_dict(raw.get("artifact_refs"))
         artifacts = _as_dict(raw.get("artifacts"))
         memory_refs.extend([item for item in _as_list(refs.get("memories")) if isinstance(item, dict)])
         memory_scopes.extend([item for item in _as_list(artifacts.get("memory_scopes")) if isinstance(item, dict)])
+        policy = artifacts.get("memory_scope_policy")
+        if isinstance(policy, dict):
+            memory_scope_policies.append(policy)
     final_output = _as_dict(trace.get("final_output"))
     memory_candidate_ids = _as_string_list(final_output.get("memory_candidate_ids"))
     if not memory_candidate_ids:
@@ -153,6 +157,7 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
         "memory": {
             "recalledMemoryIds": [str(item.get("memory_id")) for item in memory_refs if item.get("memory_id")],
             "searchedScopes": memory_scopes,
+            "scopePolicies": memory_scope_policies,
             "candidateIds": memory_candidate_ids,
             "recalledCount": len({str(item.get("memory_id")) for item in memory_refs if item.get("memory_id")}),
             "candidateCount": len(set(memory_candidate_ids)),
