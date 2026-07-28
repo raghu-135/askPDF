@@ -197,7 +197,7 @@ class ThreadSettingsResponse(BaseModel):
         default="", max_length=MAX_CUSTOM_INSTRUCTIONS_CHARS
     )
     hitl_web_approval: bool = False
-    use_reranker: bool = True
+    use_reranker: bool = False
     agent_workflow: Dict[str, str] = Field(default_factory=lambda: {"workflow_id": default_agent_workflow_key()})
 
 
@@ -227,7 +227,7 @@ class PromptDefaults(BaseModel):
     tool_instructions: Dict[str, str]
     custom_instructions: str
     hitl_web_approval: bool = False
-    use_reranker: bool = True
+    use_reranker: bool = False
 
 
 class PromptPreviewRequest(BaseModel):

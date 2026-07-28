@@ -900,8 +900,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
-    const [useReranker, setUseReranker] = useState(true);
-    const [defaultUseReranker, setDefaultUseReranker] = useState(true);
+    const [useReranker, setUseReranker] = useState(false);
+    const [defaultUseReranker, setDefaultUseReranker] = useState(false);
     const [agentWorkflowId, setAgentWorkflowId] = useState('');
     const [agentWorkflows, setAgentWorkflows] = useState<AgentWorkflow[]>([]);
 
@@ -1152,7 +1152,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     setDefaultSystemRole(res.defaults.system_role ?? '');
                     setDefaultCustomInstructions(res.defaults.custom_instructions ?? '');
                     setDefaultHitlWebApproval(res.defaults.hitl_web_approval ?? false);
-                    setDefaultUseReranker(res.defaults.use_reranker ?? true);
+                    setDefaultUseReranker(res.defaults.use_reranker ?? false);
                     if (res.defaults.context_window && !localStorage.getItem('last_context_window')) {
                         setContextWindow(res.defaults.context_window);
                     }
@@ -1161,7 +1161,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         setSystemRole(res.defaults.system_role ?? '');
                         setCustomInstructions(res.defaults.custom_instructions ?? '');
                         setHitlWebApproval(res.defaults.hitl_web_approval ?? false);
-                        setUseReranker(res.defaults.use_reranker ?? true);
+                        setUseReranker(res.defaults.use_reranker ?? false);
                         setAgentWorkflowId(normalizeAgentWorkflowForUi(res.defaults.agent_workflow?.workflow_id));
                     }
                 }

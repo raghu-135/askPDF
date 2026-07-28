@@ -496,6 +496,7 @@ class TestThreadEndpoints:
         data = response.json()
         assert isinstance(data, dict)
         assert data["hitl_web_approval"] is False
+        assert data["use_reranker"] is False
 
     def test_get_thread_settings_clamps_legacy_replans(self, client, monkeypatch):
         """Stored replans above the current limit should not break settings reads."""
