@@ -196,6 +196,7 @@ export default function Home() {
 
     setPdfTabs(prev => [...prev, newTab]);
     setActiveTabId(newTab.id);
+    setIsBrowserActive(false);
 
     if (activeThread && fileHash) {
       try {

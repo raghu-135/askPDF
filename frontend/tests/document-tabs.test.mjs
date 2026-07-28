@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   buildDocumentWorkspaceTabs,
+  isBrowserWorkspaceActive,
   traceWorkspaceStatus,
 } from '../src/lib/document-tabs.ts';
 
@@ -37,4 +38,10 @@ test('document workspace tabs include browser, documents, and debug trace', () =
 
 test('document workspace tabs are empty when disabled', () => {
   assert.deepEqual(buildDocumentWorkspaceTabs({ enabled: false, documents: [document], traces: [] }), []);
+});
+
+test('browser workspace is inactive after switching to a PDF tab', () => {
+  assert.equal(isBrowserWorkspaceActive({ activeTabId: 'browser-tab', isBrowserActive: false }), true);
+  assert.equal(isBrowserWorkspaceActive({ activeTabId: 'file-1', isBrowserActive: true }), true);
+  assert.equal(isBrowserWorkspaceActive({ activeTabId: 'file-1', isBrowserActive: false }), false);
 });

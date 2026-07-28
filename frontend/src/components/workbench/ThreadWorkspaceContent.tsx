@@ -1,6 +1,6 @@
 import dynamic from 'next/dynamic';
 import { Box, CircularProgress, Typography } from '@mui/material';
-import type { PdfTab } from '../../lib/document-tabs';
+import { isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
 import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 
@@ -57,7 +57,7 @@ export default function ThreadWorkspaceContent({
           onClose={onCloseTrace}
           suspendHeavyContent={isResizing}
         />
-      ) : isBrowserActive || activeTabId === 'browser-tab' ? (
+      ) : isBrowserWorkspaceActive({ activeTabId, isBrowserActive }) ? (
         <BrowserWorkspaceFrame />
       ) : isLoading ? (
         <Box sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: darkMode ? '#222' : 'grey.50', color: darkMode ? '#eee' : 'inherit' }}>

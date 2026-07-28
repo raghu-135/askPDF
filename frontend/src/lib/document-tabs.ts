@@ -33,6 +33,14 @@ export const traceWorkspaceStatus = (
   return 'idle';
 };
 
+export const isBrowserWorkspaceActive = ({
+  activeTabId,
+  isBrowserActive,
+}: {
+  activeTabId: string | null;
+  isBrowserActive: boolean;
+}) => isBrowserActive || activeTabId === 'browser-tab';
+
 export const buildDocumentWorkspaceTabs = ({
   enabled,
   documents,
