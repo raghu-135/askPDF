@@ -281,6 +281,44 @@ async def test_memory_candidate_resolution(repo_sessionmaker):
 
 
 @pytest.mark.asyncio
+async def test_memory_candidate_filters_compose(repo_sessionmaker):
+    repo = MemoryRepository()
+    matching = await repo.create_candidate(
+        proposed_scope_type=MemoryScopeType.USER.value,
+        proposed_scope_id="default",
+        source_project_id="project-1",
+        source_thread_id="thread-1",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Matching candidate.",
+    )
+    await repo.create_candidate(
+        proposed_scope_type=MemoryScopeType.USER.value,
+        proposed_scope_id="default",
+        source_project_id="project-2",
+        source_thread_id="thread-2",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Other project.",
+    )
+    await repo.create_candidate(
+        proposed_scope_type=MemoryScopeType.PROJECT.value,
+        proposed_scope_id="project-1",
+        source_project_id="project-1",
+        source_thread_id="thread-1",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Other scope.",
+    )
+
+    rows = await repo.list_candidates(
+        source_project_id="project-1",
+        source_thread_id="thread-1",
+        proposed_scope_type=MemoryScopeType.USER.value,
+        proposed_scope_id="default",
+    )
+
+    assert [candidate.id for candidate in rows] == [matching.id]
+
+
+@pytest.mark.asyncio
 async def test_memory_repository_hard_deletes_candidates(repo_sessionmaker):
     repo = MemoryRepository()
 

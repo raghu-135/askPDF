@@ -15,6 +15,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import CodeIcon from '@mui/icons-material/Code';
 import DeleteIcon from '@mui/icons-material/Delete';
 import LanguageIcon from '@mui/icons-material/Language';
+import HomeIcon from '@mui/icons-material/Home';
+import MemoryIcon from '@mui/icons-material/Memory';
 import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import RouteIcon from '@mui/icons-material/Route';
@@ -43,6 +45,8 @@ export type DocumentWorkspaceTab = {
 };
 
 export type BrowserWorkspaceTab = { kind: 'browser'; id: 'browser-tab'; label: string };
+export type HomeWorkspaceTab = { kind: 'home'; id: 'home-tab'; label: string };
+export type MemoryWorkspaceTab = { kind: 'memory'; id: 'memory-tab'; label: string };
 export type CanvasWorkspaceTab = { kind: 'canvas'; id: 'canvas-tab'; label: string; issueCount?: number };
 export type SpecWorkspaceTab = { kind: 'spec'; id: 'spec-tab'; label: string; dirty?: boolean };
 export type TraceWorkspaceTab = {
@@ -52,7 +56,7 @@ export type TraceWorkspaceTab = {
   status?: 'idle' | 'running' | 'failed' | 'review';
   count?: number;
 };
-export type WorkspaceTab = DocumentWorkspaceTab | BrowserWorkspaceTab | CanvasWorkspaceTab | SpecWorkspaceTab | TraceWorkspaceTab;
+export type WorkspaceTab = DocumentWorkspaceTab | BrowserWorkspaceTab | HomeWorkspaceTab | MemoryWorkspaceTab | CanvasWorkspaceTab | SpecWorkspaceTab | TraceWorkspaceTab;
 
 const statusColor = (status?: TraceWorkspaceTab['status']) => {
   if (status === 'failed') return 'error';
@@ -107,6 +111,12 @@ export default React.memo(function WorkspaceTabs({
         }}
       >
         {tabs.map((tab) => {
+          if (tab.kind === 'home') {
+            return <Tab key={tab.id} icon={<HomeIcon fontSize="small" />} iconPosition="start" label={tab.label} sx={commonTabSx} />;
+          }
+          if (tab.kind === 'memory') {
+            return <Tab key={tab.id} icon={<MemoryIcon fontSize="small" />} iconPosition="start" label={tab.label} sx={commonTabSx} />;
+          }
           if (tab.kind === 'canvas') {
             return <Tab key={tab.id} icon={<Badge color="error" badgeContent={tab.issueCount || 0}><AccountTreeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
           }

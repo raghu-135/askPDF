@@ -359,6 +359,52 @@ class TestThreadEndpoints:
         )
         assert invalid_candidate.status_code == 400
 
+    def test_memory_candidate_endpoint_combines_scope_and_source_filters(self, client):
+        matching = client.post(
+            "/api/memory-candidates",
+            json={
+                "proposed_scope_type": "user",
+                "proposed_scope_id": "default",
+                "source_project_id": "project-filter-1",
+                "source_thread_id": "thread-filter-1",
+                "content": "Matching preference.",
+            },
+        ).json()
+        client.post(
+            "/api/memory-candidates",
+            json={
+                "proposed_scope_type": "user",
+                "proposed_scope_id": "default",
+                "source_project_id": "project-filter-2",
+                "source_thread_id": "thread-filter-2",
+                "content": "Different project.",
+            },
+        )
+        client.post(
+            "/api/memory-candidates",
+            json={
+                "proposed_scope_type": "project",
+                "proposed_scope_id": "project-filter-1",
+                "source_project_id": "project-filter-1",
+                "source_thread_id": "thread-filter-1",
+                "content": "Different scope.",
+            },
+        )
+
+        response = client.get(
+            "/api/memory-candidates",
+            params={
+                "status": "pending",
+                "source_project_id": "project-filter-1",
+                "source_thread_id": "thread-filter-1",
+                "proposed_scope_type": "user",
+                "proposed_scope_id": "default",
+            },
+        )
+
+        assert response.status_code == 200
+        assert [row["id"] for row in response.json()["memory_candidates"]] == [matching["id"]]
+
     def test_memory_delete_endpoints_hard_delete_records(self, client):
         thread_response = client.post(
             "/api/threads",

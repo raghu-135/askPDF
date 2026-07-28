@@ -1,6 +1,6 @@
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Typography, Box, CssBaseline, IconButton, Tooltip, CircularProgress } from "@mui/material";
 import { ThemeProvider } from '@mui/material/styles';
 import { getTheme } from '../theme';
@@ -16,7 +16,7 @@ import PdfUploader from "../components/PdfUploader";
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
 import ThreadSecondaryPanel from "../components/ThreadSecondaryPanel";
-import { buildDocumentWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
+import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
 import { WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
@@ -34,7 +34,9 @@ import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 export default function Home() {
   // Multiple PDF tabs state
   const [pdfTabs, setPdfTabs] = useState<PdfTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [activeTabId, setActiveTabId] = useState<string | null>('home-tab');
+  const activeTabIdRef = useRef<string | null>('home-tab');
+  activeTabIdRef.current = activeTabId;
   const [isPdfLoading, setIsPdfLoading] = useState(false);
 
   // Get active tab and its data using utility
@@ -80,9 +82,10 @@ export default function Home() {
 
   // Handle thread selection
   const handleThreadSelect = useCallback(async (thread: Thread | null) => {
+    const preserveMemoryTab = activeTabIdRef.current === 'memory-tab';
     // Clear current state
     setPdfTabs([]);
-    setActiveTabId(null);
+    setActiveTabId(preserveMemoryTab ? 'memory-tab' : thread ? null : 'home-tab');
     setCurrentPdfId(null);
     setCurrentChatId(null);
     setPlayRequestId(null);
@@ -103,7 +106,7 @@ export default function Home() {
         const loadedTabs = await loadThreadTabs(detailedThread);
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
-          setActiveTabId(loadedTabs[0].id);
+          setActiveTabId(preserveMemoryTab ? 'memory-tab' : loadedTabs[0].id);
           window.setTimeout(() => {
             detailedThread.files.slice(1).forEach(async (threadFile) => {
               try {
@@ -114,6 +117,8 @@ export default function Home() {
               }
             });
           }, 0);
+        } else if (preserveMemoryTab) {
+          setActiveTabId('memory-tab');
         } else {
           setActiveTabId('browser-tab');
           setIsBrowserActive(true);
@@ -125,6 +130,7 @@ export default function Home() {
       }
     } else {
       setActiveThread(null);
+      setActiveTabId(preserveMemoryTab ? 'memory-tab' : 'home-tab');
     }
   }, [clearTraces]);
 
@@ -414,11 +420,16 @@ export default function Home() {
     ? rightPanelLineageThreadsById.get(activeThread.id) || activeThread
     : null;
 
-  const workspaceTabs = useMemo(() => buildDocumentWorkspaceTabs({
-    enabled: Boolean(activeThread),
-    documents: pdfTabs,
-    traces: traceTabs,
-  }), [activeThread, pdfTabs, traceTabs]);
+  const workspaceTabs = useMemo(
+    () => activeThread
+      ? buildDocumentWorkspaceTabs({
+          enabled: true,
+          documents: pdfTabs,
+          traces: traceTabs,
+        })
+      : buildHomeWorkspaceTabs(),
+    [activeThread, pdfTabs, traceTabs],
+  );
 
   const handleWorkspaceTabChange = useCallback((tabId: string) => {
     setActiveTabId(tabId);
@@ -491,17 +502,15 @@ export default function Home() {
             </Box>
           }
           primaryTabs={
-            activeThread ? (
-              <WorkspaceTabs
-                tabs={workspaceTabs}
-                activeTabId={activeTabId}
-                onTabChange={handleWorkspaceTabChange}
-                onTabClose={handleTabClose}
-                onDocumentRemove={handleTabRemove}
-                onAddBrowserToThread={handleAddBrowserToThread}
-                isBrowserCapturing={isBrowserCapturing}
-              />
-            ) : null
+            <WorkspaceTabs
+              tabs={workspaceTabs}
+              activeTabId={activeTabId}
+              onTabChange={handleWorkspaceTabChange}
+              onTabClose={handleTabClose}
+              onDocumentRemove={handleTabRemove}
+              onAddBrowserToThread={handleAddBrowserToThread}
+              isBrowserCapturing={isBrowserCapturing}
+            />
           }
           primaryContent={
             <ThreadWorkspaceContent
@@ -522,6 +531,7 @@ export default function Home() {
               autoScroll={autoScroll}
               highlightEnabled={highlightEnabled}
               threadId={activeThread?.id ?? null}
+              activeThread={activeThread}
               emptyTitle="Welcome to AskPDF"
               emptyDescription="Select or create a thread, then upload a PDF or open the browser."
             />

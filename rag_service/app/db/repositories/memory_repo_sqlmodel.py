@@ -311,11 +311,26 @@ class MemoryRepository:
         *,
         status: str = MemoryCandidateStatus.PENDING.value,
         source_project_id: Optional[str] = None,
+        source_thread_id: Optional[str] = None,
+        proposed_scope_type: Optional[str] = None,
+        proposed_scope_id: Optional[str] = None,
         limit: int = 100,
     ) -> list[MemoryCandidate]:
         bounded_limit = max(1, min(int(limit), 500))
         if status:
             status = _require_enum(status, "status", VALID_CANDIDATE_STATUSES)
+        if source_project_id is not None:
+            source_project_id = _require_nonempty(source_project_id, "source_project_id")
+        if source_thread_id is not None:
+            source_thread_id = _require_nonempty(source_thread_id, "source_thread_id")
+        if proposed_scope_type is not None:
+            proposed_scope_type = _require_enum(
+                proposed_scope_type,
+                "proposed_scope_type",
+                VALID_MEMORY_SCOPE_TYPES,
+            )
+        if proposed_scope_id is not None:
+            proposed_scope_id = _require_nonempty(proposed_scope_id, "proposed_scope_id")
         session = await self._get_session()
         async with session.begin():
             query = select(MemoryCandidate)
@@ -323,6 +338,12 @@ class MemoryRepository:
                 query = query.where(MemoryCandidate.status == status)
             if source_project_id is not None:
                 query = query.where(MemoryCandidate.source_project_id == source_project_id)
+            if source_thread_id is not None:
+                query = query.where(MemoryCandidate.source_thread_id == source_thread_id)
+            if proposed_scope_type is not None:
+                query = query.where(MemoryCandidate.proposed_scope_type == proposed_scope_type)
+            if proposed_scope_id is not None:
+                query = query.where(MemoryCandidate.proposed_scope_id == proposed_scope_id)
             result = await session.execute(query.order_by(MemoryCandidate.created_at.desc()).limit(bounded_limit))
             return list(result.scalars().all())
 

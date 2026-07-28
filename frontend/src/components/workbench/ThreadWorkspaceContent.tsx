@@ -3,6 +3,8 @@ import { Box, CircularProgress, Typography } from '@mui/material';
 import { isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
 import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
+import MemoryWorkspace from './MemoryWorkspace';
+import type { Thread } from '../../lib/api';
 
 const PdfViewer = dynamic(() => import('../PdfViewer'), { ssr: false });
 
@@ -24,6 +26,7 @@ export default function ThreadWorkspaceContent({
   autoScroll = false,
   highlightEnabled = true,
   threadId,
+  activeThread = null,
   emptyTitle,
   emptyDescription,
 }: {
@@ -44,6 +47,7 @@ export default function ThreadWorkspaceContent({
   autoScroll?: boolean;
   highlightEnabled?: boolean;
   threadId?: string | null;
+  activeThread?: Thread | null;
   emptyTitle: string;
   emptyDescription: string;
 }) {
@@ -57,6 +61,8 @@ export default function ThreadWorkspaceContent({
           onClose={onCloseTrace}
           suspendHeavyContent={isResizing}
         />
+      ) : activeTabId === 'memory-tab' ? (
+        <MemoryWorkspace activeThread={activeThread} />
       ) : isBrowserWorkspaceActive({ activeTabId, isBrowserActive }) ? (
         <BrowserWorkspaceFrame />
       ) : isLoading ? (

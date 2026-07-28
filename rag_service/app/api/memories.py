@@ -164,9 +164,22 @@ async def search_thread_memories_endpoint(thread_id: str, req: MemorySearchReque
 async def list_memory_candidates_endpoint(
     status: str = Query(default=MemoryCandidateStatus.PENDING.value),
     source_project_id: Optional[str] = Query(default=None),
+    source_thread_id: Optional[str] = Query(default=None),
+    proposed_scope_type: Optional[str] = Query(default=None),
+    proposed_scope_id: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    candidates = await list_memory_candidates(status=status, source_project_id=source_project_id, limit=limit)
+    try:
+        candidates = await list_memory_candidates(
+            status=status,
+            source_project_id=source_project_id,
+            source_thread_id=source_thread_id,
+            proposed_scope_type=proposed_scope_type,
+            proposed_scope_id=proposed_scope_id,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise _bad_request_from_value_error(exc) from exc
     return {"memory_candidates": [_candidate_payload(candidate) for candidate in candidates]}
 
 

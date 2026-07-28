@@ -53,6 +53,7 @@ export const buildDocumentWorkspaceTabs = ({
   if (!enabled) return [];
   return [
     { kind: 'browser', id: 'browser-tab', label: 'Browser' },
+    { kind: 'memory', id: 'memory-tab', label: 'Memory' },
     ...documents.map((tab) => ({ ...tab, kind: 'document' as const })),
     {
       kind: 'trace',
@@ -63,3 +64,8 @@ export const buildDocumentWorkspaceTabs = ({
     },
   ];
 };
+
+export const buildHomeWorkspaceTabs = (): WorkspaceTab[] => [
+  { kind: 'home', id: 'home-tab', label: 'Home' },
+  { kind: 'memory', id: 'memory-tab', label: 'Memory' },
+];
