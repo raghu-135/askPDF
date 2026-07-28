@@ -79,7 +79,7 @@ import ChatInterface, { type ChatTraceDescriptor } from '../ChatInterface';
 import ThreadSecondaryPanel from '../ThreadSecondaryPanel';
 import { buildDocumentWorkspaceTabs, type PdfTab } from '../../lib/document-tabs';
 import { getThread } from '../../lib/api';
-import { loadThreadTabs } from '../../lib/thread-utils';
+import { hydrateThreadPdfTab, loadThreadTabs } from '../../lib/thread-utils';
 import { getActiveTab, getActiveTabData } from '../../lib/pdf-utils';
 import { emptyBuilderTestSession, type BuilderTestSession } from '../../lib/builder-test-session';
 import {
@@ -661,10 +661,35 @@ export default function AgentWorkflowBuilderPage() {
       setTestActiveTabId(tabs[0]?.id || 'browser-tab');
       setTestSession(emptyBuilderTestSession(detailed.id));
       clearTestTraces();
+      window.setTimeout(() => {
+        detailed.files.slice(1).forEach(async (threadFile) => {
+          try {
+            const hydrated = await hydrateThreadPdfTab(detailed.id, threadFile);
+            setTestPdfTabs(prev => prev.map(tab => tab.fileHash === hydrated.fileHash ? hydrated : tab));
+          } catch (error) {
+            console.warn(`Failed to hydrate background test PDF tab ${threadFile.fileHash}:`, error);
+          }
+        });
+      }, 0);
     } finally {
       setTestThreadLoading(false);
     }
   }, [clearTestTraces]);
+
+  const handleTestTabChange = useCallback((tabId: string) => {
+    setTestActiveTabId(tabId);
+    const tab = testPdfTabs.find(item => item.id === tabId);
+    if (!testThread || !tab || tabId === 'browser-tab' || tab.sentences) return;
+    void hydrateThreadPdfTab(testThread.id, {
+      fileHash: tab.fileHash,
+      fileName: tab.fileName,
+      sourceType: tab.sourceType,
+    }).then((hydrated) => {
+      setTestPdfTabs(prev => prev.map(item => item.fileHash === hydrated.fileHash ? hydrated : item));
+    }).catch((error) => {
+      console.warn(`Failed to hydrate selected test PDF tab ${tab.fileHash}:`, error);
+    });
+  }, [testPdfTabs, testThread]);
 
   const handleOpenTestTrace = useCallback((trace: ChatTraceDescriptor) => {
     openTestTrace(trace);
@@ -810,7 +835,7 @@ export default function AgentWorkflowBuilderPage() {
               <WorkspaceTabs
                 tabs={testWorkspaceTabs}
                 activeTabId={testActiveTabId}
-                onTabChange={setTestActiveTabId}
+                onTabChange={handleTestTabChange}
               />
             ) : null
           }

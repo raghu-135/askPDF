@@ -36,8 +36,9 @@ import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
 import RouteIcon from '@mui/icons-material/Route';
 import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
+import { useVirtualizer } from '@tanstack/react-virtual';
 const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
-import { splitIntoSentences, stripMarkdown } from '../lib/sentence-utils';
+import { deriveChatSentences, type ChatSentenceCache } from '../lib/chat-sentence-cache';
 import { getChatComposerState } from '../lib/chat-composer-state';
 import { canRequestChatCancellation, recoverCanceledChat } from '../lib/chat-run-cancellation';
 import {
@@ -239,6 +240,543 @@ const useBuilderTestChatRuntime = (
     };
 };
 
+const ChatComposer = React.memo(function ChatComposer({
+    inputRef,
+    seedText,
+    seedVersion,
+    loading,
+    llmModel,
+    isLlmModelValid,
+    isLlmToolsSupported,
+    isEmbeddingModelValid,
+    indexingStatus,
+    liveExecution,
+    isTestRuntime,
+    onSubmit,
+    onStop,
+    onOpenSettings,
+}: {
+    inputRef: React.Ref<HTMLInputElement | HTMLTextAreaElement>;
+    seedText: string;
+    seedVersion: number;
+    loading: boolean;
+    llmModel: string;
+    isLlmModelValid: boolean | null;
+    isLlmToolsSupported: boolean | null;
+    isEmbeddingModelValid: boolean | null;
+    indexingStatus: ChatComposerIndexingStatusValue;
+    liveExecution: LiveChatExecution | null;
+    isTestRuntime: boolean;
+    onSubmit: (text: string) => void;
+    onStop: () => void;
+    onOpenSettings: () => void;
+}) {
+    const theme = useTheme();
+    const [draft, setDraft] = useState(seedText);
+
+    useEffect(() => {
+        setDraft(seedText);
+    }, [seedText, seedVersion]);
+
+    const composerState = useMemo(() => getChatComposerState({
+        loading,
+        llmModel,
+        isLlmModelValid,
+        isLlmToolsSupported,
+        isEmbeddingModelValid,
+        indexingStatus,
+        hasInput: Boolean(draft),
+    }), [
+        draft,
+        indexingStatus,
+        isEmbeddingModelValid,
+        isLlmModelValid,
+        isLlmToolsSupported,
+        llmModel,
+        loading,
+    ]);
+
+    return (
+        <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch', px: 1 }}>
+            <TextField
+                inputRef={inputRef}
+                fullWidth
+                variant="outlined"
+                multiline
+                minRows={3}
+                maxRows={10}
+                placeholder={composerState.placeholder}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        onSubmit(draft);
+                    }
+                }}
+                disabled={composerState.disabled}
+                sx={{
+                    '& .MuiOutlinedInput-root': {
+                        bgcolor: theme.palette.background.paper,
+                        color: theme.palette.text.primary,
+                        '& fieldset': {
+                            borderColor: 'primary.light',
+                            borderWidth: '1px',
+                        },
+                        '&:hover fieldset': {
+                            borderColor: 'primary.main',
+                        },
+                    },
+                }}
+            />
+            <Box
+                sx={{
+                    flex: '0 0 auto',
+                    width: '2.5rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                }}
+            >
+                {loading && liveExecution ? (
+                    <Tooltip title={
+                        liveExecution.canceling
+                            ? 'Stopping after the current LLM or tool call finishes'
+                            : liveExecution.runId
+                                ? 'Stop after the current step'
+                                : 'Preparing the chat run'
+                    }>
+                        <span>
+                            <IconButton
+                                size="medium"
+                                color="error"
+                                aria-label={liveExecution.canceling ? 'Stopping chat run' : 'Stop chat run'}
+                                onClick={onStop}
+                                disabled={!liveExecution.runId || liveExecution.canceling || !liveExecution.running}
+                            >
+                                {liveExecution.canceling
+                                    ? <CircularProgress size="1em" color="inherit" />
+                                    : <StopCircleOutlinedIcon fontSize="medium" />}
+                            </IconButton>
+                        </span>
+                    </Tooltip>
+                ) : (
+                    <IconButton
+                        size="medium"
+                        color="primary"
+                        onClick={() => onSubmit(draft)}
+                        disabled={composerState.disabled}
+                    >
+                        {composerState.busy ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
+                    </IconButton>
+                )}
+                <Tooltip
+                    title={isTestRuntime
+                        ? 'AI prompt settings for this test session'
+                        : 'AI prompt settings for this thread'}
+                    placement="top"
+                >
+                    <IconButton
+                        size="medium"
+                        onClick={onOpenSettings}
+                        sx={{
+                            color: 'text.secondary',
+                            '&:hover': {
+                                bgcolor: 'action.hover',
+                                color: 'text.primary',
+                            },
+                        }}
+                    >
+                        <SettingsIcon fontSize="medium" />
+                    </IconButton>
+                </Tooltip>
+            </Box>
+        </Box>
+    );
+});
+
+const MemoizedMarkdown = React.memo(function MemoizedMarkdown({ content }: { content: string }) {
+    return (
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {content}
+        </ReactMarkdown>
+    );
+});
+
+type ChatMessageItemProps = {
+    msg: ChatMessage;
+    index: number;
+    isRecollected: boolean;
+    isActive: boolean;
+    isEditing: boolean;
+    isOlderQuestion: boolean;
+    copied: boolean;
+    liveForMessage: LiveChatExecution | null;
+    showAgentRunDebug: boolean;
+    forking: boolean;
+    loading: boolean;
+    isTestRuntime: boolean;
+    onCopy: (text: string, messageId: string) => void;
+    onReadAloud: (messageIdx: number) => void;
+    onForkFromMessage: (messageId: string, event: React.MouseEvent) => void;
+    onEditQuestion: (msg: ChatMessage, event: React.MouseEvent) => void;
+    onDeleteMessage: (messageId: string, event: React.MouseEvent) => void;
+    onOpenAgentRun: (msg: ChatMessage) => void;
+    formatAgentWorkflowLabel: (msg: ChatMessage) => string;
+};
+
+const ChatMessageItem = React.memo(function ChatMessageItem({
+    msg,
+    index,
+    isRecollected,
+    isActive,
+    isEditing,
+    isOlderQuestion,
+    copied,
+    liveForMessage,
+    showAgentRunDebug,
+    forking,
+    loading,
+    isTestRuntime,
+    onCopy,
+    onReadAloud,
+    onForkFromMessage,
+    onEditQuestion,
+    onDeleteMessage,
+    onOpenAgentRun,
+    formatAgentWorkflowLabel,
+}: ChatMessageItemProps) {
+    const theme = useTheme();
+    const isUser = msg.role === MessageRole.User;
+    const content = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '');
+    const editTooltip = isEditing
+        ? "Editing this question"
+        : isOlderQuestion
+            ? "Edit and ask again at the end"
+            : "Edit question";
+
+    return (
+        <ListItem
+            alignItems="flex-start"
+            sx={{
+                flexDirection: 'column',
+                alignItems: isUser ? 'flex-end' : 'flex-start',
+                px: 0,
+                py: 0.5
+            }}
+        >
+            <Paper
+                sx={{
+                    p: 1.5,
+                    bgcolor: isUser
+                        ? theme.palette.mode === 'dark'
+                            ? theme.palette.primary.dark
+                            : theme.palette.primary.main
+                        : theme.palette.mode === 'dark'
+                            ? theme.palette.background.paper
+                            : theme.palette.grey[100],
+                    color: isUser
+                        ? theme.palette.getContrastText(theme.palette.primary.main)
+                        : theme.palette.text.primary,
+                    width: showAgentRunDebug ? `calc(100% - ${theme.spacing(6)})` : 'fit-content',
+                    maxWidth: isUser ? '90%' : `calc(100% - ${theme.spacing(6)})`,
+                    minWidth: 0,
+                    overflowWrap: 'anywhere',
+                    wordBreak: 'break-word',
+                    boxShadow: isActive
+                        ? '0 0 10px rgba(255, 255, 0, 0.4)'
+                        : isRecollected
+                            ? '0 0 10px rgba(156, 39, 176, 0.5)'
+                            : 'none',
+                    border: (isRecollected || isEditing) ? '2px solid' : 'none',
+                    borderColor: isEditing
+                        ? 'warning.main'
+                        : isRecollected
+                            ? 'secondary.main'
+                            : 'transparent',
+                    borderRadius: '12px',
+                    transition: 'all 0.2s ease',
+                    cursor: 'default',
+                    position: 'relative',
+                    contain: 'layout paint style',
+                    '&:hover .message-actions': {
+                        opacity: 1
+                    }
+                }}
+            >
+                {isRecollected && (
+                    <Chip
+                        icon={<MemoryIcon fontSize="small" />}
+                        label="Used as context"
+                        size="small"
+                        color="secondary"
+                        sx={{
+                            position: 'absolute',
+                            top: -10,
+                            left: 10,
+                            height: 20,
+                            fontSize: '0.65rem'
+                        }}
+                    />
+                )}
+
+                <Box
+                    className="message-actions"
+                    sx={{
+                        position: 'absolute',
+                        top: 8,
+                        right: 8,
+                        display: 'flex',
+                        gap: 0.25,
+                        opacity: 0,
+                        transition: 'opacity 0.2s ease',
+                        bgcolor: isUser
+                            ? theme.palette.mode === 'dark' ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.2)'
+                            : theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                        backdropFilter: 'blur(4px)',
+                        borderRadius: '20px',
+                        p: 0.4,
+                        boxShadow: 1,
+                        zIndex: 10,
+                        '&:hover': { opacity: 1 }
+                    }}
+                >
+                    <Tooltip title={copied ? "Copied!" : "Copy message"}>
+                        <IconButton
+                            size="small"
+                            onClick={() => onCopy(content, msg.id)}
+                            sx={{
+                                color: 'inherit',
+                                p: 0.5,
+                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                            }}
+                        >
+                            {copied ? <CheckIcon fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
+                        </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Read aloud">
+                        <IconButton
+                            size="small"
+                            onClick={() => onReadAloud(index)}
+                            sx={{
+                                color: isUser ? 'inherit' : (isActive ? 'primary.main' : 'inherit'),
+                                p: 0.5,
+                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                            }}
+                        >
+                            <VolumeUpIcon fontSize="small" />
+                        </IconButton>
+                    </Tooltip>
+                    {!isTestRuntime && !isUser && (
+                        <Tooltip title="Fork from here">
+                            <span>
+                                <IconButton
+                                    size="small"
+                                    onClick={(e) => onForkFromMessage(msg.id, e)}
+                                    disabled={forking || loading}
+                                    sx={{
+                                        color: 'inherit',
+                                        p: 0.5,
+                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                    }}
+                                >
+                                    {forking ? <CircularProgress size={14} /> : <CallSplitIcon fontSize="small" />}
+                                </IconButton>
+                            </span>
+                        </Tooltip>
+                    )}
+                    {!isTestRuntime && isUser && (
+                        <Tooltip title={editTooltip}>
+                            <span>
+                                <IconButton
+                                    size="small"
+                                    onClick={(e) => onEditQuestion(msg, e)}
+                                    disabled={loading}
+                                    sx={{
+                                        color: isEditing ? 'warning.light' : 'inherit',
+                                        p: 0.5,
+                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                    }}
+                                >
+                                    <EditIcon fontSize="small" />
+                                </IconButton>
+                            </span>
+                        </Tooltip>
+                    )}
+                    {!isTestRuntime && (
+                        <Tooltip title="Delete message">
+                            <span>
+                                <IconButton
+                                    size="small"
+                                    onClick={(e) => onDeleteMessage(msg.id, e)}
+                                    disabled={loading || isEditing}
+                                    sx={{
+                                        color: 'inherit',
+                                        p: 0.5,
+                                        '&:hover': { color: 'error.main' },
+                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
+                                    }}
+                                >
+                                    <DeleteIcon fontSize="small" />
+                                </IconButton>
+                            </span>
+                        </Tooltip>
+                    )}
+                </Box>
+
+                {showAgentRunDebug && (
+                    <Box sx={{ mb: 1 }}>
+                        <Button
+                            size="small"
+                            variant="text"
+                            startIcon={<RouteIcon fontSize="small" />}
+                            onClick={() => void onOpenAgentRun(msg)}
+                            sx={{ minHeight: 26, px: 0.5, textTransform: 'none' }}
+                        >
+                            {liveForMessage?.canceling
+                                ? 'Stopping after current step…'
+                                : liveForMessage?.running
+                                    ? 'Open live trace'
+                                    : `Open trace · ${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`}
+                        </Button>
+                    </Box>
+                )}
+                {msg.role === MessageRole.Assistant && msg.reasoning_available && msg.reasoning && (
+                    <Box sx={{ mb: 1 }}>
+                        <details>
+                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>Reasoning</summary>
+                            <Typography
+                                variant="caption"
+                                component="pre"
+                                sx={{ mt: 0.75, mb: 0, p: 1, borderRadius: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word', bgcolor: 'rgba(0,0,0,0.04)' }}
+                            >
+                                {msg.reasoning}
+                            </Typography>
+                        </details>
+                    </Box>
+                )}
+
+                <Typography variant="body2" component="div" sx={{
+                    cursor: 'text',
+                    pr: 2,
+                    minWidth: 0,
+                    maxWidth: '100%',
+                    overflowWrap: 'anywhere',
+                    wordBreak: 'break-word',
+                    '& p': { m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                    '& p:last-child': { mb: 0 },
+                    '& ul, & ol': { pl: 2, m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                    '& li': { mb: 0.5, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                    '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                    '& blockquote': { m: 0, pl: 1.5, borderLeft: '3px solid', borderColor: 'divider', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                    '& a': { overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                    '& code': { bgcolor: msg.role === MessageRole.User ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+                    '& pre': { maxWidth: '100%', bgcolor: msg.role === MessageRole.User ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 },
+                    '& pre code': { overflowWrap: 'normal', wordBreak: 'normal' },
+                    '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', mb: 1 },
+                    '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.5 }
+                }}>
+                    <MemoizedMarkdown content={content} />
+                </Typography>
+                {msg.role === MessageRole.User && msg.rewritten_query && (
+                    <Box sx={{ mt: 1 }}>
+                        <details>
+                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                <Tooltip
+                                    title="This question was rewritten with thread context for retrieval."
+                                    arrow
+                                >
+                                    <span>Rewritten for context</span>
+                                </Tooltip>
+                            </summary>
+                            <Typography
+                                variant="caption"
+                                sx={{
+                                    mt: 1,
+                                    display: 'block',
+                                    fontStyle: 'italic',
+                                    opacity: 0.9,
+                                    p: 1,
+                                    borderRadius: 1,
+                                    bgcolor: 'rgba(255,255,255,0.1)',
+                                    minWidth: 0,
+                                    maxWidth: '100%',
+                                    overflowWrap: 'anywhere',
+                                    wordBreak: 'break-word'
+                                }}
+                            >
+                                {msg.rewritten_query}
+                            </Typography>
+                        </details>
+                    </Box>
+                )}
+                {msg.role === MessageRole.Assistant && msg.web_sources && msg.web_sources.length > 0 && (
+                    <Box sx={{ mt: 1 }}>
+                        <details>
+                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
+                                🌐 Web sources used ({msg.web_sources.length})
+                            </summary>
+                            <Box sx={{ mt: 0.75, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                                {msg.web_sources.map((source, i) => (
+                                    <Box
+                                        key={i}
+                                        sx={{
+                                            p: 1,
+                                            borderRadius: 1,
+                                            bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                                            borderLeft: '3px solid',
+                                            borderColor: 'primary.light',
+                                        }}
+                                    >
+                                        {source.url ? (
+                                            <Typography
+                                                variant="caption"
+                                                component="a"
+                                                href={source.url}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                sx={{
+                                                    color: 'primary.main',
+                                                    display: 'block',
+                                                    fontWeight: 600,
+                                                    textDecoration: 'none',
+                                                    mb: 0.25,
+                                                    '&:hover': { textDecoration: 'underline' },
+                                                }}
+                                            >
+                                                {source.title || source.url}
+                                            </Typography>
+                                        ) : (
+                                            <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.25 }}>
+                                                {source.title || 'Web result'}
+                                            </Typography>
+                                        )}
+                                        {source.url && (
+                                            <Typography
+                                                variant="caption"
+                                                sx={{ color: 'text.secondary', display: 'block', wordBreak: 'break-all', mb: 0.25 }}
+                                            >
+                                                {source.url}
+                                            </Typography>
+                                        )}
+                                        <Typography
+                                            variant="caption"
+                                            sx={{ display: 'block', opacity: 0.85, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                                        >
+                                            {source.text}
+                                        </Typography>
+                                    </Box>
+                                ))}
+                            </Box>
+                        </details>
+                    </Box>
+                )}
+            </Paper>
+        </ListItem>
+    );
+});
+
 const normalizeAgentWorkflowForUi = (workflowId?: string | null) => (
     workflowId ? String(workflowId) : ''
 );
@@ -331,7 +869,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     }
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const theme = useTheme();
-    const [input, setInput] = useState('');
+    const [composerSeed, setComposerSeed] = useState('');
+    const [composerSeedVersion, setComposerSeedVersion] = useState(0);
     const [loading, setLoading] = useState(false);
     const normalRuntime = useNormalThreadChatRuntime();
     const builderRuntime = useBuilderTestChatRuntime(testRuntime, setMessages);
@@ -397,8 +936,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [memoryCandidateActionId, setMemoryCandidateActionId] = useState<string | null>(null);
     const [memoryCandidateError, setMemoryCandidateError] = useState<string | null>(null);
 
-    const messagesEndRef = useRef<null | HTMLDivElement>(null);
+    const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
+    const sentenceCacheRef = useRef<ChatSentenceCache>(new Map());
     const chatRootRef = useRef<HTMLDivElement | null>(null);
     const composerInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null);
     const humanReviewSubmissionKeyRef = useRef<string | null>(null);
@@ -409,6 +949,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         startY: 0,
         startRatio: 0.3,
     });
+    const messageVirtualizer = useVirtualizer({
+        count: messages.length,
+        getScrollElement: () => messageListRef.current,
+        estimateSize: (index) => messages[index]?.role === MessageRole.User ? 76 : 180,
+        overscan: 8,
+        getItemKey: (index) => messages[index]?.id ?? index,
+    });
+
+    const setComposerText = useCallback((text: string) => {
+        setComposerSeed(text);
+        setComposerSeedVersion((version) => version + 1);
+    }, []);
 
     const applyThreadSettingsToState = useCallback((settings?: Thread['settings']) => {
         setReplans(settings?.replans ?? 1);
@@ -783,22 +1335,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    // Sync chatSentences with parent whenever messages change
+    // Sync chatSentences with parent whenever messages change. Cache by message id/content
+    // so streaming or appending a single message does not re-tokenize the whole thread.
     useEffect(() => {
-        let globalId = 0;
-        const result: { id: number; text: string; messageIndex: number }[] = [];
-        messages.forEach((msg, mIdx) => {
-            const stripped = stripMarkdown(msg.content);
-            const sentences = splitIntoSentences(stripped);
-            sentences.forEach((s) => {
-                result.push({
-                    id: globalId++,
-                    text: s,
-                    messageIndex: mIdx
-                });
-            });
-        });
-        setChatSentences(result);
+        setChatSentences(deriveChatSentences(messages, sentenceCacheRef.current));
     }, [messages, setChatSentences]);
 
     const activeMessageIndex = useMemo(() => {
@@ -873,23 +1413,26 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     };
 
     useEffect(() => {
-        if (autoScroll && activeMessageIndex !== null && messageRefs.current[activeMessageIndex]) {
-            messageRefs.current[activeMessageIndex]?.scrollIntoView({
+        if (autoScroll && activeMessageIndex !== null) {
+            messageVirtualizer.scrollToIndex(activeMessageIndex, {
+                align: 'center',
                 behavior: 'smooth',
-                block: 'nearest',
             });
         }
-    }, [activeMessageIndex, currentChatId, autoScroll]);
+    }, [activeMessageIndex, currentChatId, autoScroll, messageVirtualizer]);
 
     const scrollToBottom = () => {
-        if (autoScroll) {
-            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        if (autoScroll && messages.length > 0) {
+            messageVirtualizer.scrollToIndex(messages.length - 1, {
+                align: 'end',
+                behavior: 'smooth',
+            });
         }
     };
 
     useEffect(() => {
         scrollToBottom();
-    }, [messages, autoScroll]);
+    }, [messages.length, autoScroll]);
 
     // Fetch available LLM models
     useEffect(() => {
@@ -1095,41 +1638,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     }, [llmModel]);
 
-    const composerState = useMemo(() => getChatComposerState({
-        loading,
-        llmModel,
-        isLlmModelValid,
-        isLlmToolsSupported,
-        isEmbeddingModelValid,
-        indexingStatus,
-        hasInput: Boolean(input),
-    }), [
-        loading,
-        llmModel,
-        isLlmModelValid,
-        isLlmToolsSupported,
-        isEmbeddingModelValid,
-        indexingStatus,
-        input,
-    ]);
-
-
-    const cancelQuestionEdit = () => {
+    const cancelQuestionEdit = useCallback(() => {
         setEditingMessageId(null);
         setEditingOriginalText('');
-        setInput('');
-    };
+        setComposerText('');
+    }, [setComposerText]);
 
-    const handleEditQuestion = (msg: ChatMessage, event: React.MouseEvent) => {
+    const handleEditQuestion = useCallback((msg: ChatMessage, event: React.MouseEvent) => {
         event.stopPropagation();
         if (loading || msg.role !== MessageRole.User) return;
 
         const content = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '');
-        setInput(content);
+        setComposerText(content);
         setEditingMessageId(msg.id);
         setEditingOriginalText(content);
         setClarificationOptions(null);
-    };
+    }, [loading, setComposerText]);
 
     const updateBuilderTestMessage = builderRuntime?.updateMessage || (() => undefined);
 
@@ -1170,7 +1694,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 { id: assistantId, role: 'assistant', content: '', createdAt: now, status: 'sending', specFingerprint: fingerprint },
             ],
         });
-        setInput('');
+        setComposerText('');
         setLoading(true);
         resetLiveExecutionEvents();
         setPendingHumanReview(null);
@@ -1417,7 +1941,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         overrideInput?: string | React.SyntheticEvent,
         options?: { bypassClarification?: boolean },
     ) => {
-        const rawTextToSend = typeof overrideInput === 'string' ? overrideInput : input;
+        const rawTextToSend = typeof overrideInput === 'string' ? overrideInput : '';
         const textToSend = rawTextToSend.trim();
         const editMessageId = editingMessageId;
         const editOriginalText = editingOriginalText.trim();
@@ -1440,7 +1964,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             return;
         }
 
-        setInput('');
+        setComposerText('');
         setClarificationOptions(null);
         setLoading(true);
 
@@ -1587,7 +2111,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     return next;
                 });
                 resetLiveExecutionEvents();
-                setInput(textToSend);
+                setComposerText(textToSend);
                 requestAnimationFrame(() => composerInputRef.current?.focus());
                 if (traceWasOpenForTempMessage) {
                     onOpenTrace?.({
@@ -1835,7 +2359,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const handleDeleteMessage = async (messageId: string, event: React.MouseEvent) => {
+    const handleDeleteMessage = useCallback(async (messageId: string, event: React.MouseEvent) => {
         event.stopPropagation();
         if (!confirm('Delete this message?')) return;
 
@@ -1891,7 +2415,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             if (editingMessageId && deleted_ids.includes(editingMessageId)) {
                 setEditingMessageId(null);
                 setEditingOriginalText('');
-                setInput('');
+                setComposerText('');
             }
 
             // Critical: If the current active chat sentence belongs to a deleted message, 
@@ -1906,7 +2430,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         } catch (error) {
             console.error('Failed to delete message:', error);
         }
-    };
+    }, [editingMessageId, onResetChatId, onThreadUpdate, setComposerText]);
 
     const handleSaveThreadSettings = async () => {
         if (!activeThread) return;
@@ -1965,18 +2489,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         loadThreadSettings();
     };
 
-    const handleCopy = (text: string, messageId: string) => {
+    const handleCopy = useCallback((text: string, messageId: string) => {
         navigator.clipboard.writeText(text);
         setCopiedId(messageId);
         setTimeout(() => setCopiedId(null), 2000);
-    };
+    }, []);
 
-    const handleReadAloud = (messageIdx: number) => {
+    const handleReadAloud = useCallback((messageIdx: number) => {
         const firstSentence = chatSentences.find(s => s.messageIndex === messageIdx);
         if (firstSentence) onJump(firstSentence.id);
-    };
+    }, [chatSentences, onJump]);
 
-    const handleForkFromMessage = async (messageId: string, event: React.MouseEvent) => {
+    const handleForkFromMessage = useCallback(async (messageId: string, event: React.MouseEvent) => {
         event.stopPropagation();
         if (!activeThread) return;
         setForkDialogMessageId(messageId);
@@ -1988,7 +2512,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 console.error('Failed to load projects for fork dialog:', error);
             }
         }
-    };
+    }, [activeThread, forkProjects.length]);
 
     const submitMessageFork = async (options: { name?: string; targetProjectId?: string; memoryCopyMode?: MemoryCopyMode }) => {
         if (!activeThread || !forkDialogMessageId) return;
@@ -2005,7 +2529,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const handleOpenAgentRun = async (msg: ChatMessage) => {
+    const handleOpenAgentRun = useCallback(async (msg: ChatMessage) => {
         const runId = msg.agent_run_id;
         setWorkspaceTraceMessageId(msg.id);
         workspaceTraceMessageIdRef.current = msg.id;
@@ -2028,7 +2552,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         } finally {
             setAgentRunLoading(prev => ({ ...prev, [runId]: false }));
         }
-    };
+    }, [activeThread, agentRunDetails, agentRunLoading]);
 
     useEffect(() => {
         if (!workspaceTraceMessageId || !onOpenTrace) return;
@@ -2071,9 +2595,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setAgentRunDetails(prev => ({ ...prev, [run.id]: run }));
     }, []);
 
-    const formatAgentWorkflowLabel = (msg: ChatMessage) => {
+    const formatAgentWorkflowLabel = useCallback((msg: ChatMessage) => {
         return msg.agent_workflow_id || 'agent';
-    };
+    }, []);
 
     if (!activeThread) {
         return (
@@ -2282,8 +2806,65 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             </Box>
 
             {/* Messages List */}
-            <List sx={{ flexGrow: 1, minHeight: 0, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}>
-                {messages.map((msg, idx) => {
+            <List
+                component="div"
+                ref={messageListRef}
+                sx={{ flexGrow: 1, minHeight: 0, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}
+            >
+                <Box
+                    sx={{
+                        height: `${messageVirtualizer.getTotalSize()}px`,
+                        width: '100%',
+                        position: 'relative',
+                    }}
+                >
+                    {messageVirtualizer.getVirtualItems().map((virtualItem) => {
+                        const msg = messages[virtualItem.index];
+                        if (!msg) return null;
+                        const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
+                        const showAgentRunDebug = msg.role === MessageRole.Assistant && Boolean(msg.agent_run_id || liveForMessage);
+                        return (
+                            <Box
+                                key={virtualItem.key}
+                                data-index={virtualItem.index}
+                                ref={(node: HTMLDivElement | null) => {
+                                    messageVirtualizer.measureElement(node);
+                                    messageRefs.current[virtualItem.index] = node?.firstElementChild as HTMLLIElement | null;
+                                }}
+                                sx={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: 0,
+                                    width: '100%',
+                                    transform: `translateY(${virtualItem.start}px)`,
+                                }}
+                            >
+                                <ChatMessageItem
+                                    msg={msg}
+                                    index={virtualItem.index}
+                                    isRecollected={recollectedIds.has(msg.id)}
+                                    isActive={activeMessageIndex === virtualItem.index}
+                                    isEditing={editingMessageId === msg.id}
+                                    isOlderQuestion={msg.role === MessageRole.User && latestUserMessageId !== null && msg.id !== latestUserMessageId}
+                                    copied={copiedId === msg.id}
+                                    liveForMessage={liveForMessage}
+                                    showAgentRunDebug={showAgentRunDebug}
+                                    forking={forkingMessageId === msg.id}
+                                    loading={loading}
+                                    isTestRuntime={isTestRuntime}
+                                    onCopy={handleCopy}
+                                    onReadAloud={handleReadAloud}
+                                    onForkFromMessage={handleForkFromMessage}
+                                    onEditQuestion={handleEditQuestion}
+                                    onDeleteMessage={handleDeleteMessage}
+                                    onOpenAgentRun={handleOpenAgentRun}
+                                    formatAgentWorkflowLabel={formatAgentWorkflowLabel}
+                                />
+                            </Box>
+                        );
+                    })}
+                </Box>
+                {false && messages.map((msg, idx) => {
                     const isRecollected = recollectedIds.has(msg.id);
                     const isUser = msg.role === MessageRole.User;
                     const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
@@ -2620,7 +3201,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         </ListItem>
                     );
                 })}
-                <div ref={messagesEndRef} />
             </List>
 
             {/* Input Area */}
@@ -2901,102 +3481,22 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     </Box>
                 )}
 
-                <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch', px: 1 }}>
-                    <TextField
-                        inputRef={composerInputRef}
-                        fullWidth
-                        variant="outlined"
-                        multiline
-                        minRows={3}
-                        maxRows={10}
-                        placeholder={composerState.placeholder}
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                handleSend();
-                            }
-                        }}
-                        disabled={composerState.disabled}
-                        sx={{
-                            '& .MuiOutlinedInput-root': {
-                                bgcolor: theme.palette.background.paper,
-                                color: theme.palette.text.primary,
-                                '& fieldset': {
-                                    borderColor: 'primary.light',
-                                    borderWidth: '1px',
-                                },
-                                '&:hover fieldset': {
-                                    borderColor: 'primary.main',
-                                },
-                            },
-                        }}
-                    />
-                    <Box
-                        sx={{
-                            flex: '0 0 auto',
-                            width: '2.5rem',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                        }}
-                    >
-                        {loading && liveExecution ? (
-                            <Tooltip title={
-                                liveExecution.canceling
-                                    ? 'Stopping after the current LLM or tool call finishes'
-                                    : liveExecution.runId
-                                        ? 'Stop after the current step'
-                                        : 'Preparing the chat run'
-                            }>
-                                <span>
-                                    <IconButton
-                                        size="medium"
-                                        color="error"
-                                        aria-label={liveExecution.canceling ? 'Stopping chat run' : 'Stop chat run'}
-                                        onClick={handleStopChat}
-                                        disabled={!liveExecution.runId || liveExecution.canceling || !liveExecution.running}
-                                    >
-                                        {liveExecution.canceling
-                                            ? <CircularProgress size="1em" color="inherit" />
-                                            : <StopCircleOutlinedIcon fontSize="medium" />}
-                                    </IconButton>
-                                </span>
-                            </Tooltip>
-                        ) : (
-                            <IconButton
-                                size="medium"
-                                color="primary"
-                                onClick={handleSend}
-                                disabled={composerState.disabled}
-                            >
-                                {composerState.busy ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
-                            </IconButton>
-                        )}
-                        <Tooltip
-                            title={isTestRuntime
-                                ? 'AI prompt settings for this test session'
-                                : 'AI prompt settings for this thread'}
-                            placement="top"
-                        >
-                            <IconButton
-                                size="medium"
-                                onClick={handleOpenThreadSettings}
-                                sx={{
-                                    color: 'text.secondary',
-                                    '&:hover': {
-                                        bgcolor: 'action.hover',
-                                        color: 'text.primary',
-                                    },
-                                }}
-                            >
-                                <SettingsIcon fontSize="medium" />
-                            </IconButton>
-                        </Tooltip>
-                    </Box>
-                </Box>
+                <ChatComposer
+                    inputRef={composerInputRef}
+                    seedText={composerSeed}
+                    seedVersion={composerSeedVersion}
+                    loading={loading}
+                    llmModel={llmModel}
+                    isLlmModelValid={isLlmModelValid}
+                    isLlmToolsSupported={isLlmToolsSupported}
+                    isEmbeddingModelValid={isEmbeddingModelValid}
+                    indexingStatus={indexingStatus}
+                    liveExecution={liveExecution}
+                    isTestRuntime={isTestRuntime}
+                    onSubmit={(text) => void handleSend(text)}
+                    onStop={handleStopChat}
+                    onOpenSettings={handleOpenThreadSettings}
+                />
             </Box>
 
             <ChatSettingsDialog

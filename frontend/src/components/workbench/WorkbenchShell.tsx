@@ -55,10 +55,15 @@ export default function WorkbenchShell({
   sx?: SxProps<Theme>;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const resizeFrameRef = useRef<number | null>(null);
+  const pendingResizePointRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const liveLayoutRef = useRef<WorkbenchLayoutState>(layout);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [liveLayout, setLiveLayout] = useState(layout);
   const [resizing, setResizing] = useState(false);
+  const renderedLayout = resizing ? liveLayout : layout;
   const resolvedPlacement = resolveWorkbenchPlacement(
-    layout.placement,
+    renderedLayout.placement,
     containerSize.width,
     autoSideMinWidth,
     hardSideMinWidth,
@@ -68,6 +73,19 @@ export default function WorkbenchShell({
   useEffect(() => {
     onResolvedPlacementChange?.(resolvedPlacement);
   }, [onResolvedPlacementChange, resolvedPlacement]);
+
+  useEffect(() => {
+    if (!resizing) {
+      setLiveLayout(layout);
+      liveLayoutRef.current = layout;
+    }
+  }, [layout, resizing]);
+
+  useEffect(() => () => {
+    if (resizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(resizeFrameRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -82,9 +100,9 @@ export default function WorkbenchShell({
     return () => observer.disconnect();
   }, []);
 
-  const updateFromPointer = useCallback((clientX: number, clientY: number) => {
+  const computeLayoutFromPointer = useCallback((clientX: number, clientY: number) => {
     const element = containerRef.current;
-    if (!element) return;
+    if (!element) return null;
     const rect = element.getBoundingClientRect();
     const ratio = resizeWorkbenchRatio({
       placement: resolvedPlacement,
@@ -95,39 +113,67 @@ export default function WorkbenchShell({
       top: rect.top,
       bottom: rect.bottom,
     });
-    onLayoutChange(normalizeWorkbenchLayout({
-      ...layout,
+    return normalizeWorkbenchLayout({
+      ...liveLayoutRef.current,
       ...(isBottom ? { bottomRatio: ratio } : { sideRatio: ratio }),
-    }));
-  }, [isBottom, layout, onLayoutChange, resolvedPlacement]);
+    });
+  }, [isBottom, resolvedPlacement]);
+
+  const updateFromPointer = useCallback((clientX: number, clientY: number) => {
+    pendingResizePointRef.current = { clientX, clientY };
+    if (resizeFrameRef.current !== null) return;
+    resizeFrameRef.current = window.requestAnimationFrame(() => {
+      resizeFrameRef.current = null;
+      const point = pendingResizePointRef.current;
+      if (!point) return;
+      const next = computeLayoutFromPointer(point.clientX, point.clientY);
+      if (!next) return;
+      liveLayoutRef.current = next;
+      setLiveLayout(next);
+    });
+  }, [computeLayoutFromPointer]);
 
   const finishResize = useCallback(() => {
+    const point = pendingResizePointRef.current;
+    if (point) {
+      const next = computeLayoutFromPointer(point.clientX, point.clientY);
+      if (next) {
+        liveLayoutRef.current = next;
+        setLiveLayout(next);
+      }
+    }
+    if (resizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(resizeFrameRef.current);
+      resizeFrameRef.current = null;
+    }
+    pendingResizePointRef.current = null;
+    onLayoutChange(liveLayoutRef.current);
     setResizing(false);
     onResizingChange?.(false);
-  }, [onResizingChange]);
+  }, [computeLayoutFromPointer, onLayoutChange, onResizingChange]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     const delta = event.shiftKey ? 0.05 : 0.02;
     let next: WorkbenchLayoutState | null = null;
     if (isBottom && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
       next = normalizeWorkbenchLayout({
-        ...layout,
-        bottomRatio: layout.bottomRatio + (event.key === 'ArrowUp' ? delta : -delta),
+        ...renderedLayout,
+        bottomRatio: renderedLayout.bottomRatio + (event.key === 'ArrowUp' ? delta : -delta),
       });
     } else if (!isBottom && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
       const growsOnRight = resolvedPlacement === 'right'
         ? event.key === 'ArrowLeft'
         : event.key === 'ArrowRight';
       next = normalizeWorkbenchLayout({
-        ...layout,
-        sideRatio: layout.sideRatio + (growsOnRight ? delta : -delta),
+        ...renderedLayout,
+        sideRatio: renderedLayout.sideRatio + (growsOnRight ? delta : -delta),
       });
     }
     if (next) {
       event.preventDefault();
       onLayoutChange(next);
     }
-  }, [isBottom, layout, onLayoutChange, resolvedPlacement]);
+  }, [isBottom, renderedLayout, onLayoutChange, resolvedPlacement]);
 
   const primary = (
     <Box sx={{ height: '100%', minHeight: 0, minWidth: 0, display: 'grid', gridTemplateRows: `${primaryToolbar ? 'auto ' : ''}${primaryTabs ? 'auto ' : ''}minmax(0, 1fr)`, overflow: 'hidden' }}>
@@ -162,14 +208,16 @@ export default function WorkbenchShell({
       </Box>
       <Box
         role="separator"
-        tabIndex={layout.visible ? 0 : -1}
+        tabIndex={renderedLayout.visible ? 0 : -1}
         aria-label={`Resize ${secondaryLabel}`}
         aria-orientation={isBottom ? 'horizontal' : 'vertical'}
         onKeyDown={handleKeyDown}
         onPointerDown={(event) => {
-          if (!layout.visible) return;
+          if (!renderedLayout.visible) return;
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
+          liveLayoutRef.current = renderedLayout;
+          setLiveLayout(renderedLayout);
           setResizing(true);
           onResizingChange?.(true);
         }}
@@ -183,7 +231,7 @@ export default function WorkbenchShell({
         onPointerCancel={finishResize}
         sx={{
           order: resolvedPlacement === 'left' ? -1 : 1,
-          display: layout.visible ? 'flex' : 'none',
+          display: renderedLayout.visible ? 'flex' : 'none',
           flex: `0 0 ${dividerSize}px`,
           cursor: isBottom ? 'row-resize' : 'col-resize',
           alignItems: 'center',
@@ -203,8 +251,8 @@ export default function WorkbenchShell({
         aria-label={secondaryLabel}
         sx={{
           order: resolvedPlacement === 'left' ? -2 : 2,
-          display: layout.visible ? 'block' : 'none',
-          flex: `0 0 ${isBottom ? layout.bottomRatio * 100 : layout.sideRatio * 100}%`,
+          display: renderedLayout.visible ? 'block' : 'none',
+          flex: `0 0 ${isBottom ? renderedLayout.bottomRatio * 100 : renderedLayout.sideRatio * 100}%`,
           minWidth: 0,
           minHeight: 0,
           overflow: 'hidden',

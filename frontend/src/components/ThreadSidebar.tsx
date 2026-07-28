@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material/styles';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -127,6 +128,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
   const threadRowRefs = useRef<Record<string, HTMLLIElement | null>>({});
+  const threadListRef = useRef<HTMLDivElement | null>(null);
 
   const selectedCount = selectedThreadIds.size;
   const allThreadsSelected = threads.length > 0 && selectedCount === threads.length;
@@ -152,6 +154,19 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     }
     return Array.from(groups.values()).filter(group => group.threads.length > 0);
   }, [projects, projectsById, threads]);
+  const virtualThreadRows = useMemo(() => (
+    groupedThreads.flatMap((group) => [
+      { kind: 'group' as const, id: `group-${group.project?.id || 'unassigned'}`, group },
+      ...group.threads.map((thread) => ({ kind: 'thread' as const, id: thread.id, thread })),
+    ])
+  ), [groupedThreads]);
+  const threadVirtualizer = useVirtualizer({
+    count: virtualThreadRows.length,
+    getScrollElement: () => threadListRef.current,
+    estimateSize: (index) => virtualThreadRows[index]?.kind === 'group' ? 31 : 64,
+    overscan: 10,
+    getItemKey: (index) => virtualThreadRows[index]?.id ?? index,
+  });
 
 
   // Helper function to get icon and color for model type
@@ -477,7 +492,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     event?.stopPropagation();
 
     const row = threadRowRefs.current[threadId];
-    if (!row) return;
+    if (!row) {
+      const virtualIndex = virtualThreadRows.findIndex((item) => item.kind === 'thread' && item.thread.id === threadId);
+      if (virtualIndex >= 0) {
+        threadVirtualizer.scrollToIndex(virtualIndex, { align: 'center', behavior: 'smooth' });
+        setFocusedThreadId(threadId);
+      }
+      return;
+    }
 
     row.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setFocusedThreadId(threadId);
@@ -773,8 +795,180 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             )}
           </Box>
         ) : (
-          <List dense sx={{ p: 0 }}>
-            {groupedThreads.map((group) => (
+          <List component="div" ref={threadListRef} dense sx={{ p: 0, overflow: 'auto', flex: 1, minHeight: 0 }}>
+            <Box sx={{ height: `${threadVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
+              {threadVirtualizer.getVirtualItems().map((virtualItem) => {
+                const row = virtualThreadRows[virtualItem.index];
+                if (!row) return null;
+                if (row.kind === 'group') {
+                  return (
+                    <Box
+                      key={virtualItem.key}
+                      data-index={virtualItem.index}
+                      ref={threadVirtualizer.measureElement}
+                      sx={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualItem.start}px)`,
+                        px: 1.5,
+                        py: 0.75,
+                        bgcolor: 'action.hover',
+                        borderTop: 1,
+                        borderColor: 'divider',
+                      }}
+                    >
+                      <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>
+                        {row.group.project?.name || 'Unassigned'}
+                      </Typography>
+                    </Box>
+                  );
+                }
+
+                const thread = row.thread;
+                return (
+                  <Box
+                    key={virtualItem.key}
+                    data-index={virtualItem.index}
+                    ref={(node: HTMLDivElement | null) => threadVirtualizer.measureElement(node)}
+                    sx={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualItem.start}px)`,
+                    }}
+                  >
+                    <ListItem
+                      ref={(node) => {
+                        threadRowRefs.current[thread.id] = node;
+                      }}
+                      disablePadding
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'stretch',
+                        bgcolor: activeThreadId === thread.id
+                          ? theme.palette.mode === 'dark'
+                            ? theme.palette.primary.dark
+                            : theme.palette.primary.light
+                          : focusedThreadId === thread.id
+                            ? theme.palette.action.focus
+                          : isSelectionMode && selectedThreadIds.has(thread.id)
+                            ? theme.palette.action.selected
+                          : 'transparent',
+                        boxShadow: focusedThreadId === thread.id
+                          ? `inset 3px 0 0 ${theme.palette.primary.main}`
+                          : 'none',
+                        transition: 'background-color 160ms ease, box-shadow 160ms ease',
+                        '&:hover': {
+                          bgcolor: activeThreadId === thread.id
+                            ? theme.palette.mode === 'dark'
+                              ? theme.palette.primary.dark
+                              : theme.palette.primary.light
+                            : focusedThreadId === thread.id
+                              ? theme.palette.action.focus
+                            : isSelectionMode && selectedThreadIds.has(thread.id)
+                              ? theme.palette.action.selected
+                            : theme.palette.mode === 'dark'
+                              ? theme.palette.background.paper
+                              : theme.palette.grey[100]
+                        }
+                      }}
+                    >
+                      <ListItemButton
+                        onClick={(e) => handleThreadRowClick(thread, e)}
+                        selected={activeThreadId === thread.id}
+                        sx={{
+                          flex: 1,
+                          minWidth: 0,
+                          py: 1,
+                          pr: 1,
+                          bgcolor: 'transparent',
+                          '&:hover, &.Mui-selected, &.Mui-selected:hover, &.Mui-focusVisible': {
+                            bgcolor: 'transparent',
+                          },
+                        }}
+                      >
+                        {isSelectionMode && !selectionOnly && (
+                          <Checkbox
+                            edge="start"
+                            size="small"
+                            checked={selectedThreadIds.has(thread.id)}
+                            onChange={(e) => handleToggleThreadSelection(thread.id, e)}
+                            onClick={(e) => e.stopPropagation()}
+                            disabled={isBulkDeleting}
+                            inputProps={{ 'aria-label': `Select ${thread.name}` }}
+                            sx={{ p: 0.5, mr: 0.5 }}
+                          />
+                        )}
+
+                        {editingThreadId === thread.id ? (
+                          <TextField
+                            size="small"
+                            value={editingName}
+                            onChange={(e) => setEditingName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleEditThread(thread.id);
+                              if (e.key === 'Escape') setEditingThreadId(null);
+                            }}
+                            onBlur={() => handleEditThread(thread.id)}
+                            autoFocus
+                            fullWidth
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <Tooltip title={renderThreadTooltip(thread)} placement="left" arrow enterDelay={500} leaveDelay={150} disableInteractive={false}>
+                            <Box sx={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%' }}>
+                              <ListItemText
+                                primary={
+                                  <Typography variant="body2" fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'} noWrap>
+                                    {thread.name}
+                                  </Typography>
+                                }
+                                secondaryTypographyProps={{ component: 'span' }}
+                                secondary={
+                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, minWidth: 0, maxWidth: '100%' }}>
+                                    <Typography variant="caption" color="text.secondary" noWrap>
+                                      {formatDate(thread.created_at)}
+                                    </Typography>
+                                    {thread.message_count !== undefined && thread.message_count > 0 && (
+                                      <Chip label={`${thread.message_count} msgs`} size="small" sx={{ height: 16, fontSize: '0.65rem' }} />
+                                    )}
+                                    {thread.file_count !== undefined && thread.file_count > 0 && (
+                                      <Chip icon={<DescriptionIcon sx={{ fontSize: '0.7rem !important' }} />} label={thread.file_count} size="small" sx={{ height: 16, fontSize: '0.65rem' }} />
+                                    )}
+                                  </Box>
+                                }
+                                sx={{ m: 0, minWidth: 0 }}
+                              />
+                            </Box>
+                          </Tooltip>
+                        )}
+                      </ListItemButton>
+
+                      {!isSelectionMode && !selectionOnly && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flex: '0 0 auto', px: 1 }}>
+                          <Tooltip title="Fork thread">
+                            <span>
+                              <IconButton size="small" onClick={(e) => openForkDialog(thread, e)} disabled={forkingThreadId === thread.id} sx={threadActionButtonSx}>
+                                {forkingThreadId === thread.id ? <CircularProgress size={16} /> : <CallSplitIcon fontSize="small" />}
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title="Rename thread">
+                            <IconButton size="small" onClick={(e) => startEditing(thread, e)} sx={threadActionButtonSx}>
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
+                      )}
+                    </ListItem>
+                  </Box>
+                );
+              })}
+            </Box>
+            {false && groupedThreads.map((group) => (
               <Box key={group.project?.id || 'unassigned'}>
                 <Box sx={{ px: 1.5, py: 0.75, bgcolor: 'action.hover', borderTop: 1, borderColor: 'divider' }}>
                   <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>

@@ -25,7 +25,7 @@ import ThreadWorkspaceContent from '../components/workbench/ThreadWorkspaceConte
 import useTraceTabs from '../components/workbench/useTraceTabs';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
 import { Thread, removeSourceFromThread, getParsedSentences, captureBrowserPage, pollForFileReady, getThread, deleteThread, listThreads } from "../lib/api";
-import { loadThreadTabs, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
+import { loadThreadTabs, hydrateThreadPdfTab, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
 import { ProcessStatus } from "../lib/enums";
@@ -104,6 +104,16 @@ export default function Home() {
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
           setActiveTabId(loadedTabs[0].id);
+          window.setTimeout(() => {
+            detailedThread.files.slice(1).forEach(async (threadFile) => {
+              try {
+                const hydrated = await hydrateThreadPdfTab(detailedThread.id, threadFile);
+                setPdfTabs(prev => prev.map(tab => tab.fileHash === hydrated.fileHash ? hydrated : tab));
+              } catch (error) {
+                console.warn(`Failed to hydrate background PDF tab ${threadFile.fileHash}:`, error);
+              }
+            });
+          }, 0);
         } else {
           setActiveTabId('browser-tab');
           setIsBrowserActive(true);
@@ -300,6 +310,17 @@ export default function Home() {
   const handleTabChange = (tabId: string) => {
     setActiveTabId(tabId);
     setIsBrowserActive(tabId === 'browser-tab');
+    const tab = pdfTabs.find(item => item.id === tabId);
+    if (!activeThread || !tab || tabId === 'browser-tab' || tab.sentences) return;
+    void hydrateThreadPdfTab(activeThread.id, {
+      fileHash: tab.fileHash,
+      fileName: tab.fileName,
+      sourceType: tab.sourceType,
+    }).then((hydrated) => {
+      setPdfTabs(prev => prev.map(item => item.fileHash === hydrated.fileHash ? hydrated : item));
+    }).catch((error) => {
+      console.warn(`Failed to hydrate selected PDF tab ${tab.fileHash}:`, error);
+    });
   };
 
   // Handle tab close

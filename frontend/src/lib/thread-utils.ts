@@ -1,44 +1,58 @@
-import type { PdfTab } from "./document-tabs";
-import { Thread, getThread, getPdfByHash, API_BASE } from "./api";
-import { transformSentences } from "./bbox-derivation";
-import { ProcessStatus, ThreadFileSourceType } from "./enums";
+import type { PdfTab } from "./document-tabs.ts";
+import type { Thread, ThreadFile } from "./api.ts";
+import { getThread, getPdfByHash, API_BASE } from "./api.ts";
+import { transformSentences } from "./bbox-derivation.ts";
+import { ProcessStatus, ThreadFileSourceType } from "./enums.ts";
+
+export type DetailedThread = Thread & { files?: ThreadFile[] };
+
+const createPendingThreadPdfTab = (threadId: string, threadFile: ThreadFile): PdfTab => ({
+  id: threadFile.fileHash,
+  fileName: threadFile.fileName,
+  fileHash: threadFile.fileHash,
+  downloadUrl: `${API_BASE}/api/threads/${threadId}/files/${threadFile.fileHash}/download?t=${Date.now()}`,
+  sentences: null,
+  text: '',
+  sourceType: threadFile.sourceType || ThreadFileSourceType.Pdf,
+  parsingStatus: ProcessStatus.Pending,
+});
+
+export async function hydrateThreadPdfTab(threadId: string, threadFile: ThreadFile): Promise<PdfTab> {
+  const pdfData = await getPdfByHash(threadFile.fileHash, threadId);
+  const transformedSentences = transformSentences(pdfData.sentences);
+  return {
+    id: threadFile.fileHash,
+    fileName: threadFile.fileName,
+    fileHash: threadFile.fileHash,
+    downloadUrl: `${API_BASE}/api${pdfData.downloadUrl}?t=${Date.now()}`,
+    sentences: transformedSentences,
+    text: extractTextFromSentences(transformedSentences),
+    sourceType: threadFile.sourceType || ThreadFileSourceType.Pdf,
+    parsingStatus: ProcessStatus.Completed,
+  };
+}
 
 /**
- * Loads all PDF sources for a thread and returns PdfTabs.
+ * Loads PDF sources for a thread and returns PdfTabs. The first tab is hydrated
+ * eagerly; later tabs are lightweight placeholders so selecting a thread is fast.
  */
-export async function loadThreadTabs(thread: Thread): Promise<PdfTab[]> {
-  const threadData = await getThread(thread.id);
+export async function loadThreadTabs(thread: DetailedThread, options?: { eagerCount?: number }): Promise<PdfTab[]> {
+  const threadData = Array.isArray(thread.files) ? thread : await getThread(thread.id);
   if (!threadData.files || threadData.files.length === 0) return [];
   const loadedTabs: PdfTab[] = [];
+  const eagerCount = Math.max(0, options?.eagerCount ?? 1);
   
   // Process files in the order returned by backend (already ordered by added_at DESC)
-  for (const threadFile of threadData.files) {
+  for (const [index, threadFile] of threadData.files.entries()) {
+    if (index >= eagerCount) {
+      loadedTabs.push(createPendingThreadPdfTab(threadData.id, threadFile));
+      continue;
+    }
     try {
-      const pdfData = await getPdfByHash(threadFile.fileHash, thread.id);
-      const transformedSentences = transformSentences(pdfData.sentences);
-      loadedTabs.push({
-        id: threadFile.fileHash,
-        fileName: threadFile.fileName,
-        fileHash: threadFile.fileHash,
-        downloadUrl: `${API_BASE}/api${pdfData.downloadUrl}?t=${Date.now()}`,
-        sentences: transformedSentences,
-        text: extractTextFromSentences(transformedSentences),
-        sourceType: ThreadFileSourceType.Pdf,
-        parsingStatus: ProcessStatus.Completed,
-      });
+      loadedTabs.push(await hydrateThreadPdfTab(threadData.id, threadFile));
     } catch (err) {
       console.warn(`Failed to load file ${threadFile.fileHash}, creating tab with pending status:`, err);
-      // Create tab with basic info even if API call fails
-      loadedTabs.push({
-        id: threadFile.fileHash,
-        fileName: threadFile.fileName,
-        fileHash: threadFile.fileHash,
-        downloadUrl: `${API_BASE}/api/threads/${thread.id}/files/${threadFile.fileHash}/download?t=${Date.now()}`,
-        sentences: null,
-        text: '',
-        sourceType: ThreadFileSourceType.Pdf,
-        parsingStatus: ProcessStatus.Pending,
-      });
+      loadedTabs.push(createPendingThreadPdfTab(threadData.id, threadFile));
     }
   }
   
