@@ -9,8 +9,17 @@ type AnnotationApi = {
   deleteAnnotations: (selection: { pageIndex: number; id: string }[]) => void;
 };
 
+type AnnotationHistoryMetadata = {
+  annotationIds?: string[];
+};
+
+type HistoryApi = {
+  purgeByMetadata: <T>(predicate: (metadata: T | undefined) => boolean, topic?: string) => number;
+};
+
 type UsePersistAnnotationsParams = {
   annotationApi: AnnotationApi | null | undefined;
+  historyApi?: HistoryApi | null;
   threadId?: string | null;
   fileHash?: string | null;
   pdfLoaded?: boolean;
@@ -50,6 +59,7 @@ function filterPersistableAnnotations(items: any[]): any[] {
  */
 export function usePersistAnnotations({
   annotationApi,
+  historyApi,
   threadId,
   fileHash,
   pdfLoaded = true,
@@ -105,11 +115,16 @@ export function usePersistAnnotations({
 
         // Clear existing annotations first to prevent duplicate React keys
         const existing = await annotationApi.exportAnnotations().toPromise();
-        const existingSelections = (existing as any[])
+        const existingSelections = filterPersistableAnnotations(existing as any[])
           .map(getAnnotationSelection)
           .filter((selection): selection is { pageIndex: number; id: string } => Boolean(selection));
         if (existingSelections.length > 0) {
           annotationApi.deleteAnnotations(existingSelections);
+          const cleanupIds = new Set(existingSelections.map((selection) => selection.id));
+          historyApi?.purgeByMetadata<AnnotationHistoryMetadata>(
+            (metadata) => Boolean(metadata?.annotationIds?.some((id) => cleanupIds.has(id))),
+            "annotations",
+          );
         }
 
         const persistedAnnotations = filterPersistableAnnotations(annotations);
@@ -134,7 +149,7 @@ export function usePersistAnnotations({
     };
 
     void loadAnnotations();
-  }, [annotationApi, fileHash, threadId, pdfLoaded]);
+  }, [annotationApi, historyApi, fileHash, threadId, pdfLoaded]);
 
   /**
    * Capture a snapshot of the current annotations without persisting.

@@ -389,6 +389,7 @@ function EmbedPdfDocumentBody({
     schedulePersistAnnotations,
   } = usePersistAnnotations({
     annotationApi,
+    historyApi,
     threadId,
     fileHash,
     pdfLoaded,
