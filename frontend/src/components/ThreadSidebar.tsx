@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useTheme } from '@mui/material/styles';
+import { alpha, useTheme } from '@mui/material/styles';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 declare const process: {
@@ -1120,11 +1120,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         transform: `translateY(${virtualItem.start}px)`,
                         px: 1.5,
                         py: 0.75,
-                        bgcolor: row.group.project && selectedProjectIds.has(row.group.project.id)
-                          ? 'action.selected'
-                          : 'action.hover',
-                        borderTop: 1,
-                        borderColor: 'divider',
+                        bgcolor: activeProjectId === row.group.project?.id
+                          ? alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.24 : 0.14)
+                          : row.group.project && selectedProjectIds.has(row.group.project.id)
+                            ? 'action.selected'
+                            : 'action.hover',
+                        transition: 'background-color 160ms ease',
+                        '&:hover': {
+                          bgcolor: activeProjectId === row.group.project?.id
+                            ? alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.24 : 0.14)
+                            : 'action.selected',
+                        },
                       }}
                     >
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
@@ -1148,6 +1154,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         )}
                         <Button
                           size="small"
+                          disableRipple
                           color={activeProjectId === row.group.project?.id ? 'primary' : 'inherit'}
                           onClick={() => row.group.project && handleProjectClick(row.group.project)}
                           sx={{
@@ -1156,6 +1163,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                             px: 0.5,
                             textTransform: 'none',
                             justifyContent: 'flex-start',
+                            borderRadius: 0,
+                            '&:hover, &:active, &.Mui-focusVisible': {
+                              bgcolor: 'transparent',
+                            },
                           }}
                         >
                           <Typography variant="caption" fontWeight={700} noWrap>
