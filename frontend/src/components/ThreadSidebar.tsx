@@ -77,6 +77,7 @@ import {
 } from '../lib/sidebar-deletion';
 import ThreadReferenceChip from './ThreadReferenceChip';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
+import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
 
 
 export interface ThreadSidebarHeaderState {
@@ -1144,7 +1145,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         },
                       }}
                     >
-                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', ...flexTruncateSx }}>
                         {isSelectionMode && deletionTarget === 'projects' && row.group.project && (
                           <Checkbox
                             size="small"
@@ -1170,7 +1171,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                           onClick={() => row.group.project && handleProjectClick(row.group.project)}
                           sx={{
                             flex: 1,
-                            minWidth: 0,
+                            ...flexTruncateSx,
                             px: 0.5,
                             textTransform: 'none',
                             justifyContent: 'flex-start',
@@ -1180,12 +1181,12 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                             },
                           }}
                         >
-                          <Typography variant="caption" fontWeight={700} noWrap>
+                          <Typography variant="caption" fontWeight={700} noWrap sx={singleLineTruncateSx}>
                             {row.group.project?.name || 'Unassigned'}
                           </Typography>
                         </Button>
                         {row.group.project && !selectionOnly ? (
-                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', flex: '0 0 auto' }}>
                           {activeProjectId === row.group.project.id && (
                             <Tooltip title={`${row.group.project.embeddingModel}: ${
                               projectReadiness[row.group.project.id] === null
@@ -1286,7 +1287,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         selected={activeThreadId === thread.id}
                         sx={{
                           flex: 1,
-                          minWidth: 0,
+                          ...flexTruncateSx,
                           py: 1,
                           pr: 1,
                           bgcolor: 'transparent',
@@ -1327,17 +1328,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                           />
                         ) : (
                           <Tooltip title={renderThreadTooltip(thread)} placement="left" arrow enterDelay={500} leaveDelay={150} disableInteractive={false}>
-                            <Box sx={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0, maxWidth: '100%' }}>
+                            <Box sx={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', ...flexTruncateSx }}>
                               <ListItemText
                                 primary={
-                                  <Typography variant="body2" fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'} noWrap>
+                                  <Typography variant="body2" fontWeight={activeThreadId === thread.id ? 'bold' : 'normal'} noWrap sx={singleLineTruncateSx}>
                                     {thread.name}
                                   </Typography>
                                 }
                                 secondaryTypographyProps={{ component: 'span' }}
                                 secondary={
-                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, minWidth: 0, maxWidth: '100%' }}>
-                                    <Typography variant="caption" color="text.secondary" noWrap>
+                                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, ...flexTruncateSx }}>
+                                    <Typography variant="caption" color="text.secondary" noWrap sx={{ flex: '0 1 auto', ...singleLineTruncateSx }}>
                                       {formatDate(thread.created_at)}
                                     </Typography>
                                     {thread.message_count !== undefined && thread.message_count > 0 && (
@@ -1348,7 +1349,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                                     )}
                                   </Box>
                                 }
-                                sx={{ m: 0, minWidth: 0 }}
+                                sx={{ m: 0, ...flexTruncateSx }}
                               />
                             </Box>
                           </Tooltip>

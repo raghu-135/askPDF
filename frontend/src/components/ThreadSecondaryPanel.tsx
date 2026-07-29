@@ -16,6 +16,7 @@ import FolderCopyIcon from '@mui/icons-material/FolderCopy';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ThreadSidebar, { type ThreadSidebarHeaderState } from './ThreadSidebar';
 import type { Project, Thread } from '../lib/api';
+import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
 
 const countLabel = (count: number, noun: string) => (
   `${count} ${noun}${count === 1 ? '' : 's'}`
@@ -144,6 +145,7 @@ export default function ThreadSecondaryPanel({
     <Box
       sx={{
         minHeight: 49,
+        minWidth: 0,
         borderBottom: 1,
         borderColor: 'divider',
         bgcolor: 'background.paper',
@@ -156,36 +158,55 @@ export default function ThreadSecondaryPanel({
         <>
           <Box
             sx={{
-              flex: '0 1 auto',
+              flex: '0 1 min(42%, 220px)',
               maxWidth: '42%',
               px: 1,
               display: 'flex',
               alignItems: 'center',
-              minWidth: 0,
+              ...flexTruncateSx,
             }}
           >
             <Tooltip title={`Back to ${parentLabel}`}>
-              <Chip
-                size="small"
-                icon={<ArrowBackIcon fontSize="small" />}
-                label={parentLabel}
+              <Box
+                component="button"
+                type="button"
                 onClick={onBackToProject}
-                color="primary"
+                aria-label={`Back to ${parentLabel}`}
                 sx={{
-                  minWidth: 0,
-                  maxWidth: '100%',
-                  '& .MuiChip-label': {
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
+                  border: 0,
+                  bgcolor: 'transparent',
+                  color: 'primary.main',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.75,
+                  px: 0,
+                  py: 0.5,
+                  font: 'inherit',
+                  textAlign: 'left',
+                  ...flexTruncateSx,
+                  '&:hover .back-project-label': {
+                    textDecoration: 'underline',
                   },
                 }}
-              />
+              >
+                <ArrowBackIcon fontSize="small" sx={{ flex: '0 0 auto' }} />
+                <Typography
+                  className="back-project-label"
+                  variant="subtitle2"
+                  fontWeight={700}
+                  noWrap
+                  sx={singleLineTruncateSx}
+                >
+                  {parentLabel}
+                </Typography>
+              </Box>
             </Tooltip>
           </Box>
           <Box
             sx={{
               flex: 1,
-              minWidth: 0,
+              ...flexTruncateSx,
               px: 1.5,
               display: 'flex',
               alignItems: 'center',
@@ -194,7 +215,7 @@ export default function ThreadSecondaryPanel({
             }}
           >
             {renderSelectedTitle ? renderSelectedTitle(activeThread) : (
-              <Typography variant="subtitle2" fontWeight={700} noWrap sx={{ minWidth: 0 }}>
+              <Typography variant="subtitle2" fontWeight={700} noWrap sx={singleLineTruncateSx}>
                 {activeThread.name}
               </Typography>
             )}
@@ -206,7 +227,7 @@ export default function ThreadSecondaryPanel({
           <Box
             sx={{
               flex: 1,
-              minWidth: 0,
+              ...flexTruncateSx,
               px: 1.5,
               display: 'flex',
               alignItems: 'center',
@@ -217,14 +238,14 @@ export default function ThreadSecondaryPanel({
               ? <FolderOutlinedIcon fontSize="small" color="primary" />
               : <FolderCopyIcon fontSize="small" color="primary" />}
             <Tooltip title={activeProject?.name || 'Projects'}>
-              <Typography variant="subtitle1" fontWeight={700} noWrap>
+              <Typography variant="subtitle1" fontWeight={700} noWrap sx={{ ...singleLineTruncateSx, flex: '1 1 auto' }}>
                 {activeProject?.name || 'Projects'}
               </Typography>
             </Tooltip>
             {activeProject ? (
               <Chip
-                label={countLabel(headerState?.activeProjectThreadCount ?? 0, 'thread')}
                 size="small"
+                label={countLabel(headerState?.activeProjectThreadCount ?? 0, 'thread')}
               />
             ) : (
               <>

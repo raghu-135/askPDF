@@ -32,6 +32,7 @@ import { transformSentences } from "../lib/bbox-derivation";
 import { ProcessStatus, ThreadFileSourceType } from "../lib/enums";
 import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 import { checkEmbeddingModelReady } from '../lib/models-api';
+import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -741,14 +742,14 @@ export default function Home() {
                   <Box
                     sx={{
                       flex: 1,
-                      minWidth: 0,
+                      ...flexTruncateSx,
                       alignSelf: 'stretch',
                       display: 'flex',
                       alignItems: 'center',
                       cursor: 'default',
                     }}
                   >
-                    <Typography variant="subtitle2" fontWeight={700} noWrap sx={{ minWidth: 0 }}>
+                    <Typography variant="subtitle2" fontWeight={700} noWrap sx={singleLineTruncateSx}>
                       {thread.name}
                     </Typography>
                   </Box>
