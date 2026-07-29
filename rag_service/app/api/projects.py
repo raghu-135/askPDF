@@ -45,6 +45,7 @@ def _project_payload(project) -> Dict[str, Any]:
         "embedding_model": project.embedding_model,
         "settings_json": merge_project_settings_json(project.settings_json),
         "created_at": iso_utc_z(project.created_at) if project.created_at else None,
+        "last_activity_at": iso_utc_z(project.last_activity_at) if project.last_activity_at else None,
         "updated_at": iso_utc_z(project.updated_at) if project.updated_at else None,
     }
 

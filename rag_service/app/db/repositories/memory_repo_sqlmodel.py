@@ -12,6 +12,7 @@ from sqlalchemy.future import select
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import MemoryCandidateStatus, MemoryScopeType, MemoryStatus, MemoryType, MemoryVisibility
 from app.db.models_sqlmodel import Memory, MemoryCandidate, MemoryEvent
+from app.db.project_activity import touch_project_activity
 from app.time_utils import utc_now
 
 
@@ -112,6 +113,12 @@ class MemoryRepository:
                 )
             )
             await session.flush()
+            if scope_type == MemoryScopeType.PROJECT.value:
+                await touch_project_activity(
+                    session,
+                    scope_id,
+                    occurred_at=memory.created_at,
+                )
             await session.refresh(memory)
             return memory
 
@@ -217,9 +224,16 @@ class MemoryRepository:
             memory = await session.get(Memory, memory_id)
             if memory is None:
                 return False
+            project_id = (
+                memory.scope_id
+                if memory.scope_type == MemoryScopeType.PROJECT.value
+                else None
+            )
             await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id == memory_id))
             await session.delete(memory)
             await session.flush()
+            if project_id:
+                await touch_project_activity(session, project_id)
             return True
 
     async def delete_memories_for_scope(self, *, scope_type: str, scope_id: str) -> list[str]:

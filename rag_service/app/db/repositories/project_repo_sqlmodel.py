@@ -45,6 +45,7 @@ class ProjectRepository:
                     embedding_model=LOCAL_EMBEDDING_MODEL,
                     settings_json={},
                     created_at=utc_now(),
+                    last_activity_at=utc_now(),
                 )
                 session.add(project)
                 await session.flush()
@@ -65,13 +66,15 @@ class ProjectRepository:
         description: str = "",
         settings_json: Optional[Dict[str, Any]] = None,
     ) -> Project:
+        created_at = utc_now()
         project = Project(
             id=str(uuid.uuid4()),
             name=name,
             embedding_model=embedding_model,
             description=description or "",
             settings_json=merge_project_settings_json({}, settings_json),
-            created_at=utc_now(),
+            created_at=created_at,
+            last_activity_at=created_at,
         )
         session = await self._get_session()
         async with session.begin():
@@ -88,7 +91,13 @@ class ProjectRepository:
     async def list_all(self) -> list[Project]:
         session = await self._get_session()
         async with session.begin():
-            result = await session.execute(select(Project).order_by(Project.created_at.asc(), Project.name.asc()))
+            result = await session.execute(
+                select(Project).order_by(
+                    Project.last_activity_at.desc(),
+                    Project.created_at.desc(),
+                    Project.name.asc(),
+                )
+            )
             return list(result.scalars().all())
 
     async def update(

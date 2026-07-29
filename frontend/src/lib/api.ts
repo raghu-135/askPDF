@@ -251,6 +251,7 @@ export interface Project {
   embeddingModel: string;
   settings_json?: Record<string, any>;
   created_at: string;
+  last_activity_at: string;
   updated_at?: string | null;
 }
 
@@ -295,6 +296,7 @@ interface RawProject {
   embedding_model: string;
   settings_json?: Record<string, any>;
   created_at: string;
+  last_activity_at: string;
   updated_at?: string | null;
 }
 
@@ -305,6 +307,7 @@ const mapProject = (raw: RawProject): Project => ({
   embeddingModel: raw.embedding_model,
   settings_json: raw.settings_json,
   created_at: raw.created_at,
+  last_activity_at: raw.last_activity_at,
   updated_at: raw.updated_at,
 });
 

@@ -12,6 +12,7 @@ from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.models_sqlmodel import File, Project, ProjectFile, Thread, ThreadFile
+from app.db.project_activity import touch_project_activity
 from app.time_utils import utc_now
 
 
@@ -39,8 +40,10 @@ class ProjectFileRepository:
             existing = await session.get(ProjectFile, (project_id, file_hash))
             if existing:
                 return True
-            session.add(ProjectFile(project_id=project_id, file_hash=file_hash, added_at=utc_now()))
+            added_at = utc_now()
+            session.add(ProjectFile(project_id=project_id, file_hash=file_hash, added_at=added_at))
             await session.flush()
+            await touch_project_activity(session, project_id, occurred_at=added_at)
         return True
 
     async def remove(self, project_id: str, file_hash: str) -> bool:
@@ -50,6 +53,7 @@ class ProjectFileRepository:
             if not association:
                 return False
             await session.delete(association)
+            await touch_project_activity(session, project_id)
         return True
 
     async def is_file_in_project(self, project_id: str, file_hash: str) -> bool:

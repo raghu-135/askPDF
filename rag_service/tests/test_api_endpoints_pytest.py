@@ -105,6 +105,7 @@ class TestThreadEndpoints:
         )
         assert project_response.status_code == 200
         project = project_response.json()
+        assert project["last_activity_at"]
 
         thread_response = client.post(
             f"/api/projects/{project['id']}/threads",
@@ -114,6 +115,10 @@ class TestThreadEndpoints:
         thread = thread_response.json()
         assert thread["project_id"] == project["id"]
         assert thread["embedding_model"] == project["embedding_model"]
+
+        listed_projects = client.get("/api/projects").json()["projects"]
+        assert listed_projects[0]["id"] == project["id"]
+        assert listed_projects[0]["last_activity_at"] >= project["last_activity_at"]
 
     def test_project_global_memory_setting_create_and_update(self, client):
         created_response = client.post(

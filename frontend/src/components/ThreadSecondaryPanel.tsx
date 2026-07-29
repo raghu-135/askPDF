@@ -12,6 +12,7 @@ import AddIcon from '@mui/icons-material/Add';
 import ClearIcon from '@mui/icons-material/Clear';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import FolderCopyIcon from '@mui/icons-material/FolderCopy';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ThreadSidebar, { type ThreadSidebarHeaderState } from './ThreadSidebar';
 import type { Project, Thread } from '../lib/api';
@@ -212,7 +213,9 @@ export default function ThreadSecondaryPanel({
               gap: 1,
             }}
           >
-            <FolderOutlinedIcon fontSize="small" color="primary" />
+            {activeProject
+              ? <FolderOutlinedIcon fontSize="small" color="primary" />
+              : <FolderCopyIcon fontSize="small" color="primary" />}
             <Tooltip title={activeProject?.name || 'Projects'}>
               <Typography variant="subtitle1" fontWeight={700} noWrap>
                 {activeProject?.name || 'Projects'}

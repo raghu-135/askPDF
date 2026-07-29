@@ -140,6 +140,10 @@ class Project(SQLModel, table=True):
         default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
+    last_activity_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    )
     updated_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), onupdate=func.now())
@@ -154,6 +158,7 @@ class Project(SQLModel, table=True):
         UniqueConstraint("id", "embedding_model", name="uq_projects_id_embedding_model"),
         CheckConstraint("length(btrim(embedding_model)) > 0", name="ck_projects_embedding_model_nonempty"),
         Index("idx_project_created_at", "created_at"),
+        Index("idx_project_last_activity_at", "last_activity_at"),
     )
 
 

@@ -9,8 +9,10 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.enums import MemoryCandidateStatus, MemoryScopeType, MemoryType
-from app.db.models_sqlmodel import Memory, MemoryCandidate, MemoryEvent
+from app.db.models_sqlmodel import ChatTurnStatus, Memory, MemoryCandidate, MemoryEvent, Project
 from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
+from app.db.repositories.message_repo_sqlmodel import MessageRepository
+from app.db.repositories.project_file_repo_sqlmodel import ProjectFileRepository
 from app.db.repositories.project_repo_sqlmodel import DEFAULT_PROJECT_NAME, ProjectRepository
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
 from app.time_utils import utc_now
@@ -32,11 +34,15 @@ from app.db.vector.config import VectorDBInsertError
 def repo_sessionmaker(engine, monkeypatch):
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     import app.db.repositories.memory_repo_sqlmodel as memory_repo
+    import app.db.repositories.message_repo_sqlmodel as message_repo
     import app.db.repositories.project_repo_sqlmodel as project_repo
+    import app.db.repositories.project_file_repo_sqlmodel as project_file_repo
     import app.db.repositories.thread_repo_sqlmodel as thread_repo
 
     monkeypatch.setattr(memory_repo, "async_session_maker", maker)
+    monkeypatch.setattr(message_repo, "async_session_maker", maker)
     monkeypatch.setattr(project_repo, "async_session_maker", maker)
+    monkeypatch.setattr(project_file_repo, "async_session_maker", maker)
     monkeypatch.setattr(thread_repo, "async_session_maker", maker)
     return maker
 
@@ -60,6 +66,71 @@ async def test_thread_repository_creates_thread_in_project(repo_sessionmaker):
 
     assert thread.project_id == project.id
     assert thread.embedding_model == project.embedding_model
+
+
+@pytest.mark.asyncio
+async def test_projects_sort_by_last_activity_and_activity_writes_are_monotonic(
+    repo_sessionmaker,
+    sample_file,
+):
+    project_repo = ProjectRepository()
+    older = await project_repo.create(name="Older", embedding_model="BAAI/bge-m3")
+    newer = await project_repo.create(name="Newer", embedding_model="BAAI/bge-m3")
+    old_timestamp = utc_now() - timedelta(days=30)
+    recent_timestamp = utc_now() - timedelta(days=1)
+
+    async with repo_sessionmaker() as session:
+        async with session.begin():
+            older_row = await session.get(Project, older.id)
+            newer_row = await session.get(Project, newer.id)
+            older_row.last_activity_at = old_timestamp
+            newer_row.last_activity_at = recent_timestamp
+
+    assert [project.id for project in await project_repo.list_all()][:2] == [
+        newer.id,
+        older.id,
+    ]
+
+    thread = await ThreadRepository().create("Active thread", older.id)
+    refreshed = await project_repo.get(older.id)
+    assert refreshed.last_activity_at > recent_timestamp
+    thread_activity = refreshed.last_activity_at
+
+    await MessageRepository().create_turn(
+        thread_id=thread.id,
+        question="Do not reorder",
+        status=ChatTurnStatus.CANCELLED.value,
+        created_at=thread_activity + timedelta(days=1),
+    )
+    refreshed = await project_repo.get(older.id)
+    assert refreshed.last_activity_at == thread_activity
+
+    await MessageRepository().create_turn(
+        thread_id=thread.id,
+        question="Meaningful activity",
+        answer="Completed",
+        created_at=thread_activity + timedelta(days=2),
+    )
+    refreshed = await project_repo.get(older.id)
+    assert refreshed.last_activity_at == thread_activity + timedelta(days=2)
+
+    await ProjectFileRepository().add(older.id, sample_file.file_hash)
+    file_activity = (await project_repo.get(older.id)).last_activity_at
+    assert file_activity >= refreshed.last_activity_at
+
+    memory = await MemoryRepository().create_memory(
+        scope_type=MemoryScopeType.PROJECT.value,
+        scope_id=older.id,
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Project activity memory.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="project-activity-memory",
+    )
+    memory_activity = (await project_repo.get(older.id)).last_activity_at
+    assert memory_activity >= file_activity
+
+    await MemoryRepository().delete_memory(memory.id)
+    assert (await project_repo.get(older.id)).last_activity_at >= memory_activity
 
 
 @pytest.mark.asyncio

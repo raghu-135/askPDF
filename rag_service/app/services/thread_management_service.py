@@ -18,6 +18,7 @@ from app.db import (
 )
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
+from app.db.project_activity import touch_project_activity
 from app.db.models_sqlmodel import (
     ChatTurn,
     Memory,
@@ -140,6 +141,12 @@ async def fork_thread(
                 created_at=forked_at,
             )
             session.add(forked_thread)
+            await session.flush()
+            await touch_project_activity(
+                session,
+                target_project,
+                occurred_at=forked_at,
+            )
 
             parent_metadata = copy.deepcopy(source_thread.thread_metadata or {})
             fork_children = parent_metadata.get("fork_children")

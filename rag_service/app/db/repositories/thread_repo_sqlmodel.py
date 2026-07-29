@@ -13,6 +13,7 @@ from sqlalchemy.future import select
 from sqlalchemy import func
 
 from app.db.models_sqlmodel import Project, ProjectFile, Thread, ChatTurn, ChatTurnStatus, ThreadFile
+from app.db.project_activity import touch_project_activity
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import utc_now
@@ -52,6 +53,11 @@ class ThreadRepository:
             )
             session.add(thread)
             await session.flush()
+            await touch_project_activity(
+                session,
+                project.id,
+                occurred_at=created_at,
+            )
             await session.refresh(thread)
         return thread
 

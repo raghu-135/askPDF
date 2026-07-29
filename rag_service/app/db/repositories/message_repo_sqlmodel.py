@@ -19,6 +19,7 @@ from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import ReasoningFormat
 from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import ChatTurn, ChatTurnStatus, MessageRole
+from app.db.project_activity import touch_thread_project_activity
 from app.time_utils import utc_now
 
 
@@ -225,6 +226,12 @@ class MessageRepository:
         async with session.begin():
             session.add(turn)
             await session.flush()
+            if status != ChatTurnStatus.CANCELLED.value:
+                await touch_thread_project_activity(
+                    session,
+                    thread_id,
+                    occurred_at=now,
+                )
             await session.refresh(turn)
         return turn
 
