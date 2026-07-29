@@ -141,6 +141,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     return `Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
   });
   const [newThreadProjectId, setNewThreadProjectId] = useState<string>('');
+  const [isThreadProjectLocked, setIsThreadProjectLocked] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [newProjectEmbeddingModel, setNewProjectEmbeddingModel] = useState('');
@@ -292,6 +293,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         onEmbeddingModelChange(thread.embeddingModel);
       }
       setCreateDialogOpen(false);
+      setIsThreadProjectLocked(false);
       setNewThreadName('');
     } catch (error) {
       console.error('Failed to create thread:', error);
@@ -717,10 +719,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     validateEmbeddingModel();
   }, [newProjectEmbeddingModel]);
 
-  const handleOpenCreateThreadDialog = useCallback((projectId?: string) => {
+  const handleOpenCreateThreadDialog = useCallback((
+    projectId?: string,
+    lockProject = false,
+  ) => {
     const now = new Date();
     setNewThreadName(`Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`);
     if (projectId) setNewThreadProjectId(projectId);
+    setIsThreadProjectLocked(Boolean(projectId) && lockProject);
     setCreateDialogOpen(true);
   }, []);
 
@@ -1199,7 +1205,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                             <IconButton
                               size="small"
                               aria-label={`Create thread in ${row.group.project.name}`}
-                              onClick={() => handleOpenCreateThreadDialog(row.group.project!.id)}
+                              onClick={() => handleOpenCreateThreadDialog(row.group.project!.id, true)}
                               sx={{ width: 24, height: 24 }}
                             >
                               <AddIcon sx={{ fontSize: 16 }} />
@@ -1609,7 +1615,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       {/* Create Thread Dialog */}
       <Dialog
         open={createDialogOpen}
-        onClose={() => setCreateDialogOpen(false)}
+        onClose={() => {
+          setCreateDialogOpen(false);
+          setIsThreadProjectLocked(false);
+        }}
         maxWidth="xs"
         fullWidth
       >
@@ -1629,6 +1638,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             <Select
               value={newThreadProjectId}
               label="Project"
+              disabled={isThreadProjectLocked}
               onChange={(e) => setNewThreadProjectId(e.target.value)}
             >
               {projects.map((project) => (
@@ -1636,17 +1646,19 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               ))}
             </Select>
           </FormControl>
-          <Button
-            size="small"
-            startIcon={<AddIcon />}
-            onClick={() => {
-              setNewProjectReadsUserMemory(false);
-              setCreateProjectDialogOpen(true);
-            }}
-            sx={{ mt: 1 }}
-          >
-            Create project
-          </Button>
+          {!isThreadProjectLocked && (
+            <Button
+              size="small"
+              startIcon={<AddIcon />}
+              onClick={() => {
+                setNewProjectReadsUserMemory(false);
+                setCreateProjectDialogOpen(true);
+              }}
+              sx={{ mt: 1 }}
+            >
+              Create project
+            </Button>
+          )}
           <Box sx={{ mt: 2, p: 1.5, bgcolor: 'warning.light', borderRadius: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <LockIcon fontSize="small" />
@@ -1660,7 +1672,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => {
+            setCreateDialogOpen(false);
+            setIsThreadProjectLocked(false);
+          }}>Cancel</Button>
           <Button
             onClick={handleCreateThread}
             variant="contained"
