@@ -31,6 +31,8 @@ import {
   Checkbox,
   FormControlLabel,
   Switch,
+  Alert,
+  Divider,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -44,6 +46,8 @@ import ErrorIcon from '@mui/icons-material/Error';
 import ClearIcon from '@mui/icons-material/Clear';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import SettingsIcon from '@mui/icons-material/Settings';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 
 import {
   Project,
@@ -56,9 +60,17 @@ import {
   forkThread,
   updateThread,
   updateProject,
+  cloneProject,
+  deleteProject,
+  getProjectLifecycleSummary,
+  type ProjectLifecycleSummary,
 } from '../lib/api';
 import { fetchAvailableEmbeddingModels, checkEmbeddingModelReady } from '../lib/models-api';
 import { formatDate } from '../lib/date-utils';
+import {
+  defaultProjectCloneName,
+  projectDeletionConfirmed,
+} from '../lib/project-lifecycle';
 import ThreadReferenceChip from './ThreadReferenceChip';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
 
@@ -84,6 +96,8 @@ interface ThreadSidebarProps {
   onThreadSelect: (thread: Thread | null) => void;
   onProjectSelect?: (project: Project) => void;
   onProjectReadinessChange?: (projectId: string, ready: boolean | null) => void;
+  onProjectCloned?: (project: Project) => void;
+  onProjectDeleted?: (projectId: string) => void;
   onThreadForked?: (thread: Thread) => void;
   onEmbeddingModelChange?: (model: string) => void;
   hideHeader?: boolean;
@@ -98,6 +112,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   onThreadSelect,
   onProjectSelect,
   onProjectReadinessChange,
+  onProjectCloned,
+  onProjectDeleted,
   onThreadForked,
   onEmbeddingModelChange,
   hideHeader = false,
@@ -122,6 +138,16 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [newProjectReadsUserMemory, setNewProjectReadsUserMemory] = useState(false);
   const [settingsProject, setSettingsProject] = useState<Project | null>(null);
   const [settingsProjectReadsUserMemory, setSettingsProjectReadsUserMemory] = useState(false);
+  const [projectLifecycle, setProjectLifecycle] = useState<ProjectLifecycleSummary | null>(null);
+  const [projectLifecycleLoading, setProjectLifecycleLoading] = useState(false);
+  const [projectActionError, setProjectActionError] = useState('');
+  const [cloneProjectDialog, setCloneProjectDialog] = useState<{
+    project: Project;
+    includeThreads: boolean;
+  } | null>(null);
+  const [cloneProjectName, setCloneProjectName] = useState('');
+  const [deleteProjectDialog, setDeleteProjectDialog] = useState<Project | null>(null);
+  const [deleteProjectConfirmation, setDeleteProjectConfirmation] = useState('');
   const [availableEmbeddingModels, setAvailableEmbeddingModels] = useState<{
     local_embedding_models: string[];
     embedding_models: string[];
@@ -274,11 +300,33 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     }
   };
 
+  const loadProjectLifecycle = async (project: Project) => {
+    setProjectLifecycleLoading(true);
+    setProjectActionError('');
+    try {
+      const [summary, ready] = await Promise.all([
+        getProjectLifecycleSummary(project.id),
+        checkEmbeddingModelReady(project.embeddingModel),
+      ]);
+      setProjectLifecycle(summary);
+      setProjectReadiness((current) => ({ ...current, [project.id]: ready }));
+      onProjectReadinessChange?.(project.id, ready);
+    } catch (error: any) {
+      setProjectActionError(error?.message || 'Unable to load project lifecycle details.');
+      setProjectLifecycle(null);
+    } finally {
+      setProjectLifecycleLoading(false);
+    }
+  };
+
   const handleOpenProjectSettings = (project: Project) => {
     setSettingsProject(project);
+    setProjectLifecycle(null);
+    setProjectActionError('');
     setSettingsProjectReadsUserMemory(
       project.settings_json?.memory?.project_reads_user_memory === true
     );
+    void loadProjectLifecycle(project);
   };
 
   const handleSaveProjectSettings = async () => {
@@ -298,6 +346,61 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       setSettingsProject(null);
     } catch (error) {
       console.error('Failed to update project memory settings:', error);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleOpenCloneProject = (project: Project, includeThreads: boolean) => {
+    setCloneProjectName(defaultProjectCloneName(project.name));
+    setCloneProjectDialog({ project, includeThreads });
+    setProjectActionError('');
+  };
+
+  const handleCloneProject = async () => {
+    if (!cloneProjectDialog || !cloneProjectName.trim()) return;
+    try {
+      setCreating(true);
+      setProjectActionError('');
+      const result = await cloneProject(
+        cloneProjectDialog.project.id,
+        cloneProjectName.trim(),
+        cloneProjectDialog.includeThreads,
+      );
+      await loadSidebarData();
+      setSettingsProject(null);
+      setCloneProjectDialog(null);
+      onProjectCloned?.(result.project);
+    } catch (error: any) {
+      setProjectActionError(error?.message || 'Failed to clone project.');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const handleOpenDeleteProject = (project: Project) => {
+    setDeleteProjectConfirmation('');
+    setDeleteProjectDialog(project);
+    setProjectActionError('');
+  };
+
+  const handleDeleteProject = async () => {
+    if (
+      !deleteProjectDialog
+      || !projectDeletionConfirmed(deleteProjectConfirmation, deleteProjectDialog.name)
+    ) return;
+    try {
+      setCreating(true);
+      setProjectActionError('');
+      const projectId = deleteProjectDialog.id;
+      await deleteProject(projectId);
+      setProjects((current) => current.filter((project) => project.id !== projectId));
+      setThreads((current) => current.filter((thread) => thread.project_id !== projectId));
+      setSettingsProject(null);
+      setDeleteProjectDialog(null);
+      onProjectDeleted?.(projectId);
+    } catch (error: any) {
+      setProjectActionError(error?.message || 'Failed to delete project.');
     } finally {
       setCreating(false);
     }
@@ -1297,11 +1400,166 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
             Applies immediately. Each thread keeps its own global-memory preference.
           </Typography>
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Project actions</Typography>
+          {projectActionError && (
+            <Alert severity="error" sx={{ mb: 1.5 }}>{projectActionError}</Alert>
+          )}
+          {projectLifecycleLoading ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
+              <CircularProgress size={18} />
+              <Typography variant="body2">Loading project details...</Typography>
+            </Box>
+          ) : (
+            <Box sx={{ display: 'grid', gap: 1 }}>
+              <Button
+                variant="outlined"
+                startIcon={<ContentCopyIcon />}
+                onClick={() => settingsProject && handleOpenCloneProject(settingsProject, false)}
+                disabled={
+                  creating
+                  || !settingsProject
+                  || !projectLifecycle?.can_clone
+                  || projectReadiness[settingsProject.id] !== true
+                }
+                sx={{ justifyContent: 'flex-start' }}
+              >
+                Clone project
+              </Button>
+              <Button
+                variant="outlined"
+                startIcon={<ContentCopyIcon />}
+                onClick={() => settingsProject && handleOpenCloneProject(settingsProject, true)}
+                disabled={
+                  creating
+                  || !settingsProject
+                  || !projectLifecycle?.can_clone
+                  || projectReadiness[settingsProject.id] !== true
+                }
+                sx={{ justifyContent: 'flex-start' }}
+              >
+                Clone with threads
+              </Button>
+              <Button
+                variant="outlined"
+                color="error"
+                startIcon={<DeleteForeverIcon />}
+                onClick={() => settingsProject && handleOpenDeleteProject(settingsProject)}
+                disabled={creating || !settingsProject || !projectLifecycle?.can_delete}
+                sx={{ justifyContent: 'flex-start' }}
+              >
+                Delete project
+              </Button>
+              {projectLifecycle?.blocked_reason === 'active_agent_runs' && (
+                <Typography variant="caption" color="warning.main">
+                  Finish or cancel active agent runs before cloning or deleting this project.
+                </Typography>
+              )}
+              {projectLifecycle?.protected && (
+                <Typography variant="caption" color="text.secondary">
+                  The default project cannot be deleted.
+                </Typography>
+              )}
+              {settingsProject && projectReadiness[settingsProject.id] === false && (
+                <Typography variant="caption" color="warning.main">
+                  Cloning is unavailable while the locked embedding model is offline.
+                </Typography>
+              )}
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSettingsProject(null)} disabled={creating}>Cancel</Button>
           <Button onClick={handleSaveProjectSettings} variant="contained" disabled={creating}>
             {creating ? <CircularProgress size={20} /> : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={Boolean(cloneProjectDialog)}
+        onClose={() => !creating && setCloneProjectDialog(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>
+          {cloneProjectDialog?.includeThreads ? 'Clone with threads' : 'Clone project'}
+        </DialogTitle>
+        <DialogContent>
+          {projectActionError && (
+            <Alert severity="error" sx={{ mb: 1.5 }}>{projectActionError}</Alert>
+          )}
+          <TextField
+            autoFocus
+            fullWidth
+            label="Project name"
+            value={cloneProjectName}
+            onChange={(event) => setCloneProjectName(event.target.value)}
+            disabled={creating}
+            sx={{ mt: 0.5 }}
+          />
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+            {cloneProjectDialog?.includeThreads
+              ? 'Copies shared knowledge, project and thread memory, completed conversations, annotations, and read-only historical debug traces.'
+              : 'Copies shared knowledge, project settings, and active project memory into a new project.'}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCloneProjectDialog(null)} disabled={creating}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleCloneProject}
+            disabled={creating || !cloneProjectName.trim()}
+          >
+            {creating ? <CircularProgress size={20} /> : 'Clone'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog
+        open={Boolean(deleteProjectDialog)}
+        onClose={() => !creating && setDeleteProjectDialog(null)}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle>Delete project</DialogTitle>
+        <DialogContent>
+          {projectActionError && (
+            <Alert severity="error" sx={{ mb: 1.5 }}>{projectActionError}</Alert>
+          )}
+          <Typography variant="body2" color="text.secondary">
+            This permanently deletes {projectLifecycle?.thread_count || 0} threads,{' '}
+            {projectLifecycle?.memory_count || 0} memories, and{' '}
+            {projectLifecycle?.candidate_count || 0} memory candidates.
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+            {projectLifecycle?.shared_file_count || 0} shared files will remain available to
+            other projects. {projectLifecycle?.orphan_file_count || 0} unreferenced files will
+            be permanently removed.
+          </Typography>
+          <TextField
+            fullWidth
+            label={`Type "${deleteProjectDialog?.name || ''}" to confirm`}
+            value={deleteProjectConfirmation}
+            onChange={(event) => setDeleteProjectConfirmation(event.target.value)}
+            disabled={creating}
+            sx={{ mt: 2 }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteProjectDialog(null)} disabled={creating}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={handleDeleteProject}
+            disabled={
+              creating
+              || !deleteProjectDialog
+              || !projectDeletionConfirmed(
+                deleteProjectConfirmation,
+                deleteProjectDialog.name,
+              )
+            }
+          >
+            {creating ? <CircularProgress size={20} /> : 'Delete permanently'}
           </Button>
         </DialogActions>
       </Dialog>

@@ -26,6 +26,8 @@ export default function ThreadSecondaryPanel({
   onThreadSelect,
   onProjectSelect,
   onProjectReadinessChange,
+  onProjectCloned,
+  onProjectDeleted,
   onThreadForked,
   onClearThread,
   renderConversation,
@@ -41,6 +43,8 @@ export default function ThreadSecondaryPanel({
   onThreadSelect: (thread: Thread | null) => void;
   onProjectSelect?: (project: Project) => void;
   onProjectReadinessChange?: (projectId: string, ready: boolean | null) => void;
+  onProjectCloned?: (project: Project) => void;
+  onProjectDeleted?: (projectId: string) => void;
   onThreadForked?: (thread: Thread) => void;
   onClearThread: () => void;
   renderConversation?: (thread: Thread) => React.ReactNode;
@@ -222,6 +226,8 @@ export default function ThreadSecondaryPanel({
               onThreadSelect={onThreadSelect}
               onProjectSelect={onProjectSelect}
               onProjectReadinessChange={onProjectReadinessChange}
+              onProjectCloned={onProjectCloned}
+              onProjectDeleted={onProjectDeleted}
               onThreadForked={onThreadForked}
               hideHeader
               onHeaderStateChange={setHeaderState}

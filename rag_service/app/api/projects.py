@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, status
 
 from app.db import (
     assign_thread_to_project,
@@ -13,9 +13,25 @@ from app.db import (
     list_projects,
     update_project,
 )
-from app.models.requests import ProjectCreateRequest, ProjectUpdateRequest, ThreadCreateRequest
+from app.models.requests import (
+    ProjectCloneRequest,
+    ProjectCreateRequest,
+    ProjectUpdateRequest,
+    ThreadCreateRequest,
+)
 from app.time_utils import iso_utc_z
 from app.services.memory_policy import merge_project_settings_json
+from app.services.embedding_model_service import EmbeddingModelUnavailableError
+from app.services.project_lifecycle_service import (
+    ProjectActiveRunsError,
+    ProjectCleanupError,
+    ProjectLifecycleError,
+    ProjectNotFoundError,
+    ProtectedProjectError,
+    clone_project,
+    delete_project,
+    get_project_lifecycle_summary,
+)
 
 
 router = APIRouter(tags=["projects"])
@@ -88,6 +104,54 @@ async def update_project_endpoint(project_id: str, req: ProjectUpdateRequest):
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return _project_payload(project)
+
+
+def _raise_lifecycle_http(exc: Exception):
+    if isinstance(exc, ProjectNotFoundError):
+        raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)})
+    if isinstance(exc, (ProtectedProjectError, ProjectActiveRunsError, EmbeddingModelUnavailableError)):
+        code = getattr(exc, "code", "embedding_model_unavailable")
+        raise HTTPException(status_code=409, detail={"code": code, "message": str(exc)})
+    if isinstance(exc, ProjectCleanupError):
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": str(exc)})
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, ProjectLifecycleError):
+        raise HTTPException(status_code=500, detail={"code": exc.code, "message": str(exc)})
+    raise exc
+
+
+@router.get("/projects/{project_id}/lifecycle-summary")
+async def project_lifecycle_summary_endpoint(project_id: str):
+    try:
+        return await get_project_lifecycle_summary(project_id)
+    except Exception as exc:
+        _raise_lifecycle_http(exc)
+
+
+@router.post("/projects/{project_id}/clone", status_code=status.HTTP_201_CREATED)
+async def clone_project_endpoint(project_id: str, req: ProjectCloneRequest):
+    try:
+        result = await clone_project(
+            project_id,
+            name=req.name,
+            include_threads=req.include_threads,
+        )
+        return {
+            "project": _project_payload(result["project"]),
+            "counts": result["counts"],
+            "warnings": result["warnings"],
+        }
+    except Exception as exc:
+        _raise_lifecycle_http(exc)
+
+
+@router.delete("/projects/{project_id}")
+async def delete_project_endpoint(project_id: str):
+    try:
+        return await delete_project(project_id)
+    except Exception as exc:
+        _raise_lifecycle_http(exc)
 
 
 @router.post("/projects/{project_id}/threads")

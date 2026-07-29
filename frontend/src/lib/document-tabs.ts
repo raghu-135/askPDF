@@ -56,8 +56,8 @@ export const buildDocumentWorkspaceTabs = ({
 }): WorkspaceTab[] => {
   if (!enabled) return [];
   return [
-    { kind: 'memory', id: 'memory-tab', label: 'Memory' },
     { kind: 'browser', id: 'browser-tab', label: 'Browser' },
+    { kind: 'memory', id: 'memory-tab', label: 'Memory' },
     ...documents.map((tab) => ({ ...tab, kind: 'document' as const })),
     {
       kind: 'trace',
@@ -70,11 +70,12 @@ export const buildDocumentWorkspaceTabs = ({
 };
 
 export const buildProjectWorkspaceTabs = (documents: readonly PdfTab[]): WorkspaceTab[] => [
-  { kind: 'memory', id: 'memory-tab', label: 'Memory' },
   { kind: 'browser', id: 'browser-tab', label: 'Browser' },
+  { kind: 'memory', id: 'memory-tab', label: 'Memory' },
   ...documents.map((tab) => ({ ...tab, kind: 'document' as const })),
 ];
 
 export const buildHomeWorkspaceTabs = (): WorkspaceTab[] => [
+  { kind: 'home', id: 'home-tab', label: 'Home' },
   { kind: 'memory', id: 'memory-tab', label: 'Memory' },
 ];

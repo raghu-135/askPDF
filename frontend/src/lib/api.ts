@@ -254,6 +254,40 @@ export interface Project {
   updated_at?: string | null;
 }
 
+export interface ProjectLifecycleSummary {
+  project_id: string;
+  thread_count: number;
+  project_file_count: number;
+  direct_file_count: number;
+  unique_file_count: number;
+  shared_file_count: number;
+  orphan_file_count: number;
+  memory_count: number;
+  project_memory_count: number;
+  thread_memory_count: number;
+  candidate_count: number;
+  annotation_count: number;
+  agent_run_count: number;
+  active_run_count: number;
+  protected: boolean;
+  can_delete: boolean;
+  can_clone: boolean;
+  blocked_reason?: string | null;
+}
+
+export interface ProjectCloneResponse {
+  project: Project;
+  counts: Record<string, number>;
+  warnings: Array<{ code: string; memory_id?: string; message: string }>;
+}
+
+export interface ProjectDeleteResponse {
+  project_id: string;
+  deleted: boolean;
+  counts: Record<string, any>;
+  warnings: string[];
+}
+
 interface RawProject {
   id: string;
   name: string;
@@ -905,6 +939,42 @@ export async function updateProject(
   });
   if (!res.ok) throw new Error(await res.text());
   return mapProject(await res.json());
+}
+
+export async function getProjectLifecycleSummary(
+  projectId: string
+): Promise<ProjectLifecycleSummary> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/lifecycle-summary`
+  );
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function cloneProject(
+  projectId: string,
+  name: string,
+  includeThreads: boolean
+): Promise<ProjectCloneResponse> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}/clone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, include_threads: includeThreads }),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  const raw = await res.json();
+  return {
+    ...raw,
+    project: mapProject(raw.project),
+  };
+}
+
+export async function deleteProject(projectId: string): Promise<ProjectDeleteResponse> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
 }
 
 export async function createThread(name: string, projectId?: string | null): Promise<Thread> {

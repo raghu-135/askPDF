@@ -137,30 +137,35 @@ export default function Home() {
   }, [clearTraces]);
 
   const handleProjectSelect = useCallback(async (project: Project) => {
+    const preserveMemory = activeTabId === 'memory-tab';
     setActiveThread(null);
     setActiveProject(project);
     setPdfTabs([]);
     clearTraces();
-    setIsBrowserActive(false);
-    setActiveTabId('memory-tab');
+    setIsBrowserActive(!preserveMemory);
+    setActiveTabId(preserveMemory ? 'memory-tab' : 'browser-tab');
     setIsPdfLoading(true);
     setProjectModelReady(null);
     try {
       const tabs = await loadProjectTabs(project);
       setPdfTabs(tabs);
-      setActiveTabId(tabs[0]?.id || 'memory-tab');
     } catch (error) {
       console.error('Failed to open project knowledge:', error);
       setProjectModelReady(false);
     } finally {
       setIsPdfLoading(false);
     }
-  }, [clearTraces]);
+  }, [activeTabId, clearTraces]);
 
   const handleThreadForked = useCallback(async (thread: Thread) => {
     setSidebarVersion(v => v + 1);
     await handleThreadSelect(thread);
   }, [handleThreadSelect]);
+
+  const handleProjectCloned = useCallback(async (project: Project) => {
+    setSidebarVersion(v => v + 1);
+    await handleProjectSelect(project);
+  }, [handleProjectSelect]);
 
   const handleThreadSelectFromList = useCallback((thread: Thread | null) => {
     handleThreadSelect(thread);
@@ -191,7 +196,7 @@ export default function Home() {
     setActiveProject(null);
     setProjectModelReady(null);
     setPdfTabs([]);
-    setActiveTabId('memory-tab');
+    setActiveTabId('home-tab');
     setIsBrowserActive(false);
     setCurrentPdfId(null);
     setCurrentChatId(null);
@@ -200,6 +205,16 @@ export default function Home() {
     setChatSentences([]);
     clearTraces();
   }, [clearTraces]);
+
+  const handleProjectDeleted = useCallback((projectId: string) => {
+    setSidebarVersion(v => v + 1);
+    if (
+      activeProject?.id === projectId
+      || activeThread?.project_id === projectId
+    ) {
+      handleOpenHome();
+    }
+  }, [activeProject?.id, activeThread?.project_id, handleOpenHome]);
 
   const handleDeleteActiveThread = useCallback(async () => {
     if (!activeThread || isDeletingActiveThread) return;
@@ -673,6 +688,8 @@ export default function Home() {
               onThreadSelect={handleThreadSelectFromList}
               onProjectSelect={handleProjectSelect}
               onProjectReadinessChange={(_projectId, ready) => setProjectModelReady(ready)}
+              onProjectCloned={handleProjectCloned}
+              onProjectDeleted={handleProjectDeleted}
               onThreadForked={handleThreadForked}
               onClearThread={handleShowAllThreads}
               darkMode={pdfDarkMode}

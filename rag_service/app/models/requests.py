@@ -89,6 +89,15 @@ class ProjectUpdateRequest(BaseModel):
     settings_json: Optional[Dict[str, Any]] = None
 
 
+class ProjectCloneRequest(BaseModel):
+    """Request body for cloning a project snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    include_threads: bool = False
+
+
 class MemoryCreateRequest(BaseModel):
     """Request body for creating a canonical memory."""
 
