@@ -3,6 +3,10 @@ import {
   Badge,
   Box,
   CircularProgress,
+  ListItemIcon,
+  ListItemText,
+  Menu,
+  MenuItem,
   Tab,
   Tabs,
   Tooltip,
@@ -12,13 +16,16 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AddIcon from '@mui/icons-material/Add';
 import CloseIcon from '@mui/icons-material/Close';
 import CodeIcon from '@mui/icons-material/Code';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import LanguageIcon from '@mui/icons-material/Language';
 import HomeIcon from '@mui/icons-material/Home';
 import MemoryIcon from '@mui/icons-material/Memory';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import PublicIcon from '@mui/icons-material/Public';
 import RouteIcon from '@mui/icons-material/Route';
 import ErrorIcon from '@mui/icons-material/Error';
 import ReplayIcon from '@mui/icons-material/Replay';
@@ -76,6 +83,13 @@ const commonTabSx = {
   },
 };
 
+const documentTabWidth = 168;
+
+const stopTabAction = (event: React.SyntheticEvent) => {
+  event.preventDefault();
+  event.stopPropagation();
+};
+
 export default React.memo(function WorkspaceTabs({
   tabs,
   activeTabId,
@@ -99,19 +113,84 @@ export default React.memo(function WorkspaceTabs({
   isBrowserCapturing?: boolean;
   documentContext?: 'thread' | 'project';
 }) {
+  const [documentMenuAnchor, setDocumentMenuAnchor] = React.useState<HTMLElement | null>(null);
+  const [documentMenuTabId, setDocumentMenuTabId] = React.useState<string | null>(null);
+
   if (tabs.length === 0) return null;
-  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.id === activeTabId));
+  const activeIndex = tabs.findIndex((tab) => tab.id === activeTabId);
+  const activeDocumentMenuTab = tabs.find((tab): tab is DocumentWorkspaceTab => (
+    tab.kind === 'document' && tab.id === documentMenuTabId
+  )) || null;
+
+  const closeDocumentMenu = () => {
+    setDocumentMenuAnchor(null);
+    setDocumentMenuTabId(null);
+  };
+
+  const handleCopySourceUrl = async (sourceUrl: string) => {
+    try {
+      await navigator.clipboard?.writeText(sourceUrl);
+    } catch {
+      window.prompt('Copy source URL', sourceUrl);
+    }
+  };
+
+  const renderSystemTab = ({
+    tab,
+    icon,
+    tooltip,
+    label,
+  }: {
+    tab: BrowserWorkspaceTab | MemoryWorkspaceTab | TraceWorkspaceTab;
+    icon: React.ReactElement;
+    tooltip: string;
+    label?: string | React.ReactElement;
+  }) => {
+    const active = tab.id === activeTabId;
+    return (
+      <Tooltip key={tab.id} title={tooltip}>
+        <Tab
+          aria-label={tooltip}
+          icon={icon}
+          iconPosition="start"
+          label={active ? (label ?? tab.label) : undefined}
+          sx={{
+            ...commonTabSx,
+            minWidth: active ? undefined : 44,
+            px: active ? 1.5 : 1,
+          }}
+        />
+      </Tooltip>
+    );
+  };
 
   return (
-    <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper', minHeight: 40 }}>
+    <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper', minHeight: 40, minWidth: 0, width: '100%', maxWidth: '100%', overflow: 'hidden' }}>
       <Tabs
-        value={activeIndex}
+        value={activeIndex >= 0 ? activeIndex : false}
         onChange={(_, index) => tabs[index] && onTabChange(tabs[index].id)}
         variant="scrollable"
         scrollButtons="auto"
+        allowScrollButtonsMobile
         aria-label="Workspace content"
         sx={{
           minHeight: 40,
+          minWidth: 0,
+          width: '100%',
+          maxWidth: '100%',
+          display: 'flex',
+          '& .MuiTabs-scroller': {
+            minWidth: 0,
+            flex: '1 1 auto',
+          },
+          '& .MuiTabs-flexContainer': { minWidth: 0 },
+          '& .MuiTabs-scrollButtons': { flex: '0 0 36px' },
+          '& .MuiTabs-scrollButtons.Mui-disabled': {
+            width: 0,
+            flexBasis: 0,
+            opacity: 0,
+            overflow: 'hidden',
+          },
           '& .MuiTab-root': {
             minHeight: 40,
             textTransform: 'none',
@@ -126,7 +205,11 @@ export default React.memo(function WorkspaceTabs({
             return <Tab key={tab.id} icon={<HomeIcon fontSize="small" />} iconPosition="start" label={tab.label} sx={commonTabSx} />;
           }
           if (tab.kind === 'memory') {
-            return <Tab key={tab.id} icon={<MemoryIcon fontSize="small" />} iconPosition="start" label={tab.label} sx={commonTabSx} />;
+            return renderSystemTab({
+              tab,
+              icon: <MemoryIcon fontSize="small" />,
+              tooltip: 'Memory',
+            });
           }
           if (tab.kind === 'canvas') {
             return <Tab key={tab.id} icon={<Badge color="error" badgeContent={tab.issueCount || 0}><AccountTreeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
@@ -135,25 +218,21 @@ export default React.memo(function WorkspaceTabs({
             return <Tab key={tab.id} icon={<Badge color="primary" variant={tab.dirty ? 'dot' : 'standard'}><CodeIcon fontSize="small" /></Badge>} iconPosition="start" label={tab.label} sx={commonTabSx} />;
           }
           if (tab.kind === 'trace') {
-            return (
-              <Tab
-                key={tab.id}
-                icon={<Badge color={statusColor(tab.status)} variant={tab.status === 'running' ? 'dot' : 'standard'} badgeContent={tab.status === 'running' ? undefined : tab.count} max={99}><RouteIcon fontSize="small" /></Badge>}
-                iconPosition="start"
-                label={tab.label}
-                sx={commonTabSx}
-              />
-            );
+            return renderSystemTab({
+              tab,
+              icon: <Badge color={statusColor(tab.status)} variant={tab.status === 'running' ? 'dot' : 'standard'} badgeContent={tab.status === 'running' ? undefined : tab.count} max={99}><RouteIcon fontSize="small" /></Badge>,
+              tooltip: 'Debug Trace',
+            });
           }
           if (tab.kind === 'browser') {
             const active = tab.id === activeTabId;
-            return (
-              <Tab
-                key={tab.id}
-                label={
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <OpenInBrowserIcon fontSize="small" />
-                    <Typography component="span">{tab.label}</Typography>
+            return renderSystemTab({
+              tab,
+              icon: <PublicIcon fontSize="small" />,
+              tooltip: 'Browser',
+              label: (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <Typography component="span">{tab.label}</Typography>
                     {active && onAddBrowserToThread && (
                       <Tooltip title={documentContext === 'project' ? 'Add current page to project' : 'Add current page to thread'}>
                         <span>
@@ -163,13 +242,12 @@ export default React.memo(function WorkspaceTabs({
                             tabIndex={isBrowserCapturing ? -1 : 0}
                             aria-disabled={isBrowserCapturing}
                             onClick={(event) => {
-                              event.stopPropagation();
+                              stopTabAction(event);
                               if (!isBrowserCapturing) onAddBrowserToThread();
                             }}
                             onKeyDown={(event) => {
                               if (!isBrowserCapturing && (event.key === 'Enter' || event.key === ' ')) {
-                                event.preventDefault();
-                                event.stopPropagation();
+                                stopTabAction(event);
                                 onAddBrowserToThread();
                               }
                             }}
@@ -181,10 +259,8 @@ export default React.memo(function WorkspaceTabs({
                       </Tooltip>
                     )}
                   </Box>
-                }
-                sx={commonTabSx}
-              />
-            );
+              ),
+            });
           }
 
           const isBrowserDocument = tab.sourceType === ThreadFileSourceType.Browser;
@@ -200,147 +276,179 @@ export default React.memo(function WorkspaceTabs({
           return (
             <Tab
               key={tab.id}
+              aria-label={fullTitle}
               label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0, width: '100%' }}>
                   {isBrowserDocument ? (
                     <Tooltip title="Open source webpage">
-                      <Box
-                        component="span"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (tab.sourceUrl) {
-                            window.open(tab.sourceUrl, '_blank', 'noopener,noreferrer');
-                          }
-                        }}
-                        sx={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: tab.sourceUrl ? 'pointer' : 'default',
-                          p: '2px',
-                          borderRadius: 1,
-                          color: 'primary.main',
-                        }}
-                      >
-                        <LanguageIcon fontSize="small" />
-                      </Box>
+                      <span>
+                        <Box
+                          component="span"
+                          role={tab.sourceUrl ? 'button' : undefined}
+                          tabIndex={tab.sourceUrl ? 0 : -1}
+                          onClick={(event) => {
+                            stopTabAction(event);
+                            if (tab.sourceUrl) {
+                              window.open(tab.sourceUrl, '_blank', 'noopener,noreferrer');
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (tab.sourceUrl && (event.key === 'Enter' || event.key === ' ')) {
+                              stopTabAction(event);
+                              window.open(tab.sourceUrl, '_blank', 'noopener,noreferrer');
+                            }
+                          }}
+                          sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flex: '0 0 auto',
+                            cursor: tab.sourceUrl ? 'pointer' : 'default',
+                            p: '2px',
+                            borderRadius: 1,
+                            color: 'primary.main',
+                          }}
+                        >
+                          <LanguageIcon fontSize="small" />
+                        </Box>
+                      </span>
                     </Tooltip>
-                  ) : <PictureAsPdfIcon fontSize="small" sx={{ color: 'error.main', opacity: 0.7 }} />}
+                  ) : <PictureAsPdfIcon fontSize="small" sx={{ color: 'error.main', opacity: 0.7, flex: '0 0 auto' }} />}
                   <Tooltip title={fullTitle} placement="bottom">
                     <Typography
                       component="span"
                       sx={{
-                        maxWidth: 120,
+                        minWidth: 0,
+                        flex: '1 1 auto',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
+                        textAlign: 'left',
                       }}
                     >
                       {label}
                     </Typography>
                   </Tooltip>
-                  {tab.parsingStatus === ProcessStatus.Pending && <CircularProgress size={13} />}
+                  {tab.parsingStatus === ProcessStatus.Pending && <CircularProgress size={13} sx={{ flex: '0 0 auto' }} />}
                   {tab.parsingStatus === ProcessStatus.Failed && (
                     <Tooltip title={tab.processingError || 'Processing failed'}>
-                      <ErrorIcon color="error" sx={{ fontSize: 15 }} />
-                    </Tooltip>
-                  )}
-                  {tab.parsingStatus === ProcessStatus.Failed && onDocumentRetry && (
-                    <Tooltip title="Retry processing">
-                      <Box
-                        component="span"
-                        role="button"
-                        tabIndex={0}
-                        onClick={(event) => { event.stopPropagation(); onDocumentRetry(tab.id); }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            onDocumentRetry(tab.id);
-                          }
-                        }}
-                        sx={{ p: 0.2, display: 'inline-flex', borderRadius: 1 }}
-                      >
-                        <ReplayIcon sx={{ fontSize: 15 }} />
-                      </Box>
+                      <ErrorIcon color="error" sx={{ fontSize: 15, flex: '0 0 auto' }} />
                     </Tooltip>
                   )}
                   {tab.associationScope === 'project' && (
-                    <Tooltip title="Project knowledge"><MemoryIcon sx={{ fontSize: 14, color: 'primary.main' }} /></Tooltip>
+                    <Tooltip title="Project knowledge"><MemoryIcon sx={{ fontSize: 14, color: 'primary.main', flex: '0 0 auto' }} /></Tooltip>
                   )}
-                  {onDocumentPromote && tab.associationScope === 'thread' && !tab.isProjectKnowledge && (
-                    <Tooltip title="Add to project knowledge">
+                  <Tooltip title="Document actions">
+                    <span>
                       <Box
                         component="span"
                         role="button"
                         tabIndex={0}
-                        onClick={(event) => { event.stopPropagation(); onDocumentPromote(tab.id); }}
+                        aria-label={`Document actions for ${fullTitle}`}
+                        onClick={(event) => {
+                          stopTabAction(event);
+                          setDocumentMenuAnchor(event.currentTarget);
+                          setDocumentMenuTabId(tab.id);
+                        }}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            onDocumentPromote(tab.id);
+                            stopTabAction(event);
+                            setDocumentMenuAnchor(event.currentTarget);
+                            setDocumentMenuTabId(tab.id);
                           }
                         }}
-                        sx={{ p: 0.2, display: 'inline-flex', borderRadius: 1 }}
+                        sx={{ p: 0.2, display: 'inline-flex', borderRadius: 1, opacity: 0.72, flex: '0 0 auto' }}
                       >
-                        <CreateNewFolderIcon sx={{ fontSize: 15 }} />
+                        <MoreVertIcon sx={{ fontSize: 16 }} />
                       </Box>
-                    </Tooltip>
-                  )}
-                  {onDocumentRemove && (documentContext === 'project' || tab.associationScope !== 'project') && (
-                    <Tooltip title={documentContext === 'project' ? 'Remove from project' : 'Remove from thread'}>
-                      <Box
-                        component="span"
-                        role="button"
-                        tabIndex={0}
-                        className="tab-remove-btn"
-                        onClick={(event) => { event.stopPropagation(); onDocumentRemove(tab.id); }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            onDocumentRemove(tab.id);
-                          }
-                        }}
-                        sx={{ p: 0.2, color: 'error.main', opacity: 0, display: 'inline-flex', borderRadius: 1 }}
-                      >
-                        <DeleteIcon sx={{ fontSize: 14 }} />
-                      </Box>
-                    </Tooltip>
-                  )}
-                  {onTabClose && (
-                    <Tooltip title="Close tab">
-                      <Box
-                        component="span"
-                        role="button"
-                        tabIndex={0}
-                        onClick={(event) => { event.stopPropagation(); onTabClose(tab.id); }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            onTabClose(tab.id);
-                          }
-                        }}
-                        sx={{ p: 0.2, opacity: 0.65, display: 'inline-flex', borderRadius: 1 }}
-                      >
-                        <CloseIcon sx={{ fontSize: 16 }} />
-                      </Box>
-                    </Tooltip>
-                  )}
+                    </span>
+                  </Tooltip>
                   </Box>
                 }
                 sx={{
                   ...commonTabSx,
-                  '&:hover .tab-remove-btn': {
-                    opacity: 0.7,
-                  },
+                  width: documentTabWidth,
+                  minWidth: documentTabWidth,
+                  maxWidth: documentTabWidth,
+                  overflow: 'hidden',
                 }}
               />
             );
         })}
       </Tabs>
+      <Menu
+        anchorEl={documentMenuAnchor}
+        open={Boolean(documentMenuAnchor && activeDocumentMenuTab)}
+        onClose={closeDocumentMenu}
+        onClick={(event) => event.stopPropagation()}
+      >
+        {activeDocumentMenuTab?.sourceType === ThreadFileSourceType.Browser && activeDocumentMenuTab.sourceUrl && (
+          <MenuItem
+            onClick={() => {
+              window.open(activeDocumentMenuTab.sourceUrl, '_blank', 'noopener,noreferrer');
+              closeDocumentMenu();
+            }}
+          >
+            <ListItemIcon><OpenInBrowserIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Open source webpage</ListItemText>
+          </MenuItem>
+        )}
+        {activeDocumentMenuTab?.sourceType === ThreadFileSourceType.Browser && activeDocumentMenuTab.sourceUrl && (
+          <MenuItem
+            onClick={() => {
+              void handleCopySourceUrl(activeDocumentMenuTab.sourceUrl!);
+              closeDocumentMenu();
+            }}
+          >
+            <ListItemIcon><ContentCopyIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Copy source URL</ListItemText>
+          </MenuItem>
+        )}
+        {activeDocumentMenuTab && onDocumentPromote && activeDocumentMenuTab.associationScope === 'thread' && !activeDocumentMenuTab.isProjectKnowledge && (
+          <MenuItem
+            onClick={() => {
+              onDocumentPromote(activeDocumentMenuTab.id);
+              closeDocumentMenu();
+            }}
+          >
+            <ListItemIcon><CreateNewFolderIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Add to project knowledge</ListItemText>
+          </MenuItem>
+        )}
+        {activeDocumentMenuTab?.parsingStatus === ProcessStatus.Failed && onDocumentRetry && (
+          <MenuItem
+            onClick={() => {
+              onDocumentRetry(activeDocumentMenuTab.id);
+              closeDocumentMenu();
+            }}
+          >
+            <ListItemIcon><ReplayIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Retry processing</ListItemText>
+          </MenuItem>
+        )}
+        {activeDocumentMenuTab && onDocumentRemove && (documentContext === 'project' || activeDocumentMenuTab.associationScope !== 'project') && (
+          <MenuItem
+            onClick={() => {
+              onDocumentRemove(activeDocumentMenuTab.id);
+              closeDocumentMenu();
+            }}
+          >
+            <ListItemIcon><DeleteIcon color="error" fontSize="small" /></ListItemIcon>
+            <ListItemText>{documentContext === 'project' ? 'Remove from project' : 'Delete from thread'}</ListItemText>
+          </MenuItem>
+        )}
+        {activeDocumentMenuTab && onTabClose && (
+          <MenuItem
+            onClick={() => {
+              onTabClose(activeDocumentMenuTab.id);
+              closeDocumentMenu();
+            }}
+          >
+            <ListItemIcon><CloseIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Close tab</ListItemText>
+          </MenuItem>
+        )}
+      </Menu>
     </Box>
   );
 });

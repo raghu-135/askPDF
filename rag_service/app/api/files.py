@@ -123,6 +123,7 @@ def _file_payload(file, *, scope: str):
         "source_type": file.source_type,
         "association_scope": getattr(file, "association_scope", scope),
         "is_project_knowledge": getattr(file, "is_project_knowledge", scope == "project"),
+        "added_at": maybe_iso_utc_z(getattr(file, "added_at", None)),
     }
 
 

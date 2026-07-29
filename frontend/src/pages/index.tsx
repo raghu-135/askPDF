@@ -7,6 +7,7 @@ import { getTheme } from '../theme';
 import { useAppThemeMode } from '../hooks/useAppThemeMode';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AutoAwesomeSharpIcon from '@mui/icons-material/AutoAwesomeSharp';
+import HomeIcon from '@mui/icons-material/Home';
 
 declare const process: {
   env: Record<string, string | undefined>;
@@ -28,15 +29,15 @@ import { Project, Thread, removeSourceFromThread, removeSourceFromProject, promo
 import { loadThreadTabs, loadProjectTabs, hydrateThreadPdfTab, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
-import { ProcessStatus } from "../lib/enums";
+import { ProcessStatus, ThreadFileSourceType } from "../lib/enums";
 import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 import { checkEmbeddingModelReady } from '../lib/models-api';
 
 export default function Home() {
   // Multiple PDF tabs state
   const [pdfTabs, setPdfTabs] = useState<PdfTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>('home-tab');
-  const activeTabIdRef = useRef<string | null>('home-tab');
+  const [activeTabId, setActiveTabId] = useState<string | null>('memory-tab');
+  const activeTabIdRef = useRef<string | null>('memory-tab');
   activeTabIdRef.current = activeTabId;
   const [isPdfLoading, setIsPdfLoading] = useState(false);
 
@@ -85,10 +86,9 @@ export default function Home() {
 
   // Handle thread selection
   const handleThreadSelect = useCallback(async (thread: Thread | null) => {
-    const preserveMemoryTab = activeTabIdRef.current === 'memory-tab';
     // Clear current state
     setPdfTabs([]);
-    setActiveTabId(preserveMemoryTab ? 'memory-tab' : thread ? null : 'home-tab');
+    setActiveTabId('memory-tab');
     setCurrentPdfId(null);
     setCurrentChatId(null);
     setPlayRequestId(null);
@@ -111,7 +111,7 @@ export default function Home() {
         const loadedTabs = await loadThreadTabs(detailedThread);
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
-          setActiveTabId(preserveMemoryTab ? 'memory-tab' : loadedTabs[0].id);
+          setActiveTabId(loadedTabs[0].id);
           window.setTimeout(() => {
             detailedThread.files.slice(1).forEach(async (threadFile) => {
               try {
@@ -122,11 +122,8 @@ export default function Home() {
               }
             });
           }, 0);
-        } else if (preserveMemoryTab) {
-          setActiveTabId('memory-tab');
         } else {
-          setActiveTabId('browser-tab');
-          setIsBrowserActive(true);
+          setActiveTabId('memory-tab');
         }
       } catch (err) {
         console.error('Failed to load thread files:', err);
@@ -135,23 +132,23 @@ export default function Home() {
       }
     } else {
       setActiveThread(null);
-      setActiveTabId(preserveMemoryTab ? 'memory-tab' : 'home-tab');
+      setActiveTabId('memory-tab');
     }
   }, [clearTraces]);
 
   const handleProjectSelect = useCallback(async (project: Project) => {
-    const preserveMemoryTab = activeTabIdRef.current === 'memory-tab';
     setActiveThread(null);
     setActiveProject(project);
     setPdfTabs([]);
     clearTraces();
-    setIsBrowserActive(!preserveMemoryTab);
-    setActiveTabId(preserveMemoryTab ? 'memory-tab' : 'browser-tab');
+    setIsBrowserActive(false);
+    setActiveTabId('memory-tab');
     setIsPdfLoading(true);
     setProjectModelReady(null);
     try {
       const tabs = await loadProjectTabs(project);
       setPdfTabs(tabs);
+      setActiveTabId(tabs[0]?.id || 'memory-tab');
     } catch (error) {
       console.error('Failed to open project knowledge:', error);
       setProjectModelReady(false);
@@ -188,6 +185,21 @@ export default function Home() {
   const handleShowAllThreads = useCallback(async () => {
     await handleThreadSelect(null);
   }, [handleThreadSelect]);
+
+  const handleOpenHome = useCallback(() => {
+    setActiveThread(null);
+    setActiveProject(null);
+    setProjectModelReady(null);
+    setPdfTabs([]);
+    setActiveTabId('memory-tab');
+    setIsBrowserActive(false);
+    setCurrentPdfId(null);
+    setCurrentChatId(null);
+    setPlayRequestId(null);
+    setActiveSource('pdf');
+    setChatSentences([]);
+    clearTraces();
+  }, [clearTraces]);
 
   const handleDeleteActiveThread = useCallback(async () => {
     if (!activeThread || isDeletingActiveThread) return;
@@ -468,6 +480,12 @@ export default function Home() {
         fileName: displayTitle,
         downloadUrl: `/${target.scope}s/${target.id}/files/${result.fileHash}/download`,
         sentences: null,
+        sourceType: ThreadFileSourceType.Browser,
+        sourceUrl: result.url,
+        filePath: result.url,
+        addedAt: new Date().toISOString(),
+        associationScope: target.scope === 'thread' ? 'thread' : 'project',
+        isProjectKnowledge: target.scope === 'project',
       };
 
       await handlePdfUploaded(uploadData);
@@ -554,6 +572,16 @@ export default function Home() {
           primaryToolbar={
             <Box sx={{ px: 1.5, py: 0.75, minHeight: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
+                <Tooltip title="Home">
+                  <IconButton
+                    color={!activeThread && !activeProject ? 'primary' : 'default'}
+                    size="small"
+                    aria-label="Home"
+                    onClick={handleOpenHome}
+                  >
+                    <HomeIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
                 <PdfUploader
                   target={activeThread
                     ? { scope: 'thread', id: activeThread.id }

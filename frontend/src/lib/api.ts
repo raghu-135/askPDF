@@ -578,6 +578,7 @@ export interface ThreadFile {
   fileName: string;
   filePath?: string;
   sourceType?: ThreadFileSourceTypeValue;
+  addedAt?: string;
   associationScope?: "thread" | "project";
   isProjectKnowledge?: boolean;
   processingStatus?: "pending" | "completed" | "failed";
@@ -589,6 +590,7 @@ interface RawThreadFile {
   file_name: string;
   file_path?: string;
   source_type?: ThreadFileSourceTypeValue;
+  added_at?: string;
   association_scope?: "thread" | "project";
   is_project_knowledge?: boolean;
   processing_status?: "pending" | "completed" | "failed";
@@ -600,6 +602,7 @@ const mapThreadFile = (raw: RawThreadFile): ThreadFile => ({
   fileName: raw.file_name,
   filePath: raw.file_path,
   sourceType: raw.source_type,
+  addedAt: raw.added_at,
   associationScope: raw.association_scope,
   isProjectKnowledge: raw.is_project_knowledge,
   processingStatus: raw.processing_status,

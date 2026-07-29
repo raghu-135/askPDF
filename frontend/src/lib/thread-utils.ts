@@ -14,6 +14,8 @@ const createPendingThreadPdfTab = (threadId: string, threadFile: ThreadFile): Pd
   sentences: null,
   text: '',
   sourceType: threadFile.sourceType || ThreadFileSourceType.Pdf,
+  sourceUrl: threadFile.filePath,
+  addedAt: threadFile.addedAt,
   parsingStatus: threadFile.processingStatus || ProcessStatus.Pending,
   processingError: threadFile.processingError,
   associationScope: threadFile.associationScope,
@@ -31,12 +33,23 @@ export async function hydrateThreadPdfTab(threadId: string, threadFile: ThreadFi
     sentences: transformedSentences,
     text: extractTextFromSentences(transformedSentences),
     sourceType: threadFile.sourceType || ThreadFileSourceType.Pdf,
+    sourceUrl: threadFile.filePath,
+    addedAt: threadFile.addedAt,
     parsingStatus: threadFile.processingStatus || ProcessStatus.Completed,
     processingError: threadFile.processingError,
     associationScope: threadFile.associationScope,
     isProjectKnowledge: threadFile.isProjectKnowledge,
   };
 }
+
+const sortTabsByAddedAt = (tabs: PdfTab[]): PdfTab[] => (
+  [...tabs].sort((a, b) => {
+    const aTime = a.addedAt ? Date.parse(a.addedAt) : Number.MAX_SAFE_INTEGER;
+    const bTime = b.addedAt ? Date.parse(b.addedAt) : Number.MAX_SAFE_INTEGER;
+    if (aTime !== bTime) return aTime - bTime;
+    return a.fileName.localeCompare(b.fileName);
+  })
+);
 
 export async function loadProjectTabs(project: Project, options?: { eagerCount?: number }): Promise<PdfTab[]> {
   const { files } = await getProjectFiles(project.id);
@@ -50,6 +63,8 @@ export async function loadProjectTabs(project: Project, options?: { eagerCount?:
       sentences: null,
       text: '',
       sourceType: file.sourceType || ThreadFileSourceType.Pdf,
+      sourceUrl: file.filePath,
+      addedAt: file.addedAt,
       parsingStatus: file.processingStatus || ProcessStatus.Pending,
       processingError: file.processingError,
       associationScope: 'project',
@@ -69,7 +84,7 @@ export async function loadProjectTabs(project: Project, options?: { eagerCount?:
     } catch {
       return pending;
     }
-  }));
+  })).then(sortTabsByAddedAt);
 }
 
 /**
@@ -82,7 +97,6 @@ export async function loadThreadTabs(thread: DetailedThread, options?: { eagerCo
   const loadedTabs: PdfTab[] = [];
   const eagerCount = Math.max(0, options?.eagerCount ?? 1);
   
-  // Process files in the order returned by backend (already ordered by added_at DESC)
   for (const [index, threadFile] of threadData.files.entries()) {
     if (index >= eagerCount) {
       loadedTabs.push(createPendingThreadPdfTab(threadData.id, threadFile));
@@ -96,8 +110,7 @@ export async function loadThreadTabs(thread: DetailedThread, options?: { eagerCo
     }
   }
   
-  // Return tabs in the same order as backend (most recent first)
-  return loadedTabs;
+  return sortTabsByAddedAt(loadedTabs);
 }
 
 /**
@@ -113,7 +126,11 @@ export function createPdfTabFromUpload(data: any): PdfTab {
     downloadUrl: data?.downloadUrl ? `${API_BASE}/api${data.downloadUrl}?t=${Date.now()}` : '',
     sentences: sentences ? transformedSentences : null,
     text: sentences ? extractTextFromSentences(transformedSentences) : '',
-    sourceType: ThreadFileSourceType.Pdf,
+    sourceType: data?.sourceType || ThreadFileSourceType.Pdf,
+    sourceUrl: data?.sourceUrl || data?.filePath,
+    addedAt: data?.addedAt,
+    associationScope: data?.associationScope,
+    isProjectKnowledge: data?.isProjectKnowledge,
     parsingStatus: sentences ? ProcessStatus.Completed : ProcessStatus.Pending,
   };
 }

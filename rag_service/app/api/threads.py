@@ -146,6 +146,7 @@ async def _thread_file_payloads(thread, files) -> list[dict]:
             "source_type": file.source_type,
             "association_scope": file.association_scope,
             "is_project_knowledge": file.is_project_knowledge,
+            "added_at": iso_utc_z(file.added_at),
             "processing_status": processing_status,
             "processing_error": processing_error,
         })
