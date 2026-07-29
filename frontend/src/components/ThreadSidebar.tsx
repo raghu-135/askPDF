@@ -71,23 +71,30 @@ import {
   defaultProjectCloneName,
   projectDeletionConfirmed,
 } from '../lib/project-lifecycle';
+import {
+  sidebarDeletionTarget,
+  threadsEligibleForProjectDeletion,
+} from '../lib/sidebar-deletion';
 import ThreadReferenceChip from './ThreadReferenceChip';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
 
 
 export interface ThreadSidebarHeaderState {
+  projectCount: number;
   threadCount: number;
-  hasThreads: boolean;
+  activeProjectThreadCount: number;
+  deletionTarget: 'projects' | 'threads';
+  hasDeletableItems: boolean;
   isSelectionMode: boolean;
   selectedCount: number;
-  allThreadsSelected: boolean;
-  someThreadsSelected: boolean;
+  allItemsSelected: boolean;
+  someItemsSelected: boolean;
   isBulkDeleting: boolean;
   openCreateDialog: () => void;
   enterSelectionMode: () => void;
   clearSelection: () => void;
-  deleteSelectedThreads: () => void;
-  toggleAllThreads: (checked: boolean) => void;
+  deleteSelected: () => void;
+  toggleAllItems: (checked: boolean) => void;
 }
 
 interface ThreadSidebarProps {
@@ -164,6 +171,14 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [isCheckingEmbeddingModel, setIsCheckingEmbeddingModel] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
   const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
+  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
+  const [bulkProjectDeleteOpen, setBulkProjectDeleteOpen] = useState(false);
+  const [bulkProjectDeleteConfirmation, setBulkProjectDeleteConfirmation] = useState('');
+  const [bulkProjectDeleteSummaries, setBulkProjectDeleteSummaries] = useState<
+    Array<{ project: Project; summary: ProjectLifecycleSummary | null; error?: string }>
+  >([]);
+  const [bulkProjectDeleteLoading, setBulkProjectDeleteLoading] = useState(false);
+  const [bulkProjectDeleteError, setBulkProjectDeleteError] = useState('');
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [forkingThreadId, setForkingThreadId] = useState<string | null>(null);
   const [forkDialogThread, setForkDialogThread] = useState<Thread | null>(null);
@@ -173,9 +188,19 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const threadRowRefs = useRef<Record<string, HTMLLIElement | null>>({});
   const threadListRef = useRef<HTMLDivElement | null>(null);
 
-  const selectedCount = selectedThreadIds.size;
-  const allThreadsSelected = threads.length > 0 && selectedCount === threads.length;
-  const someThreadsSelected = selectedCount > 0 && !allThreadsSelected;
+  const deletionTarget = sidebarDeletionTarget(activeProjectId);
+  const eligibleThreads = useMemo(
+    () => threadsEligibleForProjectDeletion(threads, activeProjectId),
+    [activeProjectId, threads]
+  );
+  const selectedCount = deletionTarget === 'projects'
+    ? selectedProjectIds.size
+    : selectedThreadIds.size;
+  const eligibleItemCount = deletionTarget === 'projects'
+    ? projects.length
+    : eligibleThreads.length;
+  const allItemsSelected = eligibleItemCount > 0 && selectedCount === eligibleItemCount;
+  const someItemsSelected = selectedCount > 0 && !allItemsSelected;
   const threadsById = useMemo(
     () => new Map(threads.map(thread => [thread.id, thread])),
     [threads]
@@ -422,17 +447,18 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     checked: boolean,
     isShiftClick: boolean
   ) => {
+    if (!activeProjectId || !eligibleThreads.some((thread) => thread.id === threadId)) return;
     setSelectedThreadIds(prev => {
       const next = new Set(prev);
-      const currentIndex = threads.findIndex(thread => thread.id === threadId);
+      const currentIndex = eligibleThreads.findIndex(thread => thread.id === threadId);
       const lastIndex = lastSelectedThreadId
-        ? threads.findIndex(thread => thread.id === lastSelectedThreadId)
+        ? eligibleThreads.findIndex(thread => thread.id === lastSelectedThreadId)
         : -1;
 
       if (isShiftClick && currentIndex !== -1 && lastIndex !== -1) {
         const start = Math.min(currentIndex, lastIndex);
         const end = Math.max(currentIndex, lastIndex);
-        threads.slice(start, end + 1).forEach(thread => {
+        eligibleThreads.slice(start, end + 1).forEach(thread => {
           if (checked) {
             next.add(thread.id);
           } else {
@@ -462,24 +488,13 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     );
   };
 
-  const handleThreadRowClick = (thread: Thread, event: React.MouseEvent) => {
-    if (!isSelectionMode) {
-      onThreadSelect(thread);
-      return;
-    }
-
-    event.preventDefault();
-    toggleThreadSelection(
-      thread.id,
-      !selectedThreadIds.has(thread.id),
-      event.shiftKey
-    );
+  const handleThreadRowClick = (thread: Thread) => {
+    onThreadSelect(thread);
   };
 
   const handleProjectClick = async (project: Project) => {
     if (selectionOnly) return;
     if (activeProjectId === project.id) {
-      onThreadSelect(null);
       return;
     }
     onProjectSelect?.(project);
@@ -495,23 +510,23 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     }
   };
 
-  const handleToggleAllThreadsChecked = useCallback((checked: boolean) => {
-    if (checked) {
-      setSelectedThreadIds(new Set(threads.map(thread => thread.id)));
-      setLastSelectedThreadId(threads[threads.length - 1]?.id ?? null);
-    } else {
-      setSelectedThreadIds(new Set());
-      setLastSelectedThreadId(null);
+  const handleToggleAllItemsChecked = useCallback((checked: boolean) => {
+    if (deletionTarget === 'projects') {
+      setSelectedProjectIds(checked ? new Set(projects.map((project) => project.id)) : new Set());
+      return;
     }
-  }, [threads]);
+    setSelectedThreadIds(checked ? new Set(eligibleThreads.map((thread) => thread.id)) : new Set());
+    setLastSelectedThreadId(checked ? eligibleThreads[eligibleThreads.length - 1]?.id ?? null : null);
+  }, [deletionTarget, eligibleThreads, projects]);
 
   const handleToggleAllThreads = (event: React.ChangeEvent<HTMLInputElement>) => {
     event.stopPropagation();
-    handleToggleAllThreadsChecked(event.target.checked);
+    handleToggleAllItemsChecked(event.target.checked);
   };
 
   const clearThreadSelection = useCallback(() => {
     setSelectedThreadIds(new Set());
+    setSelectedProjectIds(new Set());
     setLastSelectedThreadId(null);
     setIsSelectionMode(false);
   }, []);
@@ -521,7 +536,8 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   }, []);
 
   const handleBulkDeleteThreads = useCallback(async () => {
-    const threadIds = Array.from(selectedThreadIds);
+    const eligibleIds = new Set(eligibleThreads.map((thread) => thread.id));
+    const threadIds = Array.from(selectedThreadIds).filter((threadId) => eligibleIds.has(threadId));
     if (threadIds.length === 0) return;
     if (!confirm(`Delete ${threadIds.length} threads and all their messages?`)) return;
 
@@ -556,7 +572,84 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     } finally {
       setIsBulkDeleting(false);
     }
-  }, [activeThreadId, onThreadSelect, selectedThreadIds]);
+  }, [activeThreadId, eligibleThreads, onThreadSelect, selectedThreadIds]);
+
+  const handleRequestBulkDeleteProjects = useCallback(async () => {
+    const selectedProjects = projects.filter((project) => selectedProjectIds.has(project.id));
+    if (selectedProjects.length === 0) return;
+    setBulkProjectDeleteOpen(true);
+    setBulkProjectDeleteConfirmation('');
+    setBulkProjectDeleteError('');
+    setBulkProjectDeleteLoading(true);
+    try {
+      const summaries = await Promise.all(selectedProjects.map(async (project) => {
+        try {
+          return {
+            project,
+            summary: await getProjectLifecycleSummary(project.id),
+          };
+        } catch (error) {
+          return {
+            project,
+            summary: null,
+            error: error instanceof Error ? error.message : 'Unable to inspect project',
+          };
+        }
+      }));
+      setBulkProjectDeleteSummaries(summaries);
+    } finally {
+      setBulkProjectDeleteLoading(false);
+    }
+  }, [projects, selectedProjectIds]);
+
+  const handleBulkDeleteProjects = useCallback(async () => {
+    const deletable = bulkProjectDeleteSummaries.filter((item) => item.summary?.can_delete);
+    const confirmation = `DELETE ${deletable.length} ${deletable.length === 1 ? 'PROJECT' : 'PROJECTS'}`;
+    if (deletable.length === 0 || bulkProjectDeleteConfirmation !== confirmation) return;
+
+    setIsBulkDeleting(true);
+    setBulkProjectDeleteError('');
+    const deletedIds = new Set<string>();
+    const failures: string[] = [];
+    for (const item of deletable) {
+      try {
+        await deleteProject(item.project.id);
+        deletedIds.add(item.project.id);
+      } catch (error) {
+        failures.push(
+          `${item.project.name}: ${error instanceof Error ? error.message : 'delete failed'}`
+        );
+      }
+    }
+
+    setProjects((current) => current.filter((project) => !deletedIds.has(project.id)));
+    setThreads((current) => current.filter((thread) => !deletedIds.has(thread.project_id || '')));
+    setSelectedProjectIds((current) => new Set(
+      Array.from(current).filter((projectId) => !deletedIds.has(projectId))
+    ));
+    if (deletedIds.size > 0) {
+      onProjectDeleted?.(deletedIds.values().next().value as string);
+    }
+    if (failures.length === 0) {
+      setBulkProjectDeleteOpen(false);
+      clearThreadSelection();
+    } else {
+      setBulkProjectDeleteError(failures.join('\n'));
+    }
+    setIsBulkDeleting(false);
+  }, [
+    bulkProjectDeleteConfirmation,
+    bulkProjectDeleteSummaries,
+    clearThreadSelection,
+    onProjectDeleted,
+  ]);
+
+  useEffect(() => {
+    setSelectedThreadIds(new Set());
+    setSelectedProjectIds(new Set());
+    setLastSelectedThreadId(null);
+    setIsSelectionMode(false);
+  }, [activeProjectId]);
 
   const handleEditThread = async (threadId: string) => {
     if (!editingName.trim()) return;
@@ -632,30 +725,42 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   }, []);
 
   const headerState = useMemo<ThreadSidebarHeaderState>(() => ({
+    projectCount: projects.length,
     threadCount: threads.length,
-    hasThreads: threads.length > 0,
+    activeProjectThreadCount: activeProjectId
+      ? threads.filter((thread) => thread.project_id === activeProjectId).length
+      : 0,
+    deletionTarget,
+    hasDeletableItems: eligibleItemCount > 0,
     isSelectionMode,
     selectedCount,
-    allThreadsSelected,
-    someThreadsSelected,
+    allItemsSelected,
+    someItemsSelected,
     isBulkDeleting,
     openCreateDialog: selectionOnly ? () => undefined : handleOpenCreateDialog,
     enterSelectionMode: selectionOnly ? () => undefined : enterThreadSelectionMode,
     clearSelection: clearThreadSelection,
-    deleteSelectedThreads: handleBulkDeleteThreads,
-    toggleAllThreads: handleToggleAllThreadsChecked,
+    deleteSelected: deletionTarget === 'projects'
+      ? handleRequestBulkDeleteProjects
+      : handleBulkDeleteThreads,
+    toggleAllItems: handleToggleAllItemsChecked,
   }), [
-    allThreadsSelected,
+    allItemsSelected,
     clearThreadSelection,
+    deletionTarget,
+    eligibleItemCount,
     enterThreadSelectionMode,
     handleBulkDeleteThreads,
     handleOpenCreateDialog,
-    handleToggleAllThreadsChecked,
+    handleRequestBulkDeleteProjects,
+    handleToggleAllItemsChecked,
     isBulkDeleting,
     isSelectionMode,
     selectedCount,
-    someThreadsSelected,
-    threads.length,
+    someItemsSelected,
+    projects.length,
+    threads,
+    activeProjectId,
     selectionOnly,
   ]);
 
@@ -867,6 +972,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       opacity: 0.45,
     },
   };
+  const bulkDeletableProjects = bulkProjectDeleteSummaries.filter(
+    (item) => item.summary?.can_delete
+  );
+  const bulkBlockedProjects = bulkProjectDeleteSummaries.filter(
+    (item) => !item.summary?.can_delete
+  );
+  const bulkProjectConfirmationPhrase = (
+    `DELETE ${bulkDeletableProjects.length} ${
+      bulkDeletableProjects.length === 1 ? 'PROJECT' : 'PROJECTS'
+    }`
+  );
 
   return (
     <Paper
@@ -909,17 +1025,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </Box>
           {!selectionOnly && (isSelectionMode ? (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <Tooltip title={allThreadsSelected ? "Clear selection" : "Select all threads. Shift-click a thread to select a range."}>
+              <Tooltip title={allItemsSelected ? "Clear selection" : `Select all ${deletionTarget}`}>
                 <Checkbox
                   size="small"
-                  checked={allThreadsSelected}
-                  indeterminate={someThreadsSelected}
+                  checked={allItemsSelected}
+                  indeterminate={someItemsSelected}
                   onChange={handleToggleAllThreads}
                   disabled={isBulkDeleting}
                   sx={{ p: 0.5 }}
                 />
               </Tooltip>
-              <Tooltip title="Shift-click threads to select a range">
+              <Tooltip title={`${selectedCount} ${deletionTarget} selected`}>
                 <Chip label={`${selectedCount} selected`} size="small" color="primary" />
               </Tooltip>
               <Tooltip title="Clear selection">
@@ -927,12 +1043,16 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                   <ClearIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Tooltip title="Delete selected threads">
+              <Tooltip title={`Delete selected ${deletionTarget}`}>
                 <span>
                   <IconButton
                     size="small"
                     color="error"
-                    onClick={handleBulkDeleteThreads}
+                    onClick={
+                      deletionTarget === 'projects'
+                        ? handleRequestBulkDeleteProjects
+                        : handleBulkDeleteThreads
+                    }
                     disabled={isBulkDeleting || selectedCount === 0}
                   >
                     {isBulkDeleting ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
@@ -942,13 +1062,17 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
             </Box>
           ) : (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
+              <Tooltip title={
+                deletionTarget === 'projects'
+                  ? 'Select projects to delete'
+                  : 'Select threads in this project to delete'
+              }>
                 <span>
                   <IconButton
                     size="small"
                     color="error"
                     onClick={enterThreadSelectionMode}
-                    disabled={threads.length === 0}
+                    disabled={eligibleItemCount === 0}
                   >
                     <DeleteIcon fontSize="small" />
                   </IconButton>
@@ -965,12 +1089,12 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
             <CircularProgress size={24} />
           </Box>
-        ) : threads.length === 0 ? (
+        ) : virtualThreadRows.length === 0 ? (
           <Box sx={{ p: 2, textAlign: 'center' }}>
             <Typography variant="body2" color="text.secondary">
-              No threads yet
+              {activeProjectId ? 'No threads in this project' : 'No projects yet'}
             </Typography>
-            {!selectionOnly && (
+            {!selectionOnly && activeProjectId && (
               <Button size="small" startIcon={<AddIcon />} onClick={handleOpenCreateDialog} sx={{ mt: 1 }}>
                 Create Thread
               </Button>
@@ -996,17 +1120,43 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         transform: `translateY(${virtualItem.start}px)`,
                         px: 1.5,
                         py: 0.75,
-                        bgcolor: 'action.hover',
+                        bgcolor: row.group.project && selectedProjectIds.has(row.group.project.id)
+                          ? 'action.selected'
+                          : 'action.hover',
                         borderTop: 1,
                         borderColor: 'divider',
                       }}
                     >
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
+                        {isSelectionMode && deletionTarget === 'projects' && row.group.project && (
+                          <Checkbox
+                            size="small"
+                            checked={selectedProjectIds.has(row.group.project.id)}
+                            onChange={(event) => {
+                              event.stopPropagation();
+                              const projectId = row.group.project!.id;
+                              setSelectedProjectIds((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked) next.add(projectId);
+                                else next.delete(projectId);
+                                return next;
+                              });
+                            }}
+                            inputProps={{ 'aria-label': `Select project ${row.group.project.name}` }}
+                            sx={{ p: 0.5, mr: 0.5 }}
+                          />
+                        )}
                         <Button
                           size="small"
                           color={activeProjectId === row.group.project?.id ? 'primary' : 'inherit'}
                           onClick={() => row.group.project && handleProjectClick(row.group.project)}
-                          sx={{ minWidth: 0, px: 0.5, textTransform: 'none', justifyContent: 'flex-start' }}
+                          sx={{
+                            flex: 1,
+                            minWidth: 0,
+                            px: 0.5,
+                            textTransform: 'none',
+                            justifyContent: 'flex-start',
+                          }}
                         >
                           <Typography variant="caption" fontWeight={700} noWrap>
                             {row.group.project?.name || 'Unassigned'}
@@ -1073,7 +1223,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                             : theme.palette.primary.light
                           : focusedThreadId === thread.id
                             ? theme.palette.action.focus
-                          : isSelectionMode && selectedThreadIds.has(thread.id)
+                          : isSelectionMode
+                            && deletionTarget === 'threads'
+                            && selectedThreadIds.has(thread.id)
                             ? theme.palette.action.selected
                           : 'transparent',
                         boxShadow: focusedThreadId === thread.id
@@ -1087,7 +1239,9 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                               : theme.palette.primary.light
                             : focusedThreadId === thread.id
                               ? theme.palette.action.focus
-                            : isSelectionMode && selectedThreadIds.has(thread.id)
+                            : isSelectionMode
+                              && deletionTarget === 'threads'
+                              && selectedThreadIds.has(thread.id)
                               ? theme.palette.action.selected
                             : theme.palette.mode === 'dark'
                               ? theme.palette.background.paper
@@ -1096,7 +1250,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                       }}
                     >
                       <ListItemButton
-                        onClick={(e) => handleThreadRowClick(thread, e)}
+                        onClick={() => handleThreadRowClick(thread)}
                         selected={activeThreadId === thread.id}
                         sx={{
                           flex: 1,
@@ -1109,7 +1263,10 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                           },
                         }}
                       >
-                        {isSelectionMode && !selectionOnly && (
+                        {isSelectionMode
+                          && deletionTarget === 'threads'
+                          && thread.project_id === activeProjectId
+                          && !selectionOnly && (
                           <Checkbox
                             edge="start"
                             size="small"
@@ -1166,7 +1323,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         )}
                       </ListItemButton>
 
-                      {!isSelectionMode && !selectionOnly && (
+                      {!selectionOnly && (
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, flex: '0 0 auto', px: 1 }}>
                           <Tooltip title="Fork thread">
                             <span>
@@ -1233,7 +1390,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                     }}
                   >
                     <ListItemButton
-                      onClick={(e) => handleThreadRowClick(thread, e)}
+                      onClick={() => handleThreadRowClick(thread)}
                       selected={activeThreadId === thread.id}
                       sx={{
                         flex: 1,
@@ -1326,6 +1483,102 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           </List>
         )}
       </Collapse>
+
+      <Dialog
+        open={bulkProjectDeleteOpen}
+        onClose={() => {
+          if (isBulkDeleting) return;
+          setBulkProjectDeleteOpen(false);
+          setBulkProjectDeleteError('');
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>Delete selected projects</DialogTitle>
+        <DialogContent>
+          {bulkProjectDeleteLoading ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2 }}>
+              <CircularProgress size={20} />
+              <Typography variant="body2">Checking project contents and active runs...</Typography>
+            </Box>
+          ) : (
+            <>
+              {bulkProjectDeleteError && (
+                <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-line' }}>
+                  {bulkProjectDeleteError}
+                </Alert>
+              )}
+              <Typography variant="body2" color="text.secondary">
+                {bulkDeletableProjects.length} selected {
+                  bulkDeletableProjects.length === 1 ? 'project' : 'projects'
+                } will be permanently deleted with {
+                  bulkDeletableProjects.length === 1 ? 'its' : 'their'
+                } threads, project memory, and unshared files.
+              </Typography>
+              {bulkDeletableProjects.length > 0 && (
+                <Box sx={{ mt: 1.5 }}>
+                  {bulkDeletableProjects.map(({ project }) => (
+                    <Typography key={project.id} variant="body2" noWrap title={project.name}>
+                      {project.name}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+              {bulkBlockedProjects.length > 0 && (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  <Typography variant="body2" fontWeight={700} sx={{ mb: 0.5 }}>
+                    These projects will be skipped
+                  </Typography>
+                  {bulkBlockedProjects.map(({ project, summary, error }) => (
+                    <Typography key={project.id} variant="body2">
+                      {project.name}: {error || (
+                        summary?.protected
+                          ? 'default project is protected'
+                          : summary?.active_run_count
+                            ? 'has active or awaiting-human runs'
+                            : 'cannot be deleted'
+                      )}
+                    </Typography>
+                  ))}
+                </Alert>
+              )}
+              {bulkDeletableProjects.length > 0 && (
+                <TextField
+                  fullWidth
+                  label={`Type "${bulkProjectConfirmationPhrase}" to confirm`}
+                  value={bulkProjectDeleteConfirmation}
+                  onChange={(event) => setBulkProjectDeleteConfirmation(event.target.value)}
+                  disabled={isBulkDeleting}
+                  sx={{ mt: 2 }}
+                />
+              )}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setBulkProjectDeleteOpen(false)}
+            disabled={isBulkDeleting}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={handleBulkDeleteProjects}
+            disabled={
+              bulkProjectDeleteLoading
+              || isBulkDeleting
+              || bulkDeletableProjects.length === 0
+              || bulkProjectDeleteConfirmation !== bulkProjectConfirmationPhrase
+            }
+          >
+            {isBulkDeleting
+              ? <CircularProgress size={20} />
+              : `Delete ${bulkDeletableProjects.length === 1 ? 'project' : 'projects'}`}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Create Thread Dialog */}
       <Dialog

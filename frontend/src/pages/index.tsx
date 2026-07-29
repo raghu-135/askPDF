@@ -25,7 +25,7 @@ import WorkspaceTabs from '../components/workbench/WorkspaceTabs';
 import ThreadWorkspaceContent from '../components/workbench/ThreadWorkspaceContent';
 import useTraceTabs from '../components/workbench/useTraceTabs';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
-import { Project, Thread, removeSourceFromThread, removeSourceFromProject, promoteFileToProject, retryTargetFile, getParsedSentencesForTarget, captureBrowserPageForTarget, pollForTargetFileReady, getThread, deleteThread, listThreads, type KnowledgeTarget } from "../lib/api";
+import { Project, Thread, removeSourceFromThread, removeSourceFromProject, promoteFileToProject, retryTargetFile, getParsedSentencesForTarget, captureBrowserPageForTarget, pollForTargetFileReady, getThread, getProject, deleteThread, listThreads, type KnowledgeTarget } from "../lib/api";
 import { loadThreadTabs, loadProjectTabs, hydrateThreadPdfTab, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
@@ -59,6 +59,7 @@ export default function Home() {
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [threadProject, setThreadProject] = useState<Project | null>(null);
   const [projectModelReady, setProjectModelReady] = useState<boolean | null>(null);
 
   // Sidebar refresh trigger
@@ -95,6 +96,7 @@ export default function Home() {
     setActiveSource('pdf');
     setChatSentences([]);
     setActiveProject(null);
+    setThreadProject(null);
     clearTraces();
     
     // Reset browser state when leaving thread context
@@ -108,7 +110,13 @@ export default function Home() {
         const detailedThread = await import("../lib/api").then(m => m.getThread(thread.id));
         setActiveThread(detailedThread);
 
-        const loadedTabs = await loadThreadTabs(detailedThread);
+        const [loadedTabs, parentProject] = await Promise.all([
+          loadThreadTabs(detailedThread),
+          detailedThread.project_id
+            ? getProject(detailedThread.project_id).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        setThreadProject(parentProject);
         if (loadedTabs.length > 0) {
           setPdfTabs(loadedTabs);
           setActiveTabId(loadedTabs[0].id);
@@ -139,6 +147,7 @@ export default function Home() {
   const handleProjectSelect = useCallback(async (project: Project) => {
     const preserveMemory = activeTabId === 'memory-tab';
     setActiveThread(null);
+    setThreadProject(null);
     setActiveProject(project);
     setPdfTabs([]);
     clearTraces();
@@ -168,7 +177,9 @@ export default function Home() {
   }, [handleProjectSelect]);
 
   const handleProjectUpdated = useCallback((project: Project) => {
+    setSidebarVersion((version) => version + 1);
     setActiveProject((current) => current?.id === project.id ? project : current);
+    setThreadProject((current) => current?.id === project.id ? project : current);
   }, []);
 
   const handleThreadSelectFromList = useCallback((thread: Thread | null) => {
@@ -191,13 +202,10 @@ export default function Home() {
     }
   };
 
-  const handleShowAllThreads = useCallback(async () => {
-    await handleThreadSelect(null);
-  }, [handleThreadSelect]);
-
   const handleOpenHome = useCallback(() => {
     setActiveThread(null);
     setActiveProject(null);
+    setThreadProject(null);
     setProjectModelReady(null);
     setPdfTabs([]);
     setActiveTabId('home-tab');
@@ -209,6 +217,21 @@ export default function Home() {
     setChatSentences([]);
     clearTraces();
   }, [clearTraces]);
+
+  const handleBackToProject = useCallback(async () => {
+    try {
+      const project = threadProject || (
+        activeThread?.project_id ? await getProject(activeThread.project_id) : null
+      );
+      if (project) {
+        await handleProjectSelect(project);
+        return;
+      }
+    } catch (error) {
+      console.error('Failed to open thread project:', error);
+    }
+    handleOpenHome();
+  }, [activeThread?.project_id, handleOpenHome, handleProjectSelect, threadProject]);
 
   const handleProjectDeleted = useCallback((projectId: string) => {
     setSidebarVersion(v => v + 1);
@@ -680,6 +703,7 @@ export default function Home() {
               threadId={activeThread?.id ?? null}
               activeThread={activeThread}
               activeProject={activeProject}
+              projectInventoryVersion={sidebarVersion}
               emptyTitle="Welcome to AskPDF"
               emptyDescription="Select or create a thread, then upload a PDF or open the browser."
             />
@@ -687,6 +711,8 @@ export default function Home() {
           secondaryContent={
             <ThreadSecondaryPanel
               activeThread={activeThread}
+              activeProject={activeProject}
+              threadProject={threadProject}
               activeProjectId={activeProject?.id ?? null}
               sidebarKey={sidebarVersion}
               onThreadSelect={handleThreadSelectFromList}
@@ -696,7 +722,7 @@ export default function Home() {
               onProjectCloned={handleProjectCloned}
               onProjectDeleted={handleProjectDeleted}
               onThreadForked={handleThreadForked}
-              onClearThread={handleShowAllThreads}
+              onBackToProject={handleBackToProject}
               darkMode={pdfDarkMode}
               renderSelectedTitle={(thread) => (
                 <Tooltip

@@ -28,6 +28,7 @@ export default function ThreadWorkspaceContent({
   threadId,
   activeThread = null,
   activeProject = null,
+  projectInventoryVersion = 0,
   emptyTitle,
   emptyDescription,
 }: {
@@ -50,6 +51,7 @@ export default function ThreadWorkspaceContent({
   threadId?: string | null;
   activeThread?: Thread | null;
   activeProject?: Project | null;
+  projectInventoryVersion?: number;
   emptyTitle: string;
   emptyDescription: string;
 }) {
@@ -64,7 +66,11 @@ export default function ThreadWorkspaceContent({
           suspendHeavyContent={isResizing}
         />
       ) : activeTabId === 'memory-tab' ? (
-        <MemoryWorkspace activeThread={activeThread} activeProject={activeProject} />
+        <MemoryWorkspace
+          activeThread={activeThread}
+          activeProject={activeProject}
+          projectInventoryVersion={projectInventoryVersion}
+        />
       ) : isBrowserWorkspaceActive({ activeTabId, isBrowserActive }) ? (
         <BrowserWorkspaceFrame />
       ) : isLoading ? (

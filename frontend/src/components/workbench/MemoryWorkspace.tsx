@@ -109,9 +109,11 @@ function MemoryDetails({ memory }: { memory: MemoryRecord }) {
 export default function MemoryWorkspace({
   activeThread,
   activeProject: projectContext = null,
+  projectInventoryVersion = 0,
 }: {
   activeThread: Thread | null;
   activeProject?: Project | null;
+  projectInventoryVersion?: number;
 }) {
   const [view, setView] = useState<'active' | 'pending'>('active');
   const [scopeType, setScopeType] = useState<MemoryScopeType>(activeThread ? 'thread' : projectContext ? 'project' : 'user');
@@ -159,7 +161,12 @@ export default function MemoryWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [activeThread?.id, activeThread?.project_id, projectContext?.id]);
+  }, [
+    activeThread?.id,
+    activeThread?.project_id,
+    projectContext?.id,
+    projectInventoryVersion,
+  ]);
 
   const target = useMemo(
     () => resolveMemoryScopeTarget({

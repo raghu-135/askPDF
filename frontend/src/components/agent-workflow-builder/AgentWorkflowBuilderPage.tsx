@@ -928,7 +928,7 @@ export default function AgentWorkflowBuilderPage() {
                 selectionOnly
                 activeThreadId={null}
                 onThreadSelect={(thread) => void handleTestThreadSelect(thread)}
-                onClearThread={() => void handleTestThreadSelect(null)}
+                onBackToProject={() => void handleTestThreadSelect(null)}
                 darkMode={darkMode}
                 renderSelectedTitle={(thread) => (
                   <Typography variant="subtitle2" noWrap title={thread.name || thread.id}>

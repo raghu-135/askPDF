@@ -12,12 +12,19 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import ClearIcon from '@mui/icons-material/Clear';
 import DeleteIcon from '@mui/icons-material/Delete';
-import ForumIcon from '@mui/icons-material/Forum';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ThreadSidebar, { type ThreadSidebarHeaderState } from './ThreadSidebar';
 import type { Project, Thread } from '../lib/api';
 
+const countLabel = (count: number, noun: string) => (
+  `${count} ${noun}${count === 1 ? '' : 's'}`
+);
+
 export default function ThreadSecondaryPanel({
   activeThread,
+  activeProject,
+  threadProject,
   activeThreadId,
   activeProjectId,
   sidebarKey,
@@ -30,12 +37,14 @@ export default function ThreadSecondaryPanel({
   onProjectCloned,
   onProjectDeleted,
   onThreadForked,
-  onClearThread,
+  onBackToProject,
   renderConversation,
   renderSelectedTitle,
   selectedActions,
 }: {
   activeThread: Thread | null;
+  activeProject?: Project | null;
+  threadProject?: Project | null;
   activeThreadId?: string | null;
   activeProjectId?: string | null;
   sidebarKey?: React.Key;
@@ -48,30 +57,32 @@ export default function ThreadSecondaryPanel({
   onProjectCloned?: (project: Project) => void;
   onProjectDeleted?: (projectId: string) => void;
   onThreadForked?: (thread: Thread) => void;
-  onClearThread: () => void;
+  onBackToProject: () => void;
   renderConversation?: (thread: Thread) => React.ReactNode;
   renderSelectedTitle?: (thread: Thread) => React.ReactNode;
   selectedActions?: React.ReactNode;
 }) {
   const [headerState, setHeaderState] = useState<ThreadSidebarHeaderState | null>(null);
+  const parentLabel = threadProject?.name || (activeThread?.project_id ? 'Project' : 'Threads');
 
   const renderListActions = () => {
     if (!headerState || selectionOnly) return null;
 
     if (headerState.isSelectionMode) {
+      const itemLabel = headerState.deletionTarget === 'projects' ? 'projects' : 'threads';
       return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <Tooltip title={headerState.allThreadsSelected ? 'Clear selection' : 'Select all threads. Shift-click a thread to select a range.'}>
+          <Tooltip title={headerState.allItemsSelected ? 'Clear selection' : `Select all ${itemLabel}`}>
             <Checkbox
               size="small"
-              checked={headerState.allThreadsSelected}
-              indeterminate={headerState.someThreadsSelected}
-              onChange={(event) => headerState.toggleAllThreads(event.target.checked)}
+              checked={headerState.allItemsSelected}
+              indeterminate={headerState.someItemsSelected}
+              onChange={(event) => headerState.toggleAllItems(event.target.checked)}
               disabled={headerState.isBulkDeleting}
               sx={{ p: 0.5 }}
             />
           </Tooltip>
-          <Tooltip title="Shift-click threads to select a range">
+          <Tooltip title={`${headerState.selectedCount} ${itemLabel} selected`}>
             <Chip label={`${headerState.selectedCount} selected`} size="small" color="primary" />
           </Tooltip>
           <Tooltip title="Clear selection">
@@ -79,12 +90,12 @@ export default function ThreadSecondaryPanel({
               <ClearIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Delete selected threads">
+          <Tooltip title={`Delete selected ${itemLabel}`}>
             <span>
               <IconButton
                 size="small"
                 color="error"
-                onClick={headerState.deleteSelectedThreads}
+                onClick={headerState.deleteSelected}
                 disabled={headerState.isBulkDeleting || headerState.selectedCount === 0}
               >
                 {headerState.isBulkDeleting ? <CircularProgress size={16} /> : <DeleteIcon fontSize="small" />}
@@ -103,19 +114,22 @@ export default function ThreadSecondaryPanel({
               size="small"
               color="primary"
               onClick={headerState.openCreateDialog}
-              disabled={!headerState.hasThreads && !headerState.openCreateDialog}
             >
               <AddIcon fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title="Select threads to delete. Shift-click a thread to select a range.">
+        <Tooltip title={
+          headerState.deletionTarget === 'projects'
+            ? 'Select projects to delete'
+            : 'Select threads in this project to delete'
+        }>
           <span>
             <IconButton
               size="small"
               color="error"
               onClick={headerState.enterSelectionMode}
-              disabled={!headerState.hasThreads}
+              disabled={!headerState.hasDeletableItems}
             >
               <DeleteIcon fontSize="small" />
             </IconButton>
@@ -141,22 +155,35 @@ export default function ThreadSecondaryPanel({
         <>
           <Box
             sx={{
-              width: 132,
-              flex: '0 0 132px',
+              flex: '0 1 220px',
+              maxWidth: '42%',
               px: 1,
               display: 'flex',
               alignItems: 'center',
               minWidth: 0,
+              borderRight: 1,
+              borderColor: 'divider',
             }}
           >
-            <Button
-              size="small"
-              startIcon={<ForumIcon fontSize="small" />}
-              onClick={onClearThread}
-              sx={{ textTransform: 'none', minWidth: 0 }}
-            >
-              All threads
-            </Button>
+            <Tooltip title={`Back to ${parentLabel}`}>
+              <Button
+                size="small"
+                startIcon={<ArrowBackIcon fontSize="small" />}
+                onClick={onBackToProject}
+                sx={{
+                  textTransform: 'none',
+                  minWidth: 0,
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  justifyContent: 'flex-start',
+                  '& .MuiButton-startIcon': { flexShrink: 0 },
+                }}
+              >
+                <Typography component="span" variant="body2" noWrap>
+                  {parentLabel}
+                </Typography>
+              </Button>
+            </Tooltip>
           </Box>
           <Box
             sx={{
@@ -189,11 +216,23 @@ export default function ThreadSecondaryPanel({
               gap: 1,
             }}
           >
-            <ForumIcon fontSize="small" color="primary" />
-            <Typography variant="subtitle1" fontWeight={700} noWrap>
-              Threads
-            </Typography>
-            <Chip label={headerState?.threadCount ?? 0} size="small" />
+            <FolderOutlinedIcon fontSize="small" color="primary" />
+            <Tooltip title={activeProject?.name || 'Projects'}>
+              <Typography variant="subtitle1" fontWeight={700} noWrap>
+                {activeProject?.name || 'Projects'}
+              </Typography>
+            </Tooltip>
+            {activeProject ? (
+              <Chip
+                label={countLabel(headerState?.activeProjectThreadCount ?? 0, 'thread')}
+                size="small"
+              />
+            ) : (
+              <>
+                <Chip label={countLabel(headerState?.projectCount ?? 0, 'project')} size="small" />
+                <Chip label={countLabel(headerState?.threadCount ?? 0, 'thread')} size="small" />
+              </>
+            )}
           </Box>
           <Box
             sx={{
