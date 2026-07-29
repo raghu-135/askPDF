@@ -90,7 +90,7 @@ export interface ThreadSidebarHeaderState {
   allItemsSelected: boolean;
   someItemsSelected: boolean;
   isBulkDeleting: boolean;
-  openCreateDialog: () => void;
+  openCreateProjectDialog: () => void;
   enterSelectionMode: () => void;
   clearSelection: () => void;
   deleteSelected: () => void;
@@ -235,7 +235,6 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     overscan: 10,
     getItemKey: (index) => virtualThreadRows[index]?.id ?? index,
   });
-
 
   // Helper function to get icon and color for model type
   const getModelIcon = (modelName: string) => {
@@ -718,10 +717,16 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     validateEmbeddingModel();
   }, [newProjectEmbeddingModel]);
 
-  const handleOpenCreateDialog = useCallback(() => {
+  const handleOpenCreateThreadDialog = useCallback((projectId?: string) => {
     const now = new Date();
     setNewThreadName(`Thread ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`);
+    if (projectId) setNewThreadProjectId(projectId);
     setCreateDialogOpen(true);
+  }, []);
+
+  const handleOpenCreateProjectDialog = useCallback(() => {
+    setNewProjectReadsUserMemory(false);
+    setCreateProjectDialogOpen(true);
   }, []);
 
   const headerState = useMemo<ThreadSidebarHeaderState>(() => ({
@@ -737,7 +742,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     allItemsSelected,
     someItemsSelected,
     isBulkDeleting,
-    openCreateDialog: selectionOnly ? () => undefined : handleOpenCreateDialog,
+    openCreateProjectDialog: selectionOnly ? () => undefined : handleOpenCreateProjectDialog,
     enterSelectionMode: selectionOnly ? () => undefined : enterThreadSelectionMode,
     clearSelection: clearThreadSelection,
     deleteSelected: deletionTarget === 'projects'
@@ -751,7 +756,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
     eligibleItemCount,
     enterThreadSelectionMode,
     handleBulkDeleteThreads,
-    handleOpenCreateDialog,
+    handleOpenCreateProjectDialog,
     handleRequestBulkDeleteProjects,
     handleToggleAllItemsChecked,
     isBulkDeleting,
@@ -1013,11 +1018,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               Threads
             </Typography>
             <Chip label={threads.length} size="small" />
-            {!selectionOnly && <Tooltip title="Create new thread">
+            {!selectionOnly && <Tooltip title="Create new project">
               <IconButton
                 size="small"
                 color="primary"
-                onClick={handleOpenCreateDialog}
+                onClick={handleOpenCreateProjectDialog}
               >
                 <AddIcon fontSize="small" />
               </IconButton>
@@ -1095,7 +1100,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
               {activeProjectId ? 'No threads in this project' : 'No projects yet'}
             </Typography>
             {!selectionOnly && activeProjectId && (
-              <Button size="small" startIcon={<AddIcon />} onClick={handleOpenCreateDialog} sx={{ mt: 1 }}>
+              <Button size="small" startIcon={<AddIcon />} onClick={() => handleOpenCreateThreadDialog(activeProjectId || undefined)} sx={{ mt: 1 }}>
                 Create Thread
               </Button>
             )}
@@ -1190,6 +1195,16 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                               </Box>
                             </Tooltip>
                           )}
+                          <Tooltip title={`Create thread in ${row.group.project.name}`}>
+                            <IconButton
+                              size="small"
+                              aria-label={`Create thread in ${row.group.project.name}`}
+                              onClick={() => handleOpenCreateThreadDialog(row.group.project!.id)}
+                              sx={{ width: 24, height: 24 }}
+                            >
+                              <AddIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
                           <Tooltip title="Project settings">
                             <IconButton
                               size="small"

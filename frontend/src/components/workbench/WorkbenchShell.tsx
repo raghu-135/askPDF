@@ -259,7 +259,7 @@ export default function WorkbenchShell({
           bgcolor: 'background.paper',
         }}
       >
-        {secondary}
+        {renderedLayout.visible ? secondary : null}
       </Box>
       {resizing && <Box sx={{ position: 'fixed', inset: 0, zIndex: 9999, cursor: isBottom ? 'row-resize' : 'col-resize', userSelect: 'none' }} />}
     </Box>

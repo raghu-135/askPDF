@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   Box,
-  Button,
   Checkbox,
   Chip,
   CircularProgress,
@@ -108,12 +107,13 @@ export default function ThreadSecondaryPanel({
 
     return (
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-        <Tooltip title="Create new thread">
+        <Tooltip title="Create new project">
           <span>
             <IconButton
               size="small"
               color="primary"
-              onClick={headerState.openCreateDialog}
+              aria-label="Create new project"
+              onClick={headerState.openCreateProjectDialog}
             >
               <AddIcon fontSize="small" />
             </IconButton>
@@ -155,34 +155,30 @@ export default function ThreadSecondaryPanel({
         <>
           <Box
             sx={{
-              flex: '0 1 220px',
+              flex: '0 1 auto',
               maxWidth: '42%',
               px: 1,
               display: 'flex',
               alignItems: 'center',
               minWidth: 0,
-              borderRight: 1,
-              borderColor: 'divider',
             }}
           >
             <Tooltip title={`Back to ${parentLabel}`}>
-              <Button
+              <Chip
                 size="small"
-                startIcon={<ArrowBackIcon fontSize="small" />}
+                icon={<ArrowBackIcon fontSize="small" />}
+                label={parentLabel}
                 onClick={onBackToProject}
+                color="primary"
                 sx={{
-                  textTransform: 'none',
                   minWidth: 0,
                   maxWidth: '100%',
-                  overflow: 'hidden',
-                  justifyContent: 'flex-start',
-                  '& .MuiButton-startIcon': { flexShrink: 0 },
+                  '& .MuiChip-label': {
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  },
                 }}
-              >
-                <Typography component="span" variant="body2" noWrap>
-                  {parentLabel}
-                </Typography>
-              </Button>
+              />
             </Tooltip>
           </Box>
           <Box
