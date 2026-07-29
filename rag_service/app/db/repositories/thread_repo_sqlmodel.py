@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 
-from app.db.models_sqlmodel import Project, Thread, ChatTurn, ChatTurnStatus, ThreadFile
+from app.db.models_sqlmodel import Project, ProjectFile, Thread, ChatTurn, ChatTurnStatus, ThreadFile
 from app.db.jsonb_utils import merge_jsonb_field
 from app.db.connection_sqlmodel import async_session_maker
 from app.time_utils import utc_now
@@ -120,12 +120,27 @@ class ThreadRepository:
                 .correlate(Thread)
                 .scalar_subquery()
             )
-            file_count = (
+            direct_file_count = (
                 select(func.count(ThreadFile.file_hash))
                 .where(ThreadFile.thread_id == Thread.id)
                 .correlate(Thread)
                 .scalar_subquery()
             )
+            inherited_file_count = (
+                select(func.count(ProjectFile.file_hash))
+                .where(
+                    ProjectFile.project_id == Thread.project_id,
+                    ~select(ThreadFile.file_hash)
+                    .where(
+                        ThreadFile.thread_id == Thread.id,
+                        ThreadFile.file_hash == ProjectFile.file_hash,
+                    )
+                    .exists(),
+                )
+                .correlate(Thread)
+                .scalar_subquery()
+            )
+            file_count = direct_file_count + inherited_file_count
             last_message_at = (
                 select(func.max(ChatTurn.created_at))
                 .where(ChatTurn.thread_id == Thread.id, ChatTurn.status != ChatTurnStatus.CANCELLED.value)

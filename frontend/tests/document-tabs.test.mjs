@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildDocumentWorkspaceTabs,
   buildHomeWorkspaceTabs,
+  buildProjectWorkspaceTabs,
   isBrowserWorkspaceActive,
   traceWorkspaceStatus,
 } from '../src/lib/document-tabs.ts';
@@ -46,6 +47,12 @@ test('home workspace keeps welcome first and memory second', () => {
   const tabs = buildHomeWorkspaceTabs();
   assert.deepEqual(tabs.map((tab) => tab.kind), ['home', 'memory']);
   assert.deepEqual(tabs.map((tab) => tab.id), ['home-tab', 'memory-tab']);
+});
+
+test('project workspace includes browser, memory, and shared documents without debug trace', () => {
+  const tabs = buildProjectWorkspaceTabs([document]);
+  assert.deepEqual(tabs.map((tab) => tab.kind), ['browser', 'memory', 'document']);
+  assert.deepEqual(tabs.map((tab) => tab.id), ['browser-tab', 'memory-tab', 'file-1']);
 });
 
 test('browser workspace is inactive after switching to a PDF tab', () => {

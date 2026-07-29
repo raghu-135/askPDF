@@ -1,6 +1,6 @@
 import type { PdfTab } from "./document-tabs.ts";
-import type { Thread, ThreadFile } from "./api.ts";
-import { getThread, getPdfByHash, API_BASE } from "./api.ts";
+import type { Project, Thread, ThreadFile } from "./api.ts";
+import { getThread, getPdfByHash, getPdfForTarget, getProjectFiles, API_BASE } from "./api.ts";
 import { transformSentences } from "./bbox-derivation.ts";
 import { ProcessStatus, ThreadFileSourceType } from "./enums.ts";
 
@@ -14,7 +14,10 @@ const createPendingThreadPdfTab = (threadId: string, threadFile: ThreadFile): Pd
   sentences: null,
   text: '',
   sourceType: threadFile.sourceType || ThreadFileSourceType.Pdf,
-  parsingStatus: ProcessStatus.Pending,
+  parsingStatus: threadFile.processingStatus || ProcessStatus.Pending,
+  processingError: threadFile.processingError,
+  associationScope: threadFile.associationScope,
+  isProjectKnowledge: threadFile.isProjectKnowledge,
 });
 
 export async function hydrateThreadPdfTab(threadId: string, threadFile: ThreadFile): Promise<PdfTab> {
@@ -28,8 +31,45 @@ export async function hydrateThreadPdfTab(threadId: string, threadFile: ThreadFi
     sentences: transformedSentences,
     text: extractTextFromSentences(transformedSentences),
     sourceType: threadFile.sourceType || ThreadFileSourceType.Pdf,
-    parsingStatus: ProcessStatus.Completed,
+    parsingStatus: threadFile.processingStatus || ProcessStatus.Completed,
+    processingError: threadFile.processingError,
+    associationScope: threadFile.associationScope,
+    isProjectKnowledge: threadFile.isProjectKnowledge,
   };
+}
+
+export async function loadProjectTabs(project: Project, options?: { eagerCount?: number }): Promise<PdfTab[]> {
+  const { files } = await getProjectFiles(project.id);
+  const eagerCount = Math.max(0, options?.eagerCount ?? 1);
+  return Promise.all(files.map(async (file, index) => {
+    const pending: PdfTab = {
+      id: file.fileHash,
+      fileName: file.fileName,
+      fileHash: file.fileHash,
+      downloadUrl: `${API_BASE}/api/projects/${project.id}/files/${file.fileHash}/download?t=${Date.now()}`,
+      sentences: null,
+      text: '',
+      sourceType: file.sourceType || ThreadFileSourceType.Pdf,
+      parsingStatus: file.processingStatus || ProcessStatus.Pending,
+      processingError: file.processingError,
+      associationScope: 'project',
+      isProjectKnowledge: true,
+    };
+    if (index >= eagerCount) return pending;
+    try {
+      const pdfData = await getPdfForTarget(file.fileHash, { scope: 'project', id: project.id });
+      const sentences = transformSentences(pdfData.sentences);
+      return {
+        ...pending,
+        downloadUrl: `${API_BASE}/api${pdfData.downloadUrl}?t=${Date.now()}`,
+        sentences,
+        text: extractTextFromSentences(sentences),
+        parsingStatus: ProcessStatus.Completed,
+      };
+    } catch {
+      return pending;
+    }
+  }));
 }
 
 /**

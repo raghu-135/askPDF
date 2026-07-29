@@ -15,6 +15,8 @@ from typing import Any, Dict, Optional
 from app.db import (
     count_threads_with_file,
     count_threads_with_file_for_model,
+    count_projects_with_file,
+    count_projects_with_file_for_model,
     delete_file_record,
     get_file_status,
     remove_document_from_stats,
@@ -52,20 +54,34 @@ async def delete_file_artifacts(file_hash: str) -> None:
             logger.warning("Failed to delete webpage mapping %s: %s", mapping_path, exc)
 
 
-async def cleanup_detached_file(file_hash: str, thread_id: str, embedding_model: str) -> None:
+async def cleanup_detached_file(
+    file_hash: str,
+    thread_id: Optional[str],
+    embedding_model: str,
+) -> None:
     """Apply post-detach cleanup for status, vector data, and orphaned file artifacts."""
-    await remove_document_from_stats(thread_id, file_hash)
-    await remove_thread_indexing_status(file_hash, embedding_model, thread_id)
+    if thread_id:
+        await remove_document_from_stats(thread_id, file_hash)
+        project_model_refs = await count_projects_with_file_for_model(file_hash, embedding_model)
+        await remove_thread_indexing_status(
+            file_hash,
+            embedding_model,
+            thread_id,
+            preserve_model_status=project_model_refs > 0,
+        )
 
     vector_db = get_vector_db()
-    remaining_model_refs = await count_threads_with_file_for_model(file_hash, embedding_model)
+    remaining_model_refs = (
+        await count_threads_with_file_for_model(file_hash, embedding_model)
+        + await count_projects_with_file_for_model(file_hash, embedding_model)
+    )
     if remaining_model_refs == 0:
         await vector_db.delete_document_vectors_by_file_hash_and_model(
             file_hash=file_hash,
             embedding_model=embedding_model,
         )
 
-    remaining_refs = await count_threads_with_file(file_hash)
+    remaining_refs = await count_threads_with_file(file_hash) + await count_projects_with_file(file_hash)
     if remaining_refs == 0:
         file_status = await get_file_status(file_hash) or {}
         indexing_status = file_status.get("indexing_status", {})

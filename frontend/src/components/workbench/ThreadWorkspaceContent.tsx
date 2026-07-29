@@ -4,7 +4,7 @@ import { isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
 import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 import MemoryWorkspace from './MemoryWorkspace';
-import type { Thread } from '../../lib/api';
+import type { Project, Thread } from '../../lib/api';
 
 const PdfViewer = dynamic(() => import('../PdfViewer'), { ssr: false });
 
@@ -27,6 +27,7 @@ export default function ThreadWorkspaceContent({
   highlightEnabled = true,
   threadId,
   activeThread = null,
+  activeProject = null,
   emptyTitle,
   emptyDescription,
 }: {
@@ -48,6 +49,7 @@ export default function ThreadWorkspaceContent({
   highlightEnabled?: boolean;
   threadId?: string | null;
   activeThread?: Thread | null;
+  activeProject?: Project | null;
   emptyTitle: string;
   emptyDescription: string;
 }) {
@@ -62,7 +64,7 @@ export default function ThreadWorkspaceContent({
           suspendHeavyContent={isResizing}
         />
       ) : activeTabId === 'memory-tab' ? (
-        <MemoryWorkspace activeThread={activeThread} />
+        <MemoryWorkspace activeThread={activeThread} activeProject={activeProject} />
       ) : isBrowserWorkspaceActive({ activeTabId, isBrowserActive }) ? (
         <BrowserWorkspaceFrame />
       ) : isLoading ? (
@@ -82,6 +84,9 @@ export default function ThreadWorkspaceContent({
           darkMode={darkMode}
           threadId={threadId ?? null}
           fileHash={activeDocument?.fileHash ?? null}
+          mode={!activeThread || activeDocument?.associationScope === 'project'
+            ? 'source-readonly'
+            : 'thread-editable'}
         />
       ) : (
         <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', bgcolor: darkMode ? '#222' : 'grey.50', color: darkMode ? '#eee' : 'inherit', p: 4 }}>

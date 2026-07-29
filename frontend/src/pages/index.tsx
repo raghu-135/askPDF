@@ -16,7 +16,7 @@ import PdfUploader from "../components/PdfUploader";
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
 import ThreadSecondaryPanel from "../components/ThreadSecondaryPanel";
-import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
+import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, buildProjectWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
 import { WorkbenchToolbarTrailingActions } from '../components/workbench/WorkbenchToolbar';
@@ -24,12 +24,13 @@ import WorkspaceTabs from '../components/workbench/WorkspaceTabs';
 import ThreadWorkspaceContent from '../components/workbench/ThreadWorkspaceContent';
 import useTraceTabs from '../components/workbench/useTraceTabs';
 import ThreadLineageTooltipContent from "../components/ThreadLineageTooltipContent";
-import { Thread, removeSourceFromThread, getParsedSentences, captureBrowserPage, pollForFileReady, getThread, deleteThread, listThreads } from "../lib/api";
-import { loadThreadTabs, hydrateThreadPdfTab, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
+import { Project, Thread, removeSourceFromThread, removeSourceFromProject, promoteFileToProject, retryTargetFile, getParsedSentencesForTarget, captureBrowserPageForTarget, pollForTargetFileReady, getThread, deleteThread, listThreads, type KnowledgeTarget } from "../lib/api";
+import { loadThreadTabs, loadProjectTabs, hydrateThreadPdfTab, createPdfTabFromUpload, extractTextFromSentences } from "../lib/thread-utils";
 import { handleTabCloseUtil, getActiveTab, getActiveTabData } from "../lib/pdf-utils";
 import { transformSentences } from "../lib/bbox-derivation";
 import { ProcessStatus } from "../lib/enums";
 import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
+import { checkEmbeddingModelReady } from '../lib/models-api';
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -56,6 +57,8 @@ export default function Home() {
 
   // Thread state
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [projectModelReady, setProjectModelReady] = useState<boolean | null>(null);
 
   // Sidebar refresh trigger
   const [sidebarVersion, setSidebarVersion] = useState(0);
@@ -91,12 +94,14 @@ export default function Home() {
     setPlayRequestId(null);
     setActiveSource('pdf');
     setChatSentences([]);
+    setActiveProject(null);
     clearTraces();
     
     // Reset browser state when leaving thread context
     setIsBrowserActive(false);
 
     if (thread) {
+      setActiveProject(null);
       try {
         setIsPdfLoading(true);
         // Always fetch the latest thread data to ensure we have current files and stats
@@ -131,6 +136,27 @@ export default function Home() {
     } else {
       setActiveThread(null);
       setActiveTabId(preserveMemoryTab ? 'memory-tab' : 'home-tab');
+    }
+  }, [clearTraces]);
+
+  const handleProjectSelect = useCallback(async (project: Project) => {
+    const preserveMemoryTab = activeTabIdRef.current === 'memory-tab';
+    setActiveThread(null);
+    setActiveProject(project);
+    setPdfTabs([]);
+    clearTraces();
+    setIsBrowserActive(!preserveMemoryTab);
+    setActiveTabId(preserveMemoryTab ? 'memory-tab' : 'browser-tab');
+    setIsPdfLoading(true);
+    setProjectModelReady(null);
+    try {
+      const tabs = await loadProjectTabs(project);
+      setPdfTabs(tabs);
+    } catch (error) {
+      console.error('Failed to open project knowledge:', error);
+      setProjectModelReady(false);
+    } finally {
+      setIsPdfLoading(false);
     }
   }, [clearTraces]);
 
@@ -212,6 +238,8 @@ export default function Home() {
       } catch (error) {
         console.error('Failed to refresh thread after upload:', error);
       }
+    } else if (activeProject && fileHash) {
+      setPdfTabs(await loadProjectTabs(activeProject));
     }
 
     setCurrentPdfId(null);
@@ -237,8 +265,12 @@ export default function Home() {
   };
 
   const handleIndexingComplete = async (_fileHash: string) => {
-    if (!activeThread) return;
+    if (!activeThread && !activeProject) return;
     try {
+      if (activeProject) {
+        setPdfTabs(await loadProjectTabs(activeProject));
+        return;
+      }
       const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
       setActiveThread(updatedThread);
       setSidebarVersion(v => v + 1);
@@ -249,7 +281,7 @@ export default function Home() {
 
   // Poll for parsing status when active tab is pending
   useEffect(() => {
-    if (!activeTab || activeTab.parsingStatus !== ProcessStatus.Pending || !activeThread) {
+    if (!activeTab || activeTab.parsingStatus !== ProcessStatus.Pending || (!activeThread && !activeProject)) {
       return;
     }
 
@@ -258,7 +290,10 @@ export default function Home() {
     const pollSentences = async () => {
       try {
         // Single endpoint returns both status and sentences
-        const parsedData = await getParsedSentences(activeTab.fileHash, activeThread.id);
+        const target: KnowledgeTarget = activeThread
+          ? { scope: 'thread', id: activeThread.id }
+          : { scope: 'project', id: activeProject!.id };
+        const parsedData = await getParsedSentencesForTarget(activeTab.fileHash, target);
         if (parsedData?.sentences !== null && Array.isArray(parsedData.sentences) && parsedData.sentences.length > 0) {
           // Parsing complete - sentences is an array
           handleParsingComplete(activeTab.fileHash, parsedData.sentences);
@@ -288,16 +323,22 @@ export default function Home() {
         clearInterval(pollInterval);
       }
     };
-  }, [activeTab?.fileHash, activeTab?.parsingStatus, activeThread?.id]);
+  }, [activeTab?.fileHash, activeTab?.parsingStatus, activeThread?.id, activeProject?.id]);
 
   // Handle remove source from thread (deletes from DB + Weaviate, closes tab)
   const handleTabRemove = async (tabId: string) => {
-    if (!activeThread) return;
     const tab = pdfTabs.find(t => t.id === tabId);
     if (!tab) return;
 
     try {
-      await removeSourceFromThread(activeThread.id, tab.fileHash);
+      if (activeThread) {
+        if (tab.associationScope !== 'thread') return;
+        await removeSourceFromThread(activeThread.id, tab.fileHash);
+      } else if (activeProject) {
+        await removeSourceFromProject(activeProject.id, tab.fileHash);
+      } else {
+        return;
+      }
     } catch (error) {
       console.error('Failed to remove source from thread:', error);
     }
@@ -305,6 +346,11 @@ export default function Home() {
     // Close the tab and refresh sidebar
     handleTabClose(tabId);
     try {
+      if (activeProject) {
+        setPdfTabs(await loadProjectTabs(activeProject));
+        return;
+      }
+      if (!activeThread) return;
       const updatedThread = await import("../lib/api").then(m => m.getThread(activeThread.id));
       setActiveThread(updatedThread);
       setSidebarVersion(v => v + 1);
@@ -313,16 +359,60 @@ export default function Home() {
     }
   };
 
+  const handlePromoteDocument = async (tabId: string) => {
+    if (!activeThread) return;
+    const tab = pdfTabs.find((item) => item.id === tabId);
+    if (!tab || tab.associationScope !== 'thread' || tab.isProjectKnowledge || !activeThread.project_id) return;
+    try {
+      if (!await checkEmbeddingModelReady(activeThread.embeddingModel)) return;
+      await promoteFileToProject(activeThread.project_id, {
+        fileHash: tab.fileHash,
+        fileName: tab.fileName,
+        filePath: tab.sourceUrl,
+      });
+      const updated = await getThread(activeThread.id);
+      setActiveThread(updated);
+      setPdfTabs(await loadThreadTabs(updated));
+    } catch (error) {
+      console.error('Failed to promote source:', error);
+    }
+  };
+
+  const handleRetryDocument = async (tabId: string) => {
+    const tab = pdfTabs.find((item) => item.id === tabId);
+    const target: KnowledgeTarget | null = activeThread
+      ? { scope: 'thread', id: activeThread.id }
+      : activeProject ? { scope: 'project', id: activeProject.id } : null;
+    if (!tab || !target) return;
+    try {
+      await retryTargetFile(target, tab.fileHash);
+      setPdfTabs((current) => current.map((item) => (
+        item.id === tabId ? { ...item, parsingStatus: ProcessStatus.Pending, processingError: undefined } : item
+      )));
+    } catch (error) {
+      console.error('Failed to retry document processing:', error);
+    }
+  };
+
   // Handle tab change
   const handleTabChange = (tabId: string) => {
     setActiveTabId(tabId);
     setIsBrowserActive(tabId === 'browser-tab');
     const tab = pdfTabs.find(item => item.id === tabId);
-    if (!activeThread || !tab || tabId === 'browser-tab' || tab.sentences) return;
+    if (!tab || tabId === 'browser-tab' || tab.sentences) return;
+    if (activeProject) {
+      void loadProjectTabs(activeProject).then((tabs) => {
+        setPdfTabs(tabs);
+      });
+      return;
+    }
+    if (!activeThread) return;
     void hydrateThreadPdfTab(activeThread.id, {
       fileHash: tab.fileHash,
       fileName: tab.fileName,
       sourceType: tab.sourceType,
+      associationScope: tab.associationScope,
+      isProjectKnowledge: tab.isProjectKnowledge,
     }).then((hydrated) => {
       setPdfTabs(prev => prev.map(item => item.fileHash === hydrated.fileHash ? hydrated : item));
     }).catch((error) => {
@@ -345,14 +435,17 @@ export default function Home() {
 
   // Handle adding browser page to thread
   const handleAddBrowserToThread = async () => {
-    if (!activeThread || isBrowserCapturing) return;
+    const target: KnowledgeTarget | null = activeThread
+      ? { scope: 'thread', id: activeThread.id }
+      : activeProject ? { scope: 'project', id: activeProject.id } : null;
+    if (!target || isBrowserCapturing || (target.scope === 'project' && projectModelReady !== true)) return;
 
     setIsBrowserCapturing(true);
     try {
-      const result = await captureBrowserPage(activeThread.id);
+      const result = await captureBrowserPageForTarget(target);
 
       // Pre-verify file is accessible before creating tab
-      const isReady = await pollForFileReady(activeThread.id, result.fileHash, {
+      const isReady = await pollForTargetFileReady(target, result.fileHash, {
         maxAttempts: 10,
         intervalMs: 500,
         timeoutMs: 5000,
@@ -373,7 +466,7 @@ export default function Home() {
       const uploadData = {
         fileHash: result.fileHash,
         fileName: displayTitle,
-        downloadUrl: `/threads/${activeThread.id}/files/${result.fileHash}/download`,
+        downloadUrl: `/${target.scope}s/${target.id}/files/${result.fileHash}/download`,
         sentences: null,
       };
 
@@ -427,8 +520,8 @@ export default function Home() {
           documents: pdfTabs,
           traces: traceTabs,
         })
-      : buildHomeWorkspaceTabs(),
-    [activeThread, pdfTabs, traceTabs],
+      : activeProject ? buildProjectWorkspaceTabs(pdfTabs) : buildHomeWorkspaceTabs(),
+    [activeThread, activeProject, pdfTabs, traceTabs],
   );
 
   const handleWorkspaceTabChange = useCallback((tabId: string) => {
@@ -462,12 +555,16 @@ export default function Home() {
             <Box sx={{ px: 1.5, py: 0.75, minHeight: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
                 <PdfUploader
-                  threadId={activeThread?.id ?? null}
+                  target={activeThread
+                    ? { scope: 'thread', id: activeThread.id }
+                    : activeProject ? { scope: 'project', id: activeProject.id } : null}
                   onUploaded={handlePdfUploaded}
                   onIndexingComplete={handleIndexingComplete}
                   onParsingComplete={handleParsingComplete}
-                  disabled={!activeThread}
-                  tooltipText={!activeThread ? 'Select or create a thread first' : undefined}
+                  disabled={!activeThread && (!activeProject || projectModelReady !== true)}
+                  tooltipText={!activeThread && !activeProject
+                    ? 'Select a thread or project first'
+                    : activeProject && projectModelReady !== true ? 'Project embedding model is unavailable' : undefined}
                 />
                 <Tooltip title="Agent workflow builder">
                   <IconButton color="primary" size="small" onClick={() => window.open('/agent-workflow-builder', '_blank', 'noopener,noreferrer')}>
@@ -508,6 +605,9 @@ export default function Home() {
               onTabChange={handleWorkspaceTabChange}
               onTabClose={handleTabClose}
               onDocumentRemove={handleTabRemove}
+              onDocumentPromote={handlePromoteDocument}
+              onDocumentRetry={handleRetryDocument}
+              documentContext={activeProject ? 'project' : 'thread'}
               onAddBrowserToThread={handleAddBrowserToThread}
               isBrowserCapturing={isBrowserCapturing}
             />
@@ -532,6 +632,7 @@ export default function Home() {
               highlightEnabled={highlightEnabled}
               threadId={activeThread?.id ?? null}
               activeThread={activeThread}
+              activeProject={activeProject}
               emptyTitle="Welcome to AskPDF"
               emptyDescription="Select or create a thread, then upload a PDF or open the browser."
             />
@@ -539,8 +640,11 @@ export default function Home() {
           secondaryContent={
             <ThreadSecondaryPanel
               activeThread={activeThread}
+              activeProjectId={activeProject?.id ?? null}
               sidebarKey={sidebarVersion}
               onThreadSelect={handleThreadSelectFromList}
+              onProjectSelect={handleProjectSelect}
+              onProjectReadinessChange={(_projectId, ready) => setProjectModelReady(ready)}
               onThreadForked={handleThreadForked}
               onClearThread={handleShowAllThreads}
               darkMode={pdfDarkMode}

@@ -22,6 +22,7 @@ from app.db.models_sqlmodel import (
     Thread,
     File,
     ThreadFile,
+    ProjectFile,
     ChatTurn,
     AgentWorkflow,
     AgentRun,
@@ -67,6 +68,7 @@ _thread_file_repo = None
 _stats_repo = None
 _agent_workflow_repo = None
 _project_repo = None
+_project_file_repo = None
 _memory_repo = None
 
 
@@ -131,6 +133,15 @@ def get_project_repo():
         from app.db.repositories.project_repo_sqlmodel import ProjectRepository
         _project_repo = ProjectRepository()
     return _project_repo
+
+
+def get_project_file_repo():
+    """Get the project-file repository instance."""
+    global _project_file_repo
+    if _project_file_repo is None:
+        from app.db.repositories.project_file_repo_sqlmodel import ProjectFileRepository
+        _project_file_repo = ProjectFileRepository()
+    return _project_file_repo
 
 
 def get_memory_repo():
@@ -292,9 +303,16 @@ async def update_indexing_status(
     )
 
 
-async def remove_thread_indexing_status(file_hash: str, embedding_model: str, thread_id: str):
+async def remove_thread_indexing_status(
+    file_hash: str,
+    embedding_model: str,
+    thread_id: str,
+    preserve_model_status: bool = False,
+):
     """Remove a thread-scoped indexing entry and recompute the remaining summaries."""
-    return await get_file_repo().remove_thread_indexing_status(file_hash, embedding_model, thread_id)
+    return await get_file_repo().remove_thread_indexing_status(
+        file_hash, embedding_model, thread_id, preserve_model_status
+    )
 
 
 async def delete_file_record(file_hash: str):
@@ -336,6 +354,42 @@ async def count_threads_with_file(file_hash: str):
 async def get_thread_file_association(thread_id: str, file_hash: str):
     """Get the thread-file association row for a single document."""
     return await get_thread_file_repo().get_association(thread_id, file_hash)
+
+
+async def add_file_to_project(project_id: str, file_hash: str):
+    return await get_project_file_repo().add(project_id, file_hash)
+
+
+async def get_project_files(project_id: str):
+    return await get_project_file_repo().get_files(project_id)
+
+
+async def get_effective_thread_files(thread_id: str):
+    return await get_project_file_repo().get_effective_thread_files(thread_id)
+
+
+async def remove_file_from_project(project_id: str, file_hash: str):
+    return await get_project_file_repo().remove(project_id, file_hash)
+
+
+async def is_file_in_project(project_id: str, file_hash: str):
+    return await get_project_file_repo().is_file_in_project(project_id, file_hash)
+
+
+async def is_file_accessible_to_thread(thread_id: str, file_hash: str):
+    return await get_project_file_repo().is_file_accessible_to_thread(thread_id, file_hash)
+
+
+async def is_file_in_project_thread(project_id: str, file_hash: str):
+    return await get_project_file_repo().is_file_in_project_thread(project_id, file_hash)
+
+
+async def count_projects_with_file(file_hash: str):
+    return await get_project_file_repo().count_projects_with_file(file_hash)
+
+
+async def count_projects_with_file_for_model(file_hash: str, embedding_model: str):
+    return await get_project_file_repo().count_projects_with_file_for_model(file_hash, embedding_model)
 
 
 async def get_thread_file_annotations(thread_id: str, file_hash: str):

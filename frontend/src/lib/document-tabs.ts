@@ -18,6 +18,9 @@ export type PdfTab = {
   sourceType?: ThreadFileSourceTypeValue;
   sourceUrl?: string;
   parsingStatus?: DocumentProcessStatus;
+  associationScope?: 'thread' | 'project';
+  isProjectKnowledge?: boolean;
+  processingError?: string;
 };
 
 export type TraceTabStatusInput = {
@@ -64,6 +67,12 @@ export const buildDocumentWorkspaceTabs = ({
     },
   ];
 };
+
+export const buildProjectWorkspaceTabs = (documents: readonly PdfTab[]): WorkspaceTab[] => [
+  { kind: 'browser', id: 'browser-tab', label: 'Browser' },
+  { kind: 'memory', id: 'memory-tab', label: 'Memory' },
+  ...documents.map((tab) => ({ ...tab, kind: 'document' as const })),
+];
 
 export const buildHomeWorkspaceTabs = (): WorkspaceTab[] => [
   { kind: 'home', id: 'home-tab', label: 'Home' },

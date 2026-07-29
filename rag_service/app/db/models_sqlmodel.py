@@ -71,6 +71,27 @@ class ThreadFile(SQLModel, table=True):
     )
 
 
+class ProjectFile(SQLModel, table=True):
+    """Association between projects and shared knowledge files."""
+    __tablename__ = "project_files"
+
+    project_id: str = Field(
+        sa_column=Column(String, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    )
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), primary_key=True)
+    )
+    added_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+
+    __table_args__ = (
+        Index("idx_project_files_file_hash", "file_hash"),
+        Index("idx_project_files_added_at", "added_at"),
+    )
+
+
 # ============================================================================
 # Main Tables
 # ============================================================================

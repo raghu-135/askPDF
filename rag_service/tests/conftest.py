@@ -100,6 +100,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         memory_repo_sqlmodel,
         message_repo_sqlmodel,
         project_repo_sqlmodel,
+        project_file_repo_sqlmodel,
         stats_repo_sqlmodel,
         thread_file_repo_sqlmodel,
         thread_repo_sqlmodel,
@@ -116,6 +117,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         memory_repo_sqlmodel,
         message_repo_sqlmodel,
         project_repo_sqlmodel,
+        project_file_repo_sqlmodel,
         stats_repo_sqlmodel,
         thread_file_repo_sqlmodel,
         thread_repo_sqlmodel,
@@ -128,7 +130,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
     # Rebuild repository singletons so endpoint tests cannot reuse app-DB sessions.
     import app.db as db_api
 
-    for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo", "_agent_workflow_repo", "_project_repo", "_memory_repo"):
+    for attr in ("_thread_repo", "_file_repo", "_message_repo", "_thread_file_repo", "_stats_repo", "_agent_workflow_repo", "_project_repo", "_project_file_repo", "_memory_repo"):
         monkeypatch.setattr(db_api, attr, None)
 
 

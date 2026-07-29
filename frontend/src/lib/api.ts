@@ -90,12 +90,33 @@ const mapUploadResponse = (raw: RawUploadResponse): UploadResponse => ({
   fileName: raw.file_name,
 });
 
-export async function uploadPdf(file: File, threadId: string): Promise<UploadResponse> {
+export type KnowledgeTarget = { scope: "thread" | "project"; id: string };
+
+const targetPath = (target: KnowledgeTarget) => `${target.scope}s/${target.id}`;
+
+export async function uploadPdfToTarget(file: File, target: KnowledgeTarget): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/api/threads/${threadId}/files/upload`, { method: "POST", body: form });
+  const res = await fetch(`${API_BASE}/api/${targetPath(target)}/files/upload`, { method: "POST", body: form });
   if (!res.ok) throw new Error(await res.text());
   return mapUploadResponse(await res.json());
+}
+
+export async function uploadPdf(file: File, threadId: string): Promise<UploadResponse> {
+  return uploadPdfToTarget(file, { scope: "thread", id: threadId });
+}
+
+export async function getTargetFileStatus(
+  fileHash: string,
+  target: KnowledgeTarget,
+  options?: { section?: FileStatusSectionValue },
+): Promise<FileStatus | { parsing: ProcessSection } | { indexing: IndexingSection }> {
+  const params = new URLSearchParams();
+  if (options?.section) params.set("section", options.section);
+  const query = params.toString();
+  const res = await fetch(`${API_BASE}/api/${targetPath(target)}/files/${fileHash}/status${query ? `?${query}` : ""}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export async function getFileStatus(
@@ -557,6 +578,10 @@ export interface ThreadFile {
   fileName: string;
   filePath?: string;
   sourceType?: ThreadFileSourceTypeValue;
+  associationScope?: "thread" | "project";
+  isProjectKnowledge?: boolean;
+  processingStatus?: "pending" | "completed" | "failed";
+  processingError?: string;
 }
 
 interface RawThreadFile {
@@ -564,6 +589,10 @@ interface RawThreadFile {
   file_name: string;
   file_path?: string;
   source_type?: ThreadFileSourceTypeValue;
+  association_scope?: "thread" | "project";
+  is_project_knowledge?: boolean;
+  processing_status?: "pending" | "completed" | "failed";
+  processing_error?: string;
 }
 
 const mapThreadFile = (raw: RawThreadFile): ThreadFile => ({
@@ -571,6 +600,10 @@ const mapThreadFile = (raw: RawThreadFile): ThreadFile => ({
   fileName: raw.file_name,
   filePath: raw.file_path,
   sourceType: raw.source_type,
+  associationScope: raw.association_scope,
+  isProjectKnowledge: raw.is_project_knowledge,
+  processingStatus: raw.processing_status,
+  processingError: raw.processing_error,
 });
 
 export interface WebSource {
@@ -1188,6 +1221,40 @@ export async function getThreadFiles(threadId: string): Promise<{ files: ThreadF
   return { files: (raw.files || []).map(mapThreadFile) };
 }
 
+export async function getProjectFiles(projectId: string): Promise<{ files: ThreadFile[] }> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/files`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  const raw = await res.json();
+  return { files: (raw.files || []).map(mapThreadFile) };
+}
+
+export async function promoteFileToProject(
+  projectId: string,
+  file: Pick<ThreadFile, "fileHash" | "fileName" | "filePath">,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/files`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_hash: file.fileHash, file_name: file.fileName, file_path: file.filePath }),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+}
+
+export async function removeSourceFromProject(projectId: string, fileHash: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/files/${fileHash}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await readApiError(res));
+}
+
+export async function retryProjectFile(projectId: string, fileHash: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/projects/${projectId}/files/${fileHash}/retry`, { method: "POST" });
+  if (!res.ok) throw new Error(await readApiError(res));
+}
+
+export async function retryTargetFile(target: KnowledgeTarget, fileHash: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/${targetPath(target)}/files/${fileHash}/retry`, { method: "POST" });
+  if (!res.ok) throw new Error(await readApiError(res));
+}
+
 export interface ThreadFileAnnotationsResponse {
   thread_id: string;
   file_hash: string;
@@ -1254,6 +1321,51 @@ export async function captureBrowserPage(threadId: string): Promise<{
     indexing: raw.indexing,
     ready: raw.ready,
   };
+}
+
+export async function captureBrowserPageForTarget(target: KnowledgeTarget): Promise<{
+  status: string; fileHash: string; url: string; title: string; indexing: string; ready?: boolean;
+}> {
+  const res = await fetch(`${API_BASE}/api/${targetPath(target)}/browser-capture`, { method: "POST" });
+  if (!res.ok) throw new Error(await readApiError(res));
+  const raw = await res.json();
+  return {
+    status: raw.status,
+    fileHash: raw.file_hash,
+    url: raw.url,
+    title: raw.title,
+    indexing: raw.indexing,
+    ready: raw.ready,
+  };
+}
+
+export async function getPdfForTarget(fileHash: string, target: KnowledgeTarget): Promise<PdfData> {
+  const res = await fetch(`${API_BASE}/api/${targetPath(target)}/files/${fileHash}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return mapPdfData(await res.json());
+}
+
+export async function getParsedSentencesForTarget(fileHash: string, target: KnowledgeTarget) {
+  const res = await fetch(`${API_BASE}/api/${targetPath(target)}/files/${fileHash}/sentences`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function pollForTargetFileReady(
+  target: KnowledgeTarget,
+  fileHash: string,
+  options: { maxAttempts?: number; intervalMs?: number; timeoutMs?: number } = {},
+): Promise<boolean> {
+  const { maxAttempts = 10, intervalMs = 500, timeoutMs = 5000 } = options;
+  const started = Date.now();
+  for (let attempt = 0; attempt < maxAttempts && Date.now() - started <= timeoutMs; attempt += 1) {
+    try {
+      const res = await fetch(`${API_BASE}/api/${targetPath(target)}/files/${fileHash}/download`, { method: "HEAD" });
+      if (res.ok) return true;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
 }
 
 /**

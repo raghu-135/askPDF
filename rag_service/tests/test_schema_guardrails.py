@@ -21,6 +21,7 @@ EXPECTED_MODEL_TABLES = {
     "memories",
     "memory_candidates",
     "memory_events",
+    "project_files",
     "thread_files",
     "threads",
 }
@@ -47,11 +48,27 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
 
     cleanup = scripts.get_revision("c9e6a1b4d3f8")
 
-    assert scripts.get_heads() == ["c9e6a1b4d3f8"]
+    assert scripts.get_heads() == ["e2c7a9f4b1d6"]
     assert scripts.get_revision("a7c4e9f2b1d6") is not None
     assert scripts.get_revision("b8d5f0a3c2e7") is not None
     assert cleanup is not None
     assert cleanup.down_revision == "b8d5f0a3c2e7"
+    assert scripts.get_revision("e2c7a9f4b1d6").down_revision == "c9e6a1b4d3f8"
+
+
+def test_project_files_has_composite_key_and_cascading_foreign_keys():
+    table = models_sqlmodel.ProjectFile.__table__
+    assert [column.name for column in table.primary_key.columns] == ["project_id", "file_hash"]
+    targets = {
+        element.target_fullname: element.parent.name
+        for constraint in table.foreign_key_constraints
+        for element in constraint.elements
+        if constraint.ondelete == "CASCADE"
+    }
+    assert targets == {
+        "projects.id": "project_id",
+        "files.file_hash": "file_hash",
+    }
 
 
 def test_sqlmodel_metadata_only_contains_current_application_tables():

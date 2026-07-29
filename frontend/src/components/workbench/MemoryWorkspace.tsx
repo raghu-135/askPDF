@@ -106,9 +106,15 @@ function MemoryDetails({ memory }: { memory: MemoryRecord }) {
   );
 }
 
-export default function MemoryWorkspace({ activeThread }: { activeThread: Thread | null }) {
+export default function MemoryWorkspace({
+  activeThread,
+  activeProject: projectContext = null,
+}: {
+  activeThread: Thread | null;
+  activeProject?: Project | null;
+}) {
   const [view, setView] = useState<'active' | 'pending'>('active');
-  const [scopeType, setScopeType] = useState<MemoryScopeType>(activeThread ? 'thread' : 'user');
+  const [scopeType, setScopeType] = useState<MemoryScopeType>(activeThread ? 'thread' : projectContext ? 'project' : 'user');
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
@@ -125,15 +131,17 @@ export default function MemoryWorkspace({ activeThread }: { activeThread: Thread
   const [deleteTarget, setDeleteTarget] = useState<MemoryRecord | null>(null);
 
   const availableScopes = useMemo(
-    () => memoryScopesForContext(Boolean(activeThread)),
-    [activeThread],
+    () => activeThread
+      ? memoryScopesForContext(true)
+      : projectContext ? (['project', 'user'] as MemoryScopeType[]) : memoryScopesForContext(false),
+    [activeThread, projectContext],
   );
 
   useEffect(() => {
-    setScopeType(activeThread ? 'thread' : 'user');
+    setScopeType(activeThread ? 'thread' : projectContext ? 'project' : 'user');
     setView('active');
     setQuery('');
-  }, [activeThread?.id]);
+  }, [activeThread?.id, projectContext?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,7 +150,7 @@ export default function MemoryWorkspace({ activeThread }: { activeThread: Thread
         if (cancelled) return;
         setProjects(rows);
         setSelectedProjectId((current) => (
-          activeThread?.project_id || current || rows[0]?.id || ''
+          activeThread?.project_id || projectContext?.id || current || rows[0]?.id || ''
         ));
       })
       .catch((error) => {
@@ -151,13 +159,17 @@ export default function MemoryWorkspace({ activeThread }: { activeThread: Thread
     return () => {
       cancelled = true;
     };
-  }, [activeThread?.id, activeThread?.project_id]);
+  }, [activeThread?.id, activeThread?.project_id, projectContext?.id]);
 
   const target = useMemo(
-    () => resolveMemoryScopeTarget({ scopeType, thread: activeThread, selectedProjectId }),
-    [activeThread, scopeType, selectedProjectId],
+    () => resolveMemoryScopeTarget({
+      scopeType,
+      thread: activeThread,
+      selectedProjectId: projectContext?.id || selectedProjectId,
+    }),
+    [activeThread, projectContext, scopeType, selectedProjectId],
   );
-  const activeProject = projects.find((project) => (
+  const activeProject = projectContext || projects.find((project) => (
     project.id === (activeThread?.project_id || selectedProjectId)
   )) || null;
   const consent = memoryConsentStatus({
@@ -320,7 +332,7 @@ export default function MemoryWorkspace({ activeThread }: { activeThread: Thread
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
-        {!activeThread && scopeType === 'project' && (
+        {!activeThread && !projectContext && scopeType === 'project' && (
           <FormControl size="small" sx={{ minWidth: 190, maxWidth: 300 }}>
             <InputLabel>Project</InputLabel>
             <Select value={selectedProjectId} label="Project" onChange={(event) => setSelectedProjectId(String(event.target.value))}>

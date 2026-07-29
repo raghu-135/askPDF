@@ -325,7 +325,7 @@ async def repair_thread_documents_meta(thread_id: str, embedding_model: str, fil
         scoped_status = get_scoped_indexing_status(
             file_status,
             embedding_model=embedding_model,
-            thread_id=thread_id,
+            thread_id=thread_id if getattr(file, "association_scope", "thread") == "thread" else None,
         )
         chunk_count = await vector_db.get_file_chunk_count(file.file_hash, embedding_model)
         is_ready = ProcessStatus.is_completed(scoped_status.get("status", ProcessStatus.UNKNOWN.value)) or chunk_count > 0
@@ -344,6 +344,13 @@ async def repair_thread_documents_meta(thread_id: str, embedding_model: str, fil
                 "total_chars": total_chars,
                 "indexing_status": ProcessStatus.COMPLETED.value,
                 "indexed_at": scoped_status.get("finished_at"),
+                "association_scope": getattr(file, "association_scope", "thread"),
+                "is_project_knowledge": getattr(file, "is_project_knowledge", False),
+                "document_available_in_project_at": (
+                    iso_utc_z(file.added_at)
+                    if getattr(file, "association_scope", "thread") == "project"
+                    else None
+                ),
             },
         )
 

@@ -41,6 +41,7 @@ from app.db import (
     get_project,
     get_thread,
     get_thread_files,
+    get_effective_thread_files,
     get_thread_settings,
     get_scoped_indexing_status,
     list_threads,
@@ -113,6 +114,42 @@ def _thread_payload(thread) -> dict:
         "thread_metadata": thread.thread_metadata if thread.thread_metadata else {},
         "created_at": iso_utc_z(thread.created_at),
     }
+
+
+async def _thread_file_payloads(thread, files) -> list[dict]:
+    payloads = []
+    for file in files:
+        status = await get_file_status(file.file_hash) or {}
+        scoped_indexing = get_scoped_indexing_status(
+            status,
+            thread.embedding_model,
+            thread.id if file.association_scope == "thread" else None,
+        )
+        sections = (status.get("parsing") or {}, scoped_indexing)
+        failed = next(
+            (section for section in sections if ProcessStatus.is_failed(section.get("status"))),
+            None,
+        )
+        if failed:
+            processing_status = ProcessStatus.FAILED.value
+            processing_error = str(failed.get("error") or "Processing failed")
+        elif all(ProcessStatus.is_completed(section.get("status")) for section in sections):
+            processing_status = ProcessStatus.COMPLETED.value
+            processing_error = None
+        else:
+            processing_status = ProcessStatus.PENDING.value
+            processing_error = None
+        payloads.append({
+            "file_hash": file.file_hash,
+            "file_name": file.file_name,
+            "file_path": file.file_path,
+            "source_type": file.source_type,
+            "association_scope": file.association_scope,
+            "is_project_knowledge": file.is_project_knowledge,
+            "processing_status": processing_status,
+            "processing_error": processing_error,
+        })
+    return payloads
 
 
 async def _delete_thread_resources(thread_id: str) -> bool:
@@ -322,7 +359,7 @@ async def get_thread_endpoint(thread_id: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        files = await get_thread_files(thread_id)
+        files = await get_effective_thread_files(thread_id)
         embedding_model_ready = await check_embedding_model_ready(thread.embedding_model)
         stats = _empty_thread_stats()
         stats_unavailable_reason = None
@@ -358,15 +395,7 @@ async def get_thread_endpoint(thread_id: str):
             "settings": _public_thread_settings(thread.settings),
             "thread_metadata": getattr(thread, "thread_metadata", None) or {},
             "created_at": iso_utc_z(thread.created_at),
-            "files": [
-                {
-                    "file_hash": f.file_hash,
-                    "file_name": f.file_name,
-                    "file_path": f.file_path,
-                    "source_type": f.source_type,
-                }
-                for f in files
-            ],
+            "files": await _thread_file_payloads(thread, files),
             "stats": stats,
             "embedding_model_ready": embedding_model_ready,
             "stats_unavailable_reason": stats_unavailable_reason,

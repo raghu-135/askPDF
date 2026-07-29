@@ -481,11 +481,26 @@ class TestThreadEndpoints:
             file_name="paper.pdf",
             file_path="/data/paper.pdf",
             source_type="pdf",
+            association_scope="thread",
+            is_project_knowledge=False,
         )
 
         with (
             patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
-            patch("app.api.threads.get_thread_files", new_callable=AsyncMock, return_value=[file]),
+            patch("app.api.threads.get_effective_thread_files", new_callable=AsyncMock, return_value=[file]),
+            patch(
+                "app.api.threads.get_file_status",
+                new_callable=AsyncMock,
+                return_value={
+                    "parsing": {"status": "completed"},
+                    "indexing_status": {
+                        "summary": {"status": "completed"},
+                        "models": {
+                            "text-embedding-nomic-embed-text-v1.5": {"status": "completed"}
+                        },
+                    },
+                },
+            ),
             patch("app.api.threads.repair_thread_documents_meta", new_callable=AsyncMock) as repair_meta,
             patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=False),
             patch("app.api.threads.get_vector_db") as get_vector_db,
@@ -553,7 +568,7 @@ class TestThreadEndpoints:
 
         with (
             patch("app.api.threads.get_thread", new_callable=AsyncMock, return_value=thread),
-            patch("app.api.threads.get_thread_files", new_callable=AsyncMock, return_value=[]),
+            patch("app.api.threads.get_effective_thread_files", new_callable=AsyncMock, return_value=[]),
             patch("app.api.threads.repair_thread_documents_meta", new_callable=AsyncMock),
             patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=True),
             patch("app.api.threads.get_vector_db", return_value=db),

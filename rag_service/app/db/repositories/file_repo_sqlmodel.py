@@ -353,18 +353,25 @@ class FileRepository:
             if embedding_model:
                 model_status = _copy_process_section(models.get(embedding_model))
                 threads = dict(model_status.get("threads", {}))
-                thread_status = _copy_process_section(threads.get(thread_id))
-                current_status = thread_status.get("status", ProcessStatus.UNKNOWN.value)
+                target_status = (
+                    _copy_process_section(threads.get(thread_id))
+                    if thread_id
+                    else model_status
+                )
+                current_status = target_status.get("status", ProcessStatus.UNKNOWN.value)
 
                 if ProcessStatus.is_running(current_status) or ProcessStatus.is_completed(current_status):
                     return False
 
-                thread_status["status"] = status
+                target_status["status"] = status
                 if started_at:
-                    thread_status["started_at"] = started_at
-                thread_status.pop("error", None)
-                threads[thread_id] = thread_status
-                model_status["threads"] = threads
+                    target_status["started_at"] = started_at
+                target_status.pop("error", None)
+                if thread_id:
+                    threads[thread_id] = target_status
+                    model_status["threads"] = threads
+                else:
+                    model_status = {**model_status, **target_status}
                 models[embedding_model] = model_status
                 summary = _collapse_process_sections(list(models.values()))
             else:
@@ -398,7 +405,8 @@ class FileRepository:
         self,
         file_hash: str,
         embedding_model: str,
-        thread_id: str
+        thread_id: str,
+        preserve_model_status: bool = False,
     ) -> bool:
         """Remove a thread-scoped indexing entry and recompute the remaining summaries."""
         current_status = _normalize_file_status(await self.get_status(file_hash) or {})
@@ -418,6 +426,9 @@ class FileRepository:
                 if existing is not None:
                     recomputed[key] = existing
             model_status = {**model_status, **recomputed, "threads": threads}
+            models[embedding_model] = model_status
+        elif preserve_model_status:
+            model_status.pop("threads", None)
             models[embedding_model] = model_status
         else:
             models.pop(embedding_model, None)

@@ -684,7 +684,8 @@ async def index_document_for_thread(
     file_hash: str,
     embedding_model: str,
     metadata: Optional[Dict[str, Any]] = None,
-    markdown_content: Optional[str] = None
+    markdown_content: Optional[str] = None,
+    persist_thread_state: bool = True,
 ) -> Dict[str, Any]:
     """
     Index a document into the vector database.
@@ -709,10 +710,14 @@ async def index_document_for_thread(
     total_chars = 0
     document_available_in_thread_at: Optional[str] = None
     try:
+        if not persist_thread_state:
+            raise LookupError
         association = await get_thread_file_association(thread_id, file_hash)
         if association and association.get("added_at"):
             document_available_in_thread_at = iso_utc_z(association["added_at"])
             metadata["document_available_in_thread_at"] = document_available_in_thread_at
+    except LookupError:
+        pass
     except Exception as assoc_err:
         logger.warning(
             "Could not load thread-file availability for thread %s file %s: %s",
@@ -726,7 +731,7 @@ async def index_document_for_thread(
             file_hash=file_hash,
             status=ProcessStatus.RUNNING.value,
             embedding_model=embedding_model,
-            thread_id=thread_id,
+            thread_id=thread_id if persist_thread_state else None,
             started_at=started_at,
             claim=True,
         )
@@ -742,21 +747,22 @@ async def index_document_for_thread(
                     file_hash=file_hash,
                     status=ProcessStatus.COMPLETED.value,
                     embedding_model=embedding_model,
-                    thread_id=thread_id,
+                    thread_id=thread_id if persist_thread_state else None,
                     started_at=started_at,
                     finished_at=finished_at,
                     chunk_count=shared_chunks,
                     total_chars=total_chars,
                     reused_existing_embeddings=True,
                 )
-                await _upsert_document_stats(
-                    thread_id=thread_id,
-                    file_hash=file_hash,
-                    metadata=metadata,
-                    chunk_count=shared_chunks,
-                    total_chars=total_chars if total_chars > 0 else None,
-                    indexed_at=finished_at,
-                )
+                if persist_thread_state:
+                    await _upsert_document_stats(
+                        thread_id=thread_id,
+                        file_hash=file_hash,
+                        metadata=metadata,
+                        chunk_count=shared_chunks,
+                        total_chars=total_chars if total_chars > 0 else None,
+                        indexed_at=finished_at,
+                    )
                 return {
                     "status": OperationResultStatus.SUCCESS.value,
                     "thread_id": thread_id,
@@ -793,7 +799,7 @@ async def index_document_for_thread(
                     file_hash=file_hash,
                     status=ProcessStatus.FAILED.value,
                     embedding_model=embedding_model,
-                    thread_id=thread_id,
+                    thread_id=thread_id if persist_thread_state else None,
                     started_at=started_at,
                     finished_at=iso_utc_z(),
                     error="No text extracted from document",
@@ -857,21 +863,22 @@ async def index_document_for_thread(
                 file_hash=file_hash,
                 status=ProcessStatus.COMPLETED.value,
                 embedding_model=embedding_model,
-                thread_id=thread_id,
+                thread_id=thread_id if persist_thread_state else None,
                 started_at=started_at,
                 finished_at=finished_at,
                 chunk_count=indexed_count,
                 total_chars=total_chars,
                 reused_existing_embeddings=False,
             )
-            await _upsert_document_stats(
-                thread_id=thread_id,
-                file_hash=file_hash,
-                metadata=metadata,
-                chunk_count=indexed_count,
-                total_chars=total_chars,
-                indexed_at=finished_at,
-            )
+            if persist_thread_state:
+                await _upsert_document_stats(
+                    thread_id=thread_id,
+                    file_hash=file_hash,
+                    metadata=metadata,
+                    chunk_count=indexed_count,
+                    total_chars=total_chars,
+                    indexed_at=finished_at,
+                )
 
             return {
                 "status": OperationResultStatus.SUCCESS.value,
@@ -887,7 +894,7 @@ async def index_document_for_thread(
                 file_hash=file_hash,
                 status=ProcessStatus.FAILED.value,
                 embedding_model=embedding_model,
-                thread_id=thread_id,
+                thread_id=thread_id if persist_thread_state else None,
                 started_at=started_at,
                 finished_at=iso_utc_z(),
                 error=str(e),
@@ -1080,7 +1087,7 @@ async def trigger_reembed_for_missing_sources(
     Lazy backfill for sources and chat-memory vectors missing in vector DB.
     Called when a thread is opened.
     """
-    from app.db import get_thread_files, get_thread_turns
+    from app.db import get_effective_thread_files, get_thread_turns
     if not await embedding_model_check(thread_id, embedding_model):
         return {
             "status": OperationResultStatus.SKIPPED.value,
@@ -1095,7 +1102,7 @@ async def trigger_reembed_for_missing_sources(
         }
 
     async with lock:
-        files = await get_thread_files(thread_id)
+        files = await get_effective_thread_files(thread_id)
         if file_hashes:
             wanted = set(file_hashes)
             files = [f for f in files if f.file_hash in wanted]

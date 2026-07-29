@@ -80,7 +80,10 @@ export interface ThreadSidebarHeaderState {
 
 interface ThreadSidebarProps {
   activeThreadId: string | null;
+  activeProjectId?: string | null;
   onThreadSelect: (thread: Thread | null) => void;
+  onProjectSelect?: (project: Project) => void;
+  onProjectReadinessChange?: (projectId: string, ready: boolean | null) => void;
   onThreadForked?: (thread: Thread) => void;
   onEmbeddingModelChange?: (model: string) => void;
   hideHeader?: boolean;
@@ -91,7 +94,10 @@ interface ThreadSidebarProps {
 
 const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   activeThreadId,
+  activeProjectId,
   onThreadSelect,
+  onProjectSelect,
+  onProjectReadinessChange,
   onThreadForked,
   onEmbeddingModelChange,
   hideHeader = false,
@@ -134,6 +140,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [forkDialogThread, setForkDialogThread] = useState<Thread | null>(null);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
+  const [projectReadiness, setProjectReadiness] = useState<Record<string, boolean | null>>({});
   const threadRowRefs = useRef<Record<string, HTMLLIElement | null>>({});
   const threadListRef = useRef<HTMLDivElement | null>(null);
 
@@ -159,7 +166,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       current.threads.push(thread);
       groups.set(key, current);
     }
-    return Array.from(groups.values()).filter(group => group.threads.length > 0);
+    return Array.from(groups.values());
   }, [projects, projectsById, threads]);
   const virtualThreadRows = useMemo(() => (
     groupedThreads.flatMap((group) => [
@@ -353,6 +360,25 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       !selectedThreadIds.has(thread.id),
       event.shiftKey
     );
+  };
+
+  const handleProjectClick = async (project: Project) => {
+    if (selectionOnly) return;
+    if (activeProjectId === project.id) {
+      onThreadSelect(null);
+      return;
+    }
+    onProjectSelect?.(project);
+    setProjectReadiness((current) => ({ ...current, [project.id]: null }));
+    onProjectReadinessChange?.(project.id, null);
+    try {
+      const ready = await checkEmbeddingModelReady(project.embeddingModel);
+      setProjectReadiness((current) => ({ ...current, [project.id]: ready }));
+      onProjectReadinessChange?.(project.id, ready);
+    } catch {
+      setProjectReadiness((current) => ({ ...current, [project.id]: false }));
+      onProjectReadinessChange?.(project.id, false);
+    }
   };
 
   const handleToggleAllThreadsChecked = useCallback((checked: boolean) => {
@@ -862,10 +888,33 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                       }}
                     >
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: 0 }}>
-                        <Typography variant="caption" color="text.secondary" fontWeight={700} noWrap>
-                          {row.group.project?.name || 'Unassigned'}
-                        </Typography>
+                        <Button
+                          size="small"
+                          color={activeProjectId === row.group.project?.id ? 'primary' : 'inherit'}
+                          onClick={() => row.group.project && handleProjectClick(row.group.project)}
+                          sx={{ minWidth: 0, px: 0.5, textTransform: 'none', justifyContent: 'flex-start' }}
+                        >
+                          <Typography variant="caption" fontWeight={700} noWrap>
+                            {row.group.project?.name || 'Unassigned'}
+                          </Typography>
+                        </Button>
                         {row.group.project && !selectionOnly ? (
+                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                          {activeProjectId === row.group.project.id && (
+                            <Tooltip title={`${row.group.project.embeddingModel}: ${
+                              projectReadiness[row.group.project.id] === null
+                                ? 'checking'
+                                : projectReadiness[row.group.project.id] ? 'ready' : 'unavailable'
+                            }`}>
+                              <Box sx={{ display: 'flex', mr: 0.25 }}>
+                                {projectReadiness[row.group.project.id] === null
+                                  ? <CircularProgress size={14} />
+                                  : projectReadiness[row.group.project.id]
+                                    ? <CheckCircleIcon color="success" sx={{ fontSize: 16 }} />
+                                    : <ErrorIcon color="error" sx={{ fontSize: 16 }} />}
+                              </Box>
+                            </Tooltip>
+                          )}
                           <Tooltip title="Project settings">
                             <IconButton
                               size="small"
@@ -875,6 +924,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                               <SettingsIcon sx={{ fontSize: 16 }} />
                             </IconButton>
                           </Tooltip>
+                          </Box>
                         ) : null}
                       </Box>
                     </Box>

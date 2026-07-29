@@ -24,6 +24,7 @@ from app.db.repositories.file_repo_sqlmodel import FileRepository
 # Database operations (SQLModel/PostgreSQL)
 from app.db import (
     add_file_to_thread,
+    add_file_to_project,
     create_or_get_file,
     get_file_parsed_sentences,
     get_file_status,
@@ -125,6 +126,57 @@ async def queue_file_processing(
         background_tasks.add_task(_background_parse, file_hash, file_name, backend_url)
 
 
+async def queue_project_file_processing(
+    background_tasks: BackgroundTasks,
+    project,
+    file_hash: str,
+    file_name: str,
+    file_path: Optional[str] = None,
+    source_type: str = FileSourceType.PDF.value,
+    indexing_metadata: Optional[Dict[str, Any]] = None,
+    markdown_content: Optional[str] = None,
+) -> None:
+    """Attach a canonical file to project knowledge and queue shared model indexing."""
+    await create_or_get_file(
+        file_hash=file_hash,
+        file_name=file_name,
+        file_path=file_path,
+        source_type=source_type,
+    )
+    await add_file_to_project(project.id, file_hash)
+    file_status = await get_file_status(file_hash)
+    parsing_status = (file_status or {}).get("parsing", {"status": ProcessStatus.UNKNOWN.value})
+    from app.db import get_scoped_indexing_status
+    scoped_indexing = get_scoped_indexing_status(file_status, embedding_model=project.embedding_model)
+    if (
+        not ProcessStatus.is_completed(scoped_indexing.get("status", ProcessStatus.UNKNOWN.value))
+        and not ProcessStatus.is_running(scoped_indexing.get("status", ProcessStatus.UNKNOWN.value))
+    ):
+        await update_indexing_status(
+            file_hash=file_hash,
+            status=ProcessStatus.PENDING.value,
+            embedding_model=project.embedding_model,
+        )
+        background_tasks.add_task(
+            _background_index,
+            file_hash,
+            f"project:{project.id}",
+            project.embedding_model,
+            file_name,
+            "",
+            indexing_metadata or {},
+            markdown_content,
+            False,
+        )
+    parsed_data = await get_file_parsed_sentences(file_hash)
+    if parsed_data and parsed_data.get("sentences"):
+        if not ProcessStatus.is_completed(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
+            await update_parsing_status(file_hash, ProcessStatus.COMPLETED.value)
+    elif not ProcessStatus.is_running(parsing_status.get("status", ProcessStatus.UNKNOWN.value)):
+        await update_parsing_status(file_hash, ProcessStatus.PENDING.value)
+        background_tasks.add_task(_background_parse, file_hash, file_name, "")
+
+
 async def _background_parse(file_hash: str, filename: str, backend_url: str = ""):
     """
     Background task to parse PDF and update status with atomic transactions.
@@ -203,6 +255,7 @@ async def _background_index(
     backend_url: str,
     metadata: Optional[Dict[str, Any]] = None,
     markdown_content: Optional[str] = None,
+    persist_thread_state: bool = True,
 ):
     """
     Background task to index a document for a thread after parsing completes.
@@ -213,7 +266,7 @@ async def _background_index(
             file_hash=file_hash,
             status=ProcessStatus.RUNNING.value,
             embedding_model=embedding_model,
-            thread_id=thread_id,
+            thread_id=thread_id if persist_thread_state else None,
             started_at=started_at,
             claim=True,
         )
@@ -226,6 +279,7 @@ async def _background_index(
             embedding_model=embedding_model,
             metadata=metadata,
             markdown_content=markdown_content,
+            persist_thread_state=persist_thread_state,
         )
         if result.get("status") != OperationResultStatus.SUCCESS.value:
             raise Exception(result.get("message", "Indexing failed"))
@@ -241,7 +295,7 @@ async def _background_index(
                 file_hash=file_hash,
                 status=ProcessStatus.FAILED.value,
                 embedding_model=embedding_model,
-                thread_id=thread_id,
+                thread_id=thread_id if persist_thread_state else None,
                 started_at=started_at,
                 finished_at=finished_at,
                 error=str(e),

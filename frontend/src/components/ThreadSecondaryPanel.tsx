@@ -14,15 +14,18 @@ import ClearIcon from '@mui/icons-material/Clear';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ForumIcon from '@mui/icons-material/Forum';
 import ThreadSidebar, { type ThreadSidebarHeaderState } from './ThreadSidebar';
-import type { Thread } from '../lib/api';
+import type { Project, Thread } from '../lib/api';
 
 export default function ThreadSecondaryPanel({
   activeThread,
   activeThreadId,
+  activeProjectId,
   sidebarKey,
   selectionOnly = false,
   darkMode = false,
   onThreadSelect,
+  onProjectSelect,
+  onProjectReadinessChange,
   onThreadForked,
   onClearThread,
   renderConversation,
@@ -31,10 +34,13 @@ export default function ThreadSecondaryPanel({
 }: {
   activeThread: Thread | null;
   activeThreadId?: string | null;
+  activeProjectId?: string | null;
   sidebarKey?: React.Key;
   selectionOnly?: boolean;
   darkMode?: boolean;
   onThreadSelect: (thread: Thread | null) => void;
+  onProjectSelect?: (project: Project) => void;
+  onProjectReadinessChange?: (projectId: string, ready: boolean | null) => void;
   onThreadForked?: (thread: Thread) => void;
   onClearThread: () => void;
   renderConversation?: (thread: Thread) => React.ReactNode;
@@ -212,7 +218,10 @@ export default function ThreadSecondaryPanel({
             <ThreadSidebar
               key={sidebarKey}
               activeThreadId={activeThreadId ?? activeThread?.id ?? null}
+              activeProjectId={activeProjectId}
               onThreadSelect={onThreadSelect}
+              onProjectSelect={onProjectSelect}
+              onProjectReadinessChange={onProjectReadinessChange}
               onThreadForked={onThreadForked}
               hideHeader
               onHeaderStateChange={setHeaderState}
