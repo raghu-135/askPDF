@@ -480,8 +480,8 @@ async def get_thread_file_annotations_endpoint(thread_id: str, file_hash: str):
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        if not await is_file_in_thread(thread_id, file_hash):
-            raise HTTPException(status_code=404, detail="File is not attached to this thread")
+        if not await is_file_accessible_to_thread(thread_id, file_hash):
+            raise HTTPException(status_code=404, detail="File is not accessible to this thread")
 
         row = await get_thread_file_annotations(thread_id, file_hash)
         if not row:
@@ -517,8 +517,8 @@ async def update_thread_file_annotations_endpoint(
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
-        if not await is_file_in_thread(thread_id, file_hash):
-            raise HTTPException(status_code=404, detail="File is not attached to this thread")
+        if not await is_file_accessible_to_thread(thread_id, file_hash):
+            raise HTTPException(status_code=404, detail="File is not accessible to this thread")
 
         row = await upsert_thread_file_annotations(thread_id, file_hash, req.annotations)
         return ThreadFileAnnotationsResponse(

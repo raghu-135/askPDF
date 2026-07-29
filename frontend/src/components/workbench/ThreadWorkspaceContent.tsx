@@ -84,9 +84,7 @@ export default function ThreadWorkspaceContent({
           darkMode={darkMode}
           threadId={threadId ?? null}
           fileHash={activeDocument?.fileHash ?? null}
-          mode={!activeThread || activeDocument?.associationScope === 'project'
-            ? 'source-readonly'
-            : 'thread-editable'}
+          mode={threadId ? 'thread-editable' : 'source-readonly'}
         />
       ) : (
         <Box sx={{ height: '100%', display: 'grid', placeItems: 'center', bgcolor: darkMode ? '#222' : 'grey.50', color: darkMode ? '#eee' : 'inherit', p: 4 }}>

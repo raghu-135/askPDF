@@ -92,6 +92,34 @@ class ProjectFile(SQLModel, table=True):
     )
 
 
+class ThreadDocumentAnnotation(SQLModel, table=True):
+    """Thread-owned annotation overlay for any document accessible to the thread."""
+    __tablename__ = "thread_document_annotations"
+
+    thread_id: str = Field(
+        sa_column=Column(String, ForeignKey("threads.id", ondelete="CASCADE"), primary_key=True)
+    )
+    file_hash: str = Field(
+        sa_column=Column(String, ForeignKey("files.file_hash", ondelete="CASCADE"), primary_key=True)
+    )
+    annotations: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, default=list)
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+    updated_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True))
+    )
+
+    __table_args__ = (
+        Index("idx_thread_document_annotations_file_hash", "file_hash"),
+    )
+
+
 # ============================================================================
 # Main Tables
 # ============================================================================

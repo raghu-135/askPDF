@@ -12,6 +12,7 @@ from app.db.models_sqlmodel import (
     MemoryEvent,
     Project,
     Thread,
+    ThreadDocumentAnnotation,
     ThreadFile,
 )
 from app.services import thread_management_service
@@ -63,8 +64,15 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
                     thread_id="source-thread",
                     file_hash="file-1",
                     added_at=created_at,
+                )
+            )
+            session.add(
+                ThreadDocumentAnnotation(
+                    thread_id="source-thread",
+                    file_hash="file-1",
                     annotations=[{"id": "a1"}],
-                    annotations_updated_at=created_at,
+                    created_at=created_at,
+                    updated_at=created_at,
                 )
             )
             session.add_all(
@@ -133,6 +141,13 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
                 select(ThreadFile).where(ThreadFile.thread_id == forked.id)
             )
         ).scalars().all()
+        annotation_overlays = (
+            await session.execute(
+                select(ThreadDocumentAnnotation).where(
+                    ThreadDocumentAnnotation.thread_id == forked.id
+                )
+            )
+        ).scalars().all()
         source_thread = (
             await session.execute(
                 select(Thread).where(Thread.id == "source-thread")
@@ -152,8 +167,9 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
     assert [t.payload["answer"] for t in turns] == ["answer"]
     assert all(t.id not in {"turn-1", "turn-2"} for t in turns)
     assert [f.file_hash for f in files] == ["file-1"]
-    assert files[0].annotations == [{"id": "a1"}]
-    assert files[0].annotations_updated_at == created_at
+    assert len(annotation_overlays) == 1
+    assert annotation_overlays[0].annotations == [{"id": "a1"}]
+    assert annotation_overlays[0].updated_at == created_at
 
 
 @pytest.mark.asyncio

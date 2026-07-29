@@ -18,7 +18,15 @@ from app.db import (
 )
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import ChatTurn, Memory, MemoryEvent, Project, Thread, ThreadFile
+from app.db.models_sqlmodel import (
+    ChatTurn,
+    Memory,
+    MemoryEvent,
+    Project,
+    Thread,
+    ThreadDocumentAnnotation,
+    ThreadFile,
+)
 from app.db.repositories.message_repo_sqlmodel import turn_id_from_message_id
 from app.db.vector import get_vector_db
 from app.time_utils import iso_utc_z, utc_now
@@ -166,6 +174,22 @@ async def fork_thread(
                         added_at=association.added_at,
                         annotations=association.annotations,
                         annotations_updated_at=association.annotations_updated_at,
+                    )
+                )
+
+            annotations_result = await session.execute(
+                select(ThreadDocumentAnnotation).where(
+                    ThreadDocumentAnnotation.thread_id == source_thread_id
+                )
+            )
+            for annotation_row in annotations_result.scalars().all():
+                session.add(
+                    ThreadDocumentAnnotation(
+                        thread_id=new_thread_id,
+                        file_hash=annotation_row.file_hash,
+                        annotations=copy.deepcopy(annotation_row.annotations or []),
+                        created_at=annotation_row.created_at,
+                        updated_at=annotation_row.updated_at,
                     )
                 )
 
