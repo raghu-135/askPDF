@@ -26,6 +26,7 @@ export default function ThreadSecondaryPanel({
   onThreadSelect,
   onProjectSelect,
   onProjectReadinessChange,
+  onProjectUpdated,
   onProjectCloned,
   onProjectDeleted,
   onThreadForked,
@@ -43,6 +44,7 @@ export default function ThreadSecondaryPanel({
   onThreadSelect: (thread: Thread | null) => void;
   onProjectSelect?: (project: Project) => void;
   onProjectReadinessChange?: (projectId: string, ready: boolean | null) => void;
+  onProjectUpdated?: (project: Project) => void;
   onProjectCloned?: (project: Project) => void;
   onProjectDeleted?: (projectId: string) => void;
   onThreadForked?: (thread: Thread) => void;
@@ -226,6 +228,7 @@ export default function ThreadSecondaryPanel({
               onThreadSelect={onThreadSelect}
               onProjectSelect={onProjectSelect}
               onProjectReadinessChange={onProjectReadinessChange}
+              onProjectUpdated={onProjectUpdated}
               onProjectCloned={onProjectCloned}
               onProjectDeleted={onProjectDeleted}
               onThreadForked={onThreadForked}

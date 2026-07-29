@@ -167,6 +167,10 @@ export default function Home() {
     await handleProjectSelect(project);
   }, [handleProjectSelect]);
 
+  const handleProjectUpdated = useCallback((project: Project) => {
+    setActiveProject((current) => current?.id === project.id ? project : current);
+  }, []);
+
   const handleThreadSelectFromList = useCallback((thread: Thread | null) => {
     handleThreadSelect(thread);
   }, [handleThreadSelect]);
@@ -688,6 +692,7 @@ export default function Home() {
               onThreadSelect={handleThreadSelectFromList}
               onProjectSelect={handleProjectSelect}
               onProjectReadinessChange={(_projectId, ready) => setProjectModelReady(ready)}
+              onProjectUpdated={handleProjectUpdated}
               onProjectCloned={handleProjectCloned}
               onProjectDeleted={handleProjectDeleted}
               onThreadForked={handleThreadForked}

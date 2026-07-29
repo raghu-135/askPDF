@@ -96,6 +96,7 @@ interface ThreadSidebarProps {
   onThreadSelect: (thread: Thread | null) => void;
   onProjectSelect?: (project: Project) => void;
   onProjectReadinessChange?: (projectId: string, ready: boolean | null) => void;
+  onProjectUpdated?: (project: Project) => void;
   onProjectCloned?: (project: Project) => void;
   onProjectDeleted?: (projectId: string) => void;
   onThreadForked?: (thread: Thread) => void;
@@ -112,6 +113,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   onThreadSelect,
   onProjectSelect,
   onProjectReadinessChange,
+  onProjectUpdated,
   onProjectCloned,
   onProjectDeleted,
   onThreadForked,
@@ -137,6 +139,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   const [newProjectEmbeddingModel, setNewProjectEmbeddingModel] = useState('');
   const [newProjectReadsUserMemory, setNewProjectReadsUserMemory] = useState(false);
   const [settingsProject, setSettingsProject] = useState<Project | null>(null);
+  const [settingsProjectName, setSettingsProjectName] = useState('');
   const [settingsProjectReadsUserMemory, setSettingsProjectReadsUserMemory] = useState(false);
   const [projectLifecycle, setProjectLifecycle] = useState<ProjectLifecycleSummary | null>(null);
   const [projectLifecycleLoading, setProjectLifecycleLoading] = useState(false);
@@ -321,6 +324,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
 
   const handleOpenProjectSettings = (project: Project) => {
     setSettingsProject(project);
+    setSettingsProjectName(project.name);
     setProjectLifecycle(null);
     setProjectActionError('');
     setSettingsProjectReadsUserMemory(
@@ -330,10 +334,13 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
   };
 
   const handleSaveProjectSettings = async () => {
-    if (!settingsProject) return;
+    const projectName = settingsProjectName.trim();
+    if (!settingsProject || !projectName) return;
     try {
       setCreating(true);
+      setProjectActionError('');
       const updated = await updateProject(settingsProject.id, {
+        name: projectName,
         settings_json: {
           memory: {
             project_reads_user_memory: settingsProjectReadsUserMemory,
@@ -343,9 +350,13 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
       setProjects((current) => current.map((project) => (
         project.id === updated.id ? updated : project
       )));
+      onProjectUpdated?.(updated);
       setSettingsProject(null);
     } catch (error) {
       console.error('Failed to update project memory settings:', error);
+      setProjectActionError(
+        error instanceof Error ? error.message : 'Failed to update project settings.'
+      );
     } finally {
       setCreating(false);
     }
@@ -1386,8 +1397,19 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         maxWidth="xs"
         fullWidth
       >
-        <DialogTitle>{settingsProject?.name || 'Project'} Settings</DialogTitle>
+        <DialogTitle>Project settings</DialogTitle>
         <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            margin="dense"
+            label="Project name"
+            value={settingsProjectName}
+            onChange={(event) => setSettingsProjectName(event.target.value)}
+            disabled={creating}
+            inputProps={{ maxLength: 200 }}
+            sx={{ mb: 1 }}
+          />
           <FormControlLabel
             control={
               <Switch
@@ -1470,7 +1492,11 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSettingsProject(null)} disabled={creating}>Cancel</Button>
-          <Button onClick={handleSaveProjectSettings} variant="contained" disabled={creating}>
+          <Button
+            onClick={handleSaveProjectSettings}
+            variant="contained"
+            disabled={creating || !settingsProjectName.trim()}
+          >
             {creating ? <CircularProgress size={20} /> : 'Save'}
           </Button>
         </DialogActions>
