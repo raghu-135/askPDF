@@ -145,19 +145,19 @@ export default function Home() {
   }, [clearTraces]);
 
   const handleProjectSelect = useCallback(async (project: Project) => {
-    const preserveMemory = activeTabId === 'memory-tab';
     setActiveThread(null);
     setThreadProject(null);
     setActiveProject(project);
     setPdfTabs([]);
     clearTraces();
-    setIsBrowserActive(!preserveMemory);
-    setActiveTabId(preserveMemory ? 'memory-tab' : 'browser-tab');
+    setIsBrowserActive(false);
+    setActiveTabId('memory-tab');
     setIsPdfLoading(true);
     setProjectModelReady(null);
     try {
       const tabs = await loadProjectTabs(project);
       setPdfTabs(tabs);
+      setActiveTabId(tabs[0]?.id || 'memory-tab');
     } catch (error) {
       console.error('Failed to open project knowledge:', error);
       setProjectModelReady(false);
@@ -208,7 +208,7 @@ export default function Home() {
     setThreadProject(null);
     setProjectModelReady(null);
     setPdfTabs([]);
-    setActiveTabId('home-tab');
+    setActiveTabId('memory-tab');
     setIsBrowserActive(false);
     setCurrentPdfId(null);
     setCurrentChatId(null);
