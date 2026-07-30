@@ -293,7 +293,12 @@ class TestProductionErrorHandling:
         """Test handling of partial collection creation failures."""
         mock_client = MagicMock()
         mock_client.collections.exists.return_value = False
-        mock_client.collections.create.side_effect = [None, Exception("Creation failed"), None]
+        mock_client.collections.create.side_effect = [
+            None,
+            Exception("Creation failed"),
+            None,
+            None,
+        ]
         mock_client.collections.use.return_value = MagicMock()
         
         with patch('app.db.vector.collection_manager.get_embedding_model_registry') as mock_registry:
@@ -309,7 +314,7 @@ class TestProductionErrorHandling:
             
             # Partial failures are logged and deferred until first use.
             await collection_manager.ensure_collections_for_thread("test-model")
-            assert mock_client.collections.create.call_count == 3
+            assert mock_client.collections.create.call_count == 4
     
     @pytest.mark.asyncio
     async def test_embedding_model_unavailable_during_indexing(self):

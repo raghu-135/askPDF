@@ -488,6 +488,7 @@ class TestThreadEndpoints:
             source_type="pdf",
             association_scope="thread",
             is_project_knowledge=False,
+            added_at=datetime(2026, 1, 1),
         )
 
         with (

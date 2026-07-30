@@ -17,6 +17,7 @@ def _project(project_id="clone-project", name="Clone"):
         embedding_model="BAAI/bge-m3",
         settings_json={},
         created_at=now,
+        last_activity_at=now,
         updated_at=None,
     )
 

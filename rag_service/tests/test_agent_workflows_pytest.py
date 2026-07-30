@@ -6561,8 +6561,12 @@ async def test_builder_test_run_uses_resolved_workflow_row_id(monkeypatch):
 
     captured = {}
 
-    async def fake_get_thread(_thread_id):
-        return SimpleNamespace(embedding_model="test-embedding")
+    async def fake_require_ready_thread(_thread_id):
+        return SimpleNamespace(
+            thread=SimpleNamespace(embedding_model="test-embedding"),
+            project=SimpleNamespace(embedding_model="test-embedding"),
+            embedding_model="test-embedding",
+        )
 
     async def fake_get_workflow(_self, workflow_id, *, include_custom=False):
         assert workflow_id == ROUTER_RAG_AGENT_ID
@@ -6573,7 +6577,7 @@ async def test_builder_test_run_uses_resolved_workflow_row_id(monkeypatch):
         captured.update(kwargs)
         return SimpleNamespace(id="builder-test-run")
 
-    monkeypatch.setattr(agent_workflows_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(agent_workflows_api, "_require_ready_thread", fake_require_ready_thread)
     monkeypatch.setattr(AgentWorkflowRepository, "get_workflow", fake_get_workflow)
     monkeypatch.setattr(AgentWorkflowRepository, "create_run", fake_create_run)
 
@@ -6585,6 +6589,8 @@ async def test_builder_test_run_uses_resolved_workflow_row_id(monkeypatch):
             thread_id="thread-1",
             use_web_search=False,
             allow_external_tools=False,
+            hitl_web_approval=False,
+            workflow_spec_fingerprint=None,
         )
     )
 
@@ -6621,8 +6627,12 @@ async def test_thread_chat_content_negotiation_streams_compact_progress(monkeypa
                 "document_sources": [],
             }
 
-    async def fake_get_thread(_thread_id):
-        return SimpleNamespace(embedding_model="embed-test")
+    async def fake_require_thread_embedding_ready(_thread_id):
+        return SimpleNamespace(
+            thread=SimpleNamespace(embedding_model="embed-test"),
+            project=SimpleNamespace(embedding_model="embed-test"),
+            embedding_model="embed-test",
+        )
 
     async def fake_get_settings(_thread_id):
         return {}
@@ -6630,7 +6640,11 @@ async def test_thread_chat_content_negotiation_streams_compact_progress(monkeypa
     async def fake_supports_replans(_settings):
         return False
 
-    monkeypatch.setattr(messages_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(
+        messages_api,
+        "require_thread_embedding_ready",
+        fake_require_thread_embedding_ready,
+    )
     monkeypatch.setattr(messages_api, "get_thread_settings", fake_get_settings)
     monkeypatch.setattr(messages_api, "_settings_workflow_supports_replans", fake_supports_replans)
     monkeypatch.setattr(messages_api, "AgentRunService", FakeService)
@@ -6680,8 +6694,12 @@ async def test_thread_chat_stream_emits_canceled_terminal_event(monkeypatch):
                 "clarification_options": None,
             }
 
-    async def fake_get_thread(_thread_id):
-        return SimpleNamespace(embedding_model="embed-test")
+    async def fake_require_thread_embedding_ready(_thread_id):
+        return SimpleNamespace(
+            thread=SimpleNamespace(embedding_model="embed-test"),
+            project=SimpleNamespace(embedding_model="embed-test"),
+            embedding_model="embed-test",
+        )
 
     async def fake_get_settings(_thread_id):
         return {}
@@ -6689,7 +6707,11 @@ async def test_thread_chat_stream_emits_canceled_terminal_event(monkeypatch):
     async def fake_supports_replans(_settings):
         return False
 
-    monkeypatch.setattr(messages_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(
+        messages_api,
+        "require_thread_embedding_ready",
+        fake_require_thread_embedding_ready,
+    )
     monkeypatch.setattr(messages_api, "get_thread_settings", fake_get_settings)
     monkeypatch.setattr(messages_api, "_settings_workflow_supports_replans", fake_supports_replans)
     monkeypatch.setattr(messages_api, "AgentRunService", FakeService)
@@ -6782,8 +6804,12 @@ async def test_thread_chat_returns_non_persistent_clarification_for_json_and_sse
                 ],
             }
 
-    async def fake_get_thread(_thread_id):
-        return SimpleNamespace(embedding_model="embed-test")
+    async def fake_require_thread_embedding_ready(_thread_id):
+        return SimpleNamespace(
+            thread=SimpleNamespace(embedding_model="embed-test"),
+            project=SimpleNamespace(embedding_model="embed-test"),
+            embedding_model="embed-test",
+        )
 
     async def fake_get_settings(_thread_id):
         return {}
@@ -6791,7 +6817,11 @@ async def test_thread_chat_returns_non_persistent_clarification_for_json_and_sse
     async def fake_supports_replans(_settings):
         return False
 
-    monkeypatch.setattr(messages_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(
+        messages_api,
+        "require_thread_embedding_ready",
+        fake_require_thread_embedding_ready,
+    )
     monkeypatch.setattr(messages_api, "get_thread_settings", fake_get_settings)
     monkeypatch.setattr(messages_api, "_settings_workflow_supports_replans", fake_supports_replans)
     monkeypatch.setattr(messages_api, "AgentRunService", FakeService)
@@ -6868,10 +6898,17 @@ async def test_agent_run_resume_content_negotiation_streams_progress(monkeypatch
             await sink.emit("node.completed", {"node_id": "finalizer", "visit_index": 2, "detail": {"prompt": "hidden"}})
             return SimpleNamespace(run=run, interrupt={"interrupt_id": "interrupt-1"}, outcome="resumed", duplicate=False)
 
-    async def fake_get_thread(_thread_id):
-        return SimpleNamespace(id="thread-resume-stream")
+    async def fake_require_ready_thread(_thread_id):
+        return SimpleNamespace(
+            thread=SimpleNamespace(
+                id="thread-resume-stream",
+                embedding_model="embed-test",
+            ),
+            project=SimpleNamespace(embedding_model="embed-test"),
+            embedding_model="embed-test",
+        )
 
-    monkeypatch.setattr(agent_workflows_api, "get_thread", fake_get_thread)
+    monkeypatch.setattr(agent_workflows_api, "_require_ready_thread", fake_require_ready_thread)
     monkeypatch.setattr(agent_workflows_api, "AgentRunService", FakeService)
     request = SimpleNamespace(
         thread_id="thread-resume-stream",
