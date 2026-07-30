@@ -5,7 +5,6 @@ import {
   LOCAL_USER_MEMORY_SCOPE_ID,
   filterMemoryRecords,
   isMemoryResultTruncated,
-  memoryCandidateQuery,
   memoryConsentStatus,
   memoryScopesForContext,
   resolveMemoryScopeTarget,
@@ -64,29 +63,6 @@ test('memory scope targets use canonical IDs', () => {
   assert.equal(
     resolveMemoryScopeTarget({ scopeType: 'project', thread: null, selectedProjectId: '' }),
     null,
-  );
-});
-
-test('thread global candidate query remains project relevant', () => {
-  assert.deepEqual(
-    memoryCandidateQuery({
-      target: { scopeType: 'user', scopeId: LOCAL_USER_MEMORY_SCOPE_ID },
-      thread,
-    }),
-    {
-      status: 'pending',
-      proposedScopeType: 'user',
-      proposedScopeId: LOCAL_USER_MEMORY_SCOPE_ID,
-      sourceProjectId: 'project-1',
-      limit: 500,
-    },
-  );
-  assert.equal(
-    memoryCandidateQuery({
-      target: { scopeType: 'user', scopeId: LOCAL_USER_MEMORY_SCOPE_ID },
-      thread: null,
-    }).sourceProjectId,
-    undefined,
   );
 });
 

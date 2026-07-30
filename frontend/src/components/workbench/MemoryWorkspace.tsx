@@ -17,8 +17,6 @@ import {
   MenuItem,
   Select,
   Stack,
-  Tab,
-  Tabs,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
@@ -26,8 +24,6 @@ import {
   Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
-import CheckIcon from '@mui/icons-material/Check';
-import CloseIcon from '@mui/icons-material/Close';
 import DeleteIcon from '@mui/icons-material/Delete';
 import MemoryIcon from '@mui/icons-material/Memory';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -36,11 +32,8 @@ import {
   createMemory,
   deleteMemory,
   listMemories,
-  listMemoryCandidates,
   listProjects,
-  resolveMemoryCandidate,
   retryMemoryIndex,
-  type MemoryCandidate,
   type MemoryRecord,
   type MemoryScopeType,
   type MemoryType,
@@ -48,7 +41,6 @@ import {
   type Thread,
 } from '../../lib/api';
 import {
-  memoryCandidateQuery,
   memoryConsentStatus,
   memoryScopesForContext,
   filterMemoryRecords,
@@ -115,12 +107,10 @@ export default function MemoryWorkspace({
   activeProject?: Project | null;
   projectInventoryVersion?: number;
 }) {
-  const [view, setView] = useState<'active' | 'pending'>('active');
   const [scopeType, setScopeType] = useState<MemoryScopeType>(activeThread ? 'thread' : projectContext ? 'project' : 'user');
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
-  const [candidates, setCandidates] = useState<MemoryCandidate[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -141,7 +131,6 @@ export default function MemoryWorkspace({
 
   useEffect(() => {
     setScopeType(activeThread ? 'thread' : projectContext ? 'project' : 'user');
-    setView('active');
     setQuery('');
   }, [activeThread?.id, projectContext?.id]);
 
@@ -189,7 +178,6 @@ export default function MemoryWorkspace({
     let cancelled = false;
     if (!target) {
       setMemories([]);
-      setCandidates([]);
       setLoading(false);
       return () => {
         cancelled = true;
@@ -197,16 +185,10 @@ export default function MemoryWorkspace({
     }
     setLoading(true);
     setLoadError(null);
-    const request = view === 'active'
-      ? listMemories(target.scopeType, target.scopeId, MEMORY_LIMIT)
-          .then((response) => ({ memories: response.memories, candidates: [] as MemoryCandidate[] }))
-      : listMemoryCandidates(memoryCandidateQuery({ target, thread: activeThread }))
-          .then((response) => ({ memories: [] as MemoryRecord[], candidates: response.memory_candidates }));
-    request
-      .then((result) => {
+    listMemories(target.scopeType, target.scopeId, MEMORY_LIMIT)
+      .then((response) => {
         if (cancelled) return;
-        setMemories(result.memories);
-        setCandidates(result.candidates);
+        setMemories(response.memories);
       })
       .catch((error) => {
         if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Unable to load memory.');
@@ -217,7 +199,7 @@ export default function MemoryWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [activeThread, refreshVersion, target, view]);
+  }, [refreshVersion, target]);
 
   const filteredMemories = useMemo(
     () => filterMemoryRecords(memories, query),
@@ -242,7 +224,6 @@ export default function MemoryWorkspace({
       setCreateContent('');
       setCreateType('semantic');
       setCreateOpen(false);
-      setView('active');
       setRefreshVersion((value) => value + 1);
     } catch (error) {
       setCreateError(error instanceof Error ? error.message : 'Unable to create memory.');
@@ -280,21 +261,8 @@ export default function MemoryWorkspace({
     }
   };
 
-  const handleCandidate = async (candidate: MemoryCandidate, status: 'approved' | 'rejected') => {
-    try {
-      setActionId(candidate.id);
-      setLoadError(null);
-      await resolveMemoryCandidate(candidate.id, status, { actorId: 'ui' });
-      setCandidates((current) => current.filter((item) => item.id !== candidate.id));
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : `Unable to ${status} candidate.`);
-    } finally {
-      setActionId(null);
-    }
-  };
-
   const rowsAtLimit = isMemoryResultTruncated(
-    view === 'active' ? memories.length : candidates.length,
+    memories.length,
     MEMORY_LIMIT,
   );
 
@@ -302,25 +270,20 @@ export default function MemoryWorkspace({
     <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: 'auto auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
       <Box sx={{ px: 2, pt: 1.5, borderBottom: 1, borderColor: 'divider' }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-          <Tabs value={view} onChange={(_, value) => setView(value)} sx={{ minHeight: 38 }}>
-            <Tab value="active" label="Active" sx={{ minHeight: 38, textTransform: 'none' }} />
-            <Tab value="pending" label={`Pending${candidates.length ? ` (${candidates.length})` : ''}`} sx={{ minHeight: 38, textTransform: 'none' }} />
-          </Tabs>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Active Memory</Typography>
           <Stack direction="row" spacing={0.5}>
             <Tooltip title="Refresh">
               <IconButton size="small" onClick={() => setRefreshVersion((value) => value + 1)} disabled={loading}>
                 <RefreshIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            {view === 'active' && (
-              <Tooltip title="Add memory">
-                <span>
-                  <IconButton size="small" color="primary" onClick={() => setCreateOpen(true)} disabled={!target}>
-                    <AddIcon fontSize="small" />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            )}
+            <Tooltip title="Add memory">
+              <span>
+                <IconButton size="small" color="primary" onClick={() => setCreateOpen(true)} disabled={!target}>
+                  <AddIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
           </Stack>
         </Stack>
       </Box>
@@ -353,15 +316,13 @@ export default function MemoryWorkspace({
           color={consent.enabled === false ? 'warning' : consent.enabled === true ? 'success' : 'default'}
           label={consent.label}
         />
-        {view === 'active' && (
-          <TextField
-            size="small"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter memory"
-            sx={{ ml: { sm: 'auto' }, width: { xs: '100%', sm: 220 } }}
-          />
-        )}
+        <TextField
+          size="small"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filter memory"
+          sx={{ ml: { sm: 'auto' }, width: { xs: '100%', sm: 220 } }}
+        />
       </Box>
 
       <Box sx={{ minHeight: 0, overflow: 'auto' }}>
@@ -369,7 +330,7 @@ export default function MemoryWorkspace({
         {rowsAtLimit && <Alert severity="info" sx={{ mx: 1.5, mt: 1.5 }}>Showing the first {MEMORY_LIMIT} records.</Alert>}
         {loading ? (
           <Box sx={{ height: '100%', minHeight: 180, display: 'grid', placeItems: 'center' }}><CircularProgress size={28} /></Box>
-        ) : view === 'active' ? (
+        ) : (
           filteredMemories.length ? (
             <List disablePadding>
               {filteredMemories.map((memory) => {
@@ -413,36 +374,6 @@ export default function MemoryWorkspace({
               <Stack alignItems="center" spacing={0.5}><MemoryIcon sx={{ fontSize: 40, opacity: 0.45 }} /><Typography>No active memories</Typography></Stack>
             </Box>
           )
-        ) : candidates.length ? (
-          <List disablePadding>
-            {candidates.map((candidate) => {
-              const busy = actionId === candidate.id;
-              return (
-                <ListItem key={candidate.id} divider alignItems="flex-start" sx={{ px: 2, py: 1.5, gap: 1.5 }}>
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-                      <Chip size="small" label={candidate.memory_type} variant="outlined" />
-                      <Typography variant="caption" color="text.secondary">{formatTimestamp(candidate.created_at)}</Typography>
-                    </Stack>
-                    <Typography variant="body2" sx={{ mt: 0.75, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{candidate.content}</Typography>
-                    {candidate.reason && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>{candidate.reason}</Typography>}
-                  </Box>
-                  <Stack direction="row" spacing={0.25}>
-                    <Tooltip title="Approve">
-                      <span><IconButton size="small" color="primary" onClick={() => void handleCandidate(candidate, 'approved')} disabled={busy}><CheckIcon fontSize="small" /></IconButton></span>
-                    </Tooltip>
-                    <Tooltip title="Reject">
-                      <span><IconButton size="small" onClick={() => void handleCandidate(candidate, 'rejected')} disabled={busy}><CloseIcon fontSize="small" /></IconButton></span>
-                    </Tooltip>
-                  </Stack>
-                </ListItem>
-              );
-            })}
-          </List>
-        ) : (
-          <Box sx={{ height: '100%', minHeight: 220, display: 'grid', placeItems: 'center', color: 'text.secondary', p: 3 }}>
-            <Typography>No pending candidates</Typography>
-          </Box>
         )}
       </Box>
 

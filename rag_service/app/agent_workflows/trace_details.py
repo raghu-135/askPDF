@@ -105,8 +105,6 @@ def final_output_from_result(result: Any) -> Dict[str, Any]:
         "reasoning": source.get("reasoning"),
         "reasoning_available": source.get("reasoning_available"),
         "reasoning_format": source.get("reasoning_format"),
-        "memory_candidate_ids": source.get("memory_candidate_ids"),
-        "memory_candidates": source.get("memory_candidates"),
     }
     compact = {key: value for key, value in payload.items() if value not in (None, "", [], {})}
     if not compact:

@@ -222,8 +222,6 @@ def test_trace_details_keep_loop_visits_full_reasoning_checkpoints_and_final_ans
             "route": "document",
             "reasoning": reasoning,
             "reasoning_available": True,
-            "memory_candidate_ids": ["candidate-1"],
-            "memory_candidates": [{"id": "candidate-1", "content": "Remembered fact", "status": "pending"}],
         },
     )
 
@@ -238,8 +236,8 @@ def test_trace_details_keep_loop_visits_full_reasoning_checkpoints_and_final_ans
     assert payload["details"][0]["changes"]["added"]["final_answer"] == long_answer
     assert payload["final_output"]["answer"] == long_answer
     assert len(payload["final_output"]["answer"]) > 900
-    assert payload["final_output"]["memory_candidate_ids"] == ["candidate-1"]
-    assert payload["summary"]["memory"]["candidateIds"] == ["candidate-1"]
+    assert "memory_candidate_ids" not in payload["final_output"]
+    assert "candidateIds" not in payload["summary"].get("memory", {})
 
 
 def test_resumed_trace_details_share_one_run_size_limit(monkeypatch):

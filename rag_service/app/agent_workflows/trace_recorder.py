@@ -685,23 +685,6 @@ class AgentTraceRecorder:
         trace = self._build_trace(run=run, chat_turn_id=chat_turn_id, metrics=metrics)
         summary = self._build_summary(trace)
         final_output = final_output_from_result(result)
-        if final_output:
-            memory_summary = dict(summary.get("memory") or {})
-            candidate_ids = [
-                str(item)
-                for item in final_output.get("memory_candidate_ids") or []
-                if item
-            ]
-            if not candidate_ids:
-                candidate_ids = [
-                    str(candidate.get("id"))
-                    for candidate in final_output.get("memory_candidates") or []
-                    if isinstance(candidate, dict) and candidate.get("id")
-                ]
-            if candidate_ids:
-                memory_summary["candidateIds"] = candidate_ids
-                memory_summary["candidateCount"] = len(set(candidate_ids))
-                summary["memory"] = memory_summary
         payload = {
             "version": DEBUG_PAYLOAD_VERSION,
             "trace": trace,

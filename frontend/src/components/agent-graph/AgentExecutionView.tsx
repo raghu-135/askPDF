@@ -265,7 +265,7 @@ function AgentExecutionView({
           </Box>
           {progressOpen && (
             <>
-        {memoryDebug && (memoryDebug.recalledCount > 0 || memoryDebug.candidateCount > 0 || memoryDebug.searchedScopes.length > 0) && (
+        {memoryDebug && (memoryDebug.recalledCount > 0 || memoryDebug.searchedScopes.length > 0) && (
           <Paper variant="outlined" sx={{ p: 0.75, mb: 0.75, bgcolor: 'background.default' }}>
             <Stack direction="row" spacing={0.6} alignItems="center" sx={{ flexWrap: 'wrap', rowGap: 0.45 }}>
               <MemoryIcon sx={{ fontSize: 16 }} color="primary" />
@@ -278,11 +278,6 @@ function AgentExecutionView({
               {memoryDebug.recalledCount > 0 && (
                 <Tooltip title={memoryDebug.recalledMemoryIds.join('\n')} arrow>
                   <Chip size="small" variant="outlined" label={`${memoryDebug.recalledCount} recalled`} sx={{ height: 22 }} />
-                </Tooltip>
-              )}
-              {memoryDebug.candidateCount > 0 && (
-                <Tooltip title={memoryDebug.candidateIds.join('\n')} arrow>
-                  <Chip size="small" color="primary" variant="outlined" label={`${memoryDebug.candidateCount} candidates`} sx={{ height: 22 }} />
                 </Tooltip>
               )}
             </Stack>

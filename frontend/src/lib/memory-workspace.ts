@@ -52,22 +52,6 @@ export const resolveMemoryScopeTarget = ({
   return projectId ? { scopeType, scopeId: projectId } : null;
 };
 
-export const memoryCandidateQuery = ({
-  target,
-  thread,
-}: {
-  target: MemoryScopeTarget;
-  thread: Thread | null;
-}) => ({
-  status: 'pending',
-  proposedScopeType: target.scopeType,
-  proposedScopeId: target.scopeId,
-  sourceProjectId: target.scopeType === 'user' && thread?.project_id
-    ? thread.project_id
-    : undefined,
-  limit: 500,
-});
-
 export const memoryConsentStatus = ({
   scopeType,
   thread,

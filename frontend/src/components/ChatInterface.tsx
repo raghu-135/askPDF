@@ -58,7 +58,6 @@ import {
     updateThreadSettings,
     getPromptTools,
     getPromptPreview,
-    listMemoryCandidates,
     listAgentWorkflows,
     getAgentRun,
     listThreadAgentRuns,
@@ -73,8 +72,6 @@ import {
     getLatestAgentWorkflowBuilderTest,
     resumeAgentWorkflowBuilderTest,
     streamAgentWorkflowBuilderTest,
-    resolveMemoryCandidate,
-    type MemoryCandidate,
     type Project,
     type ThreadChatResponse,
 } from '../lib/api';
@@ -936,9 +933,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [humanReviewSubmitting, setHumanReviewSubmitting] = useState<AgentRunResumeAction | null>(null);
     const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
     const [humanReviewEditText, setHumanReviewEditText] = useState('');
-    const [pendingMemoryCandidates, setPendingMemoryCandidates] = useState<MemoryCandidate[]>([]);
-    const [memoryCandidateActionId, setMemoryCandidateActionId] = useState<string | null>(null);
-    const [memoryCandidateError, setMemoryCandidateError] = useState<string | null>(null);
 
     const messageListRef = useRef<HTMLDivElement | null>(null);
     const messageRefs = useRef<{ [key: number]: HTMLLIElement | null }>({});
@@ -1026,45 +1020,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setIsClarificationResizing(false);
     }, []);
 
-    const loadPendingMemoryCandidates = useCallback(async () => {
-        if (!activeThread || isTestRuntime) {
-            setPendingMemoryCandidates([]);
-            return;
-        }
-        try {
-            const response = await listMemoryCandidates({
-                status: 'pending',
-                sourceProjectId: activeThread.project_id,
-                limit: 20,
-            });
-            const rows = response.memory_candidates || [];
-            setPendingMemoryCandidates(rows.filter(candidate => (
-                candidate.source_thread_id === activeThread.id
-                || candidate.proposed_scope_id === activeThread.id
-                || Boolean(activeThread.project_id && candidate.source_project_id === activeThread.project_id)
-            )));
-            setMemoryCandidateError(null);
-        } catch (error: any) {
-            setMemoryCandidateError(error?.message || 'Unable to load memory candidates.');
-        }
-    }, [activeThread?.id, activeThread?.project_id, isTestRuntime]);
-
-    const handleResolveMemoryCandidate = useCallback(async (candidate: MemoryCandidate, status: 'approved' | 'rejected') => {
-        if (!activeThread) return;
-        try {
-            setMemoryCandidateActionId(candidate.id);
-            await resolveMemoryCandidate(candidate.id, status, {
-                actorId: 'ui',
-            });
-            setPendingMemoryCandidates(prev => prev.filter(item => item.id !== candidate.id));
-            setMemoryCandidateError(null);
-        } catch (error: any) {
-            setMemoryCandidateError(error?.message || `Unable to ${status === 'approved' ? 'approve' : 'reject'} memory candidate.`);
-        } finally {
-            setMemoryCandidateActionId(null);
-        }
-    }, [activeThread?.id]);
-
     useEffect(() => {
         if (!isClarificationResizing) return;
 
@@ -1089,7 +1044,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             applyThreadSettingsToState(activeThread.settings);
             loadMessages();
             if (!isTestRuntime) {
-                loadPendingMemoryCandidates();
                 recoverPendingHumanReview(activeThread.id);
             }
             checkIndexStatus();
@@ -1103,11 +1057,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             applyThreadSettingsToState(undefined);
             setIsEmbeddingModelValid(null);
             setIsLlmToolsSupported(null);
-            setPendingMemoryCandidates([]);
-            setMemoryCandidateError(null);
             setProjectAllowsGlobalMemory(false);
         }
-    }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState, isTestRuntime, loadPendingMemoryCandidates, loadProjectMemorySettings]);
+    }, [activeThread?.id, activeThread?.file_count, activeThread?.settings, applyThreadSettingsToState, isTestRuntime, loadProjectMemorySettings]);
 
     useEffect(() => {
         if (activeThread) {
@@ -1125,9 +1077,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setHumanReviewSubmitting(null);
             setHumanReviewError(null);
             setHumanReviewEditText('');
-            setPendingMemoryCandidates([]);
-            setMemoryCandidateError(null);
-            setMemoryCandidateActionId(null);
         }
     }, [activeThread?.id, resetLiveExecutionEvents]);
 
@@ -2315,10 +2264,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     // Clear recollection highlight after 10 seconds
                     setTimeout(() => setRecollectedIds(new Set()), 10000);
                 }
-                if (response.memory_candidate_ids && response.memory_candidate_ids.length > 0) {
-                    loadPendingMemoryCandidates();
-                }
-
                 // Notify parent that thread was updated
                 if (onThreadUpdate) {
                     onThreadUpdate();
@@ -3238,53 +3183,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
             {/* Input Area */}
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
-
-                {(pendingMemoryCandidates.length > 0 || memoryCandidateError) && (
-                    <Paper variant="outlined" sx={{ p: 1, borderRadius: 1, bgcolor: 'background.paper' }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: pendingMemoryCandidates.length > 0 ? 1 : 0 }}>
-                            <MemoryIcon fontSize="small" color="primary" />
-                            <Typography variant="caption" sx={{ fontWeight: 700, flex: 1 }}>
-                                Pending memory review
-                            </Typography>
-                            <Chip size="small" label={pendingMemoryCandidates.length} sx={{ height: 20 }} />
-                        </Box>
-                        {memoryCandidateError && (
-                            <Typography variant="caption" color="error" sx={{ display: 'block', mb: pendingMemoryCandidates.length > 0 ? 1 : 0 }}>
-                                {memoryCandidateError}
-                            </Typography>
-                        )}
-                        {pendingMemoryCandidates.slice(0, 3).map(candidate => {
-                            const busy = memoryCandidateActionId === candidate.id;
-                            return (
-                                <Box key={candidate.id} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5, borderTop: 1, borderColor: 'divider', '&:first-of-type': { borderTop: 0 } }}>
-                                    <Box sx={{ minWidth: 0, flex: 1 }}>
-                                        <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                                            {candidate.content}
-                                        </Typography>
-                                        <Typography variant="caption" color="text.secondary">
-                                            {candidate.proposed_scope_type} memory · {Math.round((candidate.confidence || 0) * 100)}%
-                                        </Typography>
-                                    </Box>
-                                    <Tooltip title="Approve memory">
-                                        <span>
-                                            <IconButton size="small" color="primary" disabled={busy} onClick={() => handleResolveMemoryCandidate(candidate, 'approved')}>
-                                                {busy ? <CircularProgress size={16} /> : <CheckIcon fontSize="small" />}
-                                            </IconButton>
-                                        </span>
-                                    </Tooltip>
-                                    <Tooltip title="Reject memory">
-                                        <span>
-                                            <IconButton size="small" color="default" disabled={busy} onClick={() => handleResolveMemoryCandidate(candidate, 'rejected')}>
-                                                <CloseIcon fontSize="small" />
-                                            </IconButton>
-                                        </span>
-                                    </Tooltip>
-                                </Box>
-                            );
-                        })}
-                    </Paper>
-                )}
-
                 {showDecisionPanel && (
                     <Box
                         sx={{

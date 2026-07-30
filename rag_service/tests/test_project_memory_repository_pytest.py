@@ -16,7 +16,6 @@ from app.db.repositories.project_file_repo_sqlmodel import ProjectFileRepository
 from app.db.repositories.project_repo_sqlmodel import DEFAULT_PROJECT_NAME, ProjectRepository
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
 from app.time_utils import utc_now
-from app.services.memory_promotion_service import extract_memory_candidates_from_text
 from app.services.memory_service import (
     _rank_fuse_memory_hits,
     memory_scope_policy_for_thread,
@@ -449,32 +448,6 @@ async def test_memory_repository_rejects_invalid_candidate_values(repo_sessionma
         )
     with pytest.raises(ValueError):
         await repo.resolve_candidate("missing", status="done")
-
-
-def test_explicit_remember_phrase_extracts_project_candidate():
-    proposals = extract_memory_candidates_from_text(
-        "Remember for this project that the product name is AskPDF Pro.",
-        thread_id="thread-1",
-        project_id="project-1",
-    )
-
-    assert len(proposals) == 1
-    assert proposals[0].scope_type == MemoryScopeType.PROJECT.value
-    assert proposals[0].scope_id == "project-1"
-    assert proposals[0].content == "the product name is AskPDF Pro."
-
-
-def test_explicit_user_memory_extracts_user_candidate():
-    proposals = extract_memory_candidates_from_text(
-        "Please remember for me that I prefer concise answers.",
-        thread_id="thread-1",
-        project_id="project-1",
-        user_id="user-1",
-    )
-
-    assert len(proposals) == 1
-    assert proposals[0].scope_type == MemoryScopeType.USER.value
-    assert proposals[0].scope_id == LOCAL_USER_MEMORY_SCOPE_ID
 
 
 def test_memory_setting_normalization_removes_legacy_flags():

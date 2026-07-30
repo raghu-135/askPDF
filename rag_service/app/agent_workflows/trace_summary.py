@@ -118,13 +118,6 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
         policy = artifacts.get("memory_scope_policy")
         if isinstance(policy, dict):
             memory_scope_policies.append(policy)
-    final_output = _as_dict(trace.get("final_output"))
-    memory_candidate_ids = _as_string_list(final_output.get("memory_candidate_ids"))
-    if not memory_candidate_ids:
-        for candidate in _as_list(final_output.get("memory_candidates")):
-            candidate_id = _as_dict(candidate).get("id")
-            if candidate_id:
-                memory_candidate_ids.append(str(candidate_id))
     config = _as_dict(resolved_spec.get("config"))
     evaluator_nodes = [node for node in nodes if node.get("id") == WorkflowNodeType.EVIDENCE_EVALUATOR.value]
     replanner_nodes = [node for node in nodes if node.get("id") == WorkflowNodeType.REPLANNER.value]
@@ -158,9 +151,7 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
             "recalledMemoryIds": [str(item.get("memory_id")) for item in memory_refs if item.get("memory_id")],
             "searchedScopes": memory_scopes,
             "scopePolicies": memory_scope_policies,
-            "candidateIds": memory_candidate_ids,
             "recalledCount": len({str(item.get("memory_id")) for item in memory_refs if item.get("memory_id")}),
-            "candidateCount": len(set(memory_candidate_ids)),
         },
         **_interrupt_summary(trace),
     }

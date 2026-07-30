@@ -311,24 +311,6 @@ const mapProject = (raw: RawProject): Project => ({
   updated_at: raw.updated_at,
 });
 
-export interface MemoryCandidate {
-  id: string;
-  source_thread_id?: string | null;
-  source_project_id?: string | null;
-  source_agent_run_id?: string | null;
-  source_turn_id?: string | null;
-  proposed_scope_type: string;
-  proposed_scope_id: string;
-  memory_type: string;
-  content: string;
-  confidence: number;
-  reason?: string;
-  status: string;
-  created_by?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
-
 export type MemoryScopeType = 'user' | 'project' | 'thread';
 export type MemoryType = 'semantic' | 'episodic' | 'procedural';
 
@@ -787,8 +769,6 @@ export interface AgentRunFinalOutput {
   reasoning?: string;
   reasoning_available?: boolean;
   reasoning_format?: string;
-  memory_candidate_ids?: string[];
-  memory_candidates?: MemoryCandidate[];
   safety?: Record<string, any>;
 }
 
@@ -1000,27 +980,6 @@ export async function createProjectThread(projectId: string, name: string): Prom
   return mapThread(await res.json());
 }
 
-export async function listMemoryCandidates(options: {
-  status?: string;
-  sourceProjectId?: string | null;
-  sourceThreadId?: string | null;
-  proposedScopeType?: MemoryScopeType | null;
-  proposedScopeId?: string | null;
-  limit?: number;
-} = {}): Promise<{ memory_candidates: MemoryCandidate[] }> {
-  const params = new URLSearchParams();
-  if (options.status) params.set("status", options.status);
-  if (options.sourceProjectId) params.set("source_project_id", options.sourceProjectId);
-  if (options.sourceThreadId) params.set("source_thread_id", options.sourceThreadId);
-  if (options.proposedScopeType) params.set("proposed_scope_type", options.proposedScopeType);
-  if (options.proposedScopeId) params.set("proposed_scope_id", options.proposedScopeId);
-  if (options.limit) params.set("limit", String(options.limit));
-  const query = params.toString();
-  const res = await fetch(`${API_BASE}/api/memory-candidates${query ? `?${query}` : ""}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
 export async function listMemories(
   scopeType: MemoryScopeType,
   scopeId: string,
@@ -1061,23 +1020,6 @@ export async function deleteMemory(memoryId: string): Promise<{
 export async function retryMemoryIndex(memoryId: string): Promise<MemoryRecord> {
   const res = await fetch(`${API_BASE}/api/memories/${encodeURIComponent(memoryId)}/index`, {
     method: "POST",
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-export async function resolveMemoryCandidate(
-  candidateId: string,
-  status: "approved" | "rejected",
-  options: { actorId?: string } = {}
-): Promise<{ memory_candidate: MemoryCandidate; memory?: any | null }> {
-  const res = await fetch(`${API_BASE}/api/memory-candidates/${encodeURIComponent(candidateId)}/resolve`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      status,
-      actor_id: options.actorId,
-    })
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -1690,8 +1632,6 @@ export interface ThreadChatResponse {
   agent_run_sequence?: number | null;
   agent_trace_refs?: AgentTraceRefs | null;
   pending_interrupt?: AgentRunPendingInterrupt | null;
-  memory_candidate_ids?: string[];
-  memory_candidates?: MemoryCandidate[];
   agent_workflow_id?: string;
   route?: string;
   agent_route?: string;

@@ -66,9 +66,7 @@ export interface TraceRunView {
   memory?: {
     recalledMemoryIds: string[];
     searchedScopes: Record<string, any>[];
-    candidateIds: string[];
     recalledCount: number;
-    candidateCount: number;
   };
   finalOutput?: AgentRunFinalOutput;
   detailManifest: AgentRunNodeDetailManifest[];
@@ -248,9 +246,7 @@ export const buildRunTraceView = (
       memory: Object.keys(memory).length > 0 ? {
         recalledMemoryIds: asStringArray(memory.recalledMemoryIds),
         searchedScopes: asArray(memory.searchedScopes),
-        candidateIds: asStringArray(memory.candidateIds),
         recalledCount: asNumber(memory.recalledCount) ?? 0,
-        candidateCount: asNumber(memory.candidateCount) ?? 0,
       } : undefined,
       finalOutput: runDetails.final_output || debug.final_output,
       detailManifest: Array.isArray(debug.detail_manifest) ? debug.detail_manifest : [],
