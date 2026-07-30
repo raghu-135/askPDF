@@ -198,6 +198,7 @@ export default function MemoryCuratorPanel({
     }
   };
 
+  const modelChecking = Boolean(llmModel) && modelReady === null;
   const canCompose = Boolean(llmModel && contextWindow >= 256 && modelReady === true && !busy);
 
   return (
@@ -215,7 +216,6 @@ export default function MemoryCuratorPanel({
             models={models}
             model={llmModel}
             contextWindow={contextWindow}
-            readiness={modelReady}
             disabled={busy}
             onModelChange={setLlmModel}
             onContextWindowChange={(value) => {
@@ -324,7 +324,7 @@ export default function MemoryCuratorPanel({
         <ConversationComposer
           placeholder={intent.mode === 'edit' ? 'Describe the correction...' : 'Tell the curator what to remember...'}
           disabled={!canCompose}
-          busy={busy}
+          busy={busy || modelChecking}
           onSubmit={submitMessage}
         />
       </Box>

@@ -12,8 +12,6 @@ import {
   TextField,
   Tooltip,
 } from '@mui/material';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
 import SendIcon from '@mui/icons-material/Send';
 import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
 
@@ -44,7 +42,6 @@ export function ConversationModelControls({
   models,
   model,
   contextWindow,
-  readiness = null,
   disabled = false,
   onModelChange,
   onContextWindowChange,
@@ -52,7 +49,6 @@ export function ConversationModelControls({
   models: string[];
   model: string;
   contextWindow: number;
-  readiness?: boolean | null;
   disabled?: boolean;
   onModelChange: (model: string) => void;
   onContextWindowChange: (contextWindow: number) => void;
@@ -80,15 +76,6 @@ export function ConversationModelControls({
           {models.map((item) => <MenuItem key={item} value={item}>{item}</MenuItem>)}
         </Select>
       </FormControl>
-      {model && (
-        <Tooltip title={readiness === null ? 'Checking chat model' : readiness ? 'Chat model ready' : 'Chat model unavailable'}>
-          <Box sx={{ display: 'grid', placeItems: 'center', color: readiness === false ? 'error.main' : 'success.main' }}>
-            {readiness === null
-              ? <CircularProgress size={18} />
-              : readiness ? <CheckCircleIcon fontSize="small" /> : <ErrorIcon fontSize="small" />}
-          </Box>
-        </Tooltip>
-      )}
     </Box>
   );
 }

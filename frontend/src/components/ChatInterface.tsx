@@ -2646,7 +2646,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         models={availableModels}
                         model={llmModel}
                         contextWindow={contextWindow}
-                        readiness={isLlmModelValid}
                         onModelChange={(model) => void handleLlmModelChange(model)}
                         onContextWindowChange={handleContextWindowChange}
                     />
