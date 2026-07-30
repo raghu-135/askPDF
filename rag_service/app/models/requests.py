@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -125,29 +125,64 @@ class MemorySearchRequest(BaseModel):
     max_results: int = Field(default=10, ge=1, le=50)
 
 
-class MemoryCandidateCreateRequest(BaseModel):
-    """Request body for creating a memory promotion candidate."""
-
-    proposed_scope_type: str
-    proposed_scope_id: str
-    memory_type: str = "semantic"
-    content: str
-    source_thread_id: Optional[str] = None
-    source_project_id: Optional[str] = None
-    source_agent_run_id: Optional[str] = None
-    source_turn_id: Optional[str] = None
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    reason: str = ""
-    created_by: Optional[str] = None
-
-
-class MemoryCandidateResolveRequest(BaseModel):
-    """Request body for resolving a promotion candidate."""
-
+class MemoryCuratorMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: str
-    actor_id: Optional[str] = None
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=12000)
+
+
+class MemoryCuratorContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selected_scope_type: Literal["user", "project", "thread"]
+    selected_scope_id: str = Field(min_length=1)
+    thread_id: Optional[str] = None
+    project_id: Optional[str] = None
+
+
+class MemoryCuratorRespondRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["create", "edit", "conversation_review"]
+    context: MemoryCuratorContext
+    memory_id: Optional[str] = None
+    messages: List[MemoryCuratorMessage] = Field(default_factory=list, max_length=24)
+    llm_model: str = Field(min_length=1)
+    context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
+
+
+class MemoryCuratorOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["create", "update", "delete", "noop"]
+    scope_type: Optional[Literal["user", "project", "thread"]] = None
+    scope_id: Optional[str] = None
+    memory_id: Optional[str] = None
+    expected_updated_at: Optional[str] = None
+    memory_type: Optional[Literal["semantic", "episodic", "procedural"]] = None
+    content: Optional[str] = Field(default=None, max_length=12000)
+    summary: Optional[str] = Field(default=None, max_length=4000)
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    source_refs_json: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryReviewCursor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    thread_id: str = Field(min_length=1)
+    reviewed_through_turn_id: str = Field(min_length=1)
+    reviewed_through_created_at: datetime
+
+
+class MemoryCuratorApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    context: MemoryCuratorContext
+    confirmed: Literal[True]
+    operations: List[MemoryCuratorOperation] = Field(default_factory=list, max_length=20)
+    review_cursor: Optional[MemoryReviewCursor] = None
+    actor_id: str = Field(default="ui", min_length=1, max_length=200)
 
 
 class ThreadFileRequest(BaseModel):

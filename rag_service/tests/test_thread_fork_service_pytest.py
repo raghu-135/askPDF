@@ -45,7 +45,13 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
                     name="Source Thread",
                     embedding_model="BAAI/bge-m3",
                     settings={"replans": 3},
-                    thread_metadata={"existing": True},
+                    thread_metadata={
+                        "existing": True,
+                        "memory_curator": {
+                            "reviewed_through_turn_id": "turn-1",
+                            "reviewed_through_created_at": "2026-01-01T00:00:00Z",
+                        },
+                    },
                     created_at=created_at,
                 ),
                 ]
@@ -162,6 +168,7 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
     assert forked.thread_metadata["fork"]["parent_thread_name"] == "Source Thread"
     assert forked.thread_metadata["fork"]["source_message_id"] == "turn-1:assistant"
     assert forked.thread_metadata["fork"]["mode"] == "from_message"
+    assert forked.thread_metadata["memory_curator"]["reviewed_through_turn_id"] == turns[0].id
     assert source_thread.thread_metadata["fork_children"] == [forked.id]
     assert [t.payload["question"] for t in turns] == ["question"]
     assert [t.payload["answer"] for t in turns] == ["answer"]
@@ -170,6 +177,53 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
     assert len(annotation_overlays) == 1
     assert annotation_overlays[0].annotations == [{"id": "a1"}]
     assert annotation_overlays[0].updated_at == created_at
+
+
+@pytest.mark.asyncio
+async def test_fork_from_message_drops_review_cursor_beyond_fork_point(engine, monkeypatch):
+    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(thread_management_service, "async_session_maker", maker)
+    first_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    second_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    async with maker() as session:
+        async with session.begin():
+            session.add(Project(id="cursor-project", name="Cursor", embedding_model="BAAI/bge-m3"))
+            session.add(Thread(
+                id="cursor-thread",
+                project_id="cursor-project",
+                name="Cursor source",
+                embedding_model="BAAI/bge-m3",
+                thread_metadata={
+                    "memory_curator": {
+                        "reviewed_through_turn_id": "cursor-turn-2",
+                        "reviewed_through_created_at": second_at.isoformat(),
+                    }
+                },
+            ))
+            await session.flush()
+            session.add_all([
+                ChatTurn(
+                    id="cursor-turn-1",
+                    thread_id="cursor-thread",
+                    status="completed",
+                    payload={"question": "Q1", "answer": "A1"},
+                    created_at=first_at,
+                ),
+                ChatTurn(
+                    id="cursor-turn-2",
+                    thread_id="cursor-thread",
+                    status="completed",
+                    payload={"question": "Q2", "answer": "A2"},
+                    created_at=second_at,
+                ),
+            ])
+
+    forked = (await thread_management_service.fork_thread(
+        "cursor-thread",
+        message_id="cursor-turn-1:assistant",
+    ))["thread"]
+
+    assert "memory_curator" not in forked.thread_metadata
 
 
 @pytest.mark.asyncio

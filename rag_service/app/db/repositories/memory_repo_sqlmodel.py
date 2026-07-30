@@ -10,8 +10,8 @@ from sqlalchemy import delete, or_
 from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
-from app.db.enums import MemoryCandidateStatus, MemoryScopeType, MemoryStatus, MemoryType, MemoryVisibility
-from app.db.models_sqlmodel import Memory, MemoryCandidate, MemoryEvent
+from app.db.enums import MemoryScopeType, MemoryStatus, MemoryType, MemoryVisibility
+from app.db.models_sqlmodel import Memory, MemoryEvent
 from app.db.project_activity import touch_project_activity
 from app.time_utils import utc_now
 
@@ -20,7 +20,6 @@ VALID_MEMORY_SCOPE_TYPES = {item.value for item in MemoryScopeType}
 VALID_MEMORY_TYPES = {item.value for item in MemoryType}
 VALID_MEMORY_STATUSES = {item.value for item in MemoryStatus}
 VALID_MEMORY_VISIBILITIES = {item.value for item in MemoryVisibility}
-VALID_CANDIDATE_STATUSES = {item.value for item in MemoryCandidateStatus}
 
 
 def _require_nonempty(value: str, field_name: str) -> str:
@@ -48,7 +47,7 @@ def _normalize_confidence(value: float) -> float:
 
 
 class MemoryRepository:
-    """Repository for canonical durable memories and promotion candidates."""
+    """Repository for canonical durable memories."""
 
     def __init__(self, session: Optional[AsyncSession] = None):
         self._session = session
@@ -201,6 +200,65 @@ class MemoryRepository:
             await session.refresh(memory)
             return memory
 
+    async def update_memory(
+        self,
+        memory_id: str,
+        *,
+        memory_type: str,
+        content: str,
+        content_hash: str,
+        summary: str = "",
+        confidence: float = 1.0,
+        source_refs_json: Optional[Dict[str, Any]] = None,
+        actor_id: Optional[str] = None,
+        event_type: str = "updated",
+        event_payload: Optional[Dict[str, Any]] = None,
+        updated_at: Optional[datetime] = None,
+    ) -> Optional[Memory]:
+        """Update one canonical row, reusing an injected transaction when present."""
+
+        memory_id = _require_nonempty(memory_id, "memory_id")
+        memory_type = _require_enum(memory_type, "memory_type", VALID_MEMORY_TYPES)
+        content = _require_nonempty(content, "content")
+        content_hash = _require_nonempty(content_hash, "content_hash")
+        confidence = _normalize_confidence(confidence)
+
+        async def apply(session: AsyncSession) -> Optional[Memory]:
+            memory = await session.get(Memory, memory_id)
+            if memory is None:
+                return None
+            now = updated_at or utc_now()
+            memory.memory_type = memory_type
+            memory.content = content
+            memory.summary = summary or ""
+            memory.content_hash = content_hash
+            memory.confidence = confidence
+            memory.source_refs_json = {
+                **dict(memory.source_refs_json or {}),
+                **dict(source_refs_json or {}),
+            }
+            memory.index_status = "pending"
+            memory.indexed_at = None
+            memory.index_error = None
+            memory.updated_at = now
+            session.add(MemoryEvent(
+                memory_id=memory.id,
+                event_type=_require_nonempty(event_type, "event_type"),
+                actor_id=actor_id,
+                payload_json=event_payload or {},
+                created_at=now,
+            ))
+            await session.flush()
+            if memory.scope_type == MemoryScopeType.PROJECT.value:
+                await touch_project_activity(session, memory.scope_id, occurred_at=now)
+            return memory
+
+        session = await self._get_session()
+        if self._session is not None:
+            return await apply(session)
+        async with session.begin():
+            return await apply(session)
+
     async def list_memories_for_index_retry(self, *, limit: int = 100) -> list[Memory]:
         bounded_limit = max(1, min(int(limit), 500))
         session = await self._get_session()
@@ -278,238 +336,3 @@ class MemoryRepository:
                 .limit(bounded_limit)
             )
             return list(result.scalars().all())
-
-    async def create_candidate(
-        self,
-        *,
-        proposed_scope_type: str,
-        proposed_scope_id: str,
-        memory_type: str,
-        content: str,
-        source_thread_id: Optional[str] = None,
-        source_project_id: Optional[str] = None,
-        source_agent_run_id: Optional[str] = None,
-        source_turn_id: Optional[str] = None,
-        confidence: float = 0.0,
-        reason: str = "",
-        created_by: Optional[str] = None,
-    ) -> MemoryCandidate:
-        proposed_scope_type = _require_enum(proposed_scope_type, "proposed_scope_type", VALID_MEMORY_SCOPE_TYPES)
-        proposed_scope_id = _require_nonempty(proposed_scope_id, "proposed_scope_id")
-        memory_type = _require_enum(memory_type, "memory_type", VALID_MEMORY_TYPES)
-        content = _require_nonempty(content, "content")
-        confidence = _normalize_confidence(confidence)
-        candidate = MemoryCandidate(
-            source_thread_id=source_thread_id,
-            source_project_id=source_project_id,
-            source_agent_run_id=source_agent_run_id,
-            source_turn_id=source_turn_id,
-            proposed_scope_type=proposed_scope_type,
-            proposed_scope_id=proposed_scope_id,
-            memory_type=memory_type,
-            content=content,
-            confidence=confidence,
-            reason=reason or "",
-            created_by=created_by,
-            created_at=utc_now(),
-        )
-        session = await self._get_session()
-        async with session.begin():
-            session.add(candidate)
-            await session.flush()
-            await session.refresh(candidate)
-            return candidate
-
-    async def list_candidates(
-        self,
-        *,
-        status: str = MemoryCandidateStatus.PENDING.value,
-        source_project_id: Optional[str] = None,
-        source_thread_id: Optional[str] = None,
-        proposed_scope_type: Optional[str] = None,
-        proposed_scope_id: Optional[str] = None,
-        limit: int = 100,
-    ) -> list[MemoryCandidate]:
-        bounded_limit = max(1, min(int(limit), 500))
-        if status:
-            status = _require_enum(status, "status", VALID_CANDIDATE_STATUSES)
-        if source_project_id is not None:
-            source_project_id = _require_nonempty(source_project_id, "source_project_id")
-        if source_thread_id is not None:
-            source_thread_id = _require_nonempty(source_thread_id, "source_thread_id")
-        if proposed_scope_type is not None:
-            proposed_scope_type = _require_enum(
-                proposed_scope_type,
-                "proposed_scope_type",
-                VALID_MEMORY_SCOPE_TYPES,
-            )
-        if proposed_scope_id is not None:
-            proposed_scope_id = _require_nonempty(proposed_scope_id, "proposed_scope_id")
-        session = await self._get_session()
-        async with session.begin():
-            query = select(MemoryCandidate)
-            if status:
-                query = query.where(MemoryCandidate.status == status)
-            if source_project_id is not None:
-                query = query.where(MemoryCandidate.source_project_id == source_project_id)
-            if source_thread_id is not None:
-                query = query.where(MemoryCandidate.source_thread_id == source_thread_id)
-            if proposed_scope_type is not None:
-                query = query.where(MemoryCandidate.proposed_scope_type == proposed_scope_type)
-            if proposed_scope_id is not None:
-                query = query.where(MemoryCandidate.proposed_scope_id == proposed_scope_id)
-            result = await session.execute(query.order_by(MemoryCandidate.created_at.desc()).limit(bounded_limit))
-            return list(result.scalars().all())
-
-    async def get_candidate(self, candidate_id: str) -> Optional[MemoryCandidate]:
-        session = await self._get_session()
-        async with session.begin():
-            return await session.get(MemoryCandidate, candidate_id)
-
-    async def resolve_candidate(
-        self,
-        candidate_id: str,
-        *,
-        status: str,
-        actor_id: Optional[str] = None,
-    ) -> Optional[MemoryCandidate]:
-        status = _require_enum(status, "status", VALID_CANDIDATE_STATUSES)
-        session = await self._get_session()
-        async with session.begin():
-            result = await session.execute(
-                select(MemoryCandidate)
-                .where(MemoryCandidate.id == candidate_id)
-                .with_for_update()
-            )
-            candidate = result.scalar_one_or_none()
-            if candidate is None:
-                return None
-            if candidate.status != MemoryCandidateStatus.PENDING.value:
-                if candidate.status != status:
-                    raise ValueError(
-                        f"Memory candidate is already {candidate.status}"
-                    )
-                return candidate
-            candidate.status = status
-            candidate.resolved_by = actor_id
-            candidate.resolved_at = utc_now()
-            await session.flush()
-            await session.refresh(candidate)
-            return candidate
-
-    async def promote_candidate(
-        self,
-        candidate_id: str,
-        *,
-        status: str,
-        embedding_model: str,
-        content_hash: str,
-        actor_id: Optional[str] = None,
-    ) -> tuple[Optional[MemoryCandidate], Optional[Memory], bool]:
-        """Atomically resolve a pending candidate and create its canonical memory once."""
-
-        if status not in {
-            MemoryCandidateStatus.APPROVED.value,
-            MemoryCandidateStatus.AUTO_APPROVED.value,
-        }:
-            raise ValueError("Candidate promotion requires an approved status")
-        session = await self._get_session()
-        async with session.begin():
-            result = await session.execute(
-                select(MemoryCandidate)
-                .where(MemoryCandidate.id == candidate_id)
-                .with_for_update()
-            )
-            candidate = result.scalar_one_or_none()
-            if candidate is None:
-                return None, None, False
-            if candidate.status != MemoryCandidateStatus.PENDING.value:
-                if candidate.status not in {
-                    MemoryCandidateStatus.APPROVED.value,
-                    MemoryCandidateStatus.AUTO_APPROVED.value,
-                }:
-                    raise ValueError(
-                        f"Memory candidate is already {candidate.status}"
-                    )
-                memory = (
-                    await session.get(Memory, candidate.promoted_memory_id)
-                    if candidate.promoted_memory_id
-                    else None
-                )
-                return candidate, memory, False
-
-            memory = Memory(
-                scope_type=candidate.proposed_scope_type,
-                scope_id=candidate.proposed_scope_id,
-                memory_type=candidate.memory_type,
-                content=candidate.content,
-                summary="",
-                embedding_model=_require_nonempty(embedding_model, "embedding_model"),
-                content_hash=_require_nonempty(content_hash, "content_hash"),
-                index_status="pending",
-                source_refs_json={
-                    "candidate_id": candidate.id,
-                    "source_thread_id": candidate.source_thread_id,
-                    "source_project_id": candidate.source_project_id,
-                    "source_agent_run_id": candidate.source_agent_run_id,
-                    "source_turn_id": candidate.source_turn_id,
-                },
-                confidence=candidate.confidence,
-                visibility=(
-                    MemoryVisibility.PROJECT.value
-                    if candidate.proposed_scope_type == MemoryScopeType.PROJECT.value
-                    else MemoryVisibility.PRIVATE.value
-                ),
-                created_by=actor_id or candidate.created_by,
-                created_at=utc_now(),
-            )
-            session.add(memory)
-            await session.flush()
-            session.add(
-                MemoryEvent(
-                    memory_id=memory.id,
-                    event_type="created",
-                    actor_id=actor_id or candidate.created_by,
-                    payload_json={"candidate_id": candidate.id},
-                    created_at=utc_now(),
-                )
-            )
-            candidate.status = status
-            candidate.promoted_memory_id = memory.id
-            candidate.resolved_by = actor_id
-            candidate.resolved_at = utc_now()
-            await session.flush()
-            await session.refresh(candidate)
-            await session.refresh(memory)
-            return candidate, memory, True
-
-    async def delete_candidate(self, candidate_id: str) -> bool:
-        candidate_id = _require_nonempty(candidate_id, "candidate_id")
-        session = await self._get_session()
-        async with session.begin():
-            candidate = await session.get(MemoryCandidate, candidate_id)
-            if candidate is None:
-                return False
-            await session.delete(candidate)
-            await session.flush()
-            return True
-
-    async def delete_candidates_for_thread(self, thread_id: str) -> list[str]:
-        thread_id = _require_nonempty(thread_id, "thread_id")
-        session = await self._get_session()
-        async with session.begin():
-            query = select(MemoryCandidate.id).where(
-                or_(
-                    MemoryCandidate.source_thread_id == thread_id,
-                    (
-                        (MemoryCandidate.proposed_scope_type == MemoryScopeType.THREAD.value)
-                        & (MemoryCandidate.proposed_scope_id == thread_id)
-                    ),
-                )
-            )
-            result = await session.execute(query)
-            candidate_ids = [str(row[0]) for row in result.all()]
-            if not candidate_ids:
-                return []
-            await session.execute(delete(MemoryCandidate).where(MemoryCandidate.id.in_(candidate_ids)))
-            return candidate_ids

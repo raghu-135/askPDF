@@ -1848,8 +1848,7 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
           )}
           <Typography variant="body2" color="text.secondary">
             This permanently deletes {projectLifecycle?.thread_count || 0} threads,{' '}
-            {projectLifecycle?.memory_count || 0} memories, and{' '}
-            {projectLifecycle?.candidate_count || 0} memory candidates.
+            and {projectLifecycle?.memory_count || 0} memories.
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
             {projectLifecycle?.shared_file_count || 0} shared files will remain available to

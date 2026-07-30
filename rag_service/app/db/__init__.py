@@ -13,7 +13,6 @@ from app.db.models_sqlmodel import (
     ChatTurnStatus,
     WorkflowVisibility,
     AgentRunStatus,
-    MemoryCandidateStatus,
     MemoryScopeType,
     MemoryStatus,
     MemoryType,
@@ -29,7 +28,6 @@ from app.db.models_sqlmodel import (
     AgentRun,
     Memory,
     MemoryEvent,
-    MemoryCandidate,
 )
 from app.db.enums import (
     EmbeddingReadinessStatus,
@@ -592,31 +590,6 @@ async def list_memories_for_index_retry(**kwargs):
     return await get_memory_repo().list_memories_for_index_retry(**kwargs)
 
 
-async def create_memory_candidate(**kwargs):
-    """Create a memory promotion candidate."""
-    return await get_memory_repo().create_candidate(**kwargs)
-
-
-async def list_memory_candidates(**kwargs):
-    """List memory promotion candidates."""
-    return await get_memory_repo().list_candidates(**kwargs)
-
-
-async def resolve_memory_candidate(candidate_id: str, **kwargs):
-    """Resolve a memory promotion candidate."""
-    return await get_memory_repo().resolve_candidate(candidate_id, **kwargs)
-
-
-async def delete_memory_candidate(candidate_id: str):
-    """Hard-delete a memory promotion candidate."""
-    return await get_memory_repo().delete_candidate(candidate_id)
-
-
-async def delete_memory_candidates_for_thread(thread_id: str):
-    """Hard-delete memory promotion candidates related to a thread."""
-    return await get_memory_repo().delete_candidates_for_thread(thread_id)
-
-
 __all__ = [
     # Models
     "ProcessStatus",
@@ -625,7 +598,6 @@ __all__ = [
     "ChatTurnStatus",
     "WorkflowVisibility",
     "AgentRunStatus",
-    "MemoryCandidateStatus",
     "MemoryScopeType",
     "MemoryStatus",
     "MemoryType",
@@ -645,7 +617,6 @@ __all__ = [
     "AgentRun",
     "Memory",
     "MemoryEvent",
-    "MemoryCandidate",
     # Config
     "init_db",
     # Status
@@ -719,9 +690,4 @@ __all__ = [
     "delete_memories_for_scope",
     "delete_expired_memories",
     "list_expired_memories",
-    "create_memory_candidate",
-    "list_memory_candidates",
-    "resolve_memory_candidate",
-    "delete_memory_candidate",
-    "delete_memory_candidates_for_thread",
 ]

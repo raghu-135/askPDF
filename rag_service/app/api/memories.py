@@ -1,39 +1,39 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db import (
-    MemoryCandidateStatus,
     MemoryScopeType,
-    create_memory_candidate,
-    get_memory_repo,
-    list_memory_candidates,
 )
 from app.models.requests import (
-    MemoryCandidateCreateRequest,
-    MemoryCandidateResolveRequest,
+    MemoryCuratorApplyRequest,
+    MemoryCuratorRespondRequest,
     MemoryCreateRequest,
     MemorySearchRequest,
+)
+from app.services.memory_curator_service import (
+    MemoryChangedError,
+    MemoryCuratorError,
+    MemoryCuratorModelUnavailableError,
+    MemoryCuratorNotFoundError,
+    apply_memory_curator_change_set,
+    memory_payload as curator_memory_payload,
+    respond_to_memory_curator,
 )
 from app.services.memory_service import (
     MemoryVectorCleanupError,
     create_and_index_memory,
     hard_delete_memory,
-    hard_delete_memory_candidate,
     list_scope_memories,
-    memory_content_hash,
     retry_memory_index,
     search_thread_memory,
 )
 from app.services.embedding_model_service import (
     EmbeddingModelResolutionError,
     EmbeddingModelUnavailableError,
-    require_embedding_model_ready,
-    resolve_scope_embedding_model,
 )
-from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 from app.time_utils import iso_utc_z
 
 
@@ -66,31 +66,36 @@ def _memory_payload(memory) -> Dict[str, Any]:
     }
 
 
-def _candidate_payload(candidate) -> Dict[str, Any]:
-    return {
-        "id": candidate.id,
-        "source_thread_id": candidate.source_thread_id,
-        "source_project_id": candidate.source_project_id,
-        "source_agent_run_id": candidate.source_agent_run_id,
-        "source_turn_id": candidate.source_turn_id,
-        "proposed_scope_type": candidate.proposed_scope_type,
-        "proposed_scope_id": candidate.proposed_scope_id,
-        "memory_type": candidate.memory_type,
-        "content": candidate.content,
-        "confidence": candidate.confidence,
-        "reason": candidate.reason,
-        "status": candidate.status,
-        "promoted_memory_id": candidate.promoted_memory_id,
-        "resolved_by": candidate.resolved_by,
-        "resolved_at": iso_utc_z(candidate.resolved_at) if candidate.resolved_at else None,
-        "created_by": candidate.created_by,
-        "created_at": iso_utc_z(candidate.created_at) if candidate.created_at else None,
-        "updated_at": iso_utc_z(candidate.updated_at) if candidate.updated_at else None,
-    }
-
-
 def _bad_request_from_value_error(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
+
+
+def _raise_curator_http(exc: Exception):
+    if isinstance(exc, MemoryChangedError):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": exc.code,
+                "message": str(exc),
+                "memories": [curator_memory_payload(memory) for memory in exc.memories],
+            },
+        )
+    if isinstance(exc, MemoryCuratorModelUnavailableError):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        )
+    if isinstance(exc, MemoryCuratorNotFoundError):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": exc.code, "message": str(exc)},
+        )
+    if isinstance(exc, MemoryCuratorError):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": exc.code, "message": str(exc)},
+        )
+    raise exc
 
 
 @router.get("/memories")
@@ -160,108 +165,27 @@ async def search_thread_memories_endpoint(thread_id: str, req: MemorySearchReque
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/memory-candidates")
-async def list_memory_candidates_endpoint(
-    status: str = Query(default=MemoryCandidateStatus.PENDING.value),
-    source_project_id: Optional[str] = Query(default=None),
-    source_thread_id: Optional[str] = Query(default=None),
-    proposed_scope_type: Optional[str] = Query(default=None),
-    proposed_scope_id: Optional[str] = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
-):
+@router.post("/memory-curator/respond")
+async def memory_curator_respond_endpoint(req: MemoryCuratorRespondRequest):
     try:
-        candidates = await list_memory_candidates(
-            status=status,
-            source_project_id=source_project_id,
-            source_thread_id=source_thread_id,
-            proposed_scope_type=proposed_scope_type,
-            proposed_scope_id=proposed_scope_id,
-            limit=limit,
-        )
-    except ValueError as exc:
-        raise _bad_request_from_value_error(exc) from exc
-    return {"memory_candidates": [_candidate_payload(candidate) for candidate in candidates]}
+        return await respond_to_memory_curator(req)
+    except Exception as exc:
+        _raise_curator_http(exc)
 
 
-@router.post("/memory-candidates")
-async def create_memory_candidate_endpoint(req: MemoryCandidateCreateRequest):
+@router.post("/memory-curator/apply")
+async def memory_curator_apply_endpoint(req: MemoryCuratorApplyRequest):
     try:
-        proposed_scope_id = (
-            LOCAL_USER_MEMORY_SCOPE_ID
-            if req.proposed_scope_type == MemoryScopeType.USER.value
-            else req.proposed_scope_id
-        )
-        candidate = await create_memory_candidate(
-            proposed_scope_type=req.proposed_scope_type,
-            proposed_scope_id=proposed_scope_id,
-            memory_type=req.memory_type,
-            content=req.content,
-            source_thread_id=req.source_thread_id,
-            source_project_id=req.source_project_id,
-            source_agent_run_id=req.source_agent_run_id,
-            source_turn_id=req.source_turn_id,
-            confidence=req.confidence,
-            reason=req.reason,
-            created_by=req.created_by,
-        )
-    except ValueError as exc:
-        raise _bad_request_from_value_error(exc) from exc
-    return _candidate_payload(candidate)
-
-
-@router.post("/memory-candidates/{candidate_id}/resolve")
-async def resolve_memory_candidate_endpoint(candidate_id: str, req: MemoryCandidateResolveRequest):
-    repo = get_memory_repo()
-    existing = await repo.get_candidate(candidate_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail="Memory candidate not found")
-    if req.status not in {
-        MemoryCandidateStatus.APPROVED.value,
-        MemoryCandidateStatus.AUTO_APPROVED.value,
-        MemoryCandidateStatus.REJECTED.value,
-    }:
-        raise HTTPException(status_code=400, detail="Invalid candidate resolution status")
-    if (
-        req.status == MemoryCandidateStatus.AUTO_APPROVED.value
-        and existing.proposed_scope_type == MemoryScopeType.USER.value
-    ):
-        raise HTTPException(status_code=400, detail="User/global memory candidates require explicit approval")
-    if req.status in {MemoryCandidateStatus.APPROVED.value, MemoryCandidateStatus.AUTO_APPROVED.value}:
-        try:
-            embedding_model = await resolve_scope_embedding_model(
-                existing.proposed_scope_type, existing.proposed_scope_id
-            )
-            await require_embedding_model_ready(embedding_model)
-            candidate, memory, created = await repo.promote_candidate(
-                candidate_id,
-                status=req.status,
-                embedding_model=embedding_model,
-                content_hash=memory_content_hash(existing.content),
-                actor_id=req.actor_id,
-            )
-            if memory is not None and (created or memory.index_status != "indexed"):
-                try:
-                    memory = await retry_memory_index(memory.id)
-                except Exception:
-                    memory = await get_memory_repo().get_memory(memory.id)
-        except EmbeddingModelUnavailableError as exc:
-            raise HTTPException(status_code=409, detail={"code": "embedding_model_unavailable", "message": str(exc)}) from exc
-        except (ValueError, EmbeddingModelResolutionError) as exc:
-            raise _bad_request_from_value_error(exc) from exc
-    else:
-        try:
-            candidate = await repo.resolve_candidate(
-                candidate_id,
-                status=req.status,
-                actor_id=req.actor_id,
-            )
-        except ValueError as exc:
-            raise _bad_request_from_value_error(exc) from exc
-        memory = None
-    return {
-        "memory_candidate": _candidate_payload(candidate),
-        "memory": _memory_payload(memory) if memory is not None else None,
-    }
+        return await apply_memory_curator_change_set(req)
+    except EmbeddingModelUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "embedding_model_unavailable", "message": str(exc)},
+        ) from exc
+    except MemoryVectorCleanupError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_curator_http(exc)
 
 
 @router.post("/memories/{memory_id}/index")
@@ -273,11 +197,3 @@ async def retry_memory_index_endpoint(memory_id: str):
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory not found")
     return _memory_payload(memory)
-
-
-@router.delete("/memory-candidates/{candidate_id}")
-async def delete_memory_candidate_endpoint(candidate_id: str):
-    result = await hard_delete_memory_candidate(candidate_id)
-    if not result["deleted"]:
-        raise HTTPException(status_code=404, detail="Memory candidate not found")
-    return {"status": "deleted", "memory_candidate_id": candidate_id}

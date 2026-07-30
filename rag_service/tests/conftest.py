@@ -105,7 +105,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_file_repo_sqlmodel,
         thread_repo_sqlmodel,
     )
-    from app.services import thread_management_service
+    from app.services import memory_curator_service, thread_management_service
     from app.agent_workflows import (
         chat_cancellation,
         repository as agent_workflow_repository,
@@ -122,6 +122,7 @@ def _patch_app_session_makers(monkeypatch, session_maker):
         thread_file_repo_sqlmodel,
         thread_repo_sqlmodel,
         thread_management_service,
+        memory_curator_service,
         agent_workflow_repository,
         chat_cancellation,
     ):

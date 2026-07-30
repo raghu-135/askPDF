@@ -266,7 +266,6 @@ export interface ProjectLifecycleSummary {
   memory_count: number;
   project_memory_count: number;
   thread_memory_count: number;
-  candidate_count: number;
   annotation_count: number;
   agent_run_count: number;
   active_run_count: number;
@@ -351,6 +350,79 @@ export interface MemoryCreateInput {
   visibility?: string;
   created_by?: string;
   expires_at?: string | null;
+}
+
+export type MemoryCuratorMode = 'create' | 'edit' | 'conversation_review';
+export type MemoryCuratorState = 'clarification' | 'conflict' | 'proposal' | 'no_changes';
+
+export interface MemoryCuratorContext {
+  selected_scope_type: MemoryScopeType;
+  selected_scope_id: string;
+  thread_id?: string | null;
+  project_id?: string | null;
+}
+
+export interface MemoryCuratorMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface MemoryCuratorOperation {
+  action: 'create' | 'update' | 'delete' | 'noop';
+  scope_type?: MemoryScopeType;
+  scope_id?: string;
+  memory_id?: string;
+  expected_updated_at?: string;
+  memory_type?: MemoryType;
+  content?: string;
+  summary?: string;
+  confidence?: number;
+  source_refs_json?: Record<string, any>;
+}
+
+export interface MemoryReviewCursor {
+  thread_id: string;
+  reviewed_through_turn_id: string;
+  reviewed_through_created_at: string;
+}
+
+export interface MemoryCuratorResponse {
+  message: string;
+  state: MemoryCuratorState;
+  choices: Array<{
+    id: string;
+    label: string;
+    description: string;
+    user_message: string;
+  }>;
+  operations: MemoryCuratorOperation[];
+  review?: {
+    reviewed_count: number;
+    remaining_count: number;
+    cursor?: MemoryReviewCursor | null;
+  } | null;
+  embedding_readiness: Array<{
+    embedding_model: string;
+    scopes?: Array<{ scope_type: MemoryScopeType; scope_id: string }>;
+    ready: boolean;
+    degraded: boolean;
+    reason?: string;
+  }>;
+  consent?: {
+    administration_available: boolean;
+    thread_reads_project_memory?: boolean | null;
+    project_reads_user_memory?: boolean | null;
+    thread_reads_user_memory?: boolean | null;
+    effective_user_recall?: boolean | null;
+  };
+  context_memory_count?: number;
+}
+
+export interface MemoryCuratorApplyResponse {
+  changed_memories: MemoryRecord[];
+  deleted_memory_ids: string[];
+  warnings: Array<{ code: string; memory_id?: string; message: string }>;
+  review_cursor_advanced: boolean;
 }
 
 // ============ Agent Workflow Builder API ============
@@ -1022,6 +1094,38 @@ export async function retryMemoryIndex(memoryId: string): Promise<MemoryRecord> 
     method: "POST",
   });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function respondToMemoryCurator(input: {
+  mode: MemoryCuratorMode;
+  context: MemoryCuratorContext;
+  memory_id?: string;
+  messages: MemoryCuratorMessage[];
+  llm_model: string;
+  context_window: number;
+}): Promise<MemoryCuratorResponse> {
+  const res = await fetch(`${API_BASE}/api/memory-curator/respond`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function applyMemoryCuratorChanges(input: {
+  context: MemoryCuratorContext;
+  operations: MemoryCuratorOperation[];
+  review_cursor?: MemoryReviewCursor | null;
+  actor_id?: string;
+}): Promise<MemoryCuratorApplyResponse> {
+  const res = await fetch(`${API_BASE}/api/memory-curator/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, confirmed: true }),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }
 

@@ -30,7 +30,6 @@ from app.db.enums import (
     AgentRunStatus,
     ChatTurnStatus,
     FileSourceType,
-    MemoryCandidateStatus,
     MemoryScopeType,
     MemoryStatus,
     MemoryType,
@@ -532,50 +531,3 @@ class MemoryEvent(SQLModel, table=True):
     )
 
     memory: Optional["Memory"] = Relationship(back_populates="events")
-
-
-class MemoryCandidate(SQLModel, table=True):
-    """Memory promotion candidate generated from chat/run context."""
-    __tablename__ = "memory_candidates"
-
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    source_thread_id: Optional[str] = Field(default=None, index=True)
-    source_project_id: Optional[str] = Field(default=None, index=True)
-    source_agent_run_id: Optional[str] = Field(default=None, index=True)
-    source_turn_id: Optional[str] = Field(default=None, index=True)
-    proposed_scope_type: str = Field(default=MemoryScopeType.THREAD.value, index=True)
-    proposed_scope_id: str = Field(index=True)
-    memory_type: str = Field(default=MemoryType.SEMANTIC.value, index=True)
-    content: str
-    confidence: float = Field(default=0.0, sa_column=Column(Float, nullable=False, server_default="0"))
-    reason: str = ""
-    status: str = Field(default=MemoryCandidateStatus.PENDING.value, index=True)
-    promoted_memory_id: Optional[str] = Field(
-        default=None,
-        sa_column=Column(String, ForeignKey("memories.id", ondelete="SET NULL"), index=True)
-    )
-    resolved_by: Optional[str] = Field(default=None, index=True)
-    resolved_at: Optional[datetime] = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True))
-    )
-    created_by: Optional[str] = Field(default=None, index=True)
-    created_at: datetime = Field(
-        default_factory=utc_now,
-        sa_column=Column(DateTime(timezone=True), server_default=func.now())
-    )
-    updated_at: Optional[datetime] = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), onupdate=func.now())
-    )
-
-    __table_args__ = (
-        CheckConstraint("proposed_scope_type in ('user', 'project', 'thread')", name="ck_memory_candidates_scope_type"),
-        CheckConstraint("memory_type in ('semantic', 'episodic', 'procedural')", name="ck_memory_candidates_memory_type"),
-        CheckConstraint("status in ('pending', 'approved', 'rejected', 'auto_approved')", name="ck_memory_candidates_status"),
-        CheckConstraint("confidence >= 0 and confidence <= 1", name="ck_memory_candidates_confidence"),
-        CheckConstraint("length(btrim(proposed_scope_id)) > 0", name="ck_memory_candidates_scope_id_nonempty"),
-        CheckConstraint("length(btrim(content)) > 0", name="ck_memory_candidates_content_nonempty"),
-        Index("idx_memory_candidate_scope_status", "proposed_scope_type", "proposed_scope_id", "status"),
-        Index("idx_memory_candidate_source_thread", "source_thread_id", "created_at"),
-    )

@@ -34,7 +34,6 @@ def test_project_lifecycle_summary_api(api_client):
         "memory_count": 3,
         "project_memory_count": 1,
         "thread_memory_count": 2,
-        "candidate_count": 1,
         "annotation_count": 1,
         "agent_run_count": 2,
         "active_run_count": 0,

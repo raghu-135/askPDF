@@ -130,6 +130,18 @@ async def fork_thread(
             source_metadata = copy.deepcopy(source_thread.thread_metadata or {})
             source_metadata.pop("fork_children", None)
             source_metadata.update(fork_metadata)
+            turn_map = {turn.id: str(uuid.uuid4()) for turn in turns_to_copy}
+            curator_metadata = source_metadata.get("memory_curator")
+            if isinstance(curator_metadata, dict):
+                source_cursor_id = str(curator_metadata.get("reviewed_through_turn_id") or "")
+                mapped_cursor_id = turn_map.get(source_cursor_id)
+                if mapped_cursor_id:
+                    source_metadata["memory_curator"] = {
+                        **curator_metadata,
+                        "reviewed_through_turn_id": mapped_cursor_id,
+                    }
+                else:
+                    source_metadata.pop("memory_curator", None)
 
             forked_thread = Thread(
                 id=new_thread_id,
@@ -160,7 +172,7 @@ async def fork_thread(
             for turn in turns_to_copy:
                 session.add(
                     ChatTurn(
-                        id=str(uuid.uuid4()),
+                        id=turn_map[turn.id],
                         thread_id=new_thread_id,
                         status=turn.status,
                         payload=copy.deepcopy(turn.payload or {}),

@@ -5,6 +5,7 @@ import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 import MemoryWorkspace from './MemoryWorkspace';
 import type { Project, Thread } from '../../lib/api';
+import type { MemoryCuratorIntent } from '../../lib/memory-curator';
 
 const PdfViewer = dynamic(() => import('../PdfViewer'), { ssr: false });
 
@@ -29,6 +30,8 @@ export default function ThreadWorkspaceContent({
   activeThread = null,
   activeProject = null,
   projectInventoryVersion = 0,
+  curatorRefreshVersion = 0,
+  onOpenMemoryCurator,
   emptyTitle,
   emptyDescription,
 }: {
@@ -52,6 +55,8 @@ export default function ThreadWorkspaceContent({
   activeThread?: Thread | null;
   activeProject?: Project | null;
   projectInventoryVersion?: number;
+  curatorRefreshVersion?: number;
+  onOpenMemoryCurator?: (intent: MemoryCuratorIntent) => void;
   emptyTitle: string;
   emptyDescription: string;
 }) {
@@ -70,6 +75,8 @@ export default function ThreadWorkspaceContent({
           activeThread={activeThread}
           activeProject={activeProject}
           projectInventoryVersion={projectInventoryVersion}
+          curatorRefreshVersion={curatorRefreshVersion}
+          onOpenCurator={onOpenMemoryCurator}
         />
       ) : isBrowserWorkspaceActive({ activeTabId, isBrowserActive }) ? (
         <BrowserWorkspaceFrame />

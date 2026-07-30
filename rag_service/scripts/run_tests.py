@@ -46,6 +46,8 @@ DB_TEST_FILES = [
     "test_database_connection_pytest.py",
     "test_models_sqlmodel_pytest.py",
     "test_project_memory_repository_pytest.py",
+    "test_memory_curator_service_pytest.py",
+    "test_project_lifecycle_service_pytest.py",
     "test_thread_repository_pytest.py",
     "test_file_repository_pytest.py",
     "test_message_repository_pytest.py",
@@ -59,6 +61,7 @@ DB_TEST_FILES = [
 API_TEST_FILES = [
     "test_api_endpoints_pytest.py",
     "test_api_integration_pytest.py",
+    "test_project_lifecycle_api_pytest.py",
 ]
 
 INTEGRATION_TEST_FILES = [

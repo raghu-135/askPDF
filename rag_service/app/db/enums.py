@@ -141,12 +141,3 @@ class MemoryVisibility(str, Enum):
     PRIVATE = "private"
     PROJECT = "project"
     INTERNAL = "internal"
-
-
-class MemoryCandidateStatus(str, Enum):
-    """Promotion candidate lifecycle statuses."""
-
-    PENDING = "pending"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-    AUTO_APPROVED = "auto_approved"

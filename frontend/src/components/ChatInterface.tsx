@@ -7,11 +7,7 @@ import {
     List,
     ListItem,
     Typography,
-    Select,
-    MenuItem,
     Paper,
-    FormControl,
-    InputLabel,
     IconButton,
     Tooltip,
     Chip,
@@ -32,7 +28,6 @@ import VolumeUpIcon from '@mui/icons-material/VolumeUp';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
-import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
 import RouteIcon from '@mui/icons-material/Route';
 import dynamic from 'next/dynamic';
 import remarkGfm from 'remark-gfm';
@@ -105,6 +100,11 @@ import {
     liveTraceStatusFromEvent,
     LiveTraceStreamController,
 } from '../lib/live-trace-stream';
+import {
+    ConversationComposer,
+    ConversationModelControls,
+    ConversationPanelShell,
+} from './conversation/ConversationControls';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -253,6 +253,7 @@ const ChatComposer = React.memo(function ChatComposer({
     onSubmit,
     onStop,
     onOpenSettings,
+    onOpenMemoryReview,
 }: {
     inputRef: React.Ref<HTMLInputElement | HTMLTextAreaElement>;
     seedText: string;
@@ -268,13 +269,10 @@ const ChatComposer = React.memo(function ChatComposer({
     onSubmit: (text: string) => void;
     onStop: () => void;
     onOpenSettings: () => void;
+    onOpenMemoryReview?: () => void;
 }) {
-    const theme = useTheme();
-    const [draft, setDraft] = useState(seedText);
-
-    useEffect(() => {
-        setDraft(seedText);
-    }, [seedText, seedVersion]);
+    const [draftPresent, setDraftPresent] = useState(Boolean(seedText));
+    useEffect(() => setDraftPresent(Boolean(seedText.trim())), [seedText, seedVersion]);
 
     const composerState = useMemo(() => getChatComposerState({
         loading,
@@ -283,9 +281,9 @@ const ChatComposer = React.memo(function ChatComposer({
         isLlmToolsSupported,
         isEmbeddingModelValid,
         indexingStatus,
-        hasInput: Boolean(draft),
+        hasInput: draftPresent,
     }), [
-        draft,
+        draftPresent,
         indexingStatus,
         isEmbeddingModelValid,
         isLlmModelValid,
@@ -295,79 +293,33 @@ const ChatComposer = React.memo(function ChatComposer({
     ]);
 
     return (
-        <Box sx={{ display: 'flex', gap: 1, alignItems: 'stretch', px: 1 }}>
-            <TextField
-                inputRef={inputRef}
-                fullWidth
-                variant="outlined"
-                multiline
-                minRows={3}
-                maxRows={10}
-                placeholder={composerState.placeholder}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        onSubmit(draft);
-                    }
-                }}
-                disabled={composerState.disabled}
-                sx={{
-                    '& .MuiOutlinedInput-root': {
-                        bgcolor: theme.palette.background.paper,
-                        color: theme.palette.text.primary,
-                        '& fieldset': {
-                            borderColor: 'primary.light',
-                            borderWidth: '1px',
-                        },
-                        '&:hover fieldset': {
-                            borderColor: 'primary.main',
-                        },
-                    },
-                }}
-            />
-            <Box
-                sx={{
-                    flex: '0 0 auto',
-                    width: '2.5rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                }}
-            >
-                {loading && liveExecution ? (
-                    <Tooltip title={
-                        liveExecution.canceling
-                            ? 'Stopping after the current LLM or tool call finishes'
-                            : liveExecution.runId
-                                ? 'Stop after the current step'
-                                : 'Preparing the chat run'
-                    }>
-                        <span>
-                            <IconButton
-                                size="medium"
-                                color="error"
-                                aria-label={liveExecution.canceling ? 'Stopping chat run' : 'Stop chat run'}
-                                onClick={onStop}
-                                disabled={!liveExecution.runId || liveExecution.canceling || !liveExecution.running}
-                            >
-                                {liveExecution.canceling
-                                    ? <CircularProgress size="1em" color="inherit" />
-                                    : <StopCircleOutlinedIcon fontSize="medium" />}
-                            </IconButton>
-                        </span>
+        <ConversationComposer
+            inputRef={inputRef}
+            seedText={seedText}
+            seedVersion={seedVersion}
+            placeholder={composerState.placeholder}
+            disabled={composerState.disabled}
+            busy={composerState.busy}
+            stopping={Boolean(liveExecution?.canceling)}
+            clearOnSubmit={false}
+            onDraftChange={(text) => setDraftPresent(Boolean(text.trim()))}
+            onSubmit={(text) => {
+                onSubmit(text);
+            }}
+            onStop={liveExecution?.runId && liveExecution.running ? onStop : undefined}
+            auxiliaryActions={(
+                <>
+                {onOpenMemoryReview && !isTestRuntime && (
+                    <Tooltip title="Review conversation for memory">
+                        <IconButton
+                            size="medium"
+                            onClick={onOpenMemoryReview}
+                            aria-label="Review conversation for memory"
+                            sx={{ color: 'text.secondary' }}
+                        >
+                            <MemoryIcon fontSize="medium" />
+                        </IconButton>
                     </Tooltip>
-                ) : (
-                    <IconButton
-                        size="medium"
-                        color="primary"
-                        onClick={() => onSubmit(draft)}
-                        disabled={composerState.disabled}
-                    >
-                        {composerState.busy ? <CircularProgress size="1em" /> : <SendIcon fontSize="medium" />}
-                    </IconButton>
                 )}
                 <Tooltip
                     title={isTestRuntime
@@ -389,8 +341,9 @@ const ChatComposer = React.memo(function ChatComposer({
                         <SettingsIcon fontSize="medium" />
                     </IconButton>
                 </Tooltip>
-            </Box>
-        </Box>
+                </>
+            )}
+        />
     );
 });
 
@@ -826,6 +779,7 @@ export interface ChatInterfaceProps {
     autoScroll?: boolean;
     isPanelResizing?: boolean;
     onOpenTrace?: (trace: ChatTraceDescriptor) => void;
+    onOpenMemoryReview?: () => void;
     testRuntime?: BuilderTestConversationRuntime;
 }
 
@@ -859,6 +813,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     autoScroll = true,
     isPanelResizing = false,
     onOpenTrace,
+    onOpenMemoryReview,
     testRuntime,
 }) => {
     const ragApiUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -889,8 +844,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
     const [savingSettings, setSavingSettings] = useState(false);
     const [promptPreview, setPromptPreview] = useState('');
-    const [showContextHighlight, setShowContextHighlight] = useState(false);
-    const [tooltipOpen, setTooltipOpen] = useState(false);
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
     const [clarificationPanelRatio, setClarificationPanelRatio] = useState(0.3);
@@ -1439,8 +1392,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setIsLlmModelValid(null);
         setIsLlmToolsSupported(null);
         if (model) {
-            setShowContextHighlight(true);
-            setTooltipOpen(true);
             // Persist as last selected LLM in browser memory
             if (typeof window !== 'undefined') {
                 localStorage.setItem('last_llm_model', model);
@@ -2598,18 +2549,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         : [];
     const hasLineage = !isTestRuntime && !hideInlineLineage && Boolean(forkInfo || childThreadIds.length > 0);
     const lineageThreadsById = new Map(lineageThreads.map(thread => [thread.id, thread]));
-    const headerSelectOutlineSx = {
-        '& fieldset': {
-            borderColor: 'transparent',
-            borderWidth: '1px',
-        },
-        '&:hover fieldset': {
-            borderColor: 'primary.main',
-        },
-        '&.Mui-focused fieldset': {
-            borderColor: 'primary.main',
-        },
-    };
     const latestUserMessageId = [...messages].reverse().find(m => m.role === MessageRole.User)?.id ?? null;
     const pendingReviewInterrupt = pendingHumanReview?.interrupt ?? null;
     const pendingReviewActions = Array.isArray(pendingReviewInterrupt?.allowed_actions)
@@ -2630,7 +2569,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const showDecisionPanel = Boolean(clarificationOptions || pendingHumanReview);
 
     return (
-        <Paper ref={chatRootRef} elevation={0} sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', p: 1, bgcolor: theme.palette.background.default, color: theme.palette.text.primary, cursor: 'default' }}>
+        <ConversationPanelShell ref={chatRootRef} sx={{ p: 1, cursor: 'default' }}>
             {/* Header */}
             <Box sx={{ mb: 0.5, pt: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
@@ -2703,83 +2642,14 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             </IconButton>
                         </span>
                     </Tooltip>
-                    <Tooltip
-                        title={
-                            <Box sx={{ p: 0.5 }}>
-                                <Typography variant="caption" sx={{ display: "block" }}>
-                                    Set context window size for the LLM.
-                                </Typography>
-                                <Typography variant="caption" sx={{ mt: 0.5, display: 'block' }}>
-                                    Search for your model here - <a
-                                    href="https://llm-explorer.com/list/"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{ color: '#90caf9', marginLeft: '4px', textDecoration: 'underline' }}
-                                >
-                                    llm-explorer.com
-                                </a>
-                                    <br /> and plug in numbers only from column "Context Len" e.g. 8000 for 8k, 128000 for 128k: <br />
-                                    <br /> the larger the context window, the more context the LLM can consider, but it may also increase latency and cost. Adjust according to your needs.
-                                </Typography>
-                            </Box>
-                        }
-                        placement="top"
-                        open={tooltipOpen}
-                        onOpen={() => setTooltipOpen(true)}
-                        onClose={() => {
-                            if (!showContextHighlight) {
-                                setTooltipOpen(false);
-                            }
-                        }}
-                    >
-                        <TextField
-                            size="small"
-                            label="Ctx size"
-                            type="number"
-                            value={contextWindow}
-                            onChange={(e) => handleContextWindowChange(parseInt(e.target.value) || 0)}
-                            onClick={() => {
-                                setShowContextHighlight(false);
-                                setTooltipOpen(false);
-                            }}
-                            onFocus={() => {
-                                setShowContextHighlight(false);
-                                setTooltipOpen(false);
-                            }}
-                            sx={{
-                                width: 'auto',
-                                minWidth: 100,
-                                maxWidth: 100,
-                                '& .MuiOutlinedInput-root': {
-                                    transition: 'all 0.3s ease',
-                                    backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
-                                    ...headerSelectOutlineSx,
-                                    '& fieldset': {
-                                        borderColor: showContextHighlight ? 'primary.main' : 'transparent',
-                                        borderWidth: showContextHighlight ? '2px' : '1px',
-                                    },
-                                },
-                            }}
-                            slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
-                        />
-                    </Tooltip>
-                    <FormControl fullWidth size="small">
-                        <InputLabel id="llm-label">Select LLM</InputLabel>
-                        <Select
-                            labelId="llm-label"
-                            id="llm-select"
-                            value={llmModel}
-                            label="Select LLM"
-                            onChange={(e) => handleLlmModelChange(e.target.value)}
-                            sx={{
-                                ...headerSelectOutlineSx,
-                            }}
-                        >
-                            {availableModels.map(m => (
-                                <MenuItem key={m} value={m}>{m}</MenuItem>
-                            ))}
-                        </Select>
-                    </FormControl>
+                    <ConversationModelControls
+                        models={availableModels}
+                        model={llmModel}
+                        contextWindow={contextWindow}
+                        readiness={isLlmModelValid}
+                        onModelChange={(model) => void handleLlmModelChange(model)}
+                        onContextWindowChange={handleContextWindowChange}
+                    />
                 </Box>
             </Box>
 
@@ -3427,6 +3297,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     onSubmit={(text) => void handleSend(text)}
                     onStop={handleStopChat}
                     onOpenSettings={handleOpenThreadSettings}
+                    onOpenMemoryReview={onOpenMemoryReview}
                 />
             </Box>
 
@@ -3484,7 +3355,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onClose={() => setForkDialogMessageId(null)}
                 onSubmit={submitMessageFork}
             />
-        </Paper>
+        </ConversationPanelShell>
     );
 };
 

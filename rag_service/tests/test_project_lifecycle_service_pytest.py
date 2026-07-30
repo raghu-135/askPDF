@@ -12,7 +12,6 @@ from app.db.models_sqlmodel import (
     ChatTurn,
     File,
     Memory,
-    MemoryCandidate,
     Project,
     ProjectFile,
     Thread,
@@ -162,6 +161,12 @@ async def test_clone_with_threads_copies_completed_history_annotations_and_trace
                 name="Conversation",
                 embedding_model="BAAI/bge-m3",
                 settings={"memory": {"thread_reads_project_memory": True}},
+                thread_metadata={
+                    "memory_curator": {
+                        "reviewed_through_turn_id": "source-turn",
+                        "reviewed_through_created_at": now.isoformat(),
+                    }
+                },
             ))
             await session.flush()
             session.add(ThreadFile(thread_id="source-thread", file_hash="file-1"))
@@ -237,6 +242,7 @@ async def test_clone_with_threads_copies_completed_history_annotations_and_trace
         )).scalar_one()
 
     assert cloned_thread.thread_metadata["project_clone"]["source_thread_id"] == "source-thread"
+    assert cloned_thread.thread_metadata["memory_curator"]["reviewed_through_turn_id"] == cloned_turn.id
     assert cloned_turn.id != "source-turn"
     assert cloned_run.id != "source-run"
     assert cloned_run.thread_id == cloned_thread.id
@@ -311,18 +317,6 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
                 _memory("thread-memory", "thread", "source-thread", "Thread"),
                 _memory("global-memory", "user", "default", "Global"),
             ])
-            session.add(MemoryCandidate(
-                id="candidate-1",
-                source_project_id="source-project",
-                source_thread_id="source-thread",
-                proposed_scope_type="project",
-                proposed_scope_id="source-project",
-                memory_type="semantic",
-                content="Candidate",
-                confidence=0.8,
-                status="pending",
-                created_at=now - timedelta(minutes=1),
-            ))
 
     result = await project_lifecycle_service.delete_project("source-project")
 
@@ -336,7 +330,6 @@ async def test_delete_project_preserves_shared_files_and_global_memory(
         assert await session.get(Memory, "project-memory") is None
         assert await session.get(Memory, "thread-memory") is None
         assert await session.get(Memory, "global-memory") is not None
-        assert await session.get(MemoryCandidate, "candidate-1") is None
 
     vector_db.delete_thread_data.assert_awaited_once_with("source-thread")
     checkpoint_cleanup.assert_awaited_once_with(["checkpoint-source"])

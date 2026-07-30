@@ -19,7 +19,6 @@ EXPECTED_MODEL_TABLES = {
     "chat_turns",
     "files",
     "memories",
-    "memory_candidates",
     "memory_events",
     "project_files",
     "thread_document_annotations",
@@ -32,6 +31,7 @@ REMOVED_TABLES = {
     "messages_legacy",
     "thread_stats",
     "thread_file_annotations",
+    "memory_candidates",
 }
 
 REMOVED_MODEL_EXPORTS = {
@@ -49,7 +49,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
 
     cleanup = scripts.get_revision("c9e6a1b4d3f8")
 
-    assert scripts.get_heads() == ["d9a4e7c2b1f6"]
+    assert scripts.get_heads() == ["1c7d9e4a2b6f"]
     assert scripts.get_revision("a7c4e9f2b1d6") is not None
     assert scripts.get_revision("b8d5f0a3c2e7") is not None
     assert cleanup is not None
@@ -57,6 +57,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     assert scripts.get_revision("e2c7a9f4b1d6").down_revision == "c9e6a1b4d3f8"
     assert scripts.get_revision("f4b8c2d7e1a9").down_revision == "e2c7a9f4b1d6"
     assert scripts.get_revision("d9a4e7c2b1f6").down_revision == "f4b8c2d7e1a9"
+    assert scripts.get_revision("1c7d9e4a2b6f").down_revision == "d9a4e7c2b1f6"
 
 
 def test_project_files_has_composite_key_and_cascading_foreign_keys():
@@ -135,12 +136,6 @@ def test_memory_models_define_hardening_check_constraints():
         for constraint in models_sqlmodel.Memory.__table__.constraints
         if constraint.name
     }
-    candidate_constraints = {
-        constraint.name
-        for constraint in models_sqlmodel.MemoryCandidate.__table__.constraints
-        if constraint.name
-    }
-
     assert {
         "ck_memories_scope_type",
         "ck_memories_memory_type",
@@ -150,14 +145,6 @@ def test_memory_models_define_hardening_check_constraints():
         "ck_memories_scope_id_nonempty",
         "ck_memories_content_nonempty",
     }.issubset(memory_constraints)
-    assert {
-        "ck_memory_candidates_scope_type",
-        "ck_memory_candidates_memory_type",
-        "ck_memory_candidates_status",
-        "ck_memory_candidates_confidence",
-        "ck_memory_candidates_scope_id_nonempty",
-        "ck_memory_candidates_content_nonempty",
-    }.issubset(candidate_constraints)
 
 
 @pytest.mark.asyncio

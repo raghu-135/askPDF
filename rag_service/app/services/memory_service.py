@@ -13,8 +13,6 @@ from app.db import (
     create_memory,
     delete_memories_for_scope,
     delete_memory,
-    delete_memory_candidate,
-    delete_memory_candidates_for_thread,
     get_memory,
     list_memories_for_index_retry,
     list_expired_memories,
@@ -258,14 +256,8 @@ async def hard_delete_memory(memory_id: str) -> Dict[str, Any]:
     return {"deleted": deleted, "vector_cleanup": vector_cleanup}
 
 
-async def hard_delete_memory_candidate(candidate_id: str) -> Dict[str, Any]:
-    """Hard-delete one memory promotion candidate."""
-
-    return {"deleted": await delete_memory_candidate(candidate_id)}
-
-
 async def hard_delete_thread_memory_resources(thread_id: str) -> Dict[str, Any]:
-    """Delete durable memory records and candidates owned by a thread."""
+    """Delete durable memory records owned by a thread."""
 
     memories = await list_memories(
         scope_type=MemoryScopeType.THREAD.value,
@@ -285,10 +277,8 @@ async def hard_delete_thread_memory_resources(thread_id: str) -> Dict[str, Any]:
         scope_type=MemoryScopeType.THREAD.value,
         scope_id=thread_id,
     )
-    deleted_candidate_ids = await delete_memory_candidates_for_thread(thread_id)
     return {
         "deleted_memory_ids": deleted_memory_ids,
-        "deleted_candidate_ids": deleted_candidate_ids,
         "vector_cleanup": vector_cleanup,
     }
 

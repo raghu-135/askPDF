@@ -17,6 +17,7 @@ import PdfUploader from "../components/PdfUploader";
 import PlayerControls from "../components/PlayerControls";
 import ChatInterface, { type ChatTraceDescriptor } from "../components/ChatInterface";
 import ThreadSecondaryPanel from "../components/ThreadSecondaryPanel";
+import MemoryCuratorPanel from "../components/MemoryCuratorPanel";
 import { buildDocumentWorkspaceTabs, buildHomeWorkspaceTabs, buildProjectWorkspaceTabs, type PdfTab } from "../lib/document-tabs";
 import WorkbenchShell, { useWorkbenchLayout } from '../components/workbench/WorkbenchShell';
 import DockMenuButton from '../components/workbench/DockMenuButton';
@@ -33,13 +34,12 @@ import { ProcessStatus, ThreadFileSourceType } from "../lib/enums";
 import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 import { checkEmbeddingModelReady } from '../lib/models-api';
 import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
+import { reviewCuratorIntent, type MemoryCuratorIntent } from '../lib/memory-curator';
 
 export default function Home() {
   // Multiple PDF tabs state
   const [pdfTabs, setPdfTabs] = useState<PdfTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>('memory-tab');
-  const activeTabIdRef = useRef<string | null>('memory-tab');
-  activeTabIdRef.current = activeTabId;
   const [isPdfLoading, setIsPdfLoading] = useState(false);
 
   // Get active tab and its data using utility
@@ -67,6 +67,11 @@ export default function Home() {
   const [sidebarVersion, setSidebarVersion] = useState(0);
   const [isDeletingActiveThread, setIsDeletingActiveThread] = useState(false);
   const [rightPanelLineageThreads, setRightPanelLineageThreads] = useState<Thread[]>([]);
+  const [memoryCuratorIntent, setMemoryCuratorIntent] = useState<MemoryCuratorIntent | null>(null);
+  const [memoryCuratorDirty, setMemoryCuratorDirty] = useState(false);
+  const memoryCuratorDirtyRef = useRef(false);
+  memoryCuratorDirtyRef.current = memoryCuratorDirty;
+  const [memoryRefreshVersion, setMemoryRefreshVersion] = useState(0);
 
   // Browser tab state
   const [showBrowserTab, setShowBrowserTab] = useState(false);
@@ -85,9 +90,16 @@ export default function Home() {
     clearTraces,
   } = useTraceTabs();
 
+  const confirmDiscardMemoryCurator = useCallback(() => (
+    !memoryCuratorDirtyRef.current
+    || window.confirm('Discard the unconfirmed memory proposal?')
+  ), []);
 
   // Handle thread selection
   const handleThreadSelect = useCallback(async (thread: Thread | null) => {
+    if (memoryCuratorIntent && !confirmDiscardMemoryCurator()) return;
+    setMemoryCuratorIntent(null);
+    setMemoryCuratorDirty(false);
     // Clear current state
     setPdfTabs([]);
     setActiveTabId('memory-tab');
@@ -143,9 +155,12 @@ export default function Home() {
       setActiveThread(null);
       setActiveTabId('memory-tab');
     }
-  }, [clearTraces]);
+  }, [clearTraces, confirmDiscardMemoryCurator, memoryCuratorIntent]);
 
   const handleProjectSelect = useCallback(async (project: Project) => {
+    if (memoryCuratorIntent && !confirmDiscardMemoryCurator()) return;
+    setMemoryCuratorIntent(null);
+    setMemoryCuratorDirty(false);
     setActiveThread(null);
     setThreadProject(null);
     setActiveProject(project);
@@ -159,13 +174,14 @@ export default function Home() {
       const tabs = await loadProjectTabs(project);
       setPdfTabs(tabs);
       setActiveTabId(tabs[0]?.id || 'memory-tab');
+      setIsBrowserActive(false);
     } catch (error) {
       console.error('Failed to open project knowledge:', error);
       setProjectModelReady(false);
     } finally {
       setIsPdfLoading(false);
     }
-  }, [activeTabId, clearTraces]);
+  }, [clearTraces, confirmDiscardMemoryCurator, memoryCuratorIntent]);
 
   const handleThreadForked = useCallback(async (thread: Thread) => {
     setSidebarVersion(v => v + 1);
@@ -204,6 +220,9 @@ export default function Home() {
   };
 
   const handleOpenHome = useCallback(() => {
+    if (memoryCuratorIntent && !confirmDiscardMemoryCurator()) return;
+    setMemoryCuratorIntent(null);
+    setMemoryCuratorDirty(false);
     setActiveThread(null);
     setActiveProject(null);
     setThreadProject(null);
@@ -217,7 +236,7 @@ export default function Home() {
     setActiveSource('pdf');
     setChatSentences([]);
     clearTraces();
-  }, [clearTraces]);
+  }, [clearTraces, confirmDiscardMemoryCurator, memoryCuratorIntent]);
 
   const handleBackToProject = useCallback(async () => {
     try {
@@ -586,9 +605,33 @@ export default function Home() {
   );
 
   const handleWorkspaceTabChange = useCallback((tabId: string) => {
+    if (memoryCuratorIntent && tabId !== 'memory-tab') {
+      if (!confirmDiscardMemoryCurator()) return;
+      setMemoryCuratorIntent(null);
+      setMemoryCuratorDirty(false);
+    }
     setActiveTabId(tabId);
     setIsBrowserActive(tabId === 'browser-tab');
-  }, []);
+  }, [confirmDiscardMemoryCurator, memoryCuratorIntent]);
+
+  const handleOpenMemoryCurator = useCallback((intent: MemoryCuratorIntent) => {
+    if (memoryCuratorIntent && memoryCuratorDirtyRef.current && !confirmDiscardMemoryCurator()) return;
+    setActiveTabId('memory-tab');
+    setIsBrowserActive(false);
+    setMemoryCuratorDirty(false);
+    setMemoryCuratorIntent(intent);
+  }, [confirmDiscardMemoryCurator, memoryCuratorIntent]);
+
+  const handleCloseMemoryCurator = useCallback(() => {
+    if (!confirmDiscardMemoryCurator()) return;
+    setMemoryCuratorDirty(false);
+    setMemoryCuratorIntent(null);
+  }, [confirmDiscardMemoryCurator]);
+
+  const handleOpenConversationReview = useCallback(() => {
+    if (!activeThread) return;
+    handleOpenMemoryCurator(reviewCuratorIntent(activeThread));
+  }, [activeThread, handleOpenMemoryCurator]);
 
   const handleOpenTrace = useCallback((trace: ChatTraceDescriptor) => {
     openTrace(trace);
@@ -611,7 +654,7 @@ export default function Home() {
           onLayoutChange={setWorkbenchLayout}
           onResolvedPlacementChange={setResolvedPlacement}
           onResizingChange={setIsResizing}
-          secondaryLabel="Threads and chat"
+          secondaryLabel={memoryCuratorIntent ? 'Memory curator' : 'Threads and chat'}
           primaryToolbar={
             <Box sx={{ px: 1.5, py: 0.75, minHeight: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
@@ -705,11 +748,22 @@ export default function Home() {
               activeThread={activeThread}
               activeProject={activeProject}
               projectInventoryVersion={sidebarVersion}
+              curatorRefreshVersion={memoryRefreshVersion}
+              onOpenMemoryCurator={handleOpenMemoryCurator}
               emptyTitle="Welcome to AskPDF"
               emptyDescription="Select or create a thread, then upload a PDF or open the browser."
             />
           }
           secondaryContent={
+            memoryCuratorIntent ? (
+              <MemoryCuratorPanel
+                key={`${memoryCuratorIntent.mode}:${memoryCuratorIntent.memory?.id || memoryCuratorIntent.scopeType}:${memoryCuratorIntent.scopeId}`}
+                intent={memoryCuratorIntent}
+                onClose={handleCloseMemoryCurator}
+                onDirtyChange={setMemoryCuratorDirty}
+                onApplied={() => setMemoryRefreshVersion((version) => version + 1)}
+              />
+            ) : (
             <ThreadSecondaryPanel
               activeThread={activeThread}
               activeProject={activeProject}
@@ -782,6 +836,7 @@ export default function Home() {
                   onThreadUpdate={handleThreadUpdated}
                   onOpenThread={handleOpenThreadInChat}
                   onOpenTrace={handleOpenTrace}
+                  onOpenMemoryReview={handleOpenConversationReview}
                   hideInlineLineage
                   darkMode={pdfDarkMode}
                   autoScroll={autoScroll}
@@ -789,6 +844,7 @@ export default function Home() {
                 />
               )}
             />
+            )
           }
         />
       </Box>

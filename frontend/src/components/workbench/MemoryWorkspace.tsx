@@ -25,18 +25,17 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
 import MemoryIcon from '@mui/icons-material/Memory';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ReplayIcon from '@mui/icons-material/Replay';
 import {
-  createMemory,
   deleteMemory,
   listMemories,
   listProjects,
   retryMemoryIndex,
   type MemoryRecord,
   type MemoryScopeType,
-  type MemoryType,
   type Project,
   type Thread,
 } from '../../lib/api';
@@ -47,6 +46,7 @@ import {
   isMemoryResultTruncated,
   resolveMemoryScopeTarget,
 } from '../../lib/memory-workspace';
+import { createCuratorIntent, type MemoryCuratorIntent } from '../../lib/memory-curator';
 
 const MEMORY_LIMIT = 500;
 
@@ -102,10 +102,14 @@ export default function MemoryWorkspace({
   activeThread,
   activeProject: projectContext = null,
   projectInventoryVersion = 0,
+  curatorRefreshVersion = 0,
+  onOpenCurator,
 }: {
   activeThread: Thread | null;
   activeProject?: Project | null;
   projectInventoryVersion?: number;
+  curatorRefreshVersion?: number;
+  onOpenCurator?: (intent: MemoryCuratorIntent) => void;
 }) {
   const [scopeType, setScopeType] = useState<MemoryScopeType>(activeThread ? 'thread' : projectContext ? 'project' : 'user');
   const [projects, setProjects] = useState<Project[]>([]);
@@ -116,10 +120,6 @@ export default function MemoryWorkspace({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [actionId, setActionId] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createContent, setCreateContent] = useState('');
-  const [createType, setCreateType] = useState<MemoryType>('semantic');
-  const [createError, setCreateError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MemoryRecord | null>(null);
 
   const availableScopes = useMemo(
@@ -168,6 +168,9 @@ export default function MemoryWorkspace({
   const activeProject = projectContext || projects.find((project) => (
     project.id === (activeThread?.project_id || selectedProjectId)
   )) || null;
+  const curatorProject = (
+    activeThread || projectContext || scopeType === 'project'
+  ) ? activeProject : null;
   const consent = memoryConsentStatus({
     scopeType,
     thread: activeThread,
@@ -199,38 +202,12 @@ export default function MemoryWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [refreshVersion, target]);
+  }, [curatorRefreshVersion, refreshVersion, target]);
 
   const filteredMemories = useMemo(
     () => filterMemoryRecords(memories, query),
     [memories, query],
   );
-
-  const handleCreate = async () => {
-    const content = createContent.trim();
-    if (!target || !content) return;
-    try {
-      setActionId('create');
-      setCreateError(null);
-      await createMemory({
-        scope_type: target.scopeType,
-        scope_id: target.scopeId,
-        memory_type: createType,
-        content,
-        confidence: 1,
-        visibility: target.scopeType === 'project' ? 'project' : 'private',
-        created_by: 'ui',
-      });
-      setCreateContent('');
-      setCreateType('semantic');
-      setCreateOpen(false);
-      setRefreshVersion((value) => value + 1);
-    } catch (error) {
-      setCreateError(error instanceof Error ? error.message : 'Unable to create memory.');
-    } finally {
-      setActionId(null);
-    }
-  };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
@@ -279,7 +256,17 @@ export default function MemoryWorkspace({
             </Tooltip>
             <Tooltip title="Add memory">
               <span>
-                <IconButton size="small" color="primary" onClick={() => setCreateOpen(true)} disabled={!target}>
+                <IconButton
+                  size="small"
+                  color="primary"
+                  onClick={() => target && onOpenCurator?.(createCuratorIntent({
+                    scopeType: target.scopeType,
+                    scopeId: target.scopeId,
+                    thread: activeThread,
+                    project: curatorProject,
+                  }))}
+                  disabled={!target || !onOpenCurator}
+                >
                   <AddIcon fontSize="small" />
                 </IconButton>
               </span>
@@ -356,6 +343,25 @@ export default function MemoryWorkspace({
                       <MemoryDetails memory={memory} />
                     </Box>
                     <Stack direction="row" spacing={0.25}>
+                      <Tooltip title="Edit memory">
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => onOpenCurator?.(createCuratorIntent({
+                              scopeType: memory.scope_type,
+                              scopeId: memory.scope_id,
+                              thread: activeThread,
+                              project: (
+                                activeThread || projectContext || memory.scope_type === 'project'
+                              ) ? activeProject : null,
+                              memory,
+                            }))}
+                            disabled={busy || !onOpenCurator}
+                          >
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                       {['failed', 'pending'].includes(memory.index_status) && (
                         <Tooltip title="Retry indexing">
                           <span><IconButton size="small" onClick={() => void handleRetry(memory)} disabled={busy}><ReplayIcon fontSize="small" /></IconButton></span>
@@ -376,37 +382,6 @@ export default function MemoryWorkspace({
           )
         )}
       </Box>
-
-      <Dialog open={createOpen} onClose={() => actionId !== 'create' && setCreateOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Add {scopeLabel(scopeType)} Memory</DialogTitle>
-        <DialogContent sx={{ display: 'grid', gap: 1.5, pt: '8px !important' }}>
-          {createError && <Alert severity="error">{createError}</Alert>}
-          <FormControl fullWidth size="small">
-            <InputLabel>Memory type</InputLabel>
-            <Select value={createType} label="Memory type" onChange={(event) => setCreateType(event.target.value as MemoryType)}>
-              <MenuItem value="semantic">Semantic</MenuItem>
-              <MenuItem value="episodic">Episodic</MenuItem>
-              <MenuItem value="procedural">Procedural</MenuItem>
-            </Select>
-          </FormControl>
-          <TextField
-            autoFocus
-            fullWidth
-            multiline
-            minRows={5}
-            maxRows={12}
-            label="Memory"
-            value={createContent}
-            onChange={(event) => setCreateContent(event.target.value)}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setCreateOpen(false)} disabled={actionId === 'create'}>Cancel</Button>
-          <Button variant="contained" onClick={() => void handleCreate()} disabled={!createContent.trim() || actionId === 'create'}>
-            {actionId === 'create' ? <CircularProgress size={20} /> : 'Add'}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <Dialog open={Boolean(deleteTarget)} onClose={() => !actionId && setDeleteTarget(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Delete Memory</DialogTitle>

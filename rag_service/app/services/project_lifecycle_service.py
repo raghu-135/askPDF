@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from datetime import datetime
 import uuid
-from typing import Any, Dict, Iterable
+from typing import Any, Dict
 
 from sqlalchemy import delete, func, or_
 from sqlalchemy.future import select
@@ -13,12 +13,12 @@ from sqlalchemy.future import select
 from app.agent_workflows.checkpointing import delete_agent_checkpoints
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import AgentRunStatus, ChatTurnStatus, MemoryScopeType
+from app.db.jsonb_utils import replace_jsonb_field
 from app.db.models_sqlmodel import (
     AgentRun,
     ChatTurn,
     File,
     Memory,
-    MemoryCandidate,
     MemoryEvent,
     Project,
     ProjectFile,
@@ -87,26 +87,6 @@ def _valid_debug_trace(run: AgentRun) -> bool:
         and isinstance(debug.get("trace"), dict)
         and isinstance(debug.get("summary"), dict)
     )
-
-
-def _candidate_filter(project_id: str, thread_ids: Iterable[str]):
-    thread_ids = list(thread_ids)
-    clauses = [
-        MemoryCandidate.source_project_id == project_id,
-        (
-            (MemoryCandidate.proposed_scope_type == MemoryScopeType.PROJECT.value)
-            & (MemoryCandidate.proposed_scope_id == project_id)
-        ),
-    ]
-    if thread_ids:
-        clauses.extend([
-            MemoryCandidate.source_thread_id.in_(thread_ids),
-            (
-                (MemoryCandidate.proposed_scope_type == MemoryScopeType.THREAD.value)
-                & MemoryCandidate.proposed_scope_id.in_(thread_ids)
-            ),
-        ])
-    return or_(*clauses)
 
 
 async def _default_project_id() -> str:
@@ -179,10 +159,6 @@ async def get_project_lifecycle_summary(project_id: str) -> Dict[str, Any]:
                 Memory.scope_id == project_id,
             )
         )).scalar() or 0)
-        candidates = int((await session.execute(
-            select(func.count(MemoryCandidate.id)).where(_candidate_filter(project_id, thread_ids))
-        )).scalar() or 0)
-
     protected = project_id == default_project_id
     return {
         "project_id": project_id,
@@ -195,7 +171,6 @@ async def get_project_lifecycle_summary(project_id: str) -> Dict[str, Any]:
         "memory_count": project_memories + thread_memories,
         "project_memory_count": project_memories,
         "thread_memory_count": thread_memories,
-        "candidate_count": candidates,
         "annotation_count": annotations,
         "agent_run_count": agent_runs,
         "active_run_count": active_runs,
@@ -419,7 +394,7 @@ async def _clone_thread(
         "source_thread_id": source_thread.id,
         "cloned_at": iso_utc_z(cloned_at),
     }
-    session.add(Thread(
+    cloned_thread = Thread(
         id=new_thread_id,
         project_id=target_project_id,
         name=source_thread.name,
@@ -434,7 +409,8 @@ async def _clone_thread(
         stats_last_updated_at=source_thread.stats_last_updated_at,
         created_at=source_thread.created_at,
         updated_at=source_thread.updated_at,
-    ))
+    )
+    session.add(cloned_thread)
     await session.flush()
 
     direct_files = list((await session.execute(
@@ -470,6 +446,17 @@ async def _clone_thread(
         ).order_by(ChatTurn.created_at, ChatTurn.id)
     )).scalars().all())
     turn_map = {turn.id: str(uuid.uuid4()) for turn in source_turns}
+    curator_metadata = metadata.get("memory_curator")
+    if isinstance(curator_metadata, dict):
+        mapped_cursor_id = turn_map.get(str(curator_metadata.get("reviewed_through_turn_id") or ""))
+        if mapped_cursor_id:
+            metadata["memory_curator"] = {
+                **curator_metadata,
+                "reviewed_through_turn_id": mapped_cursor_id,
+            }
+        else:
+            metadata.pop("memory_curator", None)
+        replace_jsonb_field(cloned_thread, "thread_metadata", metadata)
     source_run_ids = {turn.agent_run_id for turn in source_turns if turn.agent_run_id}
     source_runs = []
     if source_run_ids:
@@ -676,10 +663,6 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
             current_thread_ids = list((await session.execute(
                 select(Thread.id).where(Thread.project_id == project_id)
             )).scalars().all())
-            candidate_filter = _candidate_filter(project_id, current_thread_ids)
-            candidate_ids = list((await session.execute(
-                select(MemoryCandidate.id).where(candidate_filter)
-            )).scalars().all())
             memory_ids = list((await session.execute(
                 select(Memory.id).where(or_(
                     (
@@ -692,8 +675,6 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
                     ) if current_thread_ids else False,
                 ))
             )).scalars().all())
-            if candidate_ids:
-                await session.execute(delete(MemoryCandidate).where(MemoryCandidate.id.in_(candidate_ids)))
             if memory_ids:
                 await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id.in_(memory_ids)))
                 await session.execute(delete(Memory).where(Memory.id.in_(memory_ids)))

@@ -8,8 +8,8 @@ import pytest
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.enums import MemoryCandidateStatus, MemoryScopeType, MemoryType
-from app.db.models_sqlmodel import ChatTurnStatus, Memory, MemoryCandidate, MemoryEvent, Project
+from app.db.enums import MemoryScopeType, MemoryType
+from app.db.models_sqlmodel import ChatTurnStatus, Memory, MemoryEvent, Project
 from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
 from app.db.repositories.message_repo_sqlmodel import MessageRepository
 from app.db.repositories.project_file_repo_sqlmodel import ProjectFileRepository
@@ -181,6 +181,42 @@ async def test_memory_repository_index_lifecycle_and_audit(repo_sessionmaker):
 
 
 @pytest.mark.asyncio
+async def test_memory_repository_updates_same_canonical_record(repo_sessionmaker):
+    repo = MemoryRepository()
+    memory = await repo.create_memory(
+        scope_type=MemoryScopeType.THREAD.value,
+        scope_id="thread-update",
+        memory_type=MemoryType.SEMANTIC.value,
+        content="Old preference.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="old-hash",
+    )
+
+    updated = await repo.update_memory(
+        memory.id,
+        memory_type=MemoryType.PROCEDURAL.value,
+        content="New preference.",
+        content_hash="new-hash",
+        actor_id="curator",
+        event_type="curator_updated",
+    )
+
+    assert updated.id == memory.id
+    assert updated.memory_type == MemoryType.PROCEDURAL.value
+    assert updated.content == "New preference."
+    assert updated.index_status == "pending"
+    async with repo_sessionmaker() as session:
+        rows = list((await session.execute(
+            select(Memory).where(Memory.id == memory.id)
+        )).scalars().all())
+        events = list((await session.execute(
+            select(MemoryEvent).where(MemoryEvent.memory_id == memory.id)
+        )).scalars().all())
+    assert len(rows) == 1
+    assert [event.event_type for event in events] == ["created", "curator_updated"]
+
+
+@pytest.mark.asyncio
 async def test_memory_index_failure_is_retryable_without_duplicate_canonical_record(
     repo_sessionmaker,
     monkeypatch,
@@ -330,124 +366,6 @@ async def test_memory_repository_deletes_scope_and_expired_memories(repo_session
     async with repo_sessionmaker() as session:
         remaining = (await session.execute(select(Memory))).scalars().all()
         assert [memory.id for memory in remaining] == [fresh.id]
-
-
-@pytest.mark.asyncio
-async def test_memory_candidate_resolution(repo_sessionmaker):
-    repo = MemoryRepository()
-
-    candidate = await repo.create_candidate(
-        proposed_scope_type=MemoryScopeType.THREAD.value,
-        proposed_scope_id="thread-1",
-        memory_type=MemoryType.SEMANTIC.value,
-        content="Use concise answers.",
-    )
-    resolved = await repo.resolve_candidate(
-        candidate.id,
-        status=MemoryCandidateStatus.REJECTED.value,
-    )
-
-    assert resolved.status == MemoryCandidateStatus.REJECTED.value
-
-
-@pytest.mark.asyncio
-async def test_memory_candidate_filters_compose(repo_sessionmaker):
-    repo = MemoryRepository()
-    matching = await repo.create_candidate(
-        proposed_scope_type=MemoryScopeType.USER.value,
-        proposed_scope_id="default",
-        source_project_id="project-1",
-        source_thread_id="thread-1",
-        memory_type=MemoryType.SEMANTIC.value,
-        content="Matching candidate.",
-    )
-    await repo.create_candidate(
-        proposed_scope_type=MemoryScopeType.USER.value,
-        proposed_scope_id="default",
-        source_project_id="project-2",
-        source_thread_id="thread-2",
-        memory_type=MemoryType.SEMANTIC.value,
-        content="Other project.",
-    )
-    await repo.create_candidate(
-        proposed_scope_type=MemoryScopeType.PROJECT.value,
-        proposed_scope_id="project-1",
-        source_project_id="project-1",
-        source_thread_id="thread-1",
-        memory_type=MemoryType.SEMANTIC.value,
-        content="Other scope.",
-    )
-
-    rows = await repo.list_candidates(
-        source_project_id="project-1",
-        source_thread_id="thread-1",
-        proposed_scope_type=MemoryScopeType.USER.value,
-        proposed_scope_id="default",
-    )
-
-    assert [candidate.id for candidate in rows] == [matching.id]
-
-
-@pytest.mark.asyncio
-async def test_memory_repository_hard_deletes_candidates(repo_sessionmaker):
-    repo = MemoryRepository()
-
-    direct = await repo.create_candidate(
-        proposed_scope_type=MemoryScopeType.PROJECT.value,
-        proposed_scope_id="project-1",
-        memory_type=MemoryType.SEMANTIC.value,
-        content="Candidate to delete.",
-    )
-    thread_source = await repo.create_candidate(
-        proposed_scope_type=MemoryScopeType.PROJECT.value,
-        proposed_scope_id="project-1",
-        source_thread_id="thread-1",
-        memory_type=MemoryType.SEMANTIC.value,
-        content="Thread sourced candidate.",
-    )
-    thread_scope = await repo.create_candidate(
-        proposed_scope_type=MemoryScopeType.THREAD.value,
-        proposed_scope_id="thread-1",
-        memory_type=MemoryType.SEMANTIC.value,
-        content="Thread scoped candidate.",
-    )
-
-    assert await repo.delete_candidate(direct.id) is True
-    deleted_thread_candidates = await repo.delete_candidates_for_thread("thread-1")
-
-    assert set(deleted_thread_candidates) == {thread_source.id, thread_scope.id}
-    async with repo_sessionmaker() as session:
-        remaining = (await session.execute(select(MemoryCandidate))).scalars().all()
-        assert remaining == []
-
-
-@pytest.mark.asyncio
-async def test_memory_repository_rejects_invalid_candidate_values(repo_sessionmaker):
-    repo = MemoryRepository()
-
-    with pytest.raises(ValueError):
-        await repo.create_candidate(
-            proposed_scope_type="workspace",
-            proposed_scope_id="thread-1",
-            memory_type=MemoryType.SEMANTIC.value,
-            content="content",
-        )
-    with pytest.raises(ValueError):
-        await repo.create_candidate(
-            proposed_scope_type=MemoryScopeType.THREAD.value,
-            proposed_scope_id="thread-1",
-            memory_type="fact",
-            content="content",
-        )
-    with pytest.raises(ValueError):
-        await repo.create_candidate(
-            proposed_scope_type=MemoryScopeType.THREAD.value,
-            proposed_scope_id="thread-1",
-            memory_type=MemoryType.SEMANTIC.value,
-            content="",
-        )
-    with pytest.raises(ValueError):
-        await repo.resolve_candidate("missing", status="done")
 
 
 def test_memory_setting_normalization_removes_legacy_flags():

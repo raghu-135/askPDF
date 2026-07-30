@@ -255,7 +255,7 @@ class TestThreadEndpoints:
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "embedding_model_unavailable"
 
-    def test_memory_create_hard_delete_and_candidate_approval(self, client):
+    def test_memory_create_contract(self, client):
         project_response = client.post(
             "/api/projects",
             json={"name": "Memory Project", "embedding_model": "BAAI/bge-m3"},
@@ -276,70 +276,11 @@ class TestThreadEndpoints:
         memory = memory_response.json()
         assert memory["status"] == "active"
 
-        user_candidate_response = client.post(
-            "/api/memory-candidates",
-            json={
-                "proposed_scope_type": "user",
-                "proposed_scope_id": "legacy-user-id",
-                "memory_type": "semantic",
-                "content": "I prefer concise answers.",
-            },
-        )
-        assert user_candidate_response.status_code == 200
-        assert user_candidate_response.json()["proposed_scope_id"] == "default"
-
         archive_response = client.put(
             f"/api/memories/{memory['id']}/status",
             json={"status": "archived", "actor_id": "tester"},
         )
         assert archive_response.status_code == 404
-
-        candidate_response = client.post(
-            "/api/memory-candidates",
-            json={
-                "proposed_scope_type": "project",
-                "proposed_scope_id": project_id,
-                "memory_type": "semantic",
-                "content": "Use concise project summaries.",
-                "confidence": 0.8,
-            },
-        )
-        assert candidate_response.status_code == 200
-        candidate = candidate_response.json()
-
-        resolve_response = client.post(
-            f"/api/memory-candidates/{candidate['id']}/resolve",
-            json={"status": "approved", "actor_id": "tester"},
-        )
-        assert resolve_response.status_code == 200
-        resolved = resolve_response.json()
-        assert resolved["memory_candidate"]["status"] == "approved"
-        assert resolved["memory"]["scope_id"] == project_id
-        assert resolved["memory"]["embedding_model"] == "BAAI/bge-m3"
-
-        repeated = client.post(
-            f"/api/memory-candidates/{candidate['id']}/resolve",
-            json={"status": "approved", "actor_id": "tester"},
-        )
-        assert repeated.status_code == 200
-        assert repeated.json()["memory"]["id"] == resolved["memory"]["id"]
-
-        user_candidate_response = client.post(
-            "/api/memory-candidates",
-            json={
-                "proposed_scope_type": "user",
-                "proposed_scope_id": "user-1",
-                "memory_type": "semantic",
-                "content": "Prefers concise answers.",
-                "confidence": 0.95,
-            },
-        )
-        assert user_candidate_response.status_code == 200
-        auto_response = client.post(
-            f"/api/memory-candidates/{user_candidate_response.json()['id']}/resolve",
-            json={"status": "auto_approved", "actor_id": "tester"},
-        )
-        assert auto_response.status_code == 400
 
     def test_memory_endpoints_reject_invalid_contract_values(self, client):
         invalid_memory = client.post(
@@ -353,62 +294,21 @@ class TestThreadEndpoints:
         )
         assert invalid_memory.status_code == 400
 
-        invalid_candidate = client.post(
-            "/api/memory-candidates",
+        unconfirmed_curator_apply = client.post(
+            "/api/memory-curator/apply",
             json={
-                "proposed_scope_type": "workspace",
-                "proposed_scope_id": "project-1",
-                "memory_type": "semantic",
-                "content": "Invalid scope.",
+                "context": {
+                    "selected_scope_type": "user",
+                    "selected_scope_id": "default",
+                },
+                "operations": [],
             },
         )
-        assert invalid_candidate.status_code == 400
+        assert unconfirmed_curator_apply.status_code == 422
 
-    def test_memory_candidate_endpoint_combines_scope_and_source_filters(self, client):
-        matching = client.post(
-            "/api/memory-candidates",
-            json={
-                "proposed_scope_type": "user",
-                "proposed_scope_id": "default",
-                "source_project_id": "project-filter-1",
-                "source_thread_id": "thread-filter-1",
-                "content": "Matching preference.",
-            },
-        ).json()
-        client.post(
-            "/api/memory-candidates",
-            json={
-                "proposed_scope_type": "user",
-                "proposed_scope_id": "default",
-                "source_project_id": "project-filter-2",
-                "source_thread_id": "thread-filter-2",
-                "content": "Different project.",
-            },
-        )
-        client.post(
-            "/api/memory-candidates",
-            json={
-                "proposed_scope_type": "project",
-                "proposed_scope_id": "project-filter-1",
-                "source_project_id": "project-filter-1",
-                "source_thread_id": "thread-filter-1",
-                "content": "Different scope.",
-            },
-        )
+        retired_candidate_endpoint = client.post("/api/memory-candidates", json={})
+        assert retired_candidate_endpoint.status_code == 404
 
-        response = client.get(
-            "/api/memory-candidates",
-            params={
-                "status": "pending",
-                "source_project_id": "project-filter-1",
-                "source_thread_id": "thread-filter-1",
-                "proposed_scope_type": "user",
-                "proposed_scope_id": "default",
-            },
-        )
-
-        assert response.status_code == 200
-        assert [row["id"] for row in response.json()["memory_candidates"]] == [matching["id"]]
 
     def test_memory_delete_endpoints_hard_delete_records(self, client):
         thread_response = client.post(
@@ -435,24 +335,6 @@ class TestThreadEndpoints:
         missing_memory_response = client.delete(f"/api/memories/{memory_id}")
         assert missing_memory_response.status_code == 404
 
-        candidate_response = client.post(
-            "/api/memory-candidates",
-            json={
-                "proposed_scope_type": "thread",
-                "proposed_scope_id": "thread-delete-api",
-                "memory_type": "semantic",
-                "content": "Delete this candidate through the API.",
-            },
-        )
-        assert candidate_response.status_code == 200
-        candidate_id = candidate_response.json()["id"]
-
-        delete_candidate_response = client.delete(f"/api/memory-candidates/{candidate_id}")
-        assert delete_candidate_response.status_code == 200
-        assert delete_candidate_response.json()["status"] == "deleted"
-
-        missing_candidate_response = client.delete(f"/api/memory-candidates/{candidate_id}")
-        assert missing_candidate_response.status_code == 404
 
     def test_get_thread(self, client):
         """Test getting a specific thread."""
@@ -705,7 +587,6 @@ class TestThreadEndpoints:
         with patch("app.api.threads.hard_delete_thread_memory_resources", new_callable=AsyncMock) as cleanup_memory:
             cleanup_memory.return_value = {
                 "deleted_memory_ids": [],
-                "deleted_candidate_ids": [],
                 "vector_cleanup": False,
             }
             response = client.delete(f"/api/threads/{thread_id}")
