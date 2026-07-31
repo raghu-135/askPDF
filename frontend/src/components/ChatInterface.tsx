@@ -4,8 +4,6 @@ import {
     Box,
     TextField,
     Button,
-    List,
-    ListItem,
     Typography,
     Paper,
     IconButton,
@@ -29,10 +27,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import RouteIcon from '@mui/icons-material/Route';
-import dynamic from 'next/dynamic';
-import remarkGfm from 'remark-gfm';
 import { useVirtualizer } from '@tanstack/react-virtual';
-const ReactMarkdown = dynamic(() => import('react-markdown'), { ssr: false });
 import { deriveChatSentences, type ChatSentenceCache } from '../lib/chat-sentence-cache';
 import { getChatComposerState } from '../lib/chat-composer-state';
 import { canRequestChatCancellation, recoverCanceledChat } from '../lib/chat-run-cancellation';
@@ -102,9 +97,12 @@ import {
 } from '../lib/live-trace-stream';
 import {
     ConversationComposer,
-    ConversationModelControls,
-    ConversationPanelShell,
-} from './conversation/ConversationControls';
+    ConversationHeader,
+    ConversationMessageBubble,
+    ConversationPanelTemplate,
+    ConversationTranscriptFrame,
+    ResizableDecisionPanel,
+} from './conversation';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -300,13 +298,24 @@ const ChatComposer = React.memo(function ChatComposer({
             placeholder={composerState.placeholder}
             disabled={composerState.disabled}
             busy={composerState.busy}
+            showStop={loading && Boolean(liveExecution)}
+            canStop={Boolean(liveExecution?.runId && liveExecution.running)}
             stopping={Boolean(liveExecution?.canceling)}
+            stopTooltip={
+                liveExecution?.canceling
+                    ? 'Stopping after the current LLM or tool call finishes'
+                    : liveExecution?.runId
+                        ? 'Stop after the current step'
+                        : 'Preparing the chat run'
+            }
+            stopAriaLabel={liveExecution?.canceling ? 'Stopping chat run' : 'Stop chat run'}
             clearOnSubmit={false}
+            disableWhenEmpty={false}
             onDraftChange={(text) => setDraftPresent(Boolean(text.trim()))}
             onSubmit={(text) => {
                 onSubmit(text);
             }}
-            onStop={liveExecution?.runId && liveExecution.running ? onStop : undefined}
+            onStop={onStop}
             auxiliaryActions={(
                 <>
                 {onOpenMemoryReview && !isTestRuntime && (
@@ -344,14 +353,6 @@ const ChatComposer = React.memo(function ChatComposer({
                 </>
             )}
         />
-    );
-});
-
-const MemoizedMarkdown = React.memo(function MemoizedMarkdown({ content }: { content: string }) {
-    return (
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {content}
-        </ReactMarkdown>
     );
 });
 
@@ -408,55 +409,14 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
             : "Edit question";
 
     return (
-        <ListItem
-            alignItems="flex-start"
-            sx={{
-                flexDirection: 'column',
-                alignItems: isUser ? 'flex-end' : 'flex-start',
-                px: 0,
-                py: 0.5
-            }}
-        >
-            <Paper
-                sx={{
-                    p: 1.5,
-                    bgcolor: isUser
-                        ? theme.palette.mode === 'dark'
-                            ? theme.palette.primary.dark
-                            : theme.palette.primary.main
-                        : theme.palette.mode === 'dark'
-                            ? theme.palette.background.paper
-                            : theme.palette.grey[100],
-                    color: isUser
-                        ? theme.palette.getContrastText(theme.palette.primary.main)
-                        : theme.palette.text.primary,
-                    width: showAgentRunDebug ? `calc(100% - ${theme.spacing(6)})` : 'fit-content',
-                    maxWidth: isUser ? '90%' : `calc(100% - ${theme.spacing(6)})`,
-                    minWidth: 0,
-                    overflowWrap: 'anywhere',
-                    wordBreak: 'break-word',
-                    boxShadow: isActive
-                        ? '0 0 10px rgba(255, 255, 0, 0.4)'
-                        : isRecollected
-                            ? '0 0 10px rgba(156, 39, 176, 0.5)'
-                            : 'none',
-                    border: (isRecollected || isEditing) ? '2px solid' : 'none',
-                    borderColor: isEditing
-                        ? 'warning.main'
-                        : isRecollected
-                            ? 'secondary.main'
-                            : 'transparent',
-                    borderRadius: '12px',
-                    transition: 'all 0.2s ease',
-                    cursor: 'default',
-                    position: 'relative',
-                    contain: 'layout paint style',
-                    '&:hover .message-actions': {
-                        opacity: 1
-                    }
-                }}
-            >
-                {isRecollected && (
+        <ConversationMessageBubble
+            role={isUser ? 'user' : 'assistant'}
+            content={content}
+            active={isActive}
+            recollected={isRecollected}
+            editing={isEditing}
+            wide={showAgentRunDebug}
+            badge={isRecollected ? (
                     <Chip
                         icon={<MemoryIcon fontSize="small" />}
                         label="Used as context"
@@ -470,29 +430,9 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                             fontSize: '0.65rem'
                         }}
                     />
-                )}
-
-                <Box
-                    className="message-actions"
-                    sx={{
-                        position: 'absolute',
-                        top: 8,
-                        right: 8,
-                        display: 'flex',
-                        gap: 0.25,
-                        opacity: 0,
-                        transition: 'opacity 0.2s ease',
-                        bgcolor: isUser
-                            ? theme.palette.mode === 'dark' ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.2)'
-                            : theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                        backdropFilter: 'blur(4px)',
-                        borderRadius: '20px',
-                        p: 0.4,
-                        boxShadow: 1,
-                        zIndex: 10,
-                        '&:hover': { opacity: 1 }
-                    }}
-                >
+                ) : undefined}
+            actions={(
+                <>
                     <Tooltip title={copied ? "Copied!" : "Copy message"}>
                         <IconButton
                             size="small"
@@ -574,8 +514,10 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                             </span>
                         </Tooltip>
                     )}
-                </Box>
-
+                </>
+            )}
+            beforeContent={(
+                <>
                 {showAgentRunDebug && (
                     <Box sx={{ mb: 1 }}>
                         <Button
@@ -607,29 +549,10 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                         </details>
                     </Box>
                 )}
-
-                <Typography variant="body2" component="div" sx={{
-                    cursor: 'text',
-                    pr: 2,
-                    minWidth: 0,
-                    maxWidth: '100%',
-                    overflowWrap: 'anywhere',
-                    wordBreak: 'break-word',
-                    '& p': { m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                    '& p:last-child': { mb: 0 },
-                    '& ul, & ol': { pl: 2, m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                    '& li': { mb: 0.5, overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                    '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                    '& blockquote': { m: 0, pl: 1.5, borderLeft: '3px solid', borderColor: 'divider', overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                    '& a': { overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                    '& code': { bgcolor: msg.role === MessageRole.User ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                    '& pre': { maxWidth: '100%', bgcolor: msg.role === MessageRole.User ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 },
-                    '& pre code': { overflowWrap: 'normal', wordBreak: 'normal' },
-                    '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', mb: 1 },
-                    '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.5 }
-                }}>
-                    <MemoizedMarkdown content={content} />
-                </Typography>
+                </>
+            )}
+            afterContent={(
+                <>
                 {msg.role === MessageRole.User && msg.rewritten_query && (
                     <Box sx={{ mt: 1 }}>
                         <details>
@@ -723,8 +646,9 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                         </details>
                     </Box>
                 )}
-            </Paper>
-        </ListItem>
+                </>
+            )}
+        />
     );
 });
 
@@ -846,8 +770,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [promptPreview, setPromptPreview] = useState('');
     const [recollectedIds, setRecollectedIds] = useState<Set<string>>(new Set());
     const [clarificationOptions, setClarificationOptions] = useState<ClarificationChoice[] | null>(null);
-    const [clarificationPanelRatio, setClarificationPanelRatio] = useState(0.3);
-    const [isClarificationResizing, setIsClarificationResizing] = useState(false);
     const [hitlWebApproval, setHitlWebApproval] = useState(false);
     const [savingWebSearchMode, setSavingWebSearchMode] = useState(false);
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
@@ -896,10 +818,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const manuallyToggledAgentRunsRef = useRef(new Set<string>());
     const activeThreadIdRef = useRef<string | null>(activeThread?.id ?? null);
     activeThreadIdRef.current = activeThread?.id ?? null;
-    const clarificationResizeRef = useRef({
-        startY: 0,
-        startRatio: 0.3,
-    });
     const messageVirtualizer = useVirtualizer({
         count: messages.length,
         getScrollElement: () => messageListRef.current,
@@ -947,49 +865,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setProjectAllowsGlobalMemory(false);
         }
     }, [activeThread?.id, activeThread?.project_id, isTestRuntime]);
-
-    const clampClarificationRatio = (ratio: number) => Math.max(0.16, Math.min(0.58, ratio));
-
-    const handleClarificationResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        clarificationResizeRef.current = {
-            startY: event.clientY,
-            startRatio: clarificationPanelRatio,
-        };
-        setIsClarificationResizing(true);
-        event.currentTarget.setPointerCapture(event.pointerId);
-    }, [clarificationPanelRatio]);
-
-    const handleClarificationResizeMove = useCallback((event: PointerEvent) => {
-        const chatHeight = chatRootRef.current?.getBoundingClientRect().height || window.innerHeight;
-        const deltaRatio = (clarificationResizeRef.current.startY - event.clientY) / chatHeight;
-        setClarificationPanelRatio(clampClarificationRatio(
-            clarificationResizeRef.current.startRatio + deltaRatio
-        ));
-    }, []);
-
-    const handleClarificationResizeEnd = useCallback(() => {
-        setIsClarificationResizing(false);
-    }, []);
-
-    useEffect(() => {
-        if (!isClarificationResizing) return;
-
-        document.body.style.cursor = 'ns-resize';
-        document.body.style.userSelect = 'none';
-        document.addEventListener('pointermove', handleClarificationResizeMove);
-        document.addEventListener('pointerup', handleClarificationResizeEnd);
-        document.addEventListener('pointercancel', handleClarificationResizeEnd);
-
-        return () => {
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-            document.removeEventListener('pointermove', handleClarificationResizeMove);
-            document.removeEventListener('pointerup', handleClarificationResizeEnd);
-            document.removeEventListener('pointercancel', handleClarificationResizeEnd);
-        };
-    }, [handleClarificationResizeEnd, handleClarificationResizeMove, isClarificationResizing]);
 
     // Load messages when thread changes
     useEffect(() => {
@@ -2569,10 +2444,18 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const showDecisionPanel = Boolean(clarificationOptions || pendingHumanReview);
 
     return (
-        <ConversationPanelShell ref={chatRootRef} sx={{ p: 1, cursor: 'default' }}>
-            {/* Header */}
-            <Box sx={{ mb: 0.5, pt: 0.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+        <ConversationPanelTemplate
+            ref={chatRootRef}
+            sx={{ p: 1, cursor: 'default' }}
+            header={(
+            <ConversationHeader
+                models={availableModels}
+                model={llmModel}
+                contextWindow={contextWindow}
+                onModelChange={(model) => void handleLlmModelChange(model)}
+                onContextWindowChange={handleContextWindowChange}
+                leading={(
+                    <>
                     <Tooltip title={
                         isEmbeddingModelValid === null ? "Checking embedding model status..." :
                             isEmbeddingModelValid ? `Embedding model: ${activeThread.embeddingModel}` :
@@ -2615,8 +2498,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             </IconButton>
                         </Tooltip>
                     )}
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: 1, maxWidth: '350px', gap: 1 }}>
+                    </>
+                )}
+                beforeModelControls={(
                     <Tooltip
                         title={`${webSearchModeLabel}. Click to switch to ${nextWebSearchModeLabel}.`}
                         placement="top"
@@ -2642,21 +2526,12 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                             </IconButton>
                         </span>
                     </Tooltip>
-                    <ConversationModelControls
-                        models={availableModels}
-                        model={llmModel}
-                        contextWindow={contextWindow}
-                        onModelChange={(model) => void handleLlmModelChange(model)}
-                        onContextWindowChange={handleContextWindowChange}
-                    />
-                </Box>
-            </Box>
-
-            {/* Messages List */}
-            <List
-                component="div"
+                )}
+            />
+            )}
+            transcript={(
+            <ConversationTranscriptFrame
                 ref={messageListRef}
-                sx={{ flexGrow: 1, minHeight: 0, overflow: 'auto', borderRadius: 1, mb: 1, p: 1 }}
             >
                 <Box
                     sx={{
@@ -2711,411 +2586,17 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         );
                     })}
                 </Box>
-                {false && messages.map((msg, idx) => {
-                    const isRecollected = recollectedIds.has(msg.id);
-                    const isUser = msg.role === MessageRole.User;
-                    const liveForMessage = liveExecution?.messageId === msg.id ? liveExecution : null;
-                    const showAgentRunDebug = msg.role === MessageRole.Assistant && Boolean(msg.agent_run_id || liveForMessage);
-                    const isEditingThisMessage = editingMessageId === msg.id;
-                    const isOlderQuestion = isUser && latestUserMessageId !== null && msg.id !== latestUserMessageId;
-                    const editTooltip = isEditingThisMessage
-                        ? "Editing this question"
-                        : isOlderQuestion
-                            ? "Edit and ask again at the end"
-                            : "Edit question";
-                    return (
-                        <ListItem
-                            key={msg.id}
-                            ref={el => { messageRefs.current[idx] = el; }}
-                            alignItems="flex-start"
-                            sx={{
-                                flexDirection: 'column',
-                                alignItems: isUser ? 'flex-end' : 'flex-start',
-                                px: 0,
-                                py: 0.5
-                            }}
-                        >
-                            <Paper
-                                sx={{
-                                    p: 1.5,
-                                    bgcolor: isUser
-                                        ? theme.palette.mode === 'dark'
-                                            ? theme.palette.primary.dark
-                                            : theme.palette.primary.main
-                                        : theme.palette.mode === 'dark'
-                                            ? theme.palette.background.paper
-                                            : theme.palette.grey[100],
-                                    color: isUser
-                                        ? theme.palette.getContrastText(theme.palette.primary.main)
-                                        : theme.palette.text.primary,
-                                    width: showAgentRunDebug ? `calc(100% - ${theme.spacing(6)})` : 'fit-content',
-                                    maxWidth: isUser ? '90%' : `calc(100% - ${theme.spacing(6)})`,
-                                    minWidth: 0,
-                                    overflowWrap: 'anywhere',
-                                    wordBreak: 'break-word',
-                                    boxShadow: activeMessageIndex === idx
-                                        ? '0 0 10px rgba(255, 255, 0, 0.4)'
-                                        : isRecollected
-                                            ? '0 0 10px rgba(156, 39, 176, 0.5)'
-                                            : 'none',
-                                    border: (isRecollected || isEditingThisMessage) ? '2px solid' : 'none',
-                                    borderColor: isEditingThisMessage
-                                        ? 'warning.main'
-                                        : isRecollected
-                                            ? 'secondary.main'
-                                            : 'transparent',
-                                    borderRadius: '12px',
-                                    transition: 'all 0.2s ease',
-                                    cursor: 'default',
-                                    position: 'relative',
-                                    '&:hover .message-actions': {
-                                        opacity: 1
-                                    }
-                                }}
-                            >
-                                {/* Recollection indicator */}
-                                {isRecollected && (
-                                    <Chip
-                                        icon={<MemoryIcon fontSize="small" />}
-                                        label="Used as context"
-                                        size="small"
-                                        color="secondary"
-                                        sx={{
-                                            position: 'absolute',
-                                            top: -10,
-                                            left: 10,
-                                            height: 20,
-                                            fontSize: '0.65rem'
-                                        }}
-                                    />
-                                )}
 
-                                {/* Action buttons */}
-                                <Box
-                                    className="message-actions"
-                                    sx={{
-                                        position: 'absolute',
-                                        top: 8,
-                                        right: 8,
-                                        display: 'flex',
-                                        gap: 0.25,
-                                        opacity: 0,
-                                        transition: 'opacity 0.2s ease',
-                                        bgcolor: isUser
-                                            ? theme.palette.mode === 'dark' ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.2)'
-                                            : theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                                        backdropFilter: 'blur(4px)',
-                                        borderRadius: '20px',
-                                        p: 0.4,
-                                        boxShadow: 1,
-                                        zIndex: 10,
-                                        '&:hover': { opacity: 1 }
-                                    }}
-                                >
-                                    <Tooltip title={copiedId === msg.id ? "Copied!" : "Copy message"}>
-                                        <IconButton
-                                            size="small"
-                                            onClick={() => handleCopy(typeof msg.content === 'string' ? msg.content : String(msg.content ?? ''), msg.id)}
-                                            sx={{
-                                                color: 'inherit',
-                                                p: 0.5,
-                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                                            }}
-                                        >
-                                            {copiedId === msg.id ? <CheckIcon fontSize="small" /> : <ContentCopyIcon fontSize="small" />}
-                                        </IconButton>
-                                    </Tooltip>
-                                    <Tooltip title="Read aloud">
-                                        <IconButton
-                                            size="small"
-                                            onClick={() => handleReadAloud(idx)}
-                                            sx={{
-                                                color: isUser ? 'inherit' : (activeMessageIndex === idx ? 'primary.main' : 'inherit'),
-                                                p: 0.5,
-                                                '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                                            }}
-                                        >
-                                            <VolumeUpIcon fontSize="small" />
-                                        </IconButton>
-                                    </Tooltip>
-                                    {!isTestRuntime && !isUser && (
-                                        <Tooltip title="Fork from here">
-                                            <span>
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={(e) => handleForkFromMessage(msg.id, e)}
-                                                    disabled={forkingMessageId === msg.id || loading}
-                                                    sx={{
-                                                        color: 'inherit',
-                                                        p: 0.5,
-                                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                                                    }}
-                                                >
-                                                    {forkingMessageId === msg.id ? <CircularProgress size={14} /> : <CallSplitIcon fontSize="small" />}
-                                                </IconButton>
-                                            </span>
-                                        </Tooltip>
-                                    )}
-                                    {!isTestRuntime && isUser && (
-                                        <Tooltip title={editTooltip}>
-                                            <span>
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={(e) => handleEditQuestion(msg, e)}
-                                                    disabled={loading}
-                                                    sx={{
-                                                        color: isEditingThisMessage ? 'warning.light' : 'inherit',
-                                                        p: 0.5,
-                                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                                                    }}
-                                                >
-                                                    <EditIcon fontSize="small" />
-                                                </IconButton>
-                                            </span>
-                                        </Tooltip>
-                                    )}
-                                    {!isTestRuntime && (
-                                        <Tooltip title="Delete message">
-                                            <span>
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={(e) => handleDeleteMessage(msg.id, e)}
-                                                    disabled={loading || isEditingThisMessage}
-                                                    sx={{
-                                                        color: 'inherit',
-                                                        p: 0.5,
-                                                        '&:hover': { color: 'error.main' },
-                                                        '& .MuiSvgIcon-root': { fontSize: '1.1rem' }
-                                                    }}
-                                                >
-                                                    <DeleteIcon fontSize="small" />
-                                                </IconButton>
-                                            </span>
-                                        </Tooltip>
-                                    )}
-                                </Box>
-
-                                {showAgentRunDebug && (
-                                    <Box sx={{ mb: 1 }}>
-                                        <Button
-                                            size="small"
-                                            variant="text"
-                                            startIcon={<RouteIcon fontSize="small" />}
-                                            onClick={() => void handleOpenAgentRun(msg)}
-                                            sx={{ minHeight: 26, px: 0.5, textTransform: 'none' }}
-                                        >
-                                            {liveForMessage?.canceling
-                                                ? 'Stopping after current step…'
-                                                : liveForMessage?.running
-                                                    ? 'Open live trace'
-                                                    : `Open trace · ${formatAgentWorkflowLabel(msg)}${msg.agent_route ? ` · ${msg.agent_route}` : ''}`}
-                                        </Button>
-                                    </Box>
-                                )}
-                                {msg.role === MessageRole.Assistant && msg.reasoning_available && msg.reasoning && (
-                                    <Box sx={{ mb: 1 }}>
-                                        <details>
-                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>Reasoning</summary>
-                                            <Typography
-                                                variant="caption"
-                                                component="pre"
-                                                sx={{ mt: 0.75, mb: 0, p: 1, borderRadius: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-word', bgcolor: 'rgba(0,0,0,0.04)' }}
-                                            >
-                                                {msg.reasoning}
-                                            </Typography>
-                                        </details>
-                                    </Box>
-                                )}
-
-                                <Typography variant="body2" component="div" sx={{
-                                    cursor: 'text',
-                                    pr: 2, // Add some padding to avoid immediate overlap with icons if possible
-                                    minWidth: 0,
-                                    maxWidth: '100%',
-                                    overflowWrap: 'anywhere',
-                                    wordBreak: 'break-word',
-                                    '& p': { m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                                    '& p:last-child': { mb: 0 },
-                                    '& ul, & ol': { pl: 2, m: 0, mb: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                                    '& li': { mb: 0.5, overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                                    '& h1, & h2, & h3': { fontSize: '1.1rem', fontWeight: 'bold', mb: 1, mt: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                                    '& blockquote': { m: 0, pl: 1.5, borderLeft: '3px solid', borderColor: 'divider', overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                                    '& a': { overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                                    '& code': { bgcolor: msg.role === MessageRole.User ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', px: 0.5, borderRadius: '4px', fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' },
-                                    '& pre': { maxWidth: '100%', bgcolor: msg.role === MessageRole.User ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.05)', p: 1, borderRadius: '4px', overflowX: 'auto', mb: 1 },
-                                    '& pre code': { overflowWrap: 'normal', wordBreak: 'normal' },
-                                    '& table': { display: 'block', maxWidth: '100%', overflowX: 'auto', borderCollapse: 'collapse', mb: 1 },
-                                    '& th, & td': { border: '1px solid', borderColor: 'divider', px: 0.75, py: 0.5 }
-                                }}>
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                        {typeof msg.content === 'string' ? msg.content : String(msg.content ?? '')}
-                                    </ReactMarkdown>
-                                </Typography>
-                                {msg.role === MessageRole.User && msg.rewritten_query && (
-                                    <Box sx={{ mt: 1 }}>
-                                        <details>
-                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                <Tooltip
-                                                    title="This question was rewritten with thread context for retrieval."
-                                                    arrow
-                                                >
-                                                    <span>Rewritten for context</span>
-                                                </Tooltip>
-                                            </summary>
-                                            <Typography
-                                                variant="caption"
-                                                sx={{
-                                                    mt: 1,
-                                                    display: 'block',
-                                                    fontStyle: 'italic',
-                                                    opacity: 0.9,
-                                                    p: 1,
-                                                    borderRadius: 1,
-                                                    bgcolor: 'rgba(255,255,255,0.1)',
-                                                    minWidth: 0,
-                                                    maxWidth: '100%',
-                                                    overflowWrap: 'anywhere',
-                                                    wordBreak: 'break-word'
-                                                }}
-                                            >
-                                                {msg.rewritten_query}
-                                            </Typography>
-                                        </details>
-                                    </Box>
-                                )}
-                                {msg.role === MessageRole.Assistant && msg.web_sources && msg.web_sources.length > 0 && (
-                                    <Box sx={{ mt: 1 }}>
-                                        <details>
-                                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                                🌐 Web sources used ({msg.web_sources.length})
-                                            </summary>
-                                            <Box sx={{ mt: 0.75, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-                                                {msg.web_sources.map((source, i) => (
-                                                    <Box
-                                                        key={i}
-                                                        sx={{
-                                                            p: 1,
-                                                            borderRadius: 1,
-                                                            bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                                                            borderLeft: '3px solid',
-                                                            borderColor: 'primary.light',
-                                                        }}
-                                                    >
-                                                        {source.url ? (
-                                                            <Typography
-                                                                variant="caption"
-                                                                component="a"
-                                                                href={source.url}
-                                                                target="_blank"
-                                                                rel="noopener noreferrer"
-                                                                sx={{
-                                                                    color: 'primary.main',
-                                                                    display: 'block',
-                                                                    fontWeight: 600,
-                                                                    textDecoration: 'none',
-                                                                    mb: 0.25,
-                                                                    '&:hover': { textDecoration: 'underline' },
-                                                                }}
-                                                            >
-                                                                {source.title || source.url}
-                                                            </Typography>
-                                                        ) : (
-                                                            <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.25 }}>
-                                                                {source.title || 'Web result'}
-                                                            </Typography>
-                                                        )}
-                                                        {source.url && (
-                                                            <Typography
-                                                                variant="caption"
-                                                                sx={{ color: 'text.secondary', display: 'block', wordBreak: 'break-all', mb: 0.25 }}
-                                                            >
-                                                                {source.url}
-                                                            </Typography>
-                                                        )}
-                                                        <Typography
-                                                            variant="caption"
-                                                            sx={{ display: 'block', opacity: 0.85, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                                                        >
-                                                            {source.text}
-                                                        </Typography>
-                                                    </Box>
-                                                ))}
-                                            </Box>
-                                        </details>
-                                    </Box>
-                                )}
-                            </Paper>
-                        </ListItem>
-                    );
-                })}
-            </List>
-
-            {/* Input Area */}
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
-                {showDecisionPanel && (
-                    <Box
-                        sx={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            mb: 1,
-                            bgcolor: 'background.default',
-                            borderRadius: 1,
-                            maxHeight: `calc(100dvh * ${clarificationPanelRatio})`,
-                            minHeight: 0,
-                            overflow: 'hidden',
-                            borderTop: '1px solid',
-                            borderColor: 'divider',
-                        }}
+            </ConversationTranscriptFrame>
+            )}
+            decision={showDecisionPanel ? (
+                    <ResizableDecisionPanel
+                        title={clarificationOptions
+                            ? 'I need a bit more clarification. Did you mean one of these?'
+                            : pendingReviewTitle}
+                        rootRef={chatRootRef}
+                        onClose={clarificationOptions ? () => setClarificationOptions(null) : undefined}
                     >
-                        <Box
-                            onPointerDown={handleClarificationResizeStart}
-                            role="separator"
-                            aria-orientation="horizontal"
-                            aria-label="Resize decision panel"
-                            sx={{
-                                flex: '0 0 auto',
-                                height: '1.5rem',
-                                cursor: 'ns-resize',
-                                touchAction: 'none',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: 'text.secondary',
-                                '&::before': {
-                                    content: '""',
-                                    width: '18%',
-                                    minWidth: '2rem',
-                                    maxWidth: '5rem',
-                                    height: '0.25rem',
-                                    borderRadius: 999,
-                                    bgcolor: isClarificationResizing ? 'primary.main' : 'divider',
-                                },
-                                '&:hover::before': {
-                                    bgcolor: 'primary.main',
-                                },
-                            }}
-                        />
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1, pb: 1, flexShrink: 0 }}>
-                            <Typography variant="caption" sx={{ flex: 1, textAlign: 'center', color: 'text.secondary', fontWeight: 'bold' }}>
-                                {clarificationOptions
-                                    ? 'I need a bit more clarification. Did you mean one of these?'
-                                    : pendingReviewTitle}
-                            </Typography>
-                            {clarificationOptions && (
-                                <Tooltip title="Close clarification options">
-                                    <IconButton
-                                        size="small"
-                                        onClick={() => {
-                                            setClarificationOptions(null);
-                                        }}
-                                        sx={{ flex: '0 0 auto' }}
-                                    >
-                                        <CloseIcon fontSize="small" />
-                                    </IconButton>
-                                </Tooltip>
-                            )}
-                        </Box>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, px: 1, pt: 1, pb: 1, overflowY: 'auto', minHeight: 0 }}>
                             {clarificationOptions && clarificationOptions.map((choice, i) => {
                                 const choiceText = clarificationChoiceText(choice.text);
                                 const trimmedChoiceText = choiceText.trim();
@@ -3255,10 +2736,10 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                                     )}
                                 </>
                             )}
-                        </Box>
-                    </Box>
-                )}
-
+                    </ResizableDecisionPanel>
+            ) : undefined}
+            composer={(
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0, minHeight: 0 }}>
                 {editingMessageId && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
                         <Chip
@@ -3299,7 +2780,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     onOpenMemoryReview={onOpenMemoryReview}
                 />
             </Box>
-
+            )}
+            footer={(
+            <>
             <ChatSettingsDialog
                 open={settingsDialogOpen}
                 onClose={handleCloseThreadSettings}
@@ -3354,7 +2837,9 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onClose={() => setForkDialogMessageId(null)}
                 onSubmit={submitMessageFork}
             />
-        </ConversationPanelShell>
+            </>
+            )}
+        />
     );
 };
 
