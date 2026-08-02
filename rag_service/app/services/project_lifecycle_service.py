@@ -7,7 +7,7 @@ from datetime import datetime
 import uuid
 from typing import Any, Dict
 
-from sqlalchemy import delete, func, or_
+from sqlalchemy import and_, delete, func, or_
 from sqlalchemy.future import select
 
 from app.agent_workflows.checkpointing import delete_agent_checkpoints
@@ -20,6 +20,7 @@ from app.db.models_sqlmodel import (
     File,
     Memory,
     MemoryEvent,
+    MemoryOverride,
     Project,
     ProjectFile,
     Thread,
@@ -159,6 +160,24 @@ async def get_project_lifecycle_summary(project_id: str) -> Dict[str, Any]:
                 Memory.scope_id == project_id,
             )
         )).scalar() or 0)
+        scoped_memory_ids = list((await session.execute(
+            select(Memory.id).where(or_(
+                and_(
+                    Memory.scope_type == MemoryScopeType.PROJECT.value,
+                    Memory.scope_id == project_id,
+                ),
+                and_(
+                    Memory.scope_type == MemoryScopeType.THREAD.value,
+                    Memory.scope_id.in_(thread_ids),
+                ) if thread_ids else False,
+            ))
+        )).scalars().all())
+        override_count = int((await session.execute(
+            select(func.count()).select_from(MemoryOverride).where(or_(
+                MemoryOverride.overriding_memory_id.in_(scoped_memory_ids),
+                MemoryOverride.overridden_memory_id.in_(scoped_memory_ids),
+            ))
+        )).scalar() or 0) if scoped_memory_ids else 0
     protected = project_id == default_project_id
     return {
         "project_id": project_id,
@@ -171,6 +190,7 @@ async def get_project_lifecycle_summary(project_id: str) -> Dict[str, Any]:
         "memory_count": project_memories + thread_memories,
         "project_memory_count": project_memories,
         "thread_memory_count": thread_memories,
+        "memory_override_count": override_count,
         "annotation_count": annotations,
         "agent_run_count": agent_runs,
         "active_run_count": active_runs,
@@ -225,10 +245,12 @@ async def clone_project(
         "direct_files": 0,
         "annotations": 0,
         "thread_memories": 0,
+        "memory_overrides": 0,
     }
 
     async with async_session_maker() as session:
         async with session.begin():
+            memory_id_map: dict[str, str] = {}
             source_project = await session.get(Project, project_id, with_for_update=True)
             if source_project is None:
                 raise ProjectNotFoundError("Project not found")
@@ -277,8 +299,6 @@ async def clone_project(
                 select(Memory).where(
                     Memory.scope_type == MemoryScopeType.PROJECT.value,
                     Memory.scope_id == project_id,
-                    Memory.status == "active",
-                    or_(Memory.expires_at.is_(None), Memory.expires_at > clone_time),
                 )
             )).scalars().all())
             for source_memory in project_memories:
@@ -292,6 +312,7 @@ async def clone_project(
                 await session.flush()
                 session.add(_clone_memory_event(cloned_memory, source_memory, clone_time))
                 memories_to_index.append(cloned_memory)
+                memory_id_map[source_memory.id] = cloned_memory.id
             counts["project_memories"] = len(project_memories)
 
             if include_threads:
@@ -299,7 +320,7 @@ async def clone_project(
                     select(Thread).where(Thread.project_id == project_id).order_by(Thread.created_at, Thread.id)
                 )).scalars().all())
                 for source_thread in source_threads:
-                    thread_counts, thread_memories = await _clone_thread(
+                    thread_counts, thread_memories, thread_memory_map = await _clone_thread(
                         session,
                         source_project_id=project_id,
                         target_project_id=new_project_id,
@@ -309,7 +330,33 @@ async def clone_project(
                     for key, value in thread_counts.items():
                         counts[key] += value
                     memories_to_index.extend(thread_memories)
+                    memory_id_map.update(thread_memory_map)
                 counts["threads"] = len(source_threads)
+
+            if memory_id_map:
+                override_rows = list((await session.execute(
+                    select(MemoryOverride).where(
+                        MemoryOverride.overriding_memory_id.in_(list(memory_id_map))
+                    )
+                )).scalars().all())
+                target_ids = [row.overridden_memory_id for row in override_rows]
+                target_rows = list((await session.execute(
+                    select(Memory).where(Memory.id.in_(target_ids))
+                )).scalars().all()) if target_ids else []
+                target_by_id = {memory.id: memory for memory in target_rows}
+                for row in override_rows:
+                    target_id = memory_id_map.get(row.overridden_memory_id)
+                    if target_id is None:
+                        target = target_by_id.get(row.overridden_memory_id)
+                        if target and target.scope_type == MemoryScopeType.USER.value:
+                            target_id = target.id
+                    if target_id:
+                        session.add(MemoryOverride(
+                            overriding_memory_id=memory_id_map[row.overriding_memory_id],
+                            overridden_memory_id=target_id,
+                            created_at=clone_time,
+                        ))
+                        counts["memory_overrides"] += 1
 
     warnings = []
     for memory in memories_to_index:
@@ -334,30 +381,26 @@ def _clone_memory(
     source_project_id: str,
     cloned_at: datetime,
 ) -> Memory:
+    fork_origin = {
+        "source_memory_id": source.id,
+        "source_project_id": source_project_id,
+        "copy_mode": "project_clone_snapshot",
+        "cloned_at": iso_utc_z(cloned_at),
+    }
     return Memory(
         id=str(uuid.uuid4()),
         scope_type=source.scope_type,
         scope_id=scope_id,
-        memory_type=source.memory_type,
         content=source.content,
-        summary=source.summary,
         embedding_model=source.embedding_model,
         content_hash=source.content_hash,
         index_status="pending",
         index_attempts=0,
         indexed_at=None,
         index_error=None,
-        source_refs_json=copy.deepcopy(source.source_refs_json or {}),
-        confidence=source.confidence,
-        status=source.status,
-        visibility=source.visibility,
-        created_by=source.created_by,
-        expires_at=source.expires_at,
-        fork_origin_json={
-            "source_memory_id": source.id,
-            "source_project_id": source_project_id,
-            "copy_mode": "project_clone_snapshot",
-            "cloned_at": iso_utc_z(cloned_at),
+        source_refs_json={
+            **copy.deepcopy(source.source_refs_json or {}),
+            "fork_origin": fork_origin,
         },
         created_at=cloned_at,
         updated_at=cloned_at,
@@ -385,7 +428,7 @@ async def _clone_thread(
     target_project_id: str,
     source_thread: Thread,
     cloned_at: datetime,
-) -> tuple[Dict[str, int], list[Memory]]:
+) -> tuple[Dict[str, int], list[Memory], dict[str, str]]:
     new_thread_id = str(uuid.uuid4())
     metadata = copy.deepcopy(source_thread.thread_metadata or {})
     metadata.pop("fork_children", None)
@@ -528,11 +571,10 @@ async def _clone_thread(
         select(Memory).where(
             Memory.scope_type == MemoryScopeType.THREAD.value,
             Memory.scope_id == source_thread.id,
-            Memory.status == "active",
-            or_(Memory.expires_at.is_(None), Memory.expires_at > cloned_at),
         )
     )).scalars().all())
     cloned_memories = []
+    memory_id_map: dict[str, str] = {}
     for source_memory in source_memories:
         cloned_memory = _clone_memory(
             source_memory,
@@ -544,6 +586,7 @@ async def _clone_thread(
         await session.flush()
         session.add(_clone_memory_event(cloned_memory, source_memory, cloned_at))
         cloned_memories.append(cloned_memory)
+        memory_id_map[source_memory.id] = cloned_memory.id
 
     return ({
         "turns": len(source_turns),
@@ -551,7 +594,7 @@ async def _clone_thread(
         "direct_files": len(direct_files),
         "annotations": len(annotations),
         "thread_memories": len(source_memories),
-    }, cloned_memories)
+    }, cloned_memories, memory_id_map)
 
 
 async def delete_project(project_id: str) -> Dict[str, Any]:

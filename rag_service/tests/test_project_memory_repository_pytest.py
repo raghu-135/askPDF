@@ -8,8 +8,8 @@ import pytest
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.enums import MemoryScopeType, MemoryType
-from app.db.models_sqlmodel import ChatTurnStatus, Memory, MemoryEvent, Project
+from app.db.enums import MemoryScopeType
+from app.db.models_sqlmodel import ChatTurnStatus, Memory, MemoryEvent, MemoryOverride, Project
 from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
 from app.db.repositories.message_repo_sqlmodel import MessageRepository
 from app.db.repositories.project_file_repo_sqlmodel import ProjectFileRepository
@@ -21,6 +21,7 @@ from app.services.memory_service import (
     memory_scope_policy_for_thread,
     search_thread_memory,
 )
+from app.services.effective_memory_service import resolve_effective_memory_context
 from app.services.memory_policy import (
     LOCAL_USER_MEMORY_SCOPE_ID,
     merge_project_settings_json,
@@ -37,12 +38,14 @@ def repo_sessionmaker(engine, monkeypatch):
     import app.db.repositories.project_repo_sqlmodel as project_repo
     import app.db.repositories.project_file_repo_sqlmodel as project_file_repo
     import app.db.repositories.thread_repo_sqlmodel as thread_repo
+    import app.services.effective_memory_service as effective_memory_service
 
     monkeypatch.setattr(memory_repo, "async_session_maker", maker)
     monkeypatch.setattr(message_repo, "async_session_maker", maker)
     monkeypatch.setattr(project_repo, "async_session_maker", maker)
     monkeypatch.setattr(project_file_repo, "async_session_maker", maker)
     monkeypatch.setattr(thread_repo, "async_session_maker", maker)
+    monkeypatch.setattr(effective_memory_service, "async_session_maker", maker)
     return maker
 
 
@@ -120,7 +123,6 @@ async def test_projects_sort_by_last_activity_and_activity_writes_are_monotonic(
     memory = await MemoryRepository().create_memory(
         scope_type=MemoryScopeType.PROJECT.value,
         scope_id=older.id,
-        memory_type=MemoryType.SEMANTIC.value,
         content="Project activity memory.",
         embedding_model="BAAI/bge-m3",
         content_hash="project-activity-memory",
@@ -162,12 +164,10 @@ async def test_memory_repository_index_lifecycle_and_audit(repo_sessionmaker):
     memory = await repo.create_memory(
         scope_type=MemoryScopeType.PROJECT.value,
         scope_id="project-1",
-        memory_type=MemoryType.SEMANTIC.value,
         content="The project codename is Atlas.",
         embedding_model="BAAI/bge-m3",
         content_hash="atlas-hash",
-        confidence=0.9,
-        created_by="test",
+        actor_id="test",
     )
     indexing = await repo.mark_memory_indexing(memory.id)
     indexed = await repo.mark_memory_indexed(memory.id)
@@ -186,7 +186,6 @@ async def test_memory_repository_updates_same_canonical_record(repo_sessionmaker
     memory = await repo.create_memory(
         scope_type=MemoryScopeType.THREAD.value,
         scope_id="thread-update",
-        memory_type=MemoryType.SEMANTIC.value,
         content="Old preference.",
         embedding_model="BAAI/bge-m3",
         content_hash="old-hash",
@@ -194,7 +193,6 @@ async def test_memory_repository_updates_same_canonical_record(repo_sessionmaker
 
     updated = await repo.update_memory(
         memory.id,
-        memory_type=MemoryType.PROCEDURAL.value,
         content="New preference.",
         content_hash="new-hash",
         actor_id="curator",
@@ -202,7 +200,6 @@ async def test_memory_repository_updates_same_canonical_record(repo_sessionmaker
     )
 
     assert updated.id == memory.id
-    assert updated.memory_type == MemoryType.PROCEDURAL.value
     assert updated.content == "New preference."
     assert updated.index_status == "pending"
     async with repo_sessionmaker() as session:
@@ -227,12 +224,10 @@ async def test_memory_index_failure_is_retryable_without_duplicate_canonical_rec
     memory = await repo.create_memory(
         scope_type=MemoryScopeType.PROJECT.value,
         scope_id="project-1",
-        memory_type=MemoryType.SEMANTIC.value,
         content="The project codename is Atlas.",
         embedding_model="BAAI/bge-m3",
         content_hash="atlas-retry-hash",
-        confidence=0.9,
-        created_by="test",
+        actor_id="test",
     )
     embedding_client = SimpleNamespace(
         aembed_query=AsyncMock(return_value=[0.1, 0.2, 0.3])
@@ -286,12 +281,9 @@ async def test_memory_repository_rejects_invalid_memory_values(repo_sessionmaker
     repo = MemoryRepository()
 
     invalid_cases = [
-        {"scope_type": "workspace", "scope_id": "scope-1", "memory_type": MemoryType.SEMANTIC.value, "content": "content"},
-        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": " ", "memory_type": MemoryType.SEMANTIC.value, "content": "content"},
-        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": "scope-1", "memory_type": "fact", "content": "content"},
-        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": "scope-1", "memory_type": MemoryType.SEMANTIC.value, "content": " "},
-        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": "scope-1", "memory_type": MemoryType.SEMANTIC.value, "content": "content", "confidence": 1.5},
-        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": "scope-1", "memory_type": MemoryType.SEMANTIC.value, "content": "content", "visibility": "public"},
+        {"scope_type": "workspace", "scope_id": "scope-1", "content": "content"},
+        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": " ", "content": "content"},
+        {"scope_type": MemoryScopeType.THREAD.value, "scope_id": "scope-1", "content": " "},
     ]
 
     for kwargs in invalid_cases:
@@ -308,11 +300,10 @@ async def test_memory_repository_hard_deletes_memory_and_events(repo_sessionmake
     memory = await repo.create_memory(
         scope_type=MemoryScopeType.THREAD.value,
         scope_id="thread-1",
-        memory_type=MemoryType.SEMANTIC.value,
         content="Delete this durable memory.",
         embedding_model="BAAI/bge-m3",
         content_hash="delete-hash",
-        created_by="tester",
+        actor_id="tester",
     )
     deleted = await repo.delete_memory(memory.id)
 
@@ -324,48 +315,32 @@ async def test_memory_repository_hard_deletes_memory_and_events(repo_sessionmake
 
 
 @pytest.mark.asyncio
-async def test_memory_repository_deletes_scope_and_expired_memories(repo_sessionmaker):
+async def test_memory_repository_deletes_only_requested_scope(repo_sessionmaker):
     repo = MemoryRepository()
-    now = utc_now()
 
     scoped = await repo.create_memory(
         scope_type=MemoryScopeType.THREAD.value,
         scope_id="thread-cleanup",
-        memory_type=MemoryType.SEMANTIC.value,
         content="Thread cleanup memory.",
         embedding_model="BAAI/bge-m3",
         content_hash="thread-cleanup-hash",
     )
-    expired = await repo.create_memory(
+    retained = await repo.create_memory(
         scope_type=MemoryScopeType.PROJECT.value,
         scope_id="project-cleanup",
-        memory_type=MemoryType.SEMANTIC.value,
-        content="Expired cleanup memory.",
+        content="Retained memory.",
         embedding_model="BAAI/bge-m3",
-        content_hash="expired-hash",
-        expires_at=now - timedelta(minutes=1),
-    )
-    fresh = await repo.create_memory(
-        scope_type=MemoryScopeType.PROJECT.value,
-        scope_id="project-cleanup",
-        memory_type=MemoryType.SEMANTIC.value,
-        content="Fresh memory.",
-        embedding_model="BAAI/bge-m3",
-        content_hash="fresh-hash",
-        expires_at=now + timedelta(minutes=1),
+        content_hash="retained-hash",
     )
 
     scoped_ids = await repo.delete_memories_for_scope(
         scope_type=MemoryScopeType.THREAD.value,
         scope_id="thread-cleanup",
     )
-    expired_rows = await repo.delete_expired_memories(now=now)
-
     assert scoped_ids == [scoped.id]
-    assert [memory.id for memory in expired_rows] == [expired.id]
     async with repo_sessionmaker() as session:
         remaining = (await session.execute(select(Memory))).scalars().all()
-        assert [memory.id for memory in remaining] == [fresh.id]
+        assert [memory.id for memory in remaining] == [retained.id]
 
 
 def test_memory_setting_normalization_removes_legacy_flags():
@@ -405,45 +380,34 @@ def test_memory_setting_normalization_removes_legacy_flags():
     ],
 )
 async def test_global_memory_requires_project_and_thread_consent(
-    monkeypatch,
+    repo_sessionmaker,
     project_gate,
     thread_gate,
     expects_user,
     skip_reason,
 ):
-    from app.services import memory_service
-
-    context = SimpleNamespace(
-        thread=SimpleNamespace(
-            id="thread-1",
-            settings={
-                "memory": {
-                    "thread_reads_project_memory": True,
-                    "thread_reads_user_memory": thread_gate,
-                }
-            },
-        ),
-        project=SimpleNamespace(
-            id="project-1",
-            settings_json={
-                "memory": {"project_reads_user_memory": project_gate}
-            },
-        ),
+    project = await ProjectRepository().create(
+        name="Consent matrix",
+        embedding_model="BAAI/bge-m3",
+        settings_json={"memory": {"project_reads_user_memory": project_gate}},
     )
-    monkeypatch.setattr(
-        memory_service,
-        "resolve_thread_embedding_context",
-        AsyncMock(return_value=context),
+    thread = await ThreadRepository().create("Consent thread", project.id)
+    await ThreadRepository().update_settings(
+        thread.id,
+        {"memory": {
+            "thread_reads_project_memory": True,
+            "thread_reads_user_memory": thread_gate,
+        }},
     )
 
-    policy = await memory_scope_policy_for_thread("thread-1")
+    policy = await memory_scope_policy_for_thread(thread.id)
 
     assert {
         (scope["scope_type"], scope["scope_id"])
         for scope in policy["searched_scopes"]
     } == {
-        ("thread", "thread-1"),
-        ("project", "project-1"),
+        ("thread", thread.id),
+        ("project", project.id),
         *(([("user", LOCAL_USER_MEMORY_SCOPE_ID)] if expects_user else [])),
     }
     user_skips = [
@@ -456,35 +420,24 @@ async def test_global_memory_requires_project_and_thread_consent(
 
 
 @pytest.mark.asyncio
-async def test_explicit_scope_filter_is_upper_bound_and_empty_means_none(monkeypatch):
-    from app.services import memory_service
-
-    context = SimpleNamespace(
-        thread=SimpleNamespace(
-            id="thread-1",
-            settings={
-                "memory": {
-                    "thread_reads_project_memory": True,
-                    "thread_reads_user_memory": False,
-                }
-            },
-        ),
-        project=SimpleNamespace(
-            id="project-1",
-            settings_json={
-                "memory": {"project_reads_user_memory": True}
-            },
-        ),
+async def test_explicit_scope_filter_is_upper_bound_and_empty_means_none(repo_sessionmaker):
+    project = await ProjectRepository().create(
+        name="Explicit scopes",
+        embedding_model="BAAI/bge-m3",
+        settings_json={"memory": {"project_reads_user_memory": True}},
     )
-    monkeypatch.setattr(
-        memory_service,
-        "resolve_thread_embedding_context",
-        AsyncMock(return_value=context),
+    thread = await ThreadRepository().create("Explicit scope thread", project.id)
+    await ThreadRepository().update_settings(
+        thread.id,
+        {"memory": {
+            "thread_reads_project_memory": True,
+            "thread_reads_user_memory": False,
+        }},
     )
 
-    unrestricted = await memory_scope_policy_for_thread("thread-1", None)
-    empty = await memory_scope_policy_for_thread("thread-1", [])
-    user_only = await memory_scope_policy_for_thread("thread-1", ["user"])
+    unrestricted = await memory_scope_policy_for_thread(thread.id, None)
+    empty = await memory_scope_policy_for_thread(thread.id, [])
+    user_only = await memory_scope_policy_for_thread(thread.id, ["user"])
 
     assert unrestricted["requested_scopes"] == ["thread", "project", "user"]
     assert [scope["scope_type"] for scope in unrestricted["searched_scopes"]] == [
@@ -543,14 +496,14 @@ async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
             id="project-memory",
             scope_type="project",
             scope_id="project-1",
-            memory_type="semantic",
             content="Project fact",
-            summary="",
             source_refs_json={},
-            confidence=0.9,
-            visibility="project",
-            status="active",
-            expires_at=None,
+            embedding_model="project-embedding-model",
+            content_hash="project-hash",
+            index_status="indexed",
+            index_attempts=1,
+            indexed_at=None,
+            index_error=None,
             created_at=None,
             updated_at=None,
         ),
@@ -558,14 +511,14 @@ async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
             id="user-memory",
             scope_type="user",
             scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
-            memory_type="semantic",
             content="Use concise answers",
-            summary="",
             source_refs_json={},
-            confidence=0.9,
-            visibility="private",
-            status="active",
-            expires_at=None,
+            embedding_model=memory_service.GLOBAL_MEMORY_EMBEDDING_MODEL,
+            content_hash="user-hash",
+            index_status="indexed",
+            index_attempts=1,
+            indexed_at=None,
+            index_error=None,
             created_at=None,
             updated_at=None,
         ),
@@ -590,8 +543,23 @@ async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
     monkeypatch.setattr(memory_service, "get_vector_db", lambda: vector_db)
     monkeypatch.setattr(
         memory_service,
-        "get_memory",
-        AsyncMock(side_effect=lambda memory_id: memories[memory_id]),
+        "resolve_effective_memory_context",
+        AsyncMock(return_value={
+            "policy": {
+                "requested_scopes": ["thread", "project", "user"],
+                "searched_scopes": [
+                    {"scope_type": "thread", "scope_id": "thread-1"},
+                    {"scope_type": "project", "scope_id": "project-1"},
+                    {"scope_type": "user", "scope_id": LOCAL_USER_MEMORY_SCOPE_ID},
+                ],
+                "skipped_scopes": [],
+            },
+            "memory_records": list(memories.values()),
+            "applied_overrides": [],
+            "suppressed_memory_ids": [],
+            "excluded_memory_ids": ["unavailable-memory"],
+            "unavailable_memory_count": 0,
+        }),
     )
 
     result = await search_thread_memory(
@@ -607,6 +575,129 @@ async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
     assert result["memories"][1]["embedding_model"] == memory_service.GLOBAL_MEMORY_EMBEDDING_MODEL
     assert all(item["score_type"] == "rrf" for item in result["memories"])
     assert vector_db.search_memory.await_count == 2
+    assert all(
+        call.kwargs["excluded_memory_ids"] == ["unavailable-memory"]
+        for call in vector_db.search_memory.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_override_set_replacement_is_audited(repo_sessionmaker):
+    repo = MemoryRepository()
+    source = await repo.create_memory(
+        scope_type="thread",
+        scope_id="thread-relations",
+        content="Thread preference.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="thread-relations-source",
+    )
+    first = await repo.create_memory(
+        scope_type="project",
+        scope_id="project-relations",
+        content="Project preference.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="thread-relations-first",
+    )
+    second = await repo.create_memory(
+        scope_type="user",
+        scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
+        content="Global preference.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="thread-relations-second",
+    )
+
+    async with repo_sessionmaker() as session:
+        async with session.begin():
+            transactional = MemoryRepository(session)
+            await transactional.replace_overrides(
+                source.id,
+                [first.id, second.id, first.id],
+                actor_id="curator",
+            )
+            await transactional.replace_overrides(source.id, [second.id], actor_id="curator")
+
+    edges = await repo.list_override_edges(memory_ids=[source.id])
+    assert [(edge.overriding_memory_id, edge.overridden_memory_id) for edge in edges] == [
+        (source.id, second.id),
+    ]
+    async with repo_sessionmaker() as session:
+        events = list((await session.execute(
+            select(MemoryEvent).where(
+                MemoryEvent.memory_id == source.id,
+                MemoryEvent.event_type == "override_set",
+            )
+        )).scalars().all())
+    assert [event.payload_json["overridden_memory_ids"] for event in events] == [
+        sorted([first.id, second.id]),
+        [second.id],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_effective_view_applies_indexed_overrides_and_restores_on_delete(repo_sessionmaker):
+    project = await ProjectRepository().create(
+        name="Effective memory",
+        embedding_model="BAAI/bge-m3",
+        settings_json={"memory": {"project_reads_user_memory": True}},
+    )
+    thread = await ThreadRepository().create("Effective thread", project.id)
+    await ThreadRepository().update_settings(
+        thread.id,
+        {"memory": {
+            "thread_reads_project_memory": True,
+            "thread_reads_user_memory": True,
+        }},
+    )
+    repo = MemoryRepository()
+    global_memory = await repo.create_memory(
+        scope_type="user",
+        scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
+        content="Use concise answers.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="effective-global",
+    )
+    project_memory = await repo.create_memory(
+        scope_type="project",
+        scope_id=project.id,
+        content="Use detailed answers in this project.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="effective-project",
+    )
+    thread_memory = await repo.create_memory(
+        scope_type="thread",
+        scope_id=thread.id,
+        content="Use bullet points in this thread.",
+        embedding_model="BAAI/bge-m3",
+        content_hash="effective-thread",
+    )
+    await repo.mark_memory_indexed(global_memory.id)
+    await repo.mark_memory_indexed(project_memory.id)
+    await repo.mark_memory_index_failed(thread_memory.id, "offline")
+    async with repo_sessionmaker() as session:
+        async with session.begin():
+            transactional = MemoryRepository(session)
+            await transactional.replace_overrides(project_memory.id, [global_memory.id])
+            await transactional.replace_overrides(thread_memory.id, [project_memory.id])
+
+    failed_view = await resolve_effective_memory_context(thread_id=thread.id)
+    assert [memory["id"] for memory in failed_view["memories"]] == [project_memory.id]
+    assert failed_view["suppressed_memory_ids"] == [global_memory.id]
+    assert failed_view["unavailable_memory_count"] == 1
+
+    await repo.mark_memory_indexed(thread_memory.id)
+    indexed_view = await resolve_effective_memory_context(thread_id=thread.id)
+    assert [memory["id"] for memory in indexed_view["memories"]] == [thread_memory.id]
+    assert set(indexed_view["suppressed_memory_ids"]) == {
+        global_memory.id,
+        project_memory.id,
+    }
+    project_view = await resolve_effective_memory_context(project_id=project.id)
+    assert [memory["id"] for memory in project_view["memories"]] == [project_memory.id]
+    assert project_view["suppressed_memory_ids"] == [global_memory.id]
+
+    await repo.delete_memory(thread_memory.id)
+    restored_view = await resolve_effective_memory_context(thread_id=thread.id)
+    assert [memory["id"] for memory in restored_view["memories"]] == [project_memory.id]
 
 
 def test_memory_rank_fusion_does_not_compare_raw_scores_across_models():

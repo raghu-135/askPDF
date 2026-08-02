@@ -517,6 +517,8 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
         memories = result.get("memories", []) if isinstance(result, dict) else []
         memory_scopes = result.get("scopes", []) if isinstance(result, dict) else []
         memory_scope_policy = result.get("scope_policy", {}) if isinstance(result, dict) else {}
+        applied_overrides = result.get("applied_overrides", []) if isinstance(result, dict) else []
+        suppressed_memory_ids = result.get("suppressed_memory_ids", []) if isinstance(result, dict) else []
 
         if not memories:
             return make_tool_result(
@@ -529,6 +531,8 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                     "memory_refs": [],
                     "memory_scopes": memory_scopes,
                     "memory_scope_policy": memory_scope_policy,
+                    "memory_applied_overrides": applied_overrides,
+                    "memory_suppressed_ids": suppressed_memory_ids,
                 },
             ).to_json()
 
@@ -539,14 +543,12 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
             memory = item if isinstance(item, dict) else {}
             scope_type = memory.get("scope_type") or "unknown"
             scope_id = memory.get("scope_id") or "unknown"
-            memory_type = memory.get("memory_type") or "semantic"
-            content = memory.get("summary") or memory.get("content") or ""
-            lines.append(f"{index}. {scope_type}:{scope_id} | {memory_type}: {_short_excerpt(content, limit=500)}")
+            content = memory.get("content") or ""
+            lines.append(f"{index}. {scope_type}:{scope_id}: {_short_excerpt(content, limit=500)}")
             memory_refs.append({
                 "memory_id": memory.get("id"),
                 "scope_type": scope_type,
                 "scope_id": scope_id,
-                "memory_type": memory_type,
                 "score": memory.get("score"),
                 "score_type": memory.get("score_type"),
                 "raw_score": memory.get("raw_score"),
@@ -565,6 +567,8 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                 "memory_refs": memory_refs,
                 "memory_scopes": memory_scopes or scopes,
                 "memory_scope_policy": memory_scope_policy,
+                "memory_applied_overrides": applied_overrides,
+                "memory_suppressed_ids": suppressed_memory_ids,
             },
         ).to_json()
     except Exception as e:

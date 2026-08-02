@@ -1,4 +1,3 @@
-from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,6 +11,7 @@ from app.db.models_sqlmodel import (
     ChatTurn,
     File,
     Memory,
+    MemoryOverride,
     Project,
     ProjectFile,
     Thread,
@@ -49,14 +49,9 @@ def _memory(memory_id, scope_type, scope_id, content):
         id=memory_id,
         scope_type=scope_type,
         scope_id=scope_id,
-        memory_type="semantic",
         content=content,
-        summary="",
         embedding_model="BAAI/bge-m3",
         content_hash=f"hash-{memory_id}",
-        confidence=0.9,
-        status="active",
-        visibility="project" if scope_type == "project" else "private",
         created_at=utc_now(),
     )
 
@@ -90,19 +85,22 @@ async def test_clone_project_without_threads_copies_knowledge_and_project_memory
                 "source-project",
                 "Project fact",
             ))
-            expired_memory = _memory(
-                "expired-project-memory",
-                "project",
-                "source-project",
-                "Expired fact",
-            )
-            expired_memory.expires_at = utc_now() - timedelta(minutes=1)
-            session.add(expired_memory)
             session.add(_memory(
                 "source-thread-memory",
                 "thread",
                 "source-thread",
                 "Thread fact",
+            ))
+            session.add(_memory(
+                "global-memory",
+                "user",
+                "default",
+                "Global fact",
+            ))
+            await session.flush()
+            session.add(MemoryOverride(
+                overriding_memory_id="source-project-memory",
+                overridden_memory_id="global-memory",
             ))
 
     result = await project_lifecycle_service.clone_project(
@@ -125,6 +123,11 @@ async def test_clone_project_without_threads_copies_knowledge_and_project_memory
         cloned_memories = list((await session.execute(
             select(Memory).where(Memory.scope_type == "project", Memory.scope_id == cloned.id)
         )).scalars().all())
+        cloned_override = (await session.execute(
+            select(MemoryOverride).where(
+                MemoryOverride.overriding_memory_id == cloned_memories[0].id
+            )
+        )).scalar_one()
 
     assert cloned.name == "Source Copy"
     assert cloned.embedding_model == "BAAI/bge-m3"
@@ -132,7 +135,9 @@ async def test_clone_project_without_threads_copies_knowledge_and_project_memory
     assert [row.file_hash for row in cloned_links] == ["shared-file"]
     assert len(cloned_memories) == 1
     assert cloned_memories[0].id != "source-project-memory"
-    assert cloned_memories[0].fork_origin_json["source_memory_id"] == "source-project-memory"
+    assert cloned_memories[0].source_refs_json["fork_origin"]["source_memory_id"] == "source-project-memory"
+    assert cloned_override.overridden_memory_id == "global-memory"
+    assert result["counts"]["memory_overrides"] == 1
 
 
 @pytest.mark.asyncio

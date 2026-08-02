@@ -18,7 +18,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
-    Float,
     Index,
     Integer,
     String,
@@ -31,9 +30,6 @@ from app.db.enums import (
     ChatTurnStatus,
     FileSourceType,
     MemoryScopeType,
-    MemoryStatus,
-    MemoryType,
-    MemoryVisibility,
     MessageRole,
     ProcessStatus,
     WorkflowVisibility,
@@ -451,9 +447,7 @@ class Memory(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     scope_type: str = Field(default=MemoryScopeType.THREAD.value, index=True)
     scope_id: str = Field(index=True)
-    memory_type: str = Field(default=MemoryType.SEMANTIC.value, index=True)
     content: str
-    summary: str = ""
     embedding_model: str = Field(index=True)
     content_hash: str = Field(index=True)
     index_status: str = Field(default="pending", index=True)
@@ -465,23 +459,11 @@ class Memory(SQLModel, table=True):
     index_error: Optional[str] = None
     source_refs_json: Dict[str, Any] = Field(
         default_factory=dict,
-        sa_column=Column(JSONB, default=dict)
-    )
-    confidence: float = Field(default=1.0, sa_column=Column(Float, nullable=False, server_default="1"))
-    status: str = Field(default=MemoryStatus.ACTIVE.value, index=True)
-    visibility: str = Field(default=MemoryVisibility.PRIVATE.value, index=True)
-    created_by: Optional[str] = Field(default=None, index=True)
-    expires_at: Optional[datetime] = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True))
-    )
-    fork_origin_json: Optional[Dict[str, Any]] = Field(
-        default=None,
-        sa_column=Column(JSONB)
+        sa_column=Column(JSONB, nullable=False, default=dict)
     )
     created_at: datetime = Field(
         default_factory=utc_now,
-        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     )
     updated_at: Optional[datetime] = Field(
         default=None,
@@ -495,19 +477,39 @@ class Memory(SQLModel, table=True):
 
     __table_args__ = (
         CheckConstraint("scope_type in ('user', 'project', 'thread')", name="ck_memories_scope_type"),
-        CheckConstraint("memory_type in ('semantic', 'episodic', 'procedural')", name="ck_memories_memory_type"),
-        CheckConstraint("status = 'active'", name="ck_memories_status"),
-        CheckConstraint("visibility in ('private', 'project', 'internal')", name="ck_memories_visibility"),
-        CheckConstraint("confidence >= 0 and confidence <= 1", name="ck_memories_confidence"),
         CheckConstraint("length(btrim(scope_id)) > 0", name="ck_memories_scope_id_nonempty"),
         CheckConstraint("length(btrim(content)) > 0", name="ck_memories_content_nonempty"),
         CheckConstraint("length(btrim(embedding_model)) > 0", name="ck_memories_embedding_model_nonempty"),
         CheckConstraint("length(btrim(content_hash)) > 0", name="ck_memories_content_hash_nonempty"),
         CheckConstraint("index_status in ('pending', 'indexing', 'indexed', 'failed')", name="ck_memories_index_status"),
         CheckConstraint("index_attempts >= 0", name="ck_memories_index_attempts"),
-        Index("idx_memory_scope_status", "scope_type", "scope_id", "status"),
+        Index("idx_memory_scope", "scope_type", "scope_id"),
         Index("idx_memory_index_retry", "index_status", "updated_at"),
         Index("idx_memory_created_at", "created_at"),
+    )
+
+
+class MemoryOverride(SQLModel, table=True):
+    """An explicit, user-confirmed replacement relationship between memories."""
+    __tablename__ = "memory_overrides"
+
+    overriding_memory_id: str = Field(
+        sa_column=Column(String, ForeignKey("memories.id", ondelete="CASCADE"), primary_key=True)
+    )
+    overridden_memory_id: str = Field(
+        sa_column=Column(String, ForeignKey("memories.id", ondelete="CASCADE"), primary_key=True)
+    )
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "overriding_memory_id <> overridden_memory_id",
+            name="ck_memory_overrides_not_self",
+        ),
+        Index("ix_memory_overrides_target", "overridden_memory_id"),
     )
 
 

@@ -23,6 +23,7 @@ from app.db.models_sqlmodel import (
     ChatTurn,
     Memory,
     MemoryEvent,
+    MemoryOverride,
     Project,
     Thread,
     ThreadDocumentAnnotation,
@@ -214,43 +215,39 @@ async def fork_thread(
 
             memory_cutoff = source_turn.created_at if source_turn else forked_at
             copied_memory_ids: list[str] = []
+            memory_id_map: dict[str, str] = {}
 
             if resolved_memory_copy_mode in {"thread_snapshot", "all"}:
                 thread_memories_result = await session.execute(
                     select(Memory).where(
                         Memory.scope_type == "thread",
                         Memory.scope_id == source_thread_id,
-                        Memory.status == "active",
                         Memory.created_at <= memory_cutoff,
                     )
                 )
                 for memory in thread_memories_result.scalars().all():
                     copied_id = str(uuid.uuid4())
+                    fork_origin = {
+                        "source_memory_id": memory.id,
+                        "source_thread_id": source_thread_id,
+                        "forked_thread_id": new_thread_id,
+                        "forked_at": forked_at_iso,
+                        "copy_mode": resolved_memory_copy_mode,
+                    }
                     copied_memory = Memory(
                         id=copied_id,
                         scope_type="thread",
                         scope_id=new_thread_id,
-                        memory_type=memory.memory_type,
                         content=memory.content,
-                        summary=memory.summary,
                         embedding_model=source_thread.embedding_model,
                         content_hash=memory.content_hash,
                         index_status="pending",
-                        source_refs_json=copy.deepcopy(memory.source_refs_json or {}),
-                        confidence=memory.confidence,
-                        status=memory.status,
-                        visibility=memory.visibility,
-                        created_by=memory.created_by,
+                        source_refs_json={
+                            **copy.deepcopy(memory.source_refs_json or {}),
+                            "fork_origin": fork_origin,
+                        },
                         created_at=forked_at,
                         updated_at=forked_at,
-                        expires_at=memory.expires_at,
-                        fork_origin_json={
-                            "source_memory_id": memory.id,
-                            "source_thread_id": source_thread_id,
-                            "forked_thread_id": new_thread_id,
-                            "forked_at": forked_at_iso,
-                            "copy_mode": resolved_memory_copy_mode,
-                        },
                     )
                     session.add(copied_memory)
                     copied_memory_index_jobs.append(copied_memory)
@@ -259,11 +256,12 @@ async def fork_thread(
                             memory_id=copied_id,
                             event_type="fork_snapshot",
                             actor_id=None,
-                            payload_json=copy.deepcopy(copied_memory.fork_origin_json or {}),
+                            payload_json=copy.deepcopy(fork_origin),
                             created_at=forked_at,
                         )
                     )
                     copied_memory_ids.append(copied_id)
+                    memory_id_map[memory.id] = copied_id
 
             if (
                 resolved_memory_copy_mode in {"project_snapshot", "all"}
@@ -275,37 +273,32 @@ async def fork_thread(
                     select(Memory).where(
                         Memory.scope_type == "project",
                         Memory.scope_id == source_thread.project_id,
-                        Memory.status == "active",
                     )
                 )
                 for memory in project_memories_result.scalars().all():
                     copied_id = str(uuid.uuid4())
+                    fork_origin = {
+                        "source_memory_id": memory.id,
+                        "source_project_id": source_thread.project_id,
+                        "target_project_id": target_project,
+                        "forked_thread_id": new_thread_id,
+                        "forked_at": forked_at_iso,
+                        "copy_mode": resolved_memory_copy_mode,
+                    }
                     copied_memory = Memory(
                         id=copied_id,
                         scope_type="project",
                         scope_id=target_project,
-                        memory_type=memory.memory_type,
                         content=memory.content,
-                        summary=memory.summary,
                         embedding_model=source_thread.embedding_model,
                         content_hash=memory.content_hash,
                         index_status="pending",
-                        source_refs_json=copy.deepcopy(memory.source_refs_json or {}),
-                        confidence=memory.confidence,
-                        status=memory.status,
-                        visibility=memory.visibility,
-                        created_by=memory.created_by,
+                        source_refs_json={
+                            **copy.deepcopy(memory.source_refs_json or {}),
+                            "fork_origin": fork_origin,
+                        },
                         created_at=forked_at,
                         updated_at=forked_at,
-                        expires_at=memory.expires_at,
-                        fork_origin_json={
-                            "source_memory_id": memory.id,
-                            "source_project_id": source_thread.project_id,
-                            "target_project_id": target_project,
-                            "forked_thread_id": new_thread_id,
-                            "forked_at": forked_at_iso,
-                            "copy_mode": resolved_memory_copy_mode,
-                        },
                     )
                     session.add(copied_memory)
                     copied_memory_index_jobs.append(copied_memory)
@@ -314,11 +307,43 @@ async def fork_thread(
                             memory_id=copied_id,
                             event_type="fork_snapshot",
                             actor_id=None,
-                            payload_json=copy.deepcopy(copied_memory.fork_origin_json or {}),
+                            payload_json=copy.deepcopy(fork_origin),
                             created_at=forked_at,
                         )
                     )
                     copied_memory_ids.append(copied_id)
+                    memory_id_map[memory.id] = copied_id
+
+            if memory_id_map:
+                override_rows = list((await session.execute(
+                    select(MemoryOverride).where(
+                        MemoryOverride.overriding_memory_id.in_(list(memory_id_map))
+                    )
+                )).scalars().all())
+                target_rows = list((await session.execute(
+                    select(Memory).where(
+                        Memory.id.in_([row.overridden_memory_id for row in override_rows])
+                    )
+                )).scalars().all()) if override_rows else []
+                target_by_id = {memory.id: memory for memory in target_rows}
+                for row in override_rows:
+                    target_id = memory_id_map.get(row.overridden_memory_id)
+                    if target_id is None:
+                        target_memory = target_by_id.get(row.overridden_memory_id)
+                        if target_memory and target_memory.scope_type == "user":
+                            target_id = target_memory.id
+                        elif (
+                            target_memory
+                            and target_memory.scope_type == "project"
+                            and target_memory.scope_id == target_project
+                        ):
+                            target_id = target_memory.id
+                    if target_id:
+                        session.add(MemoryOverride(
+                            overriding_memory_id=memory_id_map[row.overriding_memory_id],
+                            overridden_memory_id=target_id,
+                            created_at=forked_at,
+                        ))
 
             if copied_memory_ids:
                 child_metadata = copy.deepcopy(forked_thread.thread_metadata or {})

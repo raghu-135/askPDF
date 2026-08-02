@@ -14,9 +14,9 @@ from sqlalchemy.future import select
 
 from app.agent_workflows.runtime_invocation import safe_json_object
 from app.db.connection_sqlmodel import async_session_maker
-from app.db.enums import ChatTurnStatus, MemoryScopeType, MemoryType, MemoryVisibility
+from app.db.enums import ChatTurnStatus, MemoryScopeType
 from app.db.jsonb_utils import replace_jsonb_field
-from app.db.models_sqlmodel import ChatTurn, Memory, MemoryEvent, Project, Thread
+from app.db.models_sqlmodel import ChatTurn, Memory, MemoryEvent, MemoryOverride, Project, Thread
 from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
 from app.db.project_activity import touch_project_activity
 from app.db.vector import get_vector_db
@@ -42,6 +42,9 @@ from app.services.memory_service import (
     index_memory_record,
     memory_content_hash,
 )
+from app.services.effective_memory_service import (
+    serialize_memories_with_relationships,
+)
 from app.time_utils import iso_utc_z, utc_now
 
 
@@ -49,7 +52,6 @@ logger = logging.getLogger(__name__)
 
 MAX_CURATOR_MEMORIES = 40
 MAX_REVIEW_TURNS = 20
-VALID_MEMORY_TYPES = {item.value for item in MemoryType}
 VALID_ACTIONS = {"create", "update", "delete", "noop"}
 
 
@@ -71,32 +73,6 @@ class MemoryChangedError(MemoryCuratorError):
     def __init__(self, memories: Sequence[Memory]):
         super().__init__("Memory changed after the curator proposal was prepared")
         self.memories = list(memories)
-
-
-def memory_payload(memory: Memory) -> Dict[str, Any]:
-    return {
-        "id": memory.id,
-        "scope_type": memory.scope_type,
-        "scope_id": memory.scope_id,
-        "memory_type": memory.memory_type,
-        "content": memory.content,
-        "summary": memory.summary,
-        "embedding_model": memory.embedding_model,
-        "content_hash": memory.content_hash,
-        "index_status": memory.index_status,
-        "index_attempts": memory.index_attempts,
-        "indexed_at": iso_utc_z(memory.indexed_at) if memory.indexed_at else None,
-        "index_error": memory.index_error,
-        "source_refs_json": memory.source_refs_json or {},
-        "confidence": memory.confidence,
-        "status": memory.status,
-        "visibility": memory.visibility,
-        "created_by": memory.created_by,
-        "expires_at": iso_utc_z(memory.expires_at) if memory.expires_at else None,
-        "fork_origin_json": memory.fork_origin_json,
-        "created_at": iso_utc_z(memory.created_at) if memory.created_at else None,
-        "updated_at": iso_utc_z(memory.updated_at) if memory.updated_at else None,
-    }
 
 
 async def _resolve_visible_scopes(
@@ -232,8 +208,6 @@ async def _recent_scope_memories(scopes: Sequence[Dict[str, str]]) -> List[Memor
             select(Memory)
             .where(
                 or_(*clauses),
-                Memory.status == "active",
-                or_(Memory.expires_at.is_(None), Memory.expires_at > utc_now()),
             )
             .order_by(Memory.updated_at.desc().nullslast(), Memory.created_at.desc())
             .limit(MAX_CURATOR_MEMORIES)
@@ -316,10 +290,33 @@ async def _curator_memory_context(
     return ordered[:MAX_CURATOR_MEMORIES], readiness
 
 
+async def _relationship_context(memories: Sequence[Memory]) -> Dict[str, Dict[str, List[str]]]:
+    memory_ids = {memory.id for memory in memories}
+    result = {memory_id: {"overrides": [], "overridden_by": []} for memory_id in memory_ids}
+    if not memory_ids:
+        return result
+    async with async_session_maker() as session:
+        edges = list((await session.execute(
+            select(MemoryOverride).where(
+                or_(
+                    MemoryOverride.overriding_memory_id.in_(memory_ids),
+                    MemoryOverride.overridden_memory_id.in_(memory_ids),
+                )
+            )
+        )).scalars().all())
+    for edge in edges:
+        if edge.overriding_memory_id in result:
+            result[edge.overriding_memory_id]["overrides"].append(edge.overridden_memory_id)
+        if edge.overridden_memory_id in result:
+            result[edge.overridden_memory_id]["overridden_by"].append(edge.overriding_memory_id)
+    return result
+
+
 def _bounded_context_payload(
     memories: Sequence[Memory],
     *,
     context_window: int,
+    relationships: Dict[str, Dict[str, List[str]]],
 ) -> List[Dict[str, Any]]:
     char_budget = max(1, int(context_window * 4 * 0.25))
     used = 0
@@ -329,9 +326,9 @@ def _bounded_context_payload(
             "id": memory.id,
             "scope_type": memory.scope_type,
             "scope_id": memory.scope_id,
-            "memory_type": memory.memory_type,
             "content": memory.content,
-            "summary": memory.summary,
+            "overrides_memory_ids": relationships.get(memory.id, {}).get("overrides", []),
+            "overridden_by_memory_ids": relationships.get(memory.id, {}).get("overridden_by", []),
             "updated_at": iso_utc_z(memory.updated_at or memory.created_at),
         }
         remaining = char_budget - used
@@ -421,19 +418,28 @@ def _normalize_operation(
         })
     if action in {"create", "update"}:
         content = str(raw.get("content") or "").strip()
-        memory_type = str(raw.get("memory_type") or (existing.memory_type if existing else "semantic"))
-        if not content or memory_type not in VALID_MEMORY_TYPES:
+        if not content:
             return None
-        try:
-            confidence = float(raw.get("confidence", 1.0))
-        except (TypeError, ValueError):
-            confidence = 1.0
+        raw_targets = raw.get("override_targets")
+        if not isinstance(raw_targets, list):
+            return None
+        targets = []
+        seen_targets = set()
+        for target in raw_targets:
+            if not isinstance(target, dict):
+                return None
+            target_id = str(target.get("memory_id") or "").strip()
+            target_memory = memory_lookup.get(target_id)
+            if target_memory is None or target_id in seen_targets:
+                return None
+            seen_targets.add(target_id)
+            targets.append({
+                "memory_id": target_id,
+                "expected_updated_at": iso_utc_z(target_memory.updated_at or target_memory.created_at),
+            })
         operation.update({
             "content": content[:12000],
-            "summary": str(raw.get("summary") or "")[:4000],
-            "memory_type": memory_type,
-            "confidence": max(0.0, min(1.0, confidence)),
-            "source_refs_json": raw.get("source_refs_json") if isinstance(raw.get("source_refs_json"), dict) else {},
+            "override_targets": targets,
         })
     return operation
 
@@ -462,7 +468,12 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             query_parts.extend([turn["question"], turn["answer"]])
     query = "\n".join(part for part in query_parts if part).strip()
     memories, readiness = await _curator_memory_context(scopes, query, req.memory_id)
-    context_memories = _bounded_context_payload(memories, context_window=req.context_window)
+    relationships = await _relationship_context(memories)
+    context_memories = _bounded_context_payload(
+        memories,
+        context_window=req.context_window,
+        relationships=relationships,
+    )
     visible_scope_set = {(scope["scope_type"], scope["scope_id"]) for scope in scopes}
 
     system_prompt = (
@@ -471,9 +482,12 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         "message, state, choices, and operations. state must be clarification, conflict, proposal, "
         "or no_changes. choices is an array of {id,label,description,user_message}. operations is "
         "an array using action create, update, delete, or noop. Create/update operations require "
-        "scope_type, scope_id, memory_type, content, summary, confidence, and source_refs_json. "
+        "scope_type, scope_id, content, and the complete override_targets array. Each override target "
+        "contains memory_id; the server supplies its timestamp. "
         "Update/delete operations require memory_id. Prefer updating an existing memory over "
-        "creating a duplicate. Surface contradictions as conflict choices. Do not infer sensitive "
+        "creating a duplicate. When a narrower memory preserves a broader conflicting memory, create "
+        "the narrower memory and explicitly target the broader memory. Surface contradictions as "
+        "conflict choices. Do not infer sensitive "
         "facts or broaden scope without the user's clear direction. A proposal is never approval."
     )
     prompt_payload = {
@@ -554,13 +568,63 @@ def _timestamp_matches(memory: Memory, expected: str | None) -> bool:
     return expected == iso_utc_z(memory.updated_at or memory.created_at)
 
 
+_SCOPE_RANK = {"user": 0, "project": 1, "thread": 2}
+
+
+def _validate_override_scope(source: Memory, target: Memory) -> None:
+    source_rank = _SCOPE_RANK[source.scope_type]
+    target_rank = _SCOPE_RANK[target.scope_type]
+    if source_rank < target_rank:
+        raise MemoryCuratorError("A broader memory cannot override a narrower memory")
+    if source_rank == target_rank and source.scope_id != target.scope_id:
+        raise MemoryCuratorError("Memory overrides cannot cross peers at the same scope")
+
+
+def _assert_acyclic(edges: Sequence[tuple[str, str]]) -> None:
+    adjacency: Dict[str, List[str]] = {}
+    for source_id, target_id in edges:
+        adjacency.setdefault(source_id, []).append(target_id)
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(memory_id: str) -> None:
+        if memory_id in visiting:
+            raise MemoryCuratorError("Memory override relationships cannot contain a cycle")
+        if memory_id in visited:
+            return
+        visiting.add(memory_id)
+        for target_id in adjacency.get(memory_id, []):
+            visit(target_id)
+        visiting.remove(memory_id)
+        visited.add(memory_id)
+
+    for source_id in list(adjacency):
+        visit(source_id)
+
+
 async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dict[str, Any]:
     scopes, context_thread, _project = await _resolve_visible_scopes(req.context)
     visible_scopes = {(scope["scope_type"], scope["scope_id"]) for scope in scopes}
     operations = [operation for operation in req.operations if operation.action != "noop"]
-    affected_ids = [operation.memory_id for operation in operations if operation.memory_id]
-    if len(affected_ids) != len(set(affected_ids)):
+    source_ids = [operation.memory_id for operation in operations if operation.memory_id]
+    if len(source_ids) != len(set(source_ids)):
         raise MemoryCuratorError("A memory may only appear once in a change set")
+
+    create_ids = {
+        index: str(uuid.uuid4())
+        for index, operation in enumerate(operations)
+        if operation.action == "create"
+    }
+    target_specs = [
+        target
+        for operation in operations
+        if operation.action in {"create", "update"}
+        for target in operation.override_targets
+    ]
+    affected_ids = sorted({
+        *[memory_id for memory_id in source_ids if memory_id],
+        *[target.memory_id for target in target_specs],
+    })
 
     create_models: Dict[int, str] = {}
     for index, operation in enumerate(operations):
@@ -568,16 +632,17 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
         if operation.action == "create":
             if scope not in visible_scopes:
                 raise MemoryCuratorError("Create operation targets an unavailable scope")
-            if not operation.content or operation.memory_type not in VALID_MEMORY_TYPES:
-                raise MemoryCuratorError("Create operation requires valid content and memory_type")
+            if not operation.content:
+                raise MemoryCuratorError("Create operation requires content")
             model = await resolve_scope_embedding_model(*scope)
             await require_embedding_model_ready(model)
             create_models[index] = model
 
     changed: List[Memory] = []
+    to_index: List[Memory] = []
     deleted_ids: List[str] = []
-    cleanup_targets: List[Tuple[str, str]] = []
-    cleaned_vector_targets: List[Tuple[str, str]] = []
+    cleanup_targets: List[tuple[str, str]] = []
+    cleaned_vector_targets: List[tuple[str, str]] = []
     try:
         async with async_session_maker() as session:
             async with session.begin():
@@ -593,29 +658,81 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                 missing = [memory_id for memory_id in affected_ids if memory_id not in locked]
                 if missing:
                     raise MemoryCuratorNotFoundError(f"Memory not found: {missing[0]}")
-                stale = [
-                    memory for memory_id, memory in locked.items()
-                    if not _timestamp_matches(
-                        memory,
-                        next(op.expected_updated_at for op in operations if op.memory_id == memory_id),
-                    )
-                ]
+                expected_timestamps = {
+                    operation.memory_id: operation.expected_updated_at
+                    for operation in operations if operation.memory_id
+                }
+                expected_timestamps.update({
+                    target.memory_id: target.expected_updated_at for target in target_specs
+                })
+                stale = [memory for memory_id, memory in locked.items()
+                         if not _timestamp_matches(memory, expected_timestamps.get(memory_id))]
                 if stale:
                     raise MemoryChangedError(stale)
+
+                source_memory_by_index: Dict[int, Memory] = {}
+                for index, operation in enumerate(operations):
+                    if operation.action == "create":
+                        scope_type, scope_id = _operation_scope(operation)
+                        source_memory_by_index[index] = Memory(
+                            id=create_ids[index],
+                            scope_type=scope_type,
+                            scope_id=scope_id,
+                            content=str(operation.content or "").strip(),
+                            embedding_model=create_models[index],
+                            content_hash=memory_content_hash(operation.content or ""),
+                        )
+                        source = source_memory_by_index[index]
+                    else:
+                        source = locked[operation.memory_id or ""]
+                        if (source.scope_type, source.scope_id) not in visible_scopes:
+                            raise MemoryCuratorError("Operation targets memory outside this workspace")
+                        if _operation_scope(operation) != (source.scope_type, source.scope_id):
+                            raise MemoryCuratorError("Memory scope cannot be changed by update or delete")
+                    if operation.action not in {"create", "update"}:
+                        continue
+                    if not operation.content:
+                        raise MemoryCuratorError("Create/update operation requires content")
+                    target_ids = [target.memory_id for target in operation.override_targets]
+                    if len(target_ids) != len(set(target_ids)):
+                        raise MemoryCuratorError("Override targets cannot contain duplicates")
+                    for target_spec in operation.override_targets:
+                        target = locked[target_spec.memory_id]
+                        if (target.scope_type, target.scope_id) not in visible_scopes:
+                            raise MemoryCuratorError("Override target is outside this workspace")
+                        if source.id == target.id:
+                            raise MemoryCuratorError("A memory cannot override itself")
+                        _validate_override_scope(source, target)
+
+                existing_edges = list((await session.execute(select(MemoryOverride))).scalars().all())
+                replacement_sources = {
+                    create_ids[index] if operation.action == "create" else str(operation.memory_id)
+                    for index, operation in enumerate(operations)
+                    if operation.action in {"create", "update"}
+                }
+                proposed_edges = [
+                    (edge.overriding_memory_id, edge.overridden_memory_id)
+                    for edge in existing_edges
+                    if edge.overriding_memory_id not in replacement_sources
+                ]
+                for index, operation in enumerate(operations):
+                    if operation.action in {"create", "update"}:
+                        source_id = create_ids[index] if operation.action == "create" else str(operation.memory_id)
+                        proposed_edges.extend((source_id, target.memory_id) for target in operation.override_targets)
+                _assert_acyclic(proposed_edges)
 
                 for operation in operations:
                     if operation.action == "create":
                         continue
                     memory = locked[operation.memory_id or ""]
-                    if (memory.scope_type, memory.scope_id) not in visible_scopes:
-                        raise MemoryCuratorError("Operation targets memory outside this workspace")
-                    if _operation_scope(operation) != (memory.scope_type, memory.scope_id):
-                        raise MemoryCuratorError("Memory scope cannot be changed by update or delete")
-                    if operation.action == "update":
-                        if not operation.content or operation.memory_type not in VALID_MEMORY_TYPES:
-                            raise MemoryCuratorError("Update operation requires valid content and memory_type")
+                    content_changed = (
+                        operation.action == "update"
+                        and memory.content_hash != memory_content_hash(operation.content or "")
+                    )
+                    if content_changed:
                         await require_embedding_model_ready(memory.embedding_model)
-                    cleanup_targets.append((memory.id, memory.embedding_model))
+                    if operation.action == "delete" or content_changed:
+                        cleanup_targets.append((memory.id, memory.embedding_model))
 
                 for operation in operations:
                     if operation.action not in {"create", "update"}:
@@ -624,7 +741,6 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                     duplicate_query = select(Memory).where(
                         Memory.scope_type == scope_type,
                         Memory.scope_id == scope_id,
-                        Memory.status == "active",
                         Memory.content_hash == memory_content_hash(operation.content or ""),
                     )
                     if operation.memory_id:
@@ -661,7 +777,7 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                 now = utc_now()
                 for index, operation in enumerate(operations):
                     scope_type, scope_id = _operation_scope(operation)
-                    source_refs = dict(operation.source_refs_json or {})
+                    source_refs: Dict[str, Any] = {}
                     if req.review_cursor is not None:
                         source_refs.update({
                             "curator_mode": "conversation_review",
@@ -670,25 +786,15 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                         })
                     if operation.action == "create":
                         memory = Memory(
-                            id=str(uuid.uuid4()),
+                            id=create_ids[index],
                             scope_type=scope_type,
                             scope_id=scope_id,
-                            memory_type=operation.memory_type or MemoryType.SEMANTIC.value,
                             content=str(operation.content or "").strip(),
-                            summary=operation.summary or "",
                             embedding_model=create_models[index],
                             content_hash=memory_content_hash(operation.content or ""),
                             index_status="pending",
                             index_attempts=0,
                             source_refs_json=source_refs,
-                            confidence=operation.confidence if operation.confidence is not None else 1.0,
-                            status="active",
-                            visibility=(
-                                MemoryVisibility.PROJECT.value
-                                if scope_type == MemoryScopeType.PROJECT.value
-                                else MemoryVisibility.PRIVATE.value
-                            ),
-                            created_by=req.actor_id,
                             created_at=now,
                             updated_at=now,
                         )
@@ -702,28 +808,38 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                             created_at=now,
                         ))
                         changed.append(memory)
-                    elif operation.action == "update":
-                        memory = locked[operation.memory_id or ""]
-                        updated = await MemoryRepository(session).update_memory(
+                        to_index.append(memory)
+                        await MemoryRepository(session).replace_overrides(
                             memory.id,
-                            memory_type=operation.memory_type or memory.memory_type,
-                            content=str(operation.content or "").strip(),
-                            summary=operation.summary or "",
-                            content_hash=memory_content_hash(operation.content or ""),
-                            confidence=(
-                                operation.confidence
-                                if operation.confidence is not None
-                                else memory.confidence
-                            ),
-                            source_refs_json=source_refs,
+                            [target.memory_id for target in operation.override_targets],
                             actor_id=req.actor_id,
-                            event_type="curator_updated",
-                            event_payload={"mode": "confirmed_change_set"},
                             updated_at=now,
                         )
-                        if updated is None:
-                            raise MemoryCuratorNotFoundError("Memory disappeared during update")
-                        changed.append(updated)
+                    elif operation.action == "update":
+                        memory = locked[operation.memory_id or ""]
+                        content_changed = memory.content_hash != memory_content_hash(operation.content or "")
+                        if content_changed:
+                            updated = await MemoryRepository(session).update_memory(
+                                memory.id,
+                                content=str(operation.content or "").strip(),
+                                content_hash=memory_content_hash(operation.content or ""),
+                                source_refs_json=source_refs,
+                                actor_id=req.actor_id,
+                                event_type="curator_updated",
+                                event_payload={"mode": "confirmed_change_set"},
+                                updated_at=now,
+                            )
+                            if updated is None:
+                                raise MemoryCuratorNotFoundError("Memory disappeared during update")
+                            memory = updated
+                            to_index.append(memory)
+                        await MemoryRepository(session).replace_overrides(
+                            memory.id,
+                            [target.memory_id for target in operation.override_targets],
+                            actor_id=req.actor_id,
+                            updated_at=now,
+                        )
+                        changed.append(memory)
                     elif operation.action == "delete":
                         memory = locked[operation.memory_id or ""]
                         await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id == memory.id))
@@ -764,10 +880,12 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
         raise
 
     warnings = []
-    indexed_records = []
+    refreshed_records = []
+    to_index_ids = {memory.id for memory in to_index}
     for memory in changed:
         try:
-            await index_memory_record(memory)
+            if memory.id in to_index_ids:
+                await index_memory_record(memory)
         except Exception as exc:
             warnings.append({
                 "code": "memory_index_failed",
@@ -777,7 +895,8 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
         async with async_session_maker() as session:
             refreshed = await session.get(Memory, memory.id)
         if refreshed is not None:
-            indexed_records.append(memory_payload(refreshed))
+            refreshed_records.append(refreshed)
+    indexed_records = await serialize_memories_with_relationships(refreshed_records)
     return {
         "changed_memories": indexed_records,
         "deleted_memory_ids": deleted_ids,

@@ -40,6 +40,10 @@ function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
     || detail.output?.artifacts?.memory_scope_policy
     || detail.event?.artifact_refs?.memory_scope_policy
     || memoryToolEvent?.artifacts?.memory_scope_policy;
+  const memoryAppliedOverrides = detail.output?.artifacts?.memory_applied_overrides
+    || memoryToolEvent?.artifacts?.memory_applied_overrides;
+  const memorySuppressedIds = detail.output?.artifacts?.memory_suppressed_ids
+    || memoryToolEvent?.artifacts?.memory_suppressed_ids;
   const errorText = typeof detail.error === 'string'
     ? detail.error
     : detail.error && typeof detail.error === 'object'
@@ -85,11 +89,13 @@ function AgentNodeExecutionDetails({ detail }: { detail: AgentRunNodeDetail }) {
         )}
       </Section>}
       {Array.isArray(detail.tools) && detail.tools.length > 0 && <Section title="Tools"><JsonPreview value={detail.tools} maxHeight={440} /></Section>}
-      {(hasData(memoryRefs) || hasData(memoryScopes) || hasData(memoryScopePolicy)) && (
+      {(hasData(memoryRefs) || hasData(memoryScopes) || hasData(memoryScopePolicy) || hasData(memoryAppliedOverrides) || hasData(memorySuppressedIds)) && (
         <Section title="Memory refs" defaultOpen>
           {hasData(memoryRefs) && <JsonPreview value={{ memories: memoryRefs }} maxHeight={220} />}
           {hasData(memoryScopes) && <JsonPreview value={{ scopes: memoryScopes }} maxHeight={220} />}
           {hasData(memoryScopePolicy) && <JsonPreview value={{ policy: memoryScopePolicy }} maxHeight={220} />}
+          {hasData(memoryAppliedOverrides) && <JsonPreview value={{ applied_overrides: memoryAppliedOverrides }} maxHeight={220} />}
+          {hasData(memorySuppressedIds) && <JsonPreview value={{ suppressed_memory_ids: memorySuppressedIds }} maxHeight={220} />}
         </Section>
       )}
       {hasData(detail.output) && <Section title="Node output"><JsonPreview value={detail.output} maxHeight={440} /></Section>}

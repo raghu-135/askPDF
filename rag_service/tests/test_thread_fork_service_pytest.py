@@ -10,6 +10,7 @@ from app.db.models_sqlmodel import (
     File,
     Memory,
     MemoryEvent,
+    MemoryOverride,
     Project,
     Thread,
     ThreadDocumentAnnotation,
@@ -342,15 +343,10 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
                         id="memory-before",
                         scope_type="thread",
                         scope_id="source-thread",
-                        memory_type="semantic",
                         content="Remembered before fork",
                         embedding_model="BAAI/bge-m3",
                         content_hash="memory-before-hash",
-                        summary="before",
                         source_refs_json={"turn_id": "turn-1"},
-                        confidence=0.9,
-                        status="active",
-                        visibility="private",
                         created_at=early_at,
                         updated_at=early_at,
                     ),
@@ -358,15 +354,10 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
                         id="memory-after",
                         scope_type="thread",
                         scope_id="source-thread",
-                        memory_type="semantic",
                         content="Remembered after fork",
                         embedding_model="BAAI/bge-m3",
                         content_hash="memory-after-hash",
-                        summary="after",
                         source_refs_json={"turn_id": "turn-2"},
-                        confidence=0.9,
-                        status="active",
-                        visibility="private",
                         created_at=late_at,
                         updated_at=late_at,
                     ),
@@ -374,19 +365,20 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
                         id="project-memory",
                         scope_type="project",
                         scope_id="project-a",
-                        memory_type="semantic",
                         content="Shared project memory stays shared",
                         embedding_model="BAAI/bge-m3",
                         content_hash="project-memory-hash",
-                        summary="project",
-                        confidence=0.9,
-                        status="active",
-                        visibility="project",
                         created_at=early_at,
                         updated_at=early_at,
                     ),
                 ]
             )
+            await session.flush()
+            session.add(MemoryOverride(
+                overriding_memory_id="memory-before",
+                overridden_memory_id="project-memory",
+                created_at=early_at,
+            ))
 
     result = await thread_management_service.fork_thread(
         "source-thread",
@@ -407,6 +399,9 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
                 select(MemoryEvent).where(MemoryEvent.event_type == "fork_snapshot")
             )
         ).scalars().all()
+        copied_override = (await session.execute(
+            select(MemoryOverride).where(MemoryOverride.overriding_memory_id == copied_memories[0].id)
+        )).scalar_one()
 
     assert forked.project_id == "project-a"
     assert forked.thread_metadata["fork"]["memory_copy_mode"] == "thread_snapshot"
@@ -415,10 +410,11 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
     assert copied.content == "Remembered before fork"
     assert copied.scope_type == "thread"
     assert copied.scope_id == forked.id
-    assert copied.fork_origin_json["source_memory_id"] == "memory-before"
-    assert copied.fork_origin_json["copy_mode"] == "thread_snapshot"
+    assert copied.source_refs_json["fork_origin"]["source_memory_id"] == "memory-before"
+    assert copied.source_refs_json["fork_origin"]["copy_mode"] == "thread_snapshot"
     assert forked.thread_metadata["fork"]["copied_memory_ids"] == [copied.id]
     assert [event.memory_id for event in snapshot_events] == [copied.id]
+    assert copied_override.overridden_memory_id == "project-memory"
     assert indexed_memory_ids == [copied.id]
 
 
@@ -472,15 +468,10 @@ async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, mo
                         id="source-project-memory",
                         scope_type="project",
                         scope_id="project-a",
-                        memory_type="semantic",
                         content="Project A launch name is AskPDF Pro",
                         embedding_model="BAAI/bge-m3",
                         content_hash="source-project-memory-hash",
-                        summary="launch name",
                         source_refs_json={"project": "a"},
-                        confidence=0.95,
-                        status="active",
-                        visibility="project",
                         created_at=created_at,
                         updated_at=created_at,
                     ),
@@ -488,19 +479,30 @@ async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, mo
                         id="source-thread-memory",
                         scope_type="thread",
                         scope_id="source-thread",
-                        memory_type="semantic",
                         content="Thread-local detail",
                         embedding_model="BAAI/bge-m3",
                         content_hash="source-thread-memory-hash",
-                        summary="thread detail",
-                        confidence=0.8,
-                        status="active",
-                        visibility="private",
+                        created_at=created_at,
+                        updated_at=created_at,
+                    ),
+                    Memory(
+                        id="global-memory",
+                        scope_type="user",
+                        scope_id="default",
+                        content="Shared global detail",
+                        embedding_model="BAAI/bge-m3",
+                        content_hash="global-memory-hash",
                         created_at=created_at,
                         updated_at=created_at,
                     ),
                 ]
             )
+            await session.flush()
+            session.add(MemoryOverride(
+                overriding_memory_id="source-project-memory",
+                overridden_memory_id="global-memory",
+                created_at=created_at,
+            ))
 
     result = await thread_management_service.fork_thread(
         "source-thread",
@@ -519,6 +521,11 @@ async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, mo
                 select(Memory).where(Memory.scope_type == "thread", Memory.scope_id == forked.id)
             )
         ).scalars().all()
+        copied_override = (await session.execute(
+            select(MemoryOverride).where(
+                MemoryOverride.overriding_memory_id == project_b_memories[0].id
+            )
+        )).scalar_one()
 
     assert forked.project_id == "project-b"
     assert forked.thread_metadata["fork"]["memory_copy_mode"] == "project_snapshot"
@@ -526,9 +533,11 @@ async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, mo
     assert len(project_b_memories) == 1
     copied = project_b_memories[0]
     assert copied.content == "Project A launch name is AskPDF Pro"
-    assert copied.fork_origin_json["source_memory_id"] == "source-project-memory"
-    assert copied.fork_origin_json["source_project_id"] == "project-a"
-    assert copied.fork_origin_json["target_project_id"] == "project-b"
-    assert copied.fork_origin_json["copy_mode"] == "project_snapshot"
+    fork_origin = copied.source_refs_json["fork_origin"]
+    assert fork_origin["source_memory_id"] == "source-project-memory"
+    assert fork_origin["source_project_id"] == "project-a"
+    assert fork_origin["target_project_id"] == "project-b"
+    assert fork_origin["copy_mode"] == "project_snapshot"
     assert forked.thread_metadata["fork"]["copied_memory_ids"] == [copied.id]
+    assert copied_override.overridden_memory_id == "global-memory"
     assert indexed_memory_ids == [copied.id]

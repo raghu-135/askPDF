@@ -109,6 +109,8 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
     memory_refs: List[Dict[str, Any]] = []
     memory_scopes: List[Dict[str, Any]] = []
     memory_scope_policies: List[Dict[str, Any]] = []
+    memory_applied_overrides: List[Dict[str, Any]] = []
+    memory_suppressed_ids: List[str] = []
     for tool in tools:
         raw = _as_dict(tool.get("raw"))
         refs = _as_dict(raw.get("artifact_refs"))
@@ -118,6 +120,11 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
         policy = artifacts.get("memory_scope_policy")
         if isinstance(policy, dict):
             memory_scope_policies.append(policy)
+        memory_applied_overrides.extend([
+            item for item in _as_list(artifacts.get("memory_applied_overrides"))
+            if isinstance(item, dict)
+        ])
+        memory_suppressed_ids.extend(str(item) for item in _as_list(artifacts.get("memory_suppressed_ids")) if item)
     config = _as_dict(resolved_spec.get("config"))
     evaluator_nodes = [node for node in nodes if node.get("id") == WorkflowNodeType.EVIDENCE_EVALUATOR.value]
     replanner_nodes = [node for node in nodes if node.get("id") == WorkflowNodeType.REPLANNER.value]
@@ -151,6 +158,8 @@ def _build_summary_from_trace(trace: Dict[str, Any], resolved_spec: Mapping[str,
             "recalledMemoryIds": [str(item.get("memory_id")) for item in memory_refs if item.get("memory_id")],
             "searchedScopes": memory_scopes,
             "scopePolicies": memory_scope_policies,
+            "appliedOverrides": memory_applied_overrides,
+            "suppressedMemoryIds": list(dict.fromkeys(memory_suppressed_ids)),
             "recalledCount": len({str(item.get("memory_id")) for item in memory_refs if item.get("memory_id")}),
         },
         **_interrupt_summary(trace),

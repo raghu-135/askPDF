@@ -260,6 +260,11 @@ export default function MemoryCuratorPanel({
             {index > 0 && <Divider sx={{ mb: 1 }} />}
             <Chip size="small" label={operationLabel(operation)} />
             {operation.content && <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>{operation.content}</Typography>}
+            {Boolean(operation.override_targets?.length) && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                Overrides {operation.override_targets?.length} broader {operation.override_targets?.length === 1 ? 'memory' : 'memories'}.
+              </Typography>
+            )}
           </Box>
         ))}
         <Stack direction="row" spacing={1}>

@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.future import select
 
-from app.db.models_sqlmodel import ChatTurn, Memory, MemoryEvent, Project, Thread
+from app.db.models_sqlmodel import ChatTurn, Memory, MemoryEvent, MemoryOverride, Project, Thread
 from app.models.requests import (
     MemoryCuratorApplyRequest,
     MemoryCuratorContext,
@@ -22,7 +22,10 @@ from app.time_utils import iso_utc_z, utc_now
 @pytest.fixture
 def curator_sessionmaker(engine, monkeypatch):
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    import app.services.effective_memory_service as effective_memory_service
+
     monkeypatch.setattr(memory_curator_service, "async_session_maker", maker)
+    monkeypatch.setattr(effective_memory_service, "async_session_maker", maker)
     monkeypatch.setattr(
         memory_curator_service,
         "require_embedding_model_ready",
@@ -86,7 +89,6 @@ async def test_curator_confirmed_create_and_update_reuse_canonical_id(
                 action="create",
                 scope_type="thread",
                 scope_id="curator-thread",
-                memory_type="semantic",
                 content="The preferred release channel is stable.",
             )],
         )
@@ -103,7 +105,6 @@ async def test_curator_confirmed_create_and_update_reuse_canonical_id(
                 scope_id="curator-thread",
                 memory_id=memory["id"],
                 expected_updated_at=memory["updated_at"],
-                memory_type="semantic",
                 content="The preferred release channel is preview.",
             )],
         )
@@ -117,7 +118,12 @@ async def test_curator_confirmed_create_and_update_reuse_canonical_id(
             select(MemoryEvent).where(MemoryEvent.memory_id == memory["id"])
         )).scalars().all())
     assert [row.id for row in rows] == [memory["id"]]
-    assert [event.event_type for event in events] == ["curator_created", "curator_updated"]
+    assert [event.event_type for event in events] == [
+        "curator_created",
+        "override_set",
+        "curator_updated",
+        "override_set",
+    ]
 
 
 @pytest.mark.asyncio
@@ -131,7 +137,6 @@ async def test_curator_rejects_stale_and_duplicate_change_sets(curator_sessionma
                 action="create",
                 scope_type="thread",
                 scope_id="curator-thread",
-                memory_type="semantic",
                 content="Use concise answers.",
             )],
         )
@@ -149,7 +154,6 @@ async def test_curator_rejects_stale_and_duplicate_change_sets(curator_sessionma
                     scope_id="curator-thread",
                     memory_id=memory["id"],
                     expected_updated_at="2000-01-01T00:00:00Z",
-                    memory_type="semantic",
                     content="Use detailed answers.",
                 )],
             )
@@ -164,8 +168,150 @@ async def test_curator_rejects_stale_and_duplicate_change_sets(curator_sessionma
                     action="create",
                     scope_type="thread",
                     scope_id="curator-thread",
-                    memory_type="semantic",
                     content="Use concise answers.",
+                )],
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_relation_only_update_replaces_edges_without_reindexing(
+    curator_sessionmaker,
+    monkeypatch,
+):
+    await _workspace(curator_sessionmaker)
+    global_result = await memory_curator_service.apply_memory_curator_change_set(
+        MemoryCuratorApplyRequest(
+            context=_context(),
+            confirmed=True,
+            operations=[MemoryCuratorOperation(
+                action="create",
+                scope_type="user",
+                scope_id="default",
+                content="Use concise answers everywhere.",
+            )],
+        )
+    )
+    thread_result = await memory_curator_service.apply_memory_curator_change_set(
+        MemoryCuratorApplyRequest(
+            context=_context(),
+            confirmed=True,
+            operations=[MemoryCuratorOperation(
+                action="create",
+                scope_type="thread",
+                scope_id="curator-thread",
+                content="Use detailed answers here.",
+            )],
+        )
+    )
+    global_memory = global_result["changed_memories"][0]
+    thread_memory = thread_result["changed_memories"][0]
+    index_mock = AsyncMock(return_value=1)
+    delete_vectors = AsyncMock(return_value=True)
+    monkeypatch.setattr(memory_curator_service, "index_memory_record", index_mock)
+    monkeypatch.setattr(
+        memory_curator_service,
+        "get_vector_db",
+        lambda: SimpleNamespace(delete_memory_vectors=delete_vectors),
+    )
+
+    related = await memory_curator_service.apply_memory_curator_change_set(
+        MemoryCuratorApplyRequest(
+            context=_context(),
+            confirmed=True,
+            operations=[MemoryCuratorOperation(
+                action="update",
+                scope_type="thread",
+                scope_id="curator-thread",
+                memory_id=thread_memory["id"],
+                expected_updated_at=thread_memory["updated_at"],
+                content=thread_memory["content"],
+                override_targets=[{
+                    "memory_id": global_memory["id"],
+                    "expected_updated_at": global_memory["updated_at"],
+                }],
+            )],
+        )
+    )
+
+    assert related["changed_memories"][0]["overrides"][0]["id"] == global_memory["id"]
+    assert related["changed_memories"][0]["updated_at"] != thread_memory["updated_at"]
+    index_mock.assert_not_awaited()
+    delete_vectors.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_curator_rejects_duplicate_targets_and_override_cycles(curator_sessionmaker):
+    await _workspace(curator_sessionmaker)
+    created = []
+    for content in ("Preference A.", "Preference B."):
+        result = await memory_curator_service.apply_memory_curator_change_set(
+            MemoryCuratorApplyRequest(
+                context=_context(),
+                confirmed=True,
+                operations=[MemoryCuratorOperation(
+                    action="create",
+                    scope_type="thread",
+                    scope_id="curator-thread",
+                    content=content,
+                )],
+            )
+        )
+        created.append(result["changed_memories"][0])
+    first, second = created
+    target = {
+        "memory_id": second["id"],
+        "expected_updated_at": second["updated_at"],
+    }
+    with pytest.raises(memory_curator_service.MemoryCuratorError, match="duplicates"):
+        await memory_curator_service.apply_memory_curator_change_set(
+            MemoryCuratorApplyRequest(
+                context=_context(),
+                confirmed=True,
+                operations=[MemoryCuratorOperation(
+                    action="update",
+                    scope_type="thread",
+                    scope_id="curator-thread",
+                    memory_id=first["id"],
+                    expected_updated_at=first["updated_at"],
+                    content=first["content"],
+                    override_targets=[target, target],
+                )],
+            )
+        )
+
+    first_updated = await memory_curator_service.apply_memory_curator_change_set(
+        MemoryCuratorApplyRequest(
+            context=_context(),
+            confirmed=True,
+            operations=[MemoryCuratorOperation(
+                action="update",
+                scope_type="thread",
+                scope_id="curator-thread",
+                memory_id=first["id"],
+                expected_updated_at=first["updated_at"],
+                content=first["content"],
+                override_targets=[target],
+            )],
+        )
+    )
+    first = first_updated["changed_memories"][0]
+    with pytest.raises(memory_curator_service.MemoryCuratorError, match="cycle"):
+        await memory_curator_service.apply_memory_curator_change_set(
+            MemoryCuratorApplyRequest(
+                context=_context(),
+                confirmed=True,
+                operations=[MemoryCuratorOperation(
+                    action="update",
+                    scope_type="thread",
+                    scope_id="curator-thread",
+                    memory_id=second["id"],
+                    expected_updated_at=second["updated_at"],
+                    content=second["content"],
+                    override_targets=[{
+                        "memory_id": first["id"],
+                        "expected_updated_at": first["updated_at"],
+                    }],
                 )],
             )
         )
@@ -185,7 +331,6 @@ async def test_vector_cleanup_failure_preserves_canonical_memory(
                 action="create",
                 scope_type="thread",
                 scope_id="curator-thread",
-                memory_type="semantic",
                 content="Keep this original content.",
             )],
         )
@@ -208,7 +353,6 @@ async def test_vector_cleanup_failure_preserves_canonical_memory(
                     scope_id="curator-thread",
                     memory_id=memory["id"],
                     expected_updated_at=memory["updated_at"],
-                    memory_type="semantic",
                     content="Do not persist this change.",
                 )],
             )

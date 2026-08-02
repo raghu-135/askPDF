@@ -188,11 +188,7 @@ class WeaviateAdapter:
                 ("memory_id", wvc.config.DataType.TEXT),
                 ("scope_type", wvc.config.DataType.TEXT),
                 ("scope_id", wvc.config.DataType.TEXT),
-                ("memory_type", wvc.config.DataType.TEXT),
-                ("status", wvc.config.DataType.TEXT),
-                ("visibility", wvc.config.DataType.TEXT),
                 ("content", wvc.config.DataType.TEXT),
-                ("summary", wvc.config.DataType.TEXT),
                 ("metadata_json", wvc.config.DataType.TEXT),
                 ("created_at", wvc.config.DataType.TEXT),
                 ("updated_at", wvc.config.DataType.TEXT),
@@ -590,13 +586,9 @@ class WeaviateAdapter:
         memory_id: str,
         scope_type: str,
         scope_id: str,
-        memory_type: str,
         content: str,
         embedding: List[float],
         embedding_model: str,
-        summary: str = "",
-        status: str = "active",
-        visibility: str = "private",
         metadata: Optional[Dict[str, Any]] = None,
         created_at: Optional[str] = None,
         updated_at: Optional[str] = None,
@@ -636,11 +628,7 @@ class WeaviateAdapter:
                         "memory_id": memory_id,
                         "scope_type": scope_type,
                         "scope_id": scope_id,
-                        "memory_type": memory_type,
-                        "status": status,
-                        "visibility": visibility,
                         "content": content,
-                        "summary": summary or "",
                         "metadata_json": _metadata_json(metadata or {}),
                         "created_at": created_at or "",
                         "updated_at": updated_at or "",
@@ -655,6 +643,7 @@ class WeaviateAdapter:
         query_vector: List[float],
         embedding_model: str,
         scope_filters: List[Dict[str, str]],
+        excluded_memory_ids: Optional[List[str]] = None,
         limit: int = 10,
         query_text: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -667,7 +656,7 @@ class WeaviateAdapter:
             return []
 
         col = await self.collection_manager.get_collection(CollectionNames.MEMORY, embedding_model)
-        filt = wvc.query.Filter.by_property("status").equal("active")
+        filt = None
         scope_filter = None
         for scope in scope_filters:
             current = (
@@ -676,7 +665,15 @@ class WeaviateAdapter:
             )
             scope_filter = current if scope_filter is None else scope_filter | current
         if scope_filter is not None:
-            filt = filt & scope_filter
+            filt = scope_filter
+        excluded_object_ids = [
+            str(uuid.uuid5(uuid.NAMESPACE_URL, f"askpdf:memory:{embedding_model}:{memory_id}"))
+            for memory_id in (excluded_memory_ids or [])
+            if memory_id
+        ]
+        if excluded_object_ids:
+            exclusion = wvc.query.Filter.by_id().contains_none(excluded_object_ids)
+            filt = exclusion if filt is None else filt & exclusion
 
         kwargs = {
             "filters": filt,
@@ -710,11 +707,7 @@ class WeaviateAdapter:
                     "memory_id": p.get("memory_id"),
                     "scope_type": p.get("scope_type"),
                     "scope_id": p.get("scope_id"),
-                    "memory_type": p.get("memory_type"),
-                    "status": p.get("status"),
-                    "visibility": p.get("visibility"),
                     "content": p.get("content", ""),
-                    "summary": p.get("summary", ""),
                     "metadata": _parse_metadata(p.get("metadata_json")),
                     "created_at": p.get("created_at"),
                     "updated_at": p.get("updated_at"),

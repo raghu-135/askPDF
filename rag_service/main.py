@@ -48,19 +48,17 @@ from app.db import ensure_default_project
 from app.db.connection_sqlmodel import init_db, close_db
 from app.db.vector import close_vector_db, get_vector_db
 from app.services.memory_service import (
-    hard_delete_expired_memories,
     retry_pending_memory_indexes,
 )
 
 
 async def _memory_maintenance_loop(stop_event: asyncio.Event) -> None:
-    """Incrementally clean expired rows and retry only pending/failed indexes."""
+    """Incrementally retry pending and failed memory indexes."""
 
     interval = max(30, int(os.environ.get("MEMORY_MAINTENANCE_INTERVAL_SECONDS", "300")))
     batch_size = max(1, min(500, int(os.environ.get("MEMORY_MAINTENANCE_BATCH_SIZE", "100"))))
     while not stop_event.is_set():
         try:
-            await hard_delete_expired_memories(limit=batch_size)
             await retry_pending_memory_indexes(limit=batch_size)
         except Exception:
             logger.exception("Incremental memory maintenance failed")

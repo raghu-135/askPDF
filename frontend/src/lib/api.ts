@@ -266,6 +266,7 @@ export interface ProjectLifecycleSummary {
   memory_count: number;
   project_memory_count: number;
   thread_memory_count: number;
+  memory_override_count: number;
   annotation_count: number;
   agent_run_count: number;
   active_run_count: number;
@@ -311,15 +312,20 @@ const mapProject = (raw: RawProject): Project => ({
 });
 
 export type MemoryScopeType = 'user' | 'project' | 'thread';
-export type MemoryType = 'semantic' | 'episodic' | 'procedural';
+
+export interface MemoryOverrideRef {
+  id: string;
+  scope_type: MemoryScopeType;
+  scope_id: string;
+  content: string;
+  updated_at?: string | null;
+}
 
 export interface MemoryRecord {
   id: string;
   scope_type: MemoryScopeType;
   scope_id: string;
-  memory_type: MemoryType;
   content: string;
-  summary?: string | null;
   embedding_model: string;
   content_hash?: string;
   index_status: 'pending' | 'indexing' | 'indexed' | 'failed' | string;
@@ -328,28 +334,10 @@ export interface MemoryRecord {
   index_error?: string | null;
   source_refs?: Record<string, any>;
   source_refs_json?: Record<string, any>;
-  confidence: number;
-  status: string;
-  visibility: string;
-  created_by?: string | null;
-  expires_at?: string | null;
-  fork_origin?: Record<string, any> | null;
-  fork_origin_json?: Record<string, any> | null;
+  overrides: MemoryOverrideRef[];
+  overridden_by: MemoryOverrideRef[];
   created_at?: string | null;
   updated_at?: string | null;
-}
-
-export interface MemoryCreateInput {
-  scope_type: MemoryScopeType;
-  scope_id: string;
-  memory_type: MemoryType;
-  content: string;
-  summary?: string;
-  source_refs_json?: Record<string, any>;
-  confidence?: number;
-  visibility?: string;
-  created_by?: string;
-  expires_at?: string | null;
 }
 
 export type MemoryCuratorMode = 'create' | 'edit' | 'conversation_review';
@@ -373,11 +361,25 @@ export interface MemoryCuratorOperation {
   scope_id?: string;
   memory_id?: string;
   expected_updated_at?: string;
-  memory_type?: MemoryType;
   content?: string;
-  summary?: string;
-  confidence?: number;
-  source_refs_json?: Record<string, any>;
+  override_targets?: Array<{
+    memory_id: string;
+    expected_updated_at: string;
+  }>;
+}
+
+export interface EffectiveMemoryResponse {
+  context: { type: 'global' | 'project' | 'thread'; id: string; project_id?: string | null };
+  policy: {
+    requested_scopes: MemoryScopeType[];
+    searched_scopes: Array<{ scope_type: MemoryScopeType; scope_id: string }>;
+    skipped_scopes: Array<{ scope_type: MemoryScopeType; reason: string }>;
+  };
+  memories: MemoryRecord[];
+  applied_overrides: Array<{ overriding_memory_id: string; overridden_memory_id: string }>;
+  suppressed_memory_ids: string[];
+  unavailable_memory_count: number;
+  truncated: boolean;
 }
 
 export interface MemoryReviewCursor {
@@ -1067,12 +1069,18 @@ export async function listMemories(
   return res.json();
 }
 
-export async function createMemory(input: MemoryCreateInput): Promise<MemoryRecord> {
-  const res = await fetch(`${API_BASE}/api/memories`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
+export async function listEffectiveMemories(input: {
+  threadId?: string | null;
+  projectId?: string | null;
+  limit?: number;
+}): Promise<EffectiveMemoryResponse> {
+  const limit = input.limit ?? 500;
+  const path = input.threadId
+    ? `/api/threads/${encodeURIComponent(input.threadId)}/memories/effective`
+    : input.projectId
+      ? `/api/projects/${encodeURIComponent(input.projectId)}/memories/effective`
+      : '/api/memories/effective';
+  const res = await fetch(`${API_BASE}${path}?limit=${encodeURIComponent(String(limit))}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

@@ -14,9 +14,6 @@ from app.db.models_sqlmodel import (
     WorkflowVisibility,
     AgentRunStatus,
     MemoryScopeType,
-    MemoryStatus,
-    MemoryType,
-    MemoryVisibility,
     Project,
     Thread,
     File,
@@ -28,6 +25,7 @@ from app.db.models_sqlmodel import (
     AgentRun,
     Memory,
     MemoryEvent,
+    MemoryOverride,
 )
 from app.db.enums import (
     EmbeddingReadinessStatus,
@@ -564,16 +562,6 @@ async def delete_memories_for_scope(**kwargs):
     return await get_memory_repo().delete_memories_for_scope(**kwargs)
 
 
-async def delete_expired_memories(**kwargs):
-    """Hard-delete expired durable memories."""
-    return await get_memory_repo().delete_expired_memories(**kwargs)
-
-
-async def list_expired_memories(**kwargs):
-    """List expired durable memories."""
-    return await get_memory_repo().list_expired_memories(**kwargs)
-
-
 async def mark_memory_indexing(memory_id: str):
     return await get_memory_repo().mark_memory_indexing(memory_id)
 
@@ -599,9 +587,6 @@ __all__ = [
     "WorkflowVisibility",
     "AgentRunStatus",
     "MemoryScopeType",
-    "MemoryStatus",
-    "MemoryType",
-    "MemoryVisibility",
     "EmbeddingReadinessStatus",
     "FileStatusSection",
     "OperationResultStatus",
@@ -617,6 +602,7 @@ __all__ = [
     "AgentRun",
     "Memory",
     "MemoryEvent",
+    "MemoryOverride",
     # Config
     "init_db",
     # Status
@@ -688,6 +674,4 @@ __all__ = [
     "list_memories",
     "delete_memory",
     "delete_memories_for_scope",
-    "delete_expired_memories",
-    "list_expired_memories",
 ]

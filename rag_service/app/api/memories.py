@@ -4,13 +4,9 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.db import (
-    MemoryScopeType,
-)
 from app.models.requests import (
     MemoryCuratorApplyRequest,
     MemoryCuratorRespondRequest,
-    MemoryCreateRequest,
     MemorySearchRequest,
 )
 from app.services.memory_curator_service import (
@@ -19,12 +15,14 @@ from app.services.memory_curator_service import (
     MemoryCuratorModelUnavailableError,
     MemoryCuratorNotFoundError,
     apply_memory_curator_change_set,
-    memory_payload as curator_memory_payload,
     respond_to_memory_curator,
+)
+from app.services.effective_memory_service import (
+    memory_payload,
+    resolve_effective_memory_context,
 )
 from app.services.memory_service import (
     MemoryVectorCleanupError,
-    create_and_index_memory,
     hard_delete_memory,
     list_scope_memories,
     retry_memory_index,
@@ -34,36 +32,9 @@ from app.services.embedding_model_service import (
     EmbeddingModelResolutionError,
     EmbeddingModelUnavailableError,
 )
-from app.time_utils import iso_utc_z
 
 
 router = APIRouter(tags=["memories"])
-
-
-def _memory_payload(memory) -> Dict[str, Any]:
-    return {
-        "id": memory.id,
-        "scope_type": memory.scope_type,
-        "scope_id": memory.scope_id,
-        "memory_type": memory.memory_type,
-        "content": memory.content,
-        "summary": memory.summary,
-        "embedding_model": memory.embedding_model,
-        "content_hash": memory.content_hash,
-        "index_status": memory.index_status,
-        "index_attempts": memory.index_attempts,
-        "indexed_at": iso_utc_z(memory.indexed_at) if memory.indexed_at else None,
-        "index_error": memory.index_error,
-        "source_refs_json": memory.source_refs_json if isinstance(memory.source_refs_json, dict) else {},
-        "confidence": memory.confidence,
-        "status": memory.status,
-        "visibility": memory.visibility,
-        "created_by": memory.created_by,
-        "expires_at": iso_utc_z(memory.expires_at) if memory.expires_at else None,
-        "fork_origin_json": memory.fork_origin_json if isinstance(memory.fork_origin_json, dict) else None,
-        "created_at": iso_utc_z(memory.created_at) if memory.created_at else None,
-        "updated_at": iso_utc_z(memory.updated_at) if memory.updated_at else None,
-    }
 
 
 def _bad_request_from_value_error(exc: ValueError) -> HTTPException:
@@ -77,7 +48,7 @@ def _raise_curator_http(exc: Exception):
             detail={
                 "code": exc.code,
                 "message": str(exc),
-                "memories": [curator_memory_payload(memory) for memory in exc.memories],
+                "memories": [memory_payload(memory) for memory in exc.memories],
             },
         )
     if isinstance(exc, MemoryCuratorModelUnavailableError):
@@ -111,30 +82,47 @@ async def list_memories_endpoint(
     return {"memories": rows}
 
 
-@router.post("/memories")
-async def create_memory_endpoint(req: MemoryCreateRequest):
-    if req.scope_type not in {item.value for item in MemoryScopeType}:
-        raise HTTPException(status_code=400, detail="Invalid memory scope_type")
-    if not req.scope_id.strip() or not req.content.strip():
-        raise HTTPException(status_code=400, detail="scope_id and content are required")
+def _effective_response(result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in {"memory_records", "excluded_memory_ids"}
+    }
+
+
+@router.get("/memories/effective")
+async def global_effective_memories_endpoint(
+    limit: int = Query(default=500, ge=1, le=500),
+):
+    return _effective_response(await resolve_effective_memory_context(limit=limit))
+
+
+@router.get("/projects/{project_id}/memories/effective")
+async def project_effective_memories_endpoint(
+    project_id: str,
+    limit: int = Query(default=500, ge=1, le=500),
+):
     try:
-        memory = await create_and_index_memory(
-            scope_type=req.scope_type,
-            scope_id=req.scope_id,
-            memory_type=req.memory_type,
-            content=req.content,
-            summary=req.summary,
-            source_refs_json=req.source_refs_json,
-            confidence=req.confidence,
-            visibility=req.visibility,
-            created_by=req.created_by,
-            expires_at=req.expires_at,
-        )
-    except EmbeddingModelUnavailableError as exc:
-        raise HTTPException(status_code=409, detail={"code": "embedding_model_unavailable", "message": str(exc)}) from exc
-    except (ValueError, EmbeddingModelResolutionError) as exc:
-        raise _bad_request_from_value_error(exc) from exc
-    return _memory_payload(memory)
+        return _effective_response(await resolve_effective_memory_context(
+            project_id=project_id,
+            limit=limit,
+        ))
+    except EmbeddingModelResolutionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/threads/{thread_id}/memories/effective")
+async def thread_effective_memories_endpoint(
+    thread_id: str,
+    limit: int = Query(default=500, ge=1, le=500),
+):
+    try:
+        return _effective_response(await resolve_effective_memory_context(
+            thread_id=thread_id,
+            limit=limit,
+        ))
+    except EmbeddingModelResolutionError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete("/memories/{memory_id}")
@@ -196,4 +184,4 @@ async def retry_memory_index_endpoint(memory_id: str):
         raise HTTPException(status_code=409, detail={"code": "embedding_model_unavailable", "message": str(exc)}) from exc
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory not found")
-    return _memory_payload(memory)
+    return memory_payload(memory)

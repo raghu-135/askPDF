@@ -20,6 +20,7 @@ EXPECTED_MODEL_TABLES = {
     "files",
     "memories",
     "memory_events",
+    "memory_overrides",
     "project_files",
     "thread_document_annotations",
     "thread_files",
@@ -49,7 +50,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
 
     cleanup = scripts.get_revision("c9e6a1b4d3f8")
 
-    assert scripts.get_heads() == ["1c7d9e4a2b6f"]
+    assert scripts.get_heads() == ["3a8d7c5e1f2b"]
     assert scripts.get_revision("a7c4e9f2b1d6") is not None
     assert scripts.get_revision("b8d5f0a3c2e7") is not None
     assert cleanup is not None
@@ -58,6 +59,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     assert scripts.get_revision("f4b8c2d7e1a9").down_revision == "e2c7a9f4b1d6"
     assert scripts.get_revision("d9a4e7c2b1f6").down_revision == "f4b8c2d7e1a9"
     assert scripts.get_revision("1c7d9e4a2b6f").down_revision == "d9a4e7c2b1f6"
+    assert scripts.get_revision("3a8d7c5e1f2b").down_revision == "1c7d9e4a2b6f"
 
 
 def test_project_files_has_composite_key_and_cascading_foreign_keys():
@@ -138,13 +140,27 @@ def test_memory_models_define_hardening_check_constraints():
     }
     assert {
         "ck_memories_scope_type",
-        "ck_memories_memory_type",
-        "ck_memories_status",
-        "ck_memories_visibility",
-        "ck_memories_confidence",
         "ck_memories_scope_id_nonempty",
         "ck_memories_content_nonempty",
     }.issubset(memory_constraints)
+
+
+def test_memory_overrides_define_directional_key_and_cascades():
+    table = models_sqlmodel.MemoryOverride.__table__
+    assert [column.name for column in table.primary_key.columns] == [
+        "overriding_memory_id",
+        "overridden_memory_id",
+    ]
+    assert "ck_memory_overrides_not_self" in {
+        constraint.name for constraint in table.constraints if constraint.name
+    }
+    assert "ix_memory_overrides_target" in {index.name for index in table.indexes}
+    assert {
+        element.parent.name
+        for constraint in table.foreign_key_constraints
+        for element in constraint.elements
+        if constraint.ondelete == "CASCADE"
+    } == {"overriding_memory_id", "overridden_memory_id"}
 
 
 @pytest.mark.asyncio

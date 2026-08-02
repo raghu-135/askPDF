@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import delete, or_
+from sqlalchemy import delete
 from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
-from app.db.enums import MemoryScopeType, MemoryStatus, MemoryType, MemoryVisibility
-from app.db.models_sqlmodel import Memory, MemoryEvent
+from app.db.enums import MemoryScopeType
+from app.db.models_sqlmodel import Memory, MemoryEvent, MemoryOverride
 from app.db.project_activity import touch_project_activity
 from app.time_utils import utc_now
 
 
 VALID_MEMORY_SCOPE_TYPES = {item.value for item in MemoryScopeType}
-VALID_MEMORY_TYPES = {item.value for item in MemoryType}
-VALID_MEMORY_STATUSES = {item.value for item in MemoryStatus}
-VALID_MEMORY_VISIBILITIES = {item.value for item in MemoryVisibility}
 
 
 def _require_nonempty(value: str, field_name: str) -> str:
@@ -34,16 +30,6 @@ def _require_enum(value: str, field_name: str, allowed: set[str]) -> str:
     if normalized not in allowed:
         raise ValueError(f"invalid {field_name}: {normalized}")
     return normalized
-
-
-def _normalize_confidence(value: float) -> float:
-    try:
-        confidence = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("confidence must be a number between 0 and 1") from exc
-    if confidence < 0 or confidence > 1:
-        raise ValueError("confidence must be between 0 and 1")
-    return confidence
 
 
 class MemoryRepository:
@@ -62,40 +48,24 @@ class MemoryRepository:
         *,
         scope_type: str,
         scope_id: str,
-        memory_type: str,
         content: str,
         embedding_model: str,
         content_hash: str,
-        summary: str = "",
         source_refs_json: Optional[Dict[str, Any]] = None,
-        confidence: float = 1.0,
-        visibility: str = "private",
-        created_by: Optional[str] = None,
-        expires_at: Optional[datetime] = None,
-        fork_origin_json: Optional[Dict[str, Any]] = None,
+        actor_id: Optional[str] = None,
         event_payload: Optional[Dict[str, Any]] = None,
     ) -> Memory:
         scope_type = _require_enum(scope_type, "scope_type", VALID_MEMORY_SCOPE_TYPES)
         scope_id = _require_nonempty(scope_id, "scope_id")
-        memory_type = _require_enum(memory_type, "memory_type", VALID_MEMORY_TYPES)
         content = _require_nonempty(content, "content")
-        visibility = _require_enum(visibility, "visibility", VALID_MEMORY_VISIBILITIES)
-        confidence = _normalize_confidence(confidence)
         memory = Memory(
             scope_type=scope_type,
             scope_id=scope_id,
-            memory_type=memory_type,
             content=content,
-            summary=summary or "",
             embedding_model=_require_nonempty(embedding_model, "embedding_model"),
             content_hash=_require_nonempty(content_hash, "content_hash"),
             index_status="pending",
             source_refs_json=source_refs_json or {},
-            confidence=confidence,
-            visibility=visibility,
-            created_by=created_by,
-            expires_at=expires_at,
-            fork_origin_json=fork_origin_json,
             created_at=utc_now(),
         )
         session = await self._get_session()
@@ -106,7 +76,7 @@ class MemoryRepository:
                 MemoryEvent(
                     memory_id=memory.id,
                     event_type="created",
-                    actor_id=created_by,
+                    actor_id=actor_id,
                     payload_json=event_payload or {},
                     created_at=utc_now(),
                 )
@@ -131,7 +101,6 @@ class MemoryRepository:
         *,
         scope_type: Optional[str] = None,
         scope_id: Optional[str] = None,
-        status: str = MemoryStatus.ACTIVE.value,
         limit: int = 100,
     ) -> list[Memory]:
         bounded_limit = max(1, min(int(limit), 500))
@@ -139,8 +108,6 @@ class MemoryRepository:
             scope_type = _require_enum(scope_type, "scope_type", VALID_MEMORY_SCOPE_TYPES)
         if scope_id is not None:
             scope_id = _require_nonempty(scope_id, "scope_id")
-        if status:
-            status = _require_enum(status, "status", VALID_MEMORY_STATUSES)
         session = await self._get_session()
         async with session.begin():
             query = select(Memory)
@@ -148,11 +115,6 @@ class MemoryRepository:
                 query = query.where(Memory.scope_type == scope_type)
             if scope_id is not None:
                 query = query.where(Memory.scope_id == scope_id)
-            if status:
-                query = query.where(Memory.status == status)
-            query = query.where(
-                or_(Memory.expires_at.is_(None), Memory.expires_at > utc_now())
-            )
             result = await session.execute(
                 query.order_by(Memory.updated_at.desc().nullslast(), Memory.created_at.desc()).limit(bounded_limit)
             )
@@ -204,11 +166,8 @@ class MemoryRepository:
         self,
         memory_id: str,
         *,
-        memory_type: str,
         content: str,
         content_hash: str,
-        summary: str = "",
-        confidence: float = 1.0,
         source_refs_json: Optional[Dict[str, Any]] = None,
         actor_id: Optional[str] = None,
         event_type: str = "updated",
@@ -218,21 +177,16 @@ class MemoryRepository:
         """Update one canonical row, reusing an injected transaction when present."""
 
         memory_id = _require_nonempty(memory_id, "memory_id")
-        memory_type = _require_enum(memory_type, "memory_type", VALID_MEMORY_TYPES)
         content = _require_nonempty(content, "content")
         content_hash = _require_nonempty(content_hash, "content_hash")
-        confidence = _normalize_confidence(confidence)
 
         async def apply(session: AsyncSession) -> Optional[Memory]:
             memory = await session.get(Memory, memory_id)
             if memory is None:
                 return None
             now = updated_at or utc_now()
-            memory.memory_type = memory_type
             memory.content = content
-            memory.summary = summary or ""
             memory.content_hash = content_hash
-            memory.confidence = confidence
             memory.source_refs_json = {
                 **dict(memory.source_refs_json or {}),
                 **dict(source_refs_json or {}),
@@ -266,9 +220,7 @@ class MemoryRepository:
             result = await session.execute(
                 select(Memory)
                 .where(
-                    Memory.status == MemoryStatus.ACTIVE.value,
                     Memory.index_status.in_(("pending", "failed")),
-                    or_(Memory.expires_at.is_(None), Memory.expires_at > utc_now()),
                 )
                 .order_by(Memory.updated_at.asc().nullsfirst(), Memory.created_at.asc())
                 .limit(bounded_limit)
@@ -309,30 +261,53 @@ class MemoryRepository:
             await session.execute(delete(Memory).where(Memory.id.in_(memory_ids)))
             return memory_ids
 
-    async def delete_expired_memories(self, *, now: Optional[datetime] = None) -> list[Memory]:
-        cutoff = now or utc_now()
+    async def list_override_edges(self, *, memory_ids: Optional[list[str]] = None) -> list[MemoryOverride]:
         session = await self._get_session()
         async with session.begin():
-            result = await session.execute(
-                select(Memory).where(Memory.expires_at.is_not(None), Memory.expires_at <= cutoff)
-            )
-            memories = list(result.scalars().all())
-            if not memories:
-                return []
-            memory_ids = [memory.id for memory in memories]
-            await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id.in_(memory_ids)))
-            await session.execute(delete(Memory).where(Memory.id.in_(memory_ids)))
-            return memories
-
-    async def list_expired_memories(self, *, now: Optional[datetime] = None, limit: int = 500) -> list[Memory]:
-        cutoff = now or utc_now()
-        bounded_limit = max(1, min(int(limit), 500))
-        session = await self._get_session()
-        async with session.begin():
-            result = await session.execute(
-                select(Memory)
-                .where(Memory.expires_at.is_not(None), Memory.expires_at <= cutoff)
-                .order_by(Memory.expires_at.asc())
-                .limit(bounded_limit)
-            )
+            query = select(MemoryOverride)
+            if memory_ids is not None:
+                if not memory_ids:
+                    return []
+                query = query.where(
+                    (MemoryOverride.overriding_memory_id.in_(memory_ids))
+                    | (MemoryOverride.overridden_memory_id.in_(memory_ids))
+                )
+            result = await session.execute(query.order_by(MemoryOverride.created_at))
             return list(result.scalars().all())
+
+    async def replace_overrides(
+        self,
+        memory_id: str,
+        target_ids: list[str],
+        *,
+        actor_id: Optional[str] = None,
+        updated_at=None,
+    ) -> None:
+        """Replace all outgoing override edges in an existing transaction."""
+
+        if self._session is None:
+            raise RuntimeError("replace_overrides requires an injected transaction")
+        memory_id = _require_nonempty(memory_id, "memory_id")
+        normalized_targets = sorted({_require_nonempty(item, "overridden_memory_id") for item in target_ids})
+        memory = await self._session.get(Memory, memory_id)
+        if memory is None:
+            raise ValueError(f"memory not found: {memory_id}")
+        await self._session.execute(
+            delete(MemoryOverride).where(MemoryOverride.overriding_memory_id == memory_id)
+        )
+        now = updated_at or utc_now()
+        memory.updated_at = now
+        for target_id in normalized_targets:
+            self._session.add(MemoryOverride(
+                overriding_memory_id=memory_id,
+                overridden_memory_id=target_id,
+                created_at=now,
+            ))
+        self._session.add(MemoryEvent(
+            memory_id=memory_id,
+            event_type="override_set",
+            actor_id=actor_id,
+            payload_json={"overridden_memory_ids": normalized_targets},
+            created_at=now,
+        ))
+        await self._session.flush()

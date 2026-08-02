@@ -30,14 +30,13 @@ test('memory scopes differ between home and thread contexts', () => {
   assert.deepEqual(memoryScopesForContext(true), ['thread', 'project', 'user']);
 });
 
-test('memory filtering searches content, summary, and type', () => {
+test('memory filtering searches content and related memories', () => {
   const memories = [
-    { content: 'Use concise answers', summary: '', memory_type: 'semantic' },
-    { content: 'Visited Chicago', summary: 'Travel history', memory_type: 'episodic' },
+    { content: 'Use concise answers', overrides: [], overridden_by: [] },
+    { content: 'Visited Chicago', overrides: [{ content: 'Travel history' }], overridden_by: [] },
   ];
   assert.deepEqual(filterMemoryRecords(memories, 'concise'), [memories[0]]);
   assert.deepEqual(filterMemoryRecords(memories, 'travel'), [memories[1]]);
-  assert.deepEqual(filterMemoryRecords(memories, 'episodic'), [memories[1]]);
   assert.deepEqual(filterMemoryRecords(memories, '  '), memories);
 });
 

@@ -98,23 +98,6 @@ class ProjectCloneRequest(BaseModel):
     include_threads: bool = False
 
 
-class MemoryCreateRequest(BaseModel):
-    """Request body for creating a canonical memory."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    scope_type: str
-    scope_id: str
-    memory_type: str = "semantic"
-    content: str
-    summary: str = ""
-    source_refs_json: Dict[str, Any] = Field(default_factory=dict)
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    visibility: str = "private"
-    created_by: Optional[str] = None
-    expires_at: Optional[datetime] = None
-
-
 class MemorySearchRequest(BaseModel):
     """Request body for read-only scoped memory retrieval."""
 
@@ -152,6 +135,13 @@ class MemoryCuratorRespondRequest(BaseModel):
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
 
 
+class MemoryOverrideTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str = Field(min_length=1)
+    expected_updated_at: str = Field(min_length=1)
+
+
 class MemoryCuratorOperation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -160,11 +150,8 @@ class MemoryCuratorOperation(BaseModel):
     scope_id: Optional[str] = None
     memory_id: Optional[str] = None
     expected_updated_at: Optional[str] = None
-    memory_type: Optional[Literal["semantic", "episodic", "procedural"]] = None
     content: Optional[str] = Field(default=None, max_length=12000)
-    summary: Optional[str] = Field(default=None, max_length=4000)
-    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
-    source_refs_json: Dict[str, Any] = Field(default_factory=dict)
+    override_targets: List[MemoryOverrideTarget] = Field(default_factory=list, max_length=20)
 
 
 class MemoryReviewCursor(BaseModel):

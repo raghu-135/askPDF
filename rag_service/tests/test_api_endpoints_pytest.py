@@ -255,14 +255,14 @@ class TestThreadEndpoints:
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "embedding_model_unavailable"
 
-    def test_memory_create_contract(self, client):
+    def test_direct_memory_create_contract_is_retired(self, client):
         project_response = client.post(
             "/api/projects",
             json={"name": "Memory Project", "embedding_model": "BAAI/bge-m3"},
         )
         project_id = project_response.json()["id"]
 
-        memory_response = client.post(
+        response = client.post(
             "/api/memories",
             json={
                 "scope_type": "project",
@@ -272,18 +272,16 @@ class TestThreadEndpoints:
                 "confidence": 0.9,
             },
         )
-        assert memory_response.status_code == 200
-        memory = memory_response.json()
-        assert memory["status"] == "active"
+        assert response.status_code == 405
 
-        archive_response = client.put(
-            f"/api/memories/{memory['id']}/status",
-            json={"status": "archived", "actor_id": "tester"},
+        effective_response = client.get(
+            f"/api/projects/{project_id}/memories/effective"
         )
-        assert archive_response.status_code == 404
+        assert effective_response.status_code == 200
+        assert effective_response.json()["memories"] == []
 
     def test_memory_endpoints_reject_invalid_contract_values(self, client):
-        invalid_memory = client.post(
+        retired_direct_create = client.post(
             "/api/memories",
             json={
                 "scope_type": "project",
@@ -292,7 +290,7 @@ class TestThreadEndpoints:
                 "content": "Invalid memory type.",
             },
         )
-        assert invalid_memory.status_code == 400
+        assert retired_direct_create.status_code == 405
 
         unconfirmed_curator_apply = client.post(
             "/api/memory-curator/apply",
@@ -310,29 +308,8 @@ class TestThreadEndpoints:
         assert retired_candidate_endpoint.status_code == 404
 
 
-    def test_memory_delete_endpoints_hard_delete_records(self, client):
-        thread_response = client.post(
-            "/api/threads",
-            json={"name": "Memory delete thread"},
-        )
-        thread_id = thread_response.json()["id"]
-        memory_response = client.post(
-            "/api/memories",
-            json={
-                "scope_type": "thread",
-                "scope_id": thread_id,
-                "memory_type": "semantic",
-                "content": "Delete this memory through the API.",
-            },
-        )
-        assert memory_response.status_code == 200
-        memory_id = memory_response.json()["id"]
-
-        delete_memory_response = client.delete(f"/api/memories/{memory_id}")
-        assert delete_memory_response.status_code == 200
-        assert delete_memory_response.json()["status"] == "deleted"
-
-        missing_memory_response = client.delete(f"/api/memories/{memory_id}")
+    def test_memory_delete_endpoint_reports_missing_record(self, client):
+        missing_memory_response = client.delete("/api/memories/missing-memory")
         assert missing_memory_response.status_code == 404
 
 

@@ -24,8 +24,8 @@ export const filterMemoryRecords = (
   if (!normalized) return [...memories];
   return memories.filter((memory) => (
     memory.content.toLowerCase().includes(normalized)
-    || String(memory.summary || '').toLowerCase().includes(normalized)
-    || memory.memory_type.toLowerCase().includes(normalized)
+    || memory.overrides?.some((item) => item.content.toLowerCase().includes(normalized))
+    || memory.overridden_by?.some((item) => item.content.toLowerCase().includes(normalized))
   ));
 };
 

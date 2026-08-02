@@ -119,25 +119,3 @@ class MemoryScopeType(str, Enum):
     USER = "user"
     PROJECT = "project"
     THREAD = "thread"
-
-
-class MemoryType(str, Enum):
-    """Durable memory content categories."""
-
-    SEMANTIC = "semantic"
-    EPISODIC = "episodic"
-    PROCEDURAL = "procedural"
-
-
-class MemoryStatus(str, Enum):
-    """Durable memory lifecycle statuses."""
-
-    ACTIVE = "active"
-
-
-class MemoryVisibility(str, Enum):
-    """Durable memory visibility boundaries."""
-
-    PRIVATE = "private"
-    PROJECT = "project"
-    INTERNAL = "internal"
