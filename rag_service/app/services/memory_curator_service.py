@@ -8,7 +8,8 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Sequence
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 from sqlalchemy import and_, delete, func, or_
 from sqlalchemy.future import select
 
@@ -20,7 +21,19 @@ from app.db.models_sqlmodel import ChatTurn, Memory, MemoryEvent, MemoryOverride
 from app.db.repositories.memory_repo_sqlmodel import MemoryRepository
 from app.db.project_activity import touch_project_activity
 from app.db.vector import get_vector_db
-from app.models.llm_server_client import check_chat_model_ready, get_embedding_model, get_llm
+from app.models.llm_server_client import (
+    check_chat_model_ready,
+    check_model_supports_tools,
+    get_llm,
+)
+from app.models.memory_tools import (
+    MEMORY_PROPOSE,
+    MEMORY_READ_STORED,
+    MemoryChangeIntent,
+    MemoryGetInput,
+    MemoryPrepareChangeInput,
+    MemorySearchInput,
+)
 from app.models.requests import (
     MemoryCuratorApplyRequest,
     MemoryCuratorContext,
@@ -37,11 +50,15 @@ from app.services.memory_policy import (
     normalize_project_memory_settings,
     normalize_thread_memory_settings,
 )
-from app.services.memory_service import (
-    _rank_fuse_memory_hits,
-    index_memory_record,
-    memory_content_hash,
+from app.services.memory_tool_service import (
+    MemoryToolError,
+    MemoryToolNotFoundError,
+    build_memory_tool_context,
+    get_memory_tool,
+    prepare_memory_change,
+    search_memory_tool,
 )
+from app.services.memory_service import index_memory_record, memory_content_hash
 from app.services.effective_memory_service import (
     serialize_memories_with_relationships,
 )
@@ -52,7 +69,7 @@ logger = logging.getLogger(__name__)
 
 MAX_CURATOR_MEMORIES = 40
 MAX_REVIEW_TURNS = 20
-VALID_ACTIONS = {"create", "update", "delete", "noop"}
+MAX_CURATOR_TOOL_CALLS = 4
 
 
 class MemoryCuratorError(ValueError):
@@ -196,157 +213,6 @@ async def _review_batch(thread: Thread | None) -> Dict[str, Any] | None:
     }
 
 
-async def _recent_scope_memories(scopes: Sequence[Dict[str, str]]) -> List[Memory]:
-    clauses = [
-        and_(Memory.scope_type == scope["scope_type"], Memory.scope_id == scope["scope_id"])
-        for scope in scopes
-    ]
-    if not clauses:
-        return []
-    async with async_session_maker() as session:
-        result = await session.execute(
-            select(Memory)
-            .where(
-                or_(*clauses),
-            )
-            .order_by(Memory.updated_at.desc().nullslast(), Memory.created_at.desc())
-            .limit(MAX_CURATOR_MEMORIES)
-        )
-        return list(result.scalars().all())
-
-
-async def _curator_memory_context(
-    scopes: Sequence[Dict[str, str]],
-    query: str,
-    selected_memory_id: str | None,
-) -> tuple[List[Memory], List[Dict[str, Any]]]:
-    recent = await _recent_scope_memories(scopes)
-    by_id = {memory.id: memory for memory in recent}
-    if selected_memory_id and selected_memory_id not in by_id:
-        async with async_session_maker() as session:
-            selected = await session.get(Memory, selected_memory_id)
-        if selected is None:
-            raise MemoryCuratorNotFoundError("Memory not found")
-        allowed = {(scope["scope_type"], scope["scope_id"]) for scope in scopes}
-        if (selected.scope_type, selected.scope_id) not in allowed:
-            raise MemoryCuratorError("Selected memory is outside the curator workspace")
-        by_id[selected.id] = selected
-
-    readiness: List[Dict[str, Any]] = []
-    ranked_groups: List[tuple[str, List[Dict[str, Any]]]] = []
-    scopes_by_model: Dict[str, List[Dict[str, str]]] = {}
-    for scope in scopes:
-        model = await resolve_scope_embedding_model(scope["scope_type"], scope["scope_id"])
-        scopes_by_model.setdefault(model, []).append(scope)
-    if query.strip():
-        for model, model_scopes in scopes_by_model.items():
-            try:
-                await require_embedding_model_ready(model)
-                readiness.append({
-                    "embedding_model": model,
-                    "scopes": model_scopes,
-                    "ready": True,
-                    "degraded": False,
-                })
-                vector = await invoke_with_retry(get_embedding_model(model).aembed_query, query)
-                hits = await get_vector_db().search_memory(
-                    query_vector=vector,
-                    embedding_model=model,
-                    scope_filters=model_scopes,
-                    limit=MAX_CURATOR_MEMORIES,
-                    query_text=query,
-                )
-                ranked_groups.append((model, hits))
-            except Exception as exc:
-                readiness.append({
-                    "embedding_model": model,
-                    "scopes": model_scopes,
-                    "ready": False,
-                    "degraded": True,
-                    "reason": str(exc)[:300],
-                })
-
-    ordered: List[Memory] = []
-    if selected_memory_id and selected_memory_id in by_id:
-        ordered.append(by_id[selected_memory_id])
-    normalized_query = " ".join(query.casefold().split())
-    for memory in recent:
-        normalized_content = " ".join(memory.content.casefold().split())
-        if normalized_query and normalized_query == normalized_content and memory not in ordered:
-            ordered.append(memory)
-    for hit in _rank_fuse_memory_hits(ranked_groups):
-        memory_id = str(hit.get("memory_id") or "")
-        memory = by_id.get(memory_id)
-        if memory is None and memory_id:
-            async with async_session_maker() as session:
-                memory = await session.get(Memory, memory_id)
-            if memory is not None:
-                by_id[memory.id] = memory
-        if memory is not None and memory not in ordered:
-            ordered.append(memory)
-    for memory in recent:
-        if memory not in ordered:
-            ordered.append(memory)
-    return ordered[:MAX_CURATOR_MEMORIES], readiness
-
-
-async def _relationship_context(memories: Sequence[Memory]) -> Dict[str, Dict[str, List[str]]]:
-    memory_ids = {memory.id for memory in memories}
-    result = {memory_id: {"overrides": [], "overridden_by": []} for memory_id in memory_ids}
-    if not memory_ids:
-        return result
-    async with async_session_maker() as session:
-        edges = list((await session.execute(
-            select(MemoryOverride).where(
-                or_(
-                    MemoryOverride.overriding_memory_id.in_(memory_ids),
-                    MemoryOverride.overridden_memory_id.in_(memory_ids),
-                )
-            )
-        )).scalars().all())
-    for edge in edges:
-        if edge.overriding_memory_id in result:
-            result[edge.overriding_memory_id]["overrides"].append(edge.overridden_memory_id)
-        if edge.overridden_memory_id in result:
-            result[edge.overridden_memory_id]["overridden_by"].append(edge.overriding_memory_id)
-    return result
-
-
-def _bounded_context_payload(
-    memories: Sequence[Memory],
-    *,
-    context_window: int,
-    relationships: Dict[str, Dict[str, List[str]]],
-) -> List[Dict[str, Any]]:
-    char_budget = max(1, int(context_window * 4 * 0.25))
-    used = 0
-    result = []
-    for memory in memories:
-        payload = {
-            "id": memory.id,
-            "scope_type": memory.scope_type,
-            "scope_id": memory.scope_id,
-            "content": memory.content,
-            "overrides_memory_ids": relationships.get(memory.id, {}).get("overrides", []),
-            "overridden_by_memory_ids": relationships.get(memory.id, {}).get("overridden_by", []),
-            "updated_at": iso_utc_z(memory.updated_at or memory.created_at),
-        }
-        remaining = char_budget - used
-        encoded = json.dumps(payload, ensure_ascii=True)
-        if len(encoded) > remaining:
-            overhead = len(encoded) - len(memory.content)
-            available_content = remaining - overhead
-            if available_content <= 0:
-                break
-            payload["content"] = memory.content[:available_content]
-            encoded = json.dumps(payload, ensure_ascii=True)
-        if used + len(encoded) > char_budget:
-            break
-        result.append(payload)
-        used += len(encoded)
-    return result
-
-
 def _consent_snapshot(thread: Thread | None, project: Project | None) -> Dict[str, Any]:
     thread_memory = normalize_thread_memory_settings(thread.settings if thread else {})
     project_memory = normalize_project_memory_settings(project.settings_json if project else {})
@@ -408,69 +274,81 @@ def _permission_only_choices(choices: Sequence[Dict[str, str]]) -> bool:
     )
 
 
-def _normalize_operation(
-    raw: Any,
-    *,
-    memory_lookup: Dict[str, Memory],
-    visible_scopes: set[tuple[str, str]],
-) -> Dict[str, Any] | None:
+def _intent_from_raw(raw: Any) -> MemoryChangeIntent | None:
     if not isinstance(raw, dict):
         return None
     action = str(raw.get("action") or "")
-    if action not in VALID_ACTIONS:
+    if action not in {"create", "update", "delete", "move", "set_overrides", "noop"}:
         return None
-    if action == "noop":
-        return {"action": "noop"}
-    memory_id = str(raw.get("memory_id") or "").strip() or None
-    existing = memory_lookup.get(memory_id or "")
-    scope_type = str(raw.get("scope_type") or (existing.scope_type if existing else ""))
-    scope_id = str(raw.get("scope_id") or (existing.scope_id if existing else "")).strip()
-    if scope_type == MemoryScopeType.USER.value:
-        scope_id = LOCAL_USER_MEMORY_SCOPE_ID
-    if (scope_type, scope_id) not in visible_scopes:
+    raw_targets = raw.get("override_target_ids")
+    if raw_targets is None and isinstance(raw.get("override_targets"), list):
+        raw_targets = [
+            str(item.get("memory_id") or "")
+            for item in raw["override_targets"]
+            if isinstance(item, dict) and item.get("memory_id")
+        ]
+    try:
+        return MemoryChangeIntent(
+            action=action,
+            memory_id=str(raw.get("memory_id") or "").strip() or None,
+            scope_type=raw.get("scope_type"),
+            target_scope_type=raw.get("target_scope_type"),
+            content=raw.get("content"),
+            override_target_ids=raw_targets,
+        )
+    except Exception:
         return None
-    if action in {"update", "delete"} and existing is None:
-        return None
-    operation: Dict[str, Any] = {
-        "action": action,
-        "scope_type": scope_type,
-        "scope_id": scope_id,
-    }
-    if existing is not None:
-        operation.update({
-            "memory_id": existing.id,
-            "expected_updated_at": iso_utc_z(existing.updated_at or existing.created_at),
-        })
-    if action in {"create", "update"}:
-        content = str(raw.get("content") or "").strip()
-        if not content:
-            return None
-        raw_targets = raw.get("override_targets")
-        if not isinstance(raw_targets, list):
-            return None
-        targets = []
-        seen_targets = set()
-        for target in raw_targets:
-            if not isinstance(target, dict):
-                return None
-            target_id = str(target.get("memory_id") or "").strip()
-            target_memory = memory_lookup.get(target_id)
-            if target_memory is None or target_id in seen_targets:
-                return None
-            seen_targets.add(target_id)
-            targets.append({
-                "memory_id": target_id,
-                "expected_updated_at": iso_utc_z(target_memory.updated_at or target_memory.created_at),
-            })
-        operation.update({
-            "content": content[:12000],
-            "override_targets": targets,
-        })
-    return operation
+
+
+def _curator_safe_payload(value: Any) -> Any:
+    """Hide canonical scope IDs from the model while retaining memory IDs."""
+
+    if isinstance(value, list):
+        return [_curator_safe_payload(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _curator_safe_payload(item)
+            for key, item in value.items()
+            if key != "scope_id"
+        }
+    return value
+
+
+def _sanitize_curator_intents(
+    intents: Sequence[MemoryChangeIntent],
+    *,
+    scope_ids: set[str],
+) -> tuple[List[MemoryChangeIntent], List[str]]:
+    """Remove scope identifiers mistakenly emitted as override memory IDs."""
+
+    sanitized = []
+    warnings = []
+    for intent in intents:
+        targets = intent.override_target_ids
+        if targets is None:
+            sanitized.append(intent)
+            continue
+        filtered = [memory_id for memory_id in targets if memory_id not in scope_ids]
+        if len(filtered) != len(targets):
+            warnings.append("Ignored a workspace scope identifier used as an override memory ID.")
+        sanitized.append(intent.model_copy(update={"override_target_ids": filtered}))
+    return sanitized, warnings
 
 
 async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[str, Any]:
-    scopes, thread, project = await _resolve_visible_scopes(req.context)
+    try:
+        tool_context, thread, project = await build_memory_tool_context(
+            selected_scope_type=req.context.selected_scope_type,
+            selected_scope_id=req.context.selected_scope_id,
+            thread_id=req.context.thread_id,
+            project_id=req.context.project_id,
+            capabilities=[MEMORY_READ_STORED, MEMORY_PROPOSE],
+        )
+    except MemoryToolNotFoundError as exc:
+        raise MemoryCuratorNotFoundError(str(exc)) from exc
+    except MemoryToolError as exc:
+        raise MemoryCuratorError(str(exc)) from exc
+    scopes = [scope.model_dump() for scope in tool_context.visible_scopes]
     consent = _consent_snapshot(thread, project)
     if not await check_chat_model_ready(req.llm_model):
         raise MemoryCuratorModelUnavailableError(f"Chat model {req.llm_model} is unavailable")
@@ -492,63 +370,149 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         for turn in review["turns"]:
             query_parts.extend([turn["question"], turn["answer"]])
     query = "\n".join(part for part in query_parts if part).strip()
-    memories, readiness = await _curator_memory_context(scopes, query, req.memory_id)
-    relationships = await _relationship_context(memories)
-    context_memories = _bounded_context_payload(
-        memories,
-        context_window=req.context_window,
-        relationships=relationships,
-    )
-    visible_scope_set = {(scope["scope_type"], scope["scope_id"]) for scope in scopes}
+    search_result = await search_memory_tool(tool_context, MemorySearchInput(
+        query=query,
+        view="stored",
+        max_results=MAX_CURATOR_MEMORIES,
+        selected_memory_id=req.memory_id,
+    ))
+    readiness = search_result.get("readiness", [])
+    context_memories = list(search_result.get("memories", []))
+    char_budget = max(1, int(req.context_window * 4 * 0.25))
+    used_chars = 0
+    bounded_memories = []
+    for memory in context_memories:
+        encoded = json.dumps(memory, ensure_ascii=True)
+        if used_chars + len(encoded) > char_budget:
+            break
+        bounded_memories.append(memory)
+        used_chars += len(encoded)
+    context_memories = bounded_memories
 
     system_prompt = (
         "You are AskPDF's memory curator. Help the user create, correct, consolidate, or remove "
-        "durable memory. Never write memory directly. Return one strict JSON object with keys "
-        "message, state, choices, and operations. state must be clarification, conflict, proposal, "
-        "or no_changes. choices is an array of {id,label,description,user_message}. operations is "
-        "an array using action create, update, delete, or noop. Create/update operations require "
-        "scope_type, scope_id, content, and the complete override_targets array. Each override target "
-        "contains memory_id; the server supplies its timestamp. "
-        "Update/delete operations require memory_id. Prefer updating an existing memory over "
+        "durable memory. Never write memory directly. Use memory_search and memory_get to inspect "
+        "current records, then memory_prepare_change to validate a proposal. Return one strict JSON "
+        "object with keys message, state, choices, and intents. state must be clarification, conflict, "
+        "proposal, or no_changes. choices is an array of {id,label,description,user_message}. intents "
+        "use action create, update, delete, move, set_overrides, or noop. Identify scopes by type only; "
+        "the server binds canonical scope IDs. Every create/update/move/set_overrides intent must include "
+        "the complete override_target_ids array. Use move when the user wants the same statement removed "
+        "from one scope and retained in another. Prefer updating an existing memory over "
         "creating a duplicate. When a narrower memory preserves a broader conflicting memory, create "
         "the narrower memory and explicitly target the broader memory. Surface contradictions as "
         "conflict choices. The frontend provides the one final Confirm action for every proposal. "
         "Never ask whether to save, update, apply, proceed, or confirm, and never return yes/no choices. "
         "When the latest user message clearly states what to remember, immediately return state=proposal "
-        "with the complete operations. Use clarification only when the desired content or scope is truly "
+        "with the complete intents. Use clarification only when the desired content or scope is truly "
         "ambiguous. Use conflict only for two or more materially different resolutions. After the user "
         "selects a clarification or conflict choice, immediately return proposal or no_changes. Do not "
         "repeat a question already answered. Do not infer sensitive facts or broaden scope without the "
-        "user's clear direction. A proposal is never approval."
+        "user's clear direction. A proposal is never approval. Scope identifiers are never memory "
+        "identifiers. Only values explicitly returned as a memory record's id may be used as memory_id "
+        "or override_target_ids."
     )
     prompt_payload = {
         "mode": req.mode,
-        "selected_scope": {
-            "scope_type": req.context.selected_scope_type,
-            "scope_id": (
-                LOCAL_USER_MEMORY_SCOPE_ID
-                if req.context.selected_scope_type == MemoryScopeType.USER.value
-                else req.context.selected_scope_id
-            ),
-        },
-        "visible_scopes": scopes,
+        "selected_scope_type": req.context.selected_scope_type,
+        "visible_scope_types": [scope["scope_type"] for scope in scopes],
         "selected_memory_id": req.memory_id,
         "conversation": transcript,
         "review": review,
-        "existing_memories": context_memories,
+        "existing_memories_fallback": _curator_safe_payload(context_memories),
         "recall_consent": consent,
     }
-    memory_lookup = {memory.id: memory for memory in memories}
+    latest_prepared: Dict[str, Any] | None = None
+    tool_call_count = 0
+    scope_ids = {scope.scope_id for scope in tool_context.visible_scopes}
+
+    async def run_search(**kwargs):
+        result = await search_memory_tool(tool_context, MemorySearchInput(**kwargs))
+        return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
+
+    async def run_get(**kwargs):
+        result = await get_memory_tool(tool_context, MemoryGetInput(**kwargs))
+        return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
+
+    async def run_prepare(**kwargs):
+        nonlocal latest_prepared
+        prepare_req = MemoryPrepareChangeInput(**kwargs)
+        intents, input_warnings = _sanitize_curator_intents(
+            prepare_req.intents,
+            scope_ids=scope_ids,
+        )
+        result = await prepare_memory_change(
+            tool_context,
+            MemoryPrepareChangeInput(intents=intents),
+        )
+        if input_warnings:
+            result["input_warnings"] = input_warnings
+        latest_prepared = result
+        return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
+
+    tools = [
+        StructuredTool.from_function(
+            coroutine=run_search,
+            name="memory_search",
+            description="Search visible effective or stored memory. Curators should search stored memory.",
+            args_schema=MemorySearchInput,
+        ),
+        StructuredTool.from_function(
+            coroutine=run_get,
+            name="memory_get",
+            description="Get exact visible memory records and override relationships by ID.",
+            args_schema=MemoryGetInput,
+        ),
+        StructuredTool.from_function(
+            coroutine=run_prepare,
+            name="memory_prepare_change",
+            description="Validate semantic memory intents and prepare the one confirmable change set.",
+            args_schema=MemoryPrepareChangeInput,
+        ),
+    ]
+    tools_by_name = {tool.name: tool for tool in tools}
 
     async def invoke_decision(correction: str | None = None):
+        nonlocal latest_prepared, tool_call_count
         messages = [SystemMessage(content=system_prompt)]
         if correction:
             messages.append(SystemMessage(content=correction))
         messages.append(HumanMessage(content=json.dumps(prompt_payload, ensure_ascii=True)))
-        response = await invoke_with_retry(
-            get_llm(req.llm_model, temperature=0.0).ainvoke,
-            messages,
-        )
+        llm = get_llm(req.llm_model, temperature=0.0)
+        supports_tools = await check_model_supports_tools(req.llm_model)
+        if supports_tools:
+            bound = llm.bind_tools(tools)
+            while True:
+                response = await invoke_with_retry(bound.ainvoke, messages)
+                calls = list(getattr(response, "tool_calls", None) or [])
+                if not calls:
+                    break
+                messages.append(response)
+                for call in calls:
+                    if tool_call_count >= MAX_CURATOR_TOOL_CALLS:
+                        break
+                    tool_call_count += 1
+                    tool = tools_by_name.get(str(call.get("name") or ""))
+                    try:
+                        output = (
+                            await tool.ainvoke(call.get("args") or {})
+                            if tool is not None
+                            else json.dumps({"error": "Unknown memory tool"})
+                        )
+                    except Exception as exc:
+                        output = json.dumps({"error": str(exc)[:500]})
+                    messages.append(ToolMessage(
+                        content=str(output),
+                        tool_call_id=str(call.get("id") or f"memory-tool-{tool_call_count}"),
+                    ))
+                if tool_call_count >= MAX_CURATOR_TOOL_CALLS:
+                    messages.append(SystemMessage(
+                        content="The memory tool-call limit is reached. Return the final JSON decision now."
+                    ))
+                    response = await invoke_with_retry(llm.ainvoke, messages)
+                    break
+        else:
+            response = await invoke_with_retry(llm.ainvoke, messages)
         parsed = safe_json_object(str(getattr(response, "content", "") or ""))
         state = str(parsed.get("state") or "")
         if state not in {"clarification", "conflict", "proposal", "no_changes"}:
@@ -558,24 +522,36 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             for index, raw in enumerate(parsed.get("choices") or [])
             if (choice := _normalize_choice(raw, index)) is not None
         ][:6]
-        operations = [
-            operation
-            for raw in (parsed.get("operations") or [])
-            if (operation := _normalize_operation(
-                raw,
-                memory_lookup=memory_lookup,
-                visible_scopes=visible_scope_set,
-            )) is not None
-        ][:20]
-        return parsed, state, choices, operations
+        if latest_prepared is None:
+            intents = [
+                intent
+                for raw in (parsed.get("intents") or parsed.get("operations") or [])
+                if (intent := _intent_from_raw(raw)) is not None
+            ][:20]
+            if intents:
+                try:
+                    intents, _input_warnings = _sanitize_curator_intents(
+                        intents,
+                        scope_ids=scope_ids,
+                    )
+                    latest_prepared = await prepare_memory_change(
+                        tool_context,
+                        MemoryPrepareChangeInput(intents=intents),
+                    )
+                except MemoryToolError as exc:
+                    parsed["message"] = str(exc)
+                    state = "clarification"
+        operations = list((latest_prepared or {}).get("operations", []))
+        summaries = list((latest_prepared or {}).get("operation_summaries", []))
+        return parsed, state, choices, operations, summaries
 
-    parsed, state, choices, operations = await invoke_decision()
+    parsed, state, choices, operations, summaries = await invoke_decision()
     substantive_operations = [op for op in operations if op["action"] != "noop"]
     if substantive_operations:
         state = "proposal"
         choices = []
     elif state in {"clarification", "conflict"} and _permission_only_choices(choices):
-        parsed, state, choices, operations = await invoke_decision(
+        parsed, state, choices, operations, summaries = await invoke_decision(
             "Your previous answer redundantly asked the user for permission. The UI already provides "
             "final confirmation. Return the concrete proposal now, or no_changes when the requested "
             "state is already stored. Do not ask another question or return approval choices."
@@ -598,10 +574,12 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         "state": state,
         "choices": choices,
         "operations": operations,
+        "operation_summaries": summaries,
         "review": review,
         "embedding_readiness": readiness,
         "context_memory_count": len(context_memories),
         "consent": consent,
+        "tool_calls_used": tool_call_count,
     }
 
 
@@ -835,6 +813,8 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                             "source_thread_id": req.review_cursor.thread_id,
                             "reviewed_through_turn_id": req.review_cursor.reviewed_through_turn_id,
                         })
+                    if operation.move_source_memory_id:
+                        source_refs["curator_move_source_memory_id"] = operation.move_source_memory_id
                     if operation.action == "create":
                         memory = Memory(
                             id=create_ids[index],
@@ -855,7 +835,11 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                             memory_id=memory.id,
                             event_type="curator_created",
                             actor_id=req.actor_id,
-                            payload_json={"mode": "confirmed_change_set"},
+                            payload_json={
+                                "mode": "confirmed_change_set",
+                                "semantic_action": operation.semantic_action or operation.action,
+                                "operation_group_id": operation.operation_group_id,
+                            },
                             created_at=now,
                         ))
                         changed.append(memory)
@@ -877,7 +861,11 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                                 source_refs_json=source_refs,
                                 actor_id=req.actor_id,
                                 event_type="curator_updated",
-                                event_payload={"mode": "confirmed_change_set"},
+                                event_payload={
+                                    "mode": "confirmed_change_set",
+                                    "semantic_action": operation.semantic_action or operation.action,
+                                    "operation_group_id": operation.operation_group_id,
+                                },
                                 updated_at=now,
                             )
                             if updated is None:

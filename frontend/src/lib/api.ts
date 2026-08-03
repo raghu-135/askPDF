@@ -366,6 +366,23 @@ export interface MemoryCuratorOperation {
     memory_id: string;
     expected_updated_at: string;
   }>;
+  semantic_action?: 'create' | 'update' | 'delete' | 'move' | 'set_overrides';
+  operation_group_id?: string;
+  move_source_memory_id?: string;
+  move_destination_memory_id?: string;
+}
+
+export interface MemoryOperationSummary {
+  operation_group_id: string;
+  action: 'create' | 'update' | 'delete' | 'move' | 'set_overrides';
+  label: string;
+  content?: string;
+  source_memory_id?: string;
+  source_scope?: { scope_type: MemoryScopeType; scope_id: string };
+  destination_memory_id?: string;
+  destination_scope?: { scope_type: MemoryScopeType; scope_id: string };
+  override_target_ids: string[];
+  removed_incoming_override_count: number;
 }
 
 export interface EffectiveMemoryResponse {
@@ -398,6 +415,7 @@ export interface MemoryCuratorResponse {
     user_message: string;
   }>;
   operations: MemoryCuratorOperation[];
+  operation_summaries?: MemoryOperationSummary[];
   review?: {
     reviewed_count: number;
     remaining_count: number;
@@ -418,6 +436,21 @@ export interface MemoryCuratorResponse {
     effective_user_recall?: boolean | null;
   };
   context_memory_count?: number;
+  tool_calls_used?: number;
+}
+
+export interface MemoryChangeReceipt {
+  operation_group_id: string;
+  action: 'create' | 'update' | 'delete' | 'move' | 'set_overrides';
+  source_memory_id?: string;
+  result_memory_id?: string;
+  source_scope?: { scope_type: MemoryScopeType; scope_id: string };
+  destination_scope?: { scope_type: MemoryScopeType; scope_id: string };
+  deleted_memory_ids: string[];
+  override_target_ids: string[];
+  removed_incoming_override_count: number;
+  index_status?: string;
+  warnings: Array<{ code: string; memory_id?: string; message: string }>;
 }
 
 export interface MemoryCuratorApplyResponse {
@@ -425,6 +458,7 @@ export interface MemoryCuratorApplyResponse {
   deleted_memory_ids: string[];
   warnings: Array<{ code: string; memory_id?: string; message: string }>;
   review_cursor_advanced: boolean;
+  receipts: MemoryChangeReceipt[];
 }
 
 // ============ Agent Workflow Builder API ============

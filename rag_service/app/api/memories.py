@@ -14,8 +14,12 @@ from app.services.memory_curator_service import (
     MemoryCuratorError,
     MemoryCuratorModelUnavailableError,
     MemoryCuratorNotFoundError,
-    apply_memory_curator_change_set,
     respond_to_memory_curator,
+)
+from app.services.memory_tool_service import (
+    MemoryToolError,
+    MemoryToolNotFoundError,
+    apply_confirmed_memory_change,
 )
 from app.services.effective_memory_service import (
     memory_payload,
@@ -164,7 +168,7 @@ async def memory_curator_respond_endpoint(req: MemoryCuratorRespondRequest):
 @router.post("/memory-curator/apply")
 async def memory_curator_apply_endpoint(req: MemoryCuratorApplyRequest):
     try:
-        return await apply_memory_curator_change_set(req)
+        return await apply_confirmed_memory_change(req)
     except EmbeddingModelUnavailableError as exc:
         raise HTTPException(
             status_code=409,
@@ -172,6 +176,10 @@ async def memory_curator_apply_endpoint(req: MemoryCuratorApplyRequest):
         ) from exc
     except MemoryVectorCleanupError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except MemoryToolNotFoundError as exc:
+        raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+    except MemoryToolError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)}) from exc
     except Exception as exc:
         _raise_curator_http(exc)
 

@@ -507,12 +507,18 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                 warnings=[ToolWarningCode.MISSING_THREAD_CONTEXT],
             ).to_json()
 
-        from app.services.memory_service import search_thread_memory
+        from app.models.memory_tools import MEMORY_READ_EFFECTIVE, MemorySearchInput
+        from app.services.memory_tool_service import build_memory_tool_context, search_memory_tool
 
-        result = await search_thread_memory(
+        memory_context, _thread, _project = await build_memory_tool_context(
+            selected_scope_type="thread",
+            selected_scope_id=thread_id,
             thread_id=thread_id,
-            query=query,
-            max_results=max_results,
+            capabilities=[MEMORY_READ_EFFECTIVE],
+        )
+        result = await search_memory_tool(
+            memory_context,
+            MemorySearchInput(query=query, view="effective", max_results=max_results),
         )
         memories = result.get("memories", []) if isinstance(result, dict) else []
         memory_scopes = result.get("scopes", []) if isinstance(result, dict) else []

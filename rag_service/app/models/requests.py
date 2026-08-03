@@ -152,6 +152,10 @@ class MemoryCuratorOperation(BaseModel):
     expected_updated_at: Optional[str] = None
     content: Optional[str] = Field(default=None, max_length=12000)
     override_targets: List[MemoryOverrideTarget] = Field(default_factory=list, max_length=20)
+    semantic_action: Optional[Literal["create", "update", "delete", "move", "set_overrides"]] = None
+    operation_group_id: Optional[str] = Field(default=None, max_length=100)
+    move_source_memory_id: Optional[str] = None
+    move_destination_memory_id: Optional[str] = None
 
 
 class MemoryReviewCursor(BaseModel):

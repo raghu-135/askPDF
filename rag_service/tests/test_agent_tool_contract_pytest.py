@@ -154,7 +154,11 @@ class TestAskPdfToolContract:
             },
         }
         with patch(
-            "app.services.memory_service.search_thread_memory",
+            "app.services.memory_tool_service.build_memory_tool_context",
+            new_callable=AsyncMock,
+            return_value=(object(), None, None),
+        ), patch(
+            "app.services.memory_tool_service.search_memory_tool",
             new_callable=AsyncMock,
             return_value=search_result,
         ):
@@ -195,7 +199,11 @@ class TestAskPdfToolContract:
             },
         }
         with patch(
-            "app.services.memory_service.search_thread_memory",
+            "app.services.memory_tool_service.build_memory_tool_context",
+            new_callable=AsyncMock,
+            return_value=(object(), None, None),
+        ), patch(
+            "app.services.memory_tool_service.search_memory_tool",
             new_callable=AsyncMock,
             return_value=search_result,
         ):

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from langchain_core.messages import AIMessage
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.future import select
 
@@ -16,7 +17,14 @@ from app.models.requests import (
     MemoryCuratorRespondRequest,
     MemoryReviewCursor,
 )
-from app.services import memory_curator_service
+from app.models.memory_tools import (
+    MEMORY_PROPOSE,
+    MEMORY_READ_STORED,
+    MemoryGetInput,
+    MemoryPrepareChangeInput,
+    MemorySearchInput,
+)
+from app.services import memory_curator_service, memory_tool_service
 from app.time_utils import iso_utc_z, utc_now
 
 
@@ -24,9 +32,16 @@ from app.time_utils import iso_utc_z, utc_now
 def curator_sessionmaker(engine, monkeypatch):
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     import app.services.effective_memory_service as effective_memory_service
+    import app.services.memory_tool_service as memory_tool_service
 
     monkeypatch.setattr(memory_curator_service, "async_session_maker", maker)
     monkeypatch.setattr(effective_memory_service, "async_session_maker", maker)
+    monkeypatch.setattr(memory_tool_service, "async_session_maker", maker)
+    monkeypatch.setattr(
+        memory_curator_service,
+        "check_model_supports_tools",
+        AsyncMock(return_value=False),
+    )
     monkeypatch.setattr(
         memory_curator_service,
         "require_embedding_model_ready",
@@ -46,6 +61,11 @@ def curator_sessionmaker(engine, monkeypatch):
         memory_curator_service,
         "get_vector_db",
         lambda: SimpleNamespace(delete_memory_vectors=AsyncMock(return_value=True)),
+    )
+    monkeypatch.setattr(
+        memory_curator_service,
+        "search_memory_tool",
+        AsyncMock(return_value={"memories": [], "readiness": [], "truncated": False}),
     )
     return maker
 
@@ -86,6 +106,20 @@ def test_permission_only_choice_detection_preserves_real_conflict_options():
         {"label": "Update Project", "user_message": "Update the project memory."},
         {"label": "Override in Thread", "user_message": "Keep the project memory and override it here."},
     ]) is False
+
+
+def test_curator_payload_hides_scope_ids_but_preserves_memory_ids():
+    payload = memory_curator_service._curator_safe_payload({
+        "id": "memory-1",
+        "scope_type": "project",
+        "scope_id": "project-1",
+        "overrides": [{"id": "memory-2", "scope_id": "default"}],
+    })
+
+    assert payload["id"] == "memory-1"
+    assert payload["overrides"][0]["id"] == "memory-2"
+    assert "scope_id" not in payload
+    assert "scope_id" not in payload["overrides"][0]
 
 
 @pytest.mark.asyncio
@@ -473,11 +507,6 @@ async def test_curator_malformed_model_output_becomes_clarification(
         "check_chat_model_ready",
         AsyncMock(return_value=True),
     )
-    monkeypatch.setattr(
-        memory_curator_service,
-        "_curator_memory_context",
-        AsyncMock(return_value=([], [])),
-    )
     llm = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content="not json")))
     monkeypatch.setattr(memory_curator_service, "get_llm", lambda *_args, **_kwargs: llm)
 
@@ -503,11 +532,6 @@ async def test_curator_complete_operation_skips_redundant_permission_step(
 ):
     await _workspace(curator_sessionmaker)
     monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
-    monkeypatch.setattr(
-        memory_curator_service,
-        "_curator_memory_context",
-        AsyncMock(return_value=([], [])),
-    )
     llm = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps({
         "message": "I can save that preference.",
         "state": "clarification",
@@ -550,11 +574,6 @@ async def test_curator_repairs_permission_only_response_without_another_user_tur
 ):
     await _workspace(curator_sessionmaker)
     monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
-    monkeypatch.setattr(
-        memory_curator_service,
-        "_curator_memory_context",
-        AsyncMock(return_value=([], [])),
-    )
     permission = SimpleNamespace(content=json.dumps({
         "message": "Would you like me to save this?",
         "state": "clarification",
@@ -594,3 +613,224 @@ async def test_curator_repairs_permission_only_response_without_another_user_tur
     assert response["state"] == "proposal"
     assert response["choices"] == []
     assert llm.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_memory_tools_enforce_capabilities_and_visible_scopes(curator_sessionmaker):
+    await _workspace(curator_sessionmaker)
+    created = await memory_curator_service.apply_memory_curator_change_set(
+        MemoryCuratorApplyRequest(
+            context=_context(),
+            confirmed=True,
+            operations=[MemoryCuratorOperation(
+                action="create",
+                scope_type="thread",
+                scope_id="curator-thread",
+                content="Use concise answers in this thread.",
+            )],
+        )
+    )
+    memory_id = created["changed_memories"][0]["id"]
+    context, _thread, _project = await memory_tool_service.build_memory_tool_context(
+        selected_scope_type="thread",
+        selected_scope_id="curator-thread",
+        thread_id="curator-thread",
+        capabilities=[MEMORY_READ_STORED],
+    )
+
+    listed = await memory_tool_service.search_memory_tool(
+        context,
+        MemorySearchInput(view="stored", max_results=10),
+    )
+    fetched = await memory_tool_service.get_memory_tool(
+        context,
+        MemoryGetInput(memory_ids=[memory_id]),
+    )
+
+    assert [item["id"] for item in listed["memories"]] == [memory_id]
+    assert fetched["memories"][0]["scope_type"] == "thread"
+    context.capabilities = []
+    with pytest.raises(memory_tool_service.MemoryToolPermissionError):
+        await memory_tool_service.get_memory_tool(context, MemoryGetInput(memory_ids=[memory_id]))
+
+
+@pytest.mark.asyncio
+async def test_memory_tool_moves_global_memory_to_project_with_receipt(curator_sessionmaker):
+    await _workspace(curator_sessionmaker)
+    global_result = await memory_curator_service.apply_memory_curator_change_set(
+        MemoryCuratorApplyRequest(
+            context=_context(),
+            confirmed=True,
+            operations=[MemoryCuratorOperation(
+                action="create",
+                scope_type="user",
+                scope_id="default",
+                content="Research stocks and equities.",
+            )],
+        )
+    )
+    source = global_result["changed_memories"][0]
+    context, _thread, _project = await memory_tool_service.build_memory_tool_context(
+        selected_scope_type="project",
+        selected_scope_id="curator-project",
+        project_id="curator-project",
+        capabilities=[MEMORY_PROPOSE],
+    )
+    prepared = await memory_tool_service.prepare_memory_change(
+        context,
+        MemoryPrepareChangeInput(intents=[{
+            "action": "move",
+            "memory_id": source["id"],
+            "target_scope_type": "project",
+            "override_target_ids": [],
+        }]),
+    )
+
+    assert [item["action"] for item in prepared["operations"]] == ["create", "delete"]
+    assert prepared["operation_summaries"][0]["action"] == "move"
+    applied = await memory_tool_service.apply_confirmed_memory_change(
+        MemoryCuratorApplyRequest(
+            context=MemoryCuratorContext(
+                selected_scope_type="project",
+                selected_scope_id="curator-project",
+                project_id="curator-project",
+            ),
+            confirmed=True,
+            operations=[MemoryCuratorOperation.model_validate(item) for item in prepared["operations"]],
+        )
+    )
+
+    assert applied["receipts"][0]["action"] == "move"
+    assert applied["receipts"][0]["source_scope"]["scope_type"] == "user"
+    assert applied["receipts"][0]["destination_scope"]["scope_type"] == "project"
+    assert applied["receipts"][0]["deleted_memory_ids"] == [source["id"]]
+    async with curator_sessionmaker() as session:
+        assert await session.get(Memory, source["id"]) is None
+        project_memories = list((await session.execute(
+            select(Memory).where(Memory.scope_type == "project")
+        )).scalars().all())
+    assert len(project_memories) == 1
+    assert project_memories[0].id == applied["receipts"][0]["result_memory_id"]
+
+
+@pytest.mark.asyncio
+async def test_memory_tool_move_reuses_identical_destination(curator_sessionmaker):
+    await _workspace(curator_sessionmaker)
+    created = []
+    for scope_type, scope_id in (("user", "default"), ("project", "curator-project")):
+        result = await memory_curator_service.apply_memory_curator_change_set(
+            MemoryCuratorApplyRequest(
+                context=_context(),
+                confirmed=True,
+                operations=[MemoryCuratorOperation(
+                    action="create",
+                    scope_type=scope_type,
+                    scope_id=scope_id,
+                    content="Prefer primary-source market research.",
+                )],
+            )
+        )
+        created.append(result["changed_memories"][0])
+    source, destination = created
+    context, _thread, _project = await memory_tool_service.build_memory_tool_context(
+        selected_scope_type="project",
+        selected_scope_id="curator-project",
+        project_id="curator-project",
+        capabilities=[MEMORY_PROPOSE],
+    )
+    prepared = await memory_tool_service.prepare_memory_change(
+        context,
+        MemoryPrepareChangeInput(intents=[{
+            "action": "move",
+            "memory_id": source["id"],
+            "target_scope_type": "project",
+            "override_target_ids": [],
+        }]),
+    )
+
+    assert [item["action"] for item in prepared["operations"]] == ["update", "delete"]
+    assert prepared["operation_summaries"][0]["destination_memory_id"] == destination["id"]
+
+
+@pytest.mark.asyncio
+async def test_curator_native_tool_call_prepares_proposal(curator_sessionmaker, monkeypatch):
+    await _workspace(curator_sessionmaker)
+    monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
+    monkeypatch.setattr(memory_curator_service, "check_model_supports_tools", AsyncMock(return_value=True))
+    tool_call = AIMessage(content="", tool_calls=[{
+        "name": "memory_prepare_change",
+        "args": {"intents": [{
+            "action": "create",
+            "scope_type": "thread",
+            "content": "Answer in a funny way.",
+            "override_target_ids": [],
+        }]},
+        "id": "call-memory-1",
+        "type": "tool_call",
+    }])
+    final = AIMessage(content=json.dumps({
+        "message": "Create a thread preference for a funny tone.",
+        "state": "proposal",
+        "choices": [],
+        "intents": [],
+    }))
+    bound = SimpleNamespace(ainvoke=AsyncMock(side_effect=[tool_call, final]))
+    llm = SimpleNamespace(bind_tools=lambda _tools: bound, ainvoke=AsyncMock())
+    monkeypatch.setattr(memory_curator_service, "get_llm", lambda *_args, **_kwargs: llm)
+
+    response = await memory_curator_service.respond_to_memory_curator(
+        MemoryCuratorRespondRequest(
+            mode="create",
+            context=_context(),
+            messages=[MemoryCuratorMessage(role="user", content="Answer in a funny way.")],
+            llm_model="tool-chat-model",
+            context_window=8192,
+        )
+    )
+
+    assert response["state"] == "proposal"
+    assert response["tool_calls_used"] == 1
+    assert response["operations"][0]["action"] == "create"
+    assert response["operation_summaries"][0]["label"] == "Create thread memory"
+
+
+@pytest.mark.asyncio
+async def test_curator_ignores_project_id_mistaken_for_override_memory_id(
+    curator_sessionmaker,
+    monkeypatch,
+):
+    await _workspace(curator_sessionmaker)
+    monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
+    llm = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps({
+        "message": "Create this project memory.",
+        "state": "proposal",
+        "choices": [],
+        "intents": [{
+            "action": "create",
+            "scope_type": "project",
+            "content": "Research LLMs, AI, and machine learning for this project.",
+            "override_target_ids": ["curator-project"],
+        }],
+    }))))
+    monkeypatch.setattr(memory_curator_service, "get_llm", lambda *_args, **_kwargs: llm)
+
+    response = await memory_curator_service.respond_to_memory_curator(
+        MemoryCuratorRespondRequest(
+            mode="create",
+            context=MemoryCuratorContext(
+                selected_scope_type="project",
+                selected_scope_id="curator-project",
+                project_id="curator-project",
+            ),
+            messages=[MemoryCuratorMessage(
+                role="user",
+                content="For this project, research LLMs, AI, and machine learning.",
+            )],
+            llm_model="chat-model",
+            context_window=8192,
+        )
+    )
+
+    assert response["state"] == "proposal"
+    assert response["operations"][0]["scope_type"] == "project"
+    assert response["operations"][0]["override_targets"] == []

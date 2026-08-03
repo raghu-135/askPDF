@@ -20,6 +20,7 @@ import {
   type MemoryCuratorMessage,
   type MemoryCuratorOperation,
   type MemoryCuratorResponse,
+  type MemoryChangeReceipt,
 } from '../lib/api';
 import { checkLlmModelReady, fetchAvailableLlmModels } from '../lib/models-api';
 import {
@@ -77,6 +78,24 @@ const initialAssistantMessage = (intent: MemoryCuratorIntent): CuratorUiMessage 
 const operationLabel = (operation: MemoryCuratorOperation) => {
   const scope = operation.scope_type === 'user' ? 'Global' : operation.scope_type === 'project' ? 'Project' : 'Thread';
   return `${operation.action.toUpperCase()} ${scope || ''}`.trim();
+};
+
+const scopeLabel = (scope?: { scope_type: string; scope_id: string }) => {
+  if (!scope) return 'Stored';
+  if (scope.scope_type === 'user') return 'Global';
+  if (scope.scope_type === 'project') return 'Project';
+  return 'Thread';
+};
+
+const receiptMessage = (receipt: MemoryChangeReceipt) => {
+  const result = receipt.result_memory_id ? ` (${receipt.result_memory_id})` : '';
+  if (receipt.action === 'move') {
+    return `Moved the memory from ${scopeLabel(receipt.source_scope)} to ${scopeLabel(receipt.destination_scope)}${result}.`;
+  }
+  if (receipt.action === 'delete') return `Deleted the ${scopeLabel(receipt.source_scope)} memory.`;
+  if (receipt.action === 'set_overrides') return `Updated the memory's override relationships${result}.`;
+  if (receipt.action === 'update') return `Updated the ${scopeLabel(receipt.destination_scope)} memory${result}.`;
+  return `Created the ${scopeLabel(receipt.destination_scope)} memory${result}.`;
 };
 
 export default function MemoryCuratorPanel({
@@ -198,7 +217,12 @@ export default function MemoryCuratorPanel({
       setDecision(null);
       onDirtyChange(false);
       onApplied();
-      const summary = result.warnings.length
+      const warningSuffix = result.warnings.length
+        ? `\n${result.warnings.length} indexing warning(s) occurred. Failed records remain available for Retry.`
+        : '';
+      const summary = result.receipts?.length
+        ? `${result.receipts.map(receiptMessage).join('\n')}${warningSuffix}`
+        : result.warnings.length
         ? `Changes were saved with ${result.warnings.length} indexing warning(s). Failed records remain available for Retry.`
         : result.review_cursor_advanced && result.changed_memories.length === 0
           ? 'Review completed. No memory changes were saved.'
@@ -255,14 +279,28 @@ export default function MemoryCuratorPanel({
         horizontalInset={1}
         minHeight={80}
       >
-        {decision.operations.filter((operation) => operation.action !== 'noop').map((operation, index) => (
-          <Box key={`${operation.action}-${operation.memory_id || index}`}>
+        {(decision.operation_summaries?.length
+          ? decision.operation_summaries
+          : decision.operations.filter((operation) => operation.action !== 'noop').map((operation) => ({
+              operation_group_id: operation.operation_group_id || `${operation.action}-${operation.memory_id || ''}`,
+              action: operation.semantic_action || operation.action,
+              label: operationLabel(operation),
+              content: operation.content,
+              override_target_ids: operation.override_targets?.map((target) => target.memory_id) || [],
+              removed_incoming_override_count: 0,
+            }))).map((operation, index) => (
+          <Box key={operation.operation_group_id || `${operation.action}-${index}`}>
             {index > 0 && <Divider sx={{ mb: 1 }} />}
-            <Chip size="small" label={operationLabel(operation)} />
+            <Chip size="small" label={operation.label} />
             {operation.content && <Typography variant="body2" sx={{ mt: 0.5, whiteSpace: 'pre-wrap' }}>{operation.content}</Typography>}
-            {Boolean(operation.override_targets?.length) && (
+            {Boolean(operation.override_target_ids?.length) && (
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-                Overrides {operation.override_targets?.length} broader {operation.override_targets?.length === 1 ? 'memory' : 'memories'}.
+                Overrides {operation.override_target_ids?.length} broader {operation.override_target_ids?.length === 1 ? 'memory' : 'memories'}.
+              </Typography>
+            )}
+            {Boolean(operation.removed_incoming_override_count) && (
+              <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.5 }}>
+                Removes {operation.removed_incoming_override_count} incoming override relationship(s).
               </Typography>
             )}
           </Box>
