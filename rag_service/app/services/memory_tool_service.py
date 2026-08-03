@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from typing import Any, Dict, Iterable, List, Sequence
 
@@ -10,7 +12,7 @@ from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import MemoryScopeType
-from app.db.models_sqlmodel import Memory, MemoryOverride, Project, Thread
+from app.db.models_sqlmodel import GlobalMemoryRepresentation, Memory, MemoryOverride, Project, Thread
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import get_embedding_model
 from app.models.memory_tools import (
@@ -33,11 +35,12 @@ from app.services.effective_memory_service import (
     serialize_memories_with_relationships,
 )
 from app.services.embedding_model_service import (
+    GLOBAL_MEMORY_EMBEDDING_MODEL,
     require_embedding_model_ready,
     resolve_scope_embedding_model,
 )
 from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
-from app.services.memory_service import _rank_fuse_memory_hits, memory_content_hash
+from app.services.memory_service import _merge_same_model_memory_hits, memory_content_hash
 from app.time_utils import iso_utc_z
 
 
@@ -54,6 +57,51 @@ class MemoryToolNotFoundError(MemoryToolError):
 
 
 _SCOPE_RANK = {"user": 0, "project": 1, "thread": 2}
+logger = logging.getLogger(__name__)
+
+
+async def _workspace_search_model(context: MemoryToolContext) -> str:
+    if context.thread_id:
+        return await resolve_scope_embedding_model(MemoryScopeType.THREAD.value, context.thread_id)
+    if context.project_id:
+        return await resolve_scope_embedding_model(MemoryScopeType.PROJECT.value, context.project_id)
+    return GLOBAL_MEMORY_EMBEDDING_MODEL
+
+
+async def _schedule_missing_global_repairs(
+    context: MemoryToolContext,
+    memories: Sequence[Memory],
+    embedding_model: str,
+) -> int:
+    if embedding_model == GLOBAL_MEMORY_EMBEDDING_MODEL:
+        return 0
+    global_ids = {
+        memory.id for memory in memories
+        if memory.scope_type == MemoryScopeType.USER.value
+    }
+    if not global_ids:
+        return 0
+    async with async_session_maker() as session:
+        indexed_ids = set((await session.execute(
+            select(GlobalMemoryRepresentation.memory_id).where(
+                GlobalMemoryRepresentation.memory_id.in_(global_ids),
+                GlobalMemoryRepresentation.embedding_model == embedding_model,
+                GlobalMemoryRepresentation.index_status == "indexed",
+            )
+        )).scalars().all())
+    missing = global_ids - indexed_ids
+    if missing:
+        logger.error(
+            "Global memory representations are unavailable for memory tool search; scheduling repair | "
+            "model=%s missing=%s project_id=%s thread_id=%s",
+            embedding_model,
+            len(missing),
+            context.project_id,
+            context.thread_id,
+        )
+        from app.services.memory_representation_service import warm_global_representations_for_model
+        asyncio.create_task(warm_global_representations_for_model(embedding_model))
+    return len(missing)
 
 
 def _require_capability(context: MemoryToolContext, capability: str) -> None:
@@ -147,47 +195,47 @@ async def _semantic_stored_search(
     limit: int,
 ) -> tuple[List[Memory], List[Dict[str, Any]]]:
     by_id = {memory.id: memory for memory in memories}
-    scopes_by_model: Dict[str, List[Dict[str, str]]] = {}
+    model = await _workspace_search_model(context)
+    scopes: List[Dict[str, str]] = []
     for scope in context.visible_scopes:
         if not any(
             memory.scope_type == scope.scope_type and memory.scope_id == scope.scope_id
             for memory in memories
         ):
             continue
-        model = await resolve_scope_embedding_model(scope.scope_type, scope.scope_id)
-        scopes_by_model.setdefault(model, []).append(scope.model_dump())
+        scopes.append(scope.model_dump())
 
     readiness: List[Dict[str, Any]] = []
-    ranked_groups: List[tuple[str, List[Dict[str, Any]]]] = []
-    for model, scopes in scopes_by_model.items():
-        try:
-            await require_embedding_model_ready(model)
-            readiness.append({"embedding_model": model, "scopes": scopes, "ready": True, "degraded": False})
-            vector = await invoke_with_retry(get_embedding_model(model).aembed_query, query)
-            hits = await get_vector_db().search_memory(
-                query_vector=vector,
-                embedding_model=model,
-                scope_filters=scopes,
-                limit=limit,
-                query_text=query,
-            )
-            ranked_groups.append((model, hits))
-        except Exception as exc:
-            readiness.append({
-                "embedding_model": model,
-                "scopes": scopes,
-                "ready": False,
-                "degraded": True,
-                "reason": str(exc)[:300],
-            })
+    missing = await _schedule_missing_global_repairs(context, memories, model)
+    try:
+        await require_embedding_model_ready(model)
+        readiness.append({
+            "embedding_model": model,
+            "scopes": scopes,
+            "ready": missing == 0,
+            "reason": "global_representation_warming" if missing else None,
+        })
+        vector = await invoke_with_retry(get_embedding_model(model).aembed_query, query)
+        hits = await get_vector_db().search_memory(
+            query_vector=vector,
+            embedding_model=model,
+            scope_filters=scopes,
+            limit=limit,
+            query_text=query,
+        )
+    except Exception as exc:
+        readiness.append({
+            "embedding_model": model,
+            "scopes": scopes,
+            "ready": False,
+            "reason": str(exc)[:300],
+        })
+        hits = []
 
     ordered: List[Memory] = []
-    for hit in _rank_fuse_memory_hits(ranked_groups):
+    for hit in _merge_same_model_memory_hits(model, [hits]):
         memory = by_id.get(str(hit.get("memory_id") or ""))
         if memory is not None and memory not in ordered:
-            ordered.append(memory)
-    for memory in memories:
-        if memory not in ordered:
             ordered.append(memory)
     return ordered[:limit], readiness
 
@@ -208,16 +256,12 @@ async def search_memory_tool(context: MemoryToolContext, req: MemorySearchInput)
             )
             return {
                 **result,
-                "readiness": [
-                    {
-                        "embedding_model": item.get("fallback_model"),
-                        "scopes": [{"scope_type": item.get("scope_type"), "scope_id": "default"}],
-                        "ready": True,
-                        "degraded": True,
-                        "reason": item.get("reason"),
-                    }
-                    for item in result.get("degraded_representations", [])
-                ],
+                "readiness": [{
+                    "embedding_model": item.get("embedding_model"),
+                    "scopes": [{"scope_type": item.get("scope_type"), "scope_id": "default"}],
+                    "ready": False,
+                    "reason": item.get("reason"),
+                } for item in result.get("representation_issues", [])],
             }
         effective = await resolve_effective_memory_context(
             thread_id=context.thread_id,
@@ -231,29 +275,29 @@ async def search_memory_tool(context: MemoryToolContext, req: MemorySearchInput)
                 "readiness": [],
             }
         policy = effective["policy"]
-        scopes_by_model: Dict[str, List[Dict[str, str]]] = {}
-        for scope in policy["searched_scopes"]:
-            model = await resolve_scope_embedding_model(scope["scope_type"], scope["scope_id"])
-            scopes_by_model.setdefault(model, []).append(scope)
-        ranked_groups: List[tuple[str, List[Dict[str, Any]]]] = []
-        readiness = []
-        for model, scopes in scopes_by_model.items():
-            await require_embedding_model_ready(model)
-            readiness.append({"embedding_model": model, "scopes": scopes, "ready": True, "degraded": False})
-            vector = await invoke_with_retry(get_embedding_model(model).aembed_query, req.query)
-            hits = await get_vector_db().search_memory(
-                query_vector=vector,
-                embedding_model=model,
-                scope_filters=scopes,
-                excluded_memory_ids=effective["excluded_memory_ids"],
-                limit=req.max_results,
-                query_text=req.query,
-            )
-            ranked_groups.append((model, hits))
+        scopes = policy["searched_scopes"]
+        model = await _workspace_search_model(context)
+        missing = await _schedule_missing_global_repairs(context, effective["memory_records"], model)
+        await require_embedding_model_ready(model)
+        readiness = [{
+            "embedding_model": model,
+            "scopes": scopes,
+            "ready": missing == 0,
+            "reason": "global_representation_warming" if missing else None,
+        }]
+        vector = await invoke_with_retry(get_embedding_model(model).aembed_query, req.query)
+        hits = await get_vector_db().search_memory(
+            query_vector=vector,
+            embedding_model=model,
+            scope_filters=scopes,
+            excluded_memory_ids=effective["excluded_memory_ids"],
+            limit=req.max_results,
+            query_text=req.query,
+        )
         effective_by_id = {memory.id: memory for memory in effective["memory_records"]}
         memories = []
         seen = set()
-        for hit in _rank_fuse_memory_hits(ranked_groups):
+        for hit in _merge_same_model_memory_hits(model, [hits]):
             memory_id = str(hit.get("memory_id") or "")
             memory = effective_by_id.get(memory_id)
             if memory is None or memory_id in seen:
@@ -266,7 +310,7 @@ async def search_memory_tool(context: MemoryToolContext, req: MemorySearchInput)
                 "content": memory.content,
                 "source_refs": memory.source_refs_json or {},
                 "score": hit.get("score"),
-                "score_type": "rrf",
+                "score_type": "similarity",
                 "raw_score": hit.get("raw_score"),
                 "embedding_model": hit.get("embedding_model"),
                 "created_at": iso_utc_z(memory.created_at) if memory.created_at else None,

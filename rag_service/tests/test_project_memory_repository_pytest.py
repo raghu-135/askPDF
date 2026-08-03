@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -17,7 +18,7 @@ from app.db.repositories.project_repo_sqlmodel import DEFAULT_PROJECT_NAME, Proj
 from app.db.repositories.thread_repo_sqlmodel import ThreadRepository
 from app.time_utils import utc_now
 from app.services.memory_service import (
-    _rank_fuse_memory_hits,
+    _merge_same_model_memory_hits,
     memory_scope_policy_for_thread,
     search_thread_memory,
 )
@@ -454,11 +455,11 @@ async def test_explicit_scope_filter_is_upper_bound_and_empty_means_none(repo_se
 
 
 @pytest.mark.asyncio
-async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
+async def test_normal_recall_merges_project_and_default_user_memory_in_one_model(monkeypatch):
     from app.services import memory_service
 
     context = SimpleNamespace(
-        embedding_model="project-embedding-model",
+        embedding_model="BAAI/bge-m3",
         thread=SimpleNamespace(
             id="thread-1",
             settings={
@@ -477,18 +478,21 @@ async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
     )
     vector_db = SimpleNamespace(search_memory=AsyncMock())
 
-    async def fake_search_memory(*, embedding_model, **_kwargs):
-        if embedding_model == "project-embedding-model":
+    async def fake_search_memory(*, embedding_model, **kwargs):
+        scope_type = kwargs["scope_filters"][0]["scope_type"]
+        if scope_type == "project":
             return [{
                 "memory_id": "project-memory",
                 "scope_type": "project",
                 "score": 0.77,
             }]
-        return [{
-            "memory_id": "user-memory",
-            "scope_type": "user",
-            "score": 0.96,
-        }]
+        if scope_type == "user":
+            return [{
+                "memory_id": "user-memory",
+                "scope_type": "user",
+                "score": 0.96,
+            }]
+        return []
 
     vector_db.search_memory.side_effect = fake_search_memory
     memories = {
@@ -498,7 +502,7 @@ async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
             scope_id="project-1",
             content="Project fact",
             source_refs_json={},
-            embedding_model="project-embedding-model",
+            embedding_model="BAAI/bge-m3",
             content_hash="project-hash",
             index_status="indexed",
             index_attempts=1,
@@ -568,12 +572,12 @@ async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
     )
 
     assert [item["id"] for item in result["memories"]] == [
-        "project-memory",
         "user-memory",
+        "project-memory",
     ]
-    assert result["memories"][1]["scope_id"] == LOCAL_USER_MEMORY_SCOPE_ID
-    assert result["memories"][1]["embedding_model"] == memory_service.GLOBAL_MEMORY_EMBEDDING_MODEL
-    assert all(item["score_type"] == "rrf" for item in result["memories"])
+    assert result["memories"][0]["scope_id"] == LOCAL_USER_MEMORY_SCOPE_ID
+    assert result["memories"][0]["embedding_model"] == memory_service.GLOBAL_MEMORY_EMBEDDING_MODEL
+    assert all(item["score_type"] == "similarity" for item in result["memories"])
     # Each eligible scope receives its own bounded query so broader results cannot
     # crowd thread-local memories out before final fusion.
     assert vector_db.search_memory.await_count == 3
@@ -581,6 +585,80 @@ async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
         call.kwargs["excluded_memory_ids"] == ["unavailable-memory"]
         for call in vector_db.search_memory.await_args_list
     )
+
+
+@pytest.mark.asyncio
+async def test_normal_recall_never_falls_back_when_global_representation_is_missing(monkeypatch):
+    from app.services import memory_representation_service, memory_service
+
+    class EmptyScalars:
+        def all(self):
+            return []
+
+    class EmptyResult:
+        def scalars(self):
+            return EmptyScalars()
+
+    class EmptySession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, _query):
+            return EmptyResult()
+
+    project_model = "project-embedding-model"
+    context = SimpleNamespace(embedding_model=project_model)
+    global_memory = SimpleNamespace(
+        id="global-memory",
+        scope_type="user",
+        scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
+        content="Global preference",
+        source_refs_json={},
+        embedding_model=memory_service.GLOBAL_MEMORY_EMBEDDING_MODEL,
+        content_hash="global-hash",
+        created_at=None,
+        updated_at=None,
+    )
+    vector_db = SimpleNamespace(search_memory=AsyncMock(return_value=[]))
+    warm = AsyncMock(return_value={"indexed_ids": [], "failed_ids": []})
+    monkeypatch.setattr(memory_service, "async_session_maker", lambda: EmptySession())
+    monkeypatch.setattr(memory_service, "resolve_thread_embedding_context", AsyncMock(return_value=context))
+    monkeypatch.setattr(memory_service, "resolve_effective_memory_context", AsyncMock(return_value={
+        "policy": {
+            "requested_scopes": ["user"],
+            "searched_scopes": [{"scope_type": "user", "scope_id": LOCAL_USER_MEMORY_SCOPE_ID}],
+            "skipped_scopes": [],
+        },
+        "memory_records": [global_memory],
+        "applied_overrides": [],
+        "suppressed_memory_ids": [],
+        "excluded_memory_ids": [],
+        "unavailable_memory_count": 0,
+    }))
+    monkeypatch.setattr(memory_service, "require_embedding_model_ready", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        memory_service,
+        "get_embedding_model",
+        lambda _model: SimpleNamespace(aembed_query=AsyncMock(return_value=[0.1])),
+    )
+    monkeypatch.setattr(memory_service, "get_vector_db", lambda: vector_db)
+    monkeypatch.setattr(memory_representation_service, "warm_global_representations_for_model", warm)
+
+    result = await memory_service.search_thread_memory(thread_id="thread-1", query="preference")
+    await asyncio.sleep(0)
+
+    assert result["memories"] == []
+    assert result["representation_issues"] == [{
+        "scope_type": "user",
+        "embedding_model": project_model,
+        "missing_count": 1,
+        "reason": "global_representation_warming",
+    }]
+    assert {call.kwargs["embedding_model"] for call in vector_db.search_memory.await_args_list} == {project_model}
+    warm.assert_awaited_once_with(project_model)
 
 
 @pytest.mark.asyncio
@@ -800,12 +878,10 @@ async def test_workspace_sections_apply_limits_independently(repo_sessionmaker):
     assert [section["truncated"] for section in view["workspace_sections"]] == [True, True]
 
 
-def test_memory_rank_fusion_does_not_compare_raw_scores_across_models():
-    fused = _rank_fuse_memory_hits(
-        [
-            (
-                "project-model",
-                [
+def test_same_model_memory_merge_uses_comparable_similarity_scores():
+    merged = _merge_same_model_memory_hits(
+        "project-model",
+        [[
                     {
                         "memory_id": "project-rank-1",
                         "scope_type": "project",
@@ -816,28 +892,19 @@ def test_memory_rank_fusion_does_not_compare_raw_scores_across_models():
                         "scope_type": "project",
                         "score": 0.99,
                     },
-                ],
-            ),
-            (
-                "BAAI/bge-m3",
-                [
+                ], [
                     {
                         "memory_id": "user-rank-1",
                         "scope_type": "user",
                         "score": 0.999,
                     },
-                ],
-            ),
-        ]
+                ]]
     )
 
-    assert [hit["memory_id"] for hit in fused] == [
-        "project-rank-1",
+    assert [hit["memory_id"] for hit in merged] == [
         "user-rank-1",
         "project-rank-2",
+        "project-rank-1",
     ]
-    assert fused[0]["score"] == fused[1]["score"]
-    assert fused[0]["raw_score"] == 0.05
-    assert fused[1]["raw_score"] == 0.999
-    assert fused[0]["embedding_model"] == "project-model"
-    assert fused[1]["embedding_model"] == "BAAI/bge-m3"
+    assert merged[0]["raw_score"] == 0.999
+    assert all(hit["embedding_model"] == "project-model" for hit in merged)

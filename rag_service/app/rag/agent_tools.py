@@ -581,7 +581,7 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                 "memory_applied_overrides": applied_overrides,
                 "memory_suppressed_ids": suppressed_memory_ids,
                 "memory_precedence": result.get("precedence", ["thread", "project", "user"]),
-                "memory_degraded_representations": result.get("degraded_representations", []),
+                "memory_representation_issues": result.get("representation_issues", []),
             },
         ).to_json()
     except Exception as e:

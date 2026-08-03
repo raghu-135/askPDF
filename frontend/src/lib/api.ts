@@ -486,14 +486,15 @@ export interface MemoryCuratorResponse {
       anchor_id: string;
       memories: Array<Pick<MemoryRecord, 'id' | 'scope_type' | 'scope_id' | 'content' | 'updated_at'> & { scope_rank: number }>;
     }>;
-    degraded: boolean;
+    representation_pending: boolean;
+    missing_representation_count: number;
+    blocked: boolean;
     embedding_model: string;
   }) | null;
   embedding_readiness: Array<{
     embedding_model: string;
     scopes?: Array<{ scope_type: MemoryScopeType; scope_id: string }>;
     ready: boolean;
-    degraded: boolean;
     reason?: string;
   }>;
   consent?: {

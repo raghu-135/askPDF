@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Sequence
 
@@ -22,6 +24,7 @@ from app.time_utils import iso_utc_z, utc_now
 
 
 SCOPE_RANK = {"thread": 3, "project": 2, "user": 1}
+logger = logging.getLogger(__name__)
 
 
 def scope_key(scope_type: str, scope_id: str) -> str:
@@ -174,7 +177,33 @@ async def build_memory_review_batch(
     by_id = {memory.id: memory for memory in all_memories}
     start = max(0, anchor_position)
     selected_anchors = anchors[start:start + max_clusters]
-    degraded = represented_global_ids != global_ids
+    missing_global_ids = global_ids - represented_global_ids
+    representation_pending = bool(missing_global_ids)
+    if representation_pending and model != GLOBAL_MEMORY_EMBEDDING_MODEL:
+        logger.error(
+            "Global memory representations are unavailable for consistency review; scheduling repair | "
+            "context=%s:%s model=%s missing=%s",
+            context_type,
+            context_id,
+            model,
+            len(missing_global_ids),
+        )
+        from app.services.memory_representation_service import warm_global_representations_for_model
+        asyncio.create_task(warm_global_representations_for_model(model))
+        return {
+            "context_type": context_type,
+            "context_id": context_id,
+            "snapshot_at": iso_utc_z(cutoff),
+            "snapshot_scope_versions": snapshot_scope_versions or status["current_scope_versions"],
+            "anchor_position": start,
+            "reviewed_anchor_count": start,
+            "remaining_anchor_count": max(0, len(anchors) - start),
+            "candidate_groups": [],
+            "representation_pending": True,
+            "missing_representation_count": len(missing_global_ids),
+            "embedding_model": model,
+            "blocked": True,
+        }
     groups: List[Dict[str, Any]] = []
     seen_pairs: set[tuple[str, str]] = set()
     try:
@@ -191,20 +220,6 @@ async def build_memory_review_batch(
                 limit=7,
                 query_text=anchor.content,
             )
-            if degraded and global_ids:
-                await require_embedding_model_ready(GLOBAL_MEMORY_EMBEDDING_MODEL)
-                fallback_vector = await invoke_with_retry(
-                    get_embedding_model(GLOBAL_MEMORY_EMBEDDING_MODEL).aembed_query,
-                    anchor.content,
-                )
-                hits.extend(await get_vector_db().search_memory(
-                    query_vector=fallback_vector,
-                    embedding_model=GLOBAL_MEMORY_EMBEDDING_MODEL,
-                    scope_filters=[{"scope_type": "user", "scope_id": LOCAL_USER_MEMORY_SCOPE_ID}],
-                    excluded_memory_ids=[anchor.id],
-                    limit=7,
-                    query_text=anchor.content,
-                ))
             related_ids = [str(hit.get("memory_id")) for hit in hits if str(hit.get("memory_id")) in by_id]
             related_ids.extend(
                 edge.overridden_memory_id if edge.overriding_memory_id == anchor.id else edge.overriding_memory_id
@@ -246,7 +261,13 @@ async def build_memory_review_batch(
                     )
                     overlapping["memories"] = overlapping["memories"][:8]
     except Exception:
-        degraded = True
+        logger.exception(
+            "Memory consistency similarity search failed | context=%s:%s model=%s",
+            context_type,
+            context_id,
+            model,
+        )
+        raise
     next_position = start + len(selected_anchors)
     return {
         "context_type": context_type,
@@ -257,6 +278,8 @@ async def build_memory_review_batch(
         "reviewed_anchor_count": next_position,
         "remaining_anchor_count": max(0, len(anchors) - next_position),
         "candidate_groups": groups,
-        "degraded": degraded,
+        "representation_pending": representation_pending,
+        "missing_representation_count": len(missing_global_ids),
         "embedding_model": model,
+        "blocked": False,
     }

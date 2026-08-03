@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from typing import Any, Dict, List, Optional
@@ -38,7 +39,6 @@ from app.services.effective_memory_service import (
 
 logger = logging.getLogger(__name__)
 
-MEMORY_RRF_K = 60
 _MEMORY_SCOPE_PRIORITY = {
     MemoryScopeType.THREAD.value: 0,
     MemoryScopeType.PROJECT.value: 1,
@@ -61,46 +61,34 @@ def memory_content_hash(content: str) -> str:
     return hashlib.sha256(str(content).encode("utf-8")).hexdigest()
 
 
-def _rank_fuse_memory_hits(
-    ranked_hit_groups: List[tuple[str, List[Dict[str, Any]]]],
+def _merge_same_model_memory_hits(
+    embedding_model: str,
+    ranked_hit_groups: List[List[Dict[str, Any]]],
 ) -> List[Dict[str, Any]]:
-    """Fuse model-local rankings without comparing their raw similarity scores."""
+    """Merge comparable rankings produced by one collection and query model."""
 
-    fused: Dict[str, Dict[str, Any]] = {}
-    for model_order, (embedding_model, hits) in enumerate(ranked_hit_groups):
-        for rank, hit in enumerate(hits, start=1):
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for hits in ranked_hit_groups:
+        for hit in hits:
             memory_id = str(hit.get("memory_id") or "")
             if not memory_id:
                 continue
-            contribution = 1.0 / (MEMORY_RRF_K + rank)
-            existing = fused.get(memory_id)
-            if existing is None:
-                existing = {
-                    **hit,
-                    "embedding_model": embedding_model,
-                    "raw_score": hit.get("score"),
-                    "score": 0.0,
-                    "_best_rank": rank,
-                    "_model_order": model_order,
-                }
-                fused[memory_id] = existing
-            existing["score"] += contribution
-            existing["_best_rank"] = min(existing["_best_rank"], rank)
-
-    ranked = sorted(
-        fused.values(),
+            candidate = {
+                **hit,
+                "embedding_model": embedding_model,
+                "raw_score": hit.get("score"),
+            }
+            current = by_id.get(memory_id)
+            if current is None or float(candidate.get("score") or 0.0) > float(current.get("score") or 0.0):
+                by_id[memory_id] = candidate
+    return sorted(
+        by_id.values(),
         key=lambda hit: (
-            -float(hit["score"]),
+            -float(hit.get("score") or 0.0),
             _MEMORY_SCOPE_PRIORITY.get(str(hit.get("scope_type") or ""), 99),
-            int(hit["_best_rank"]),
-            int(hit["_model_order"]),
             str(hit.get("memory_id") or ""),
         ),
     )
-    for hit in ranked:
-        hit.pop("_best_rank", None)
-        hit.pop("_model_order", None)
-    return ranked
 
 
 async def index_memory_record(memory) -> int:
@@ -226,7 +214,7 @@ async def search_thread_memory(
     context = await resolve_thread_embedding_context(thread_id)
     user_scope = next((scope for scope in scopes if scope["scope_type"] == MemoryScopeType.USER.value), None)
     ordinary_scopes = [scope for scope in scopes if scope["scope_type"] != MemoryScopeType.USER.value]
-    use_project_model_for_global = False
+    missing_global_ids: set[str] = set()
     if user_scope and context.embedding_model != GLOBAL_MEMORY_EMBEDDING_MODEL:
         global_ids = {
             memory.id for memory in effective_view["memory_records"]
@@ -240,24 +228,33 @@ async def search_thread_memory(
                     GlobalMemoryRepresentation.memory_id.in_(global_ids),
                 )
             )).scalars().all())
-        use_project_model_for_global = bool(global_ids) and indexed_global_ids == global_ids
+        missing_global_ids = global_ids - indexed_global_ids
+        if missing_global_ids:
+            logger.error(
+                "Global memory representations are unavailable; scheduling repair | model=%s missing=%s thread_id=%s",
+                context.embedding_model,
+                len(missing_global_ids),
+                thread_id,
+            )
+            from app.services.memory_representation_service import warm_global_representations_for_model
+            asyncio.create_task(warm_global_representations_for_model(context.embedding_model))
 
     search_groups: List[tuple[str, List[Dict[str, str]]]] = []
     for scope in ordinary_scopes:
         search_groups.append((context.embedding_model, [scope]))
     if user_scope:
         search_groups.append((
-            context.embedding_model if use_project_model_for_global else GLOBAL_MEMORY_EMBEDDING_MODEL,
+            context.embedding_model,
             [user_scope],
         ))
 
-    ranked_hit_groups: List[tuple[str, List[Dict[str, Any]]]] = []
-    degraded_representations: List[Dict[str, str]] = []
-    if user_scope and not use_project_model_for_global and context.embedding_model != GLOBAL_MEMORY_EMBEDDING_MODEL:
-        degraded_representations.append({
+    ranked_hit_groups: List[List[Dict[str, Any]]] = []
+    representation_issues: List[Dict[str, Any]] = []
+    if missing_global_ids:
+        representation_issues.append({
             "scope_type": MemoryScopeType.USER.value,
-            "requested_model": context.embedding_model,
-            "fallback_model": GLOBAL_MEMORY_EMBEDDING_MODEL,
+            "embedding_model": context.embedding_model,
+            "missing_count": len(missing_global_ids),
             "reason": "global_representation_warming",
         })
     for embedding_model, model_scopes in search_groups:
@@ -272,8 +269,8 @@ async def search_thread_memory(
             limit=max_results,
             query_text=query,
         )
-        ranked_hit_groups.append((embedding_model, model_hits))
-    hits = _rank_fuse_memory_hits(ranked_hit_groups)
+        ranked_hit_groups.append(model_hits)
+    hits = _merge_same_model_memory_hits(context.embedding_model, ranked_hit_groups)
     effective_by_id = {memory.id: memory for memory in effective_view["memory_records"]}
     memories = []
     seen = set()
@@ -302,7 +299,7 @@ async def search_thread_memory(
                 "content": memory.content,
                 "source_refs": memory.source_refs_json or {},
                 "score": hit.get("score"),
-                "score_type": "rrf",
+                "score_type": "similarity",
                 "raw_score": hit.get("raw_score"),
                 "embedding_model": hit.get("embedding_model"),
                 "created_at": iso_utc_z(memory.created_at) if memory.created_at else None,
@@ -319,7 +316,7 @@ async def search_thread_memory(
         "suppressed_memory_ids": effective_view["suppressed_memory_ids"],
         "unavailable_memory_count": effective_view["unavailable_memory_count"],
         "precedence": ["thread", "project", "user"],
-        "degraded_representations": degraded_representations,
+        "representation_issues": representation_issues,
     }
 
 

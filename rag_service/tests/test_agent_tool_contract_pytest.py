@@ -141,7 +141,7 @@ class TestAskPdfToolContract:
                     "scope_id": "project-1",
                     "content": "The launch codename is Atlas.",
                     "score": 0.91,
-                    "score_type": "rrf",
+                    "score_type": "similarity",
                     "raw_score": 0.83,
                     "embedding_model": "BAAI/bge-m3",
                 }
@@ -175,9 +175,10 @@ class TestAskPdfToolContract:
                 "scope_type": "project",
                 "scope_id": "project-1",
                 "score": 0.91,
-                "score_type": "rrf",
+                "score_type": "similarity",
                 "raw_score": 0.83,
                 "embedding_model": "BAAI/bge-m3",
+                "scope_rank": None,
             }
         ]
         assert payload["artifacts"]["memory_scope_policy"]["skipped_scopes"] == [

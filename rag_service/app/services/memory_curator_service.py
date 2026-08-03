@@ -471,6 +471,29 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                 if req.memory_review_cursor else None
             ),
         )
+        if memory_review.get("blocked"):
+            return {
+                "message": (
+                    f'{memory_review["missing_representation_count"]} Global memory representation(s) '
+                    f'are being indexed with {memory_review["embedding_model"]}. Retry the review shortly.'
+                ),
+                "state": "clarification",
+                "choices": [{
+                    "id": "retry-memory-review",
+                    "label": "Retry review",
+                    "description": "Check whether the required Global representations are ready.",
+                    "user_message": "Retry the memory consistency review now.",
+                }],
+                "operations": [],
+                "review": None,
+                "memory_review": memory_review,
+                "embedding_readiness": [{
+                    "embedding_model": memory_review["embedding_model"],
+                    "ready": False,
+                    "reason": "global_representation_warming",
+                }],
+                "consent": consent,
+            }
         if not memory_review["candidate_groups"] and memory_review["remaining_anchor_count"] == 0:
             return {
                 "message": "No related memory groups require changes in this review snapshot.",
@@ -481,8 +504,11 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                 "memory_review": memory_review,
                 "embedding_readiness": [{
                     "embedding_model": memory_review["embedding_model"],
-                    "ready": True,
-                    "degraded": memory_review["degraded"],
+                    "ready": not memory_review["representation_pending"],
+                    "reason": (
+                        "global_representation_warming"
+                        if memory_review["representation_pending"] else None
+                    ),
                 }],
                 "consent": consent,
             }
@@ -523,7 +549,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         "conversation": transcript,
         "review": review,
         "memory_review": memory_review,
-        "existing_memories_fallback": _curator_safe_payload(context_memories),
+        "existing_memories": _curator_safe_payload(context_memories),
         "recall_consent": consent,
         "web_search_mode": req.web_search_mode,
         "web_search_decision": (

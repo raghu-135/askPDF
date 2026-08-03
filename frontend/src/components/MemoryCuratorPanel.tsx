@@ -443,9 +443,11 @@ export default function MemoryCuratorPanel({
             </Alert>
           )}
           {decision?.memory_review && (
-            <Alert severity={decision.memory_review.degraded ? 'warning' : 'info'} sx={{ m: 1 }}>
+            <Alert severity={decision.memory_review.representation_pending ? 'warning' : 'info'} sx={{ m: 1 }}>
               Reviewed {decision.memory_review.reviewed_anchor_count} anchor(s). {decision.memory_review.remaining_anchor_count} remain.
-              {decision.memory_review.degraded ? ` ${decision.memory_review.embedding_model} similarity is degraded; fallback evidence was used.` : ''}
+              {decision.memory_review.representation_pending
+                ? ` ${decision.memory_review.missing_representation_count} Global representation(s) are warming for ${decision.memory_review.embedding_model} and were omitted from this review.`
+                : ''}
             </Alert>
           )}
           {reviewCanContinue && reviewCursor && (
@@ -472,7 +474,7 @@ export default function MemoryCuratorPanel({
                   size="small"
                   variant="outlined"
                   color={item.ready ? 'success' : 'warning'}
-                  label={`${item.embedding_model}: ${item.ready ? 'ready' : 'fallback'}`}
+                  label={`${item.embedding_model}: ${item.ready ? 'ready' : item.reason === 'global_representation_warming' ? 'warming' : 'unavailable'}`}
                 />
               ))}
             </Stack>
@@ -483,9 +485,6 @@ export default function MemoryCuratorPanel({
             </Alert>
           )}
           {applied && <Alert severity="success" sx={{ m: 1 }}>Memory workspace refreshed.</Alert>}
-          {decision?.embedding_readiness.some((item) => item.degraded) && (
-            <Alert severity="warning" sx={{ m: 1 }}>Related-memory search was degraded; recent memory was used as fallback.</Alert>
-          )}
         </Box>
       )}
       transcript={(
