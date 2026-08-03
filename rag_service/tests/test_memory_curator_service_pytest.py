@@ -126,11 +126,17 @@ def test_curator_payload_hides_scope_ids_but_preserves_memory_ids():
 def test_memory_curator_prompt_contains_relationship_examples():
     prompt = memory_curator_service.load_prompt("memory_curator/system.md")
 
+    assert "Durable memory means a reusable preference, standing instruction, or explicit user-approved fact" in prompt
+    assert "Ordinary prior conversation belongs in semantic chat" in prompt
     assert "Similarity is not conflict" in prompt
     assert "Override in the narrower scope (recommended)" in prompt
     assert "Update the broader memory" in prompt
     assert "without asking for permission again" in prompt
     assert "Same-scope correction updates the existing record" in prompt
+    assert "the user is deliberately administering memory" in prompt
+    assert "not discussed in the current conversation" in prompt
+    assert "Do not save incidental context, episode summaries, temporary task state, inferred personal facts" in " ".join(prompt.split())
+    assert "Do not create memories phrased as conversation logs" in prompt
 
 
 def test_conversation_review_intents_are_thread_create_only():
@@ -748,6 +754,97 @@ async def test_curator_repairs_permission_only_response_without_another_user_tur
 
     assert response["state"] == "proposal"
     assert response["choices"] == []
+    assert llm.ainvoke.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_memory_review_choice_validation_error_retries_without_reasking(
+    curator_sessionmaker,
+    monkeypatch,
+):
+    await _workspace(curator_sessionmaker)
+    existing = await memory_curator_service.apply_memory_curator_change_set(
+        MemoryCuratorApplyRequest(
+            context=_context(),
+            confirmed=True,
+            operations=[MemoryCuratorOperation(
+                action="create",
+                scope_type="user",
+                scope_id="default",
+                content="Use bullet points for long answers.",
+            )],
+        )
+    )
+    memory_id = existing["changed_memories"][0]["id"]
+    monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
+    monkeypatch.setattr(memory_curator_service, "build_memory_review_batch", AsyncMock(return_value={
+        "context_type": "thread",
+        "context_id": "curator-thread",
+        "snapshot_at": iso_utc_z(utc_now()),
+        "snapshot_scope_versions": {},
+        "anchor_position": 1,
+        "reviewed_anchor_count": 1,
+        "remaining_anchor_count": 0,
+        "candidate_groups": [{
+            "anchor_id": memory_id,
+            "scope_precedence": ["thread", "project", "user"],
+            "memories": [{
+                "id": memory_id,
+                "scope_type": "user",
+                "scope_rank": 1,
+                "content": "Use bullet points for long answers.",
+            }],
+            "override_edges": [],
+        }],
+        "representation_pending": False,
+        "missing_representation_count": 0,
+        "embedding_model": "BAAI/bge-m3",
+        "blocked": False,
+    }))
+    duplicate = SimpleNamespace(content=json.dumps({
+        "message": "I will adopt bullet points.",
+        "state": "proposal",
+        "choices": [],
+        "intents": [{
+            "action": "create",
+            "scope_type": "user",
+            "content": "Use bullet points for long answers.",
+            "override_target_ids": [],
+        }],
+    }))
+    corrected = SimpleNamespace(content=json.dumps({
+        "message": "The selected bullet-point outcome is already stored, so no memory change is needed.",
+        "state": "no_changes",
+        "choices": [],
+        "intents": [],
+    }))
+    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[duplicate, corrected]))
+    monkeypatch.setattr(memory_curator_service, "get_llm", lambda *_args, **_kwargs: llm)
+
+    response = await memory_curator_service.respond_to_memory_curator(
+        MemoryCuratorRespondRequest(
+            mode="memory_review",
+            context=_context(),
+            messages=[
+                MemoryCuratorMessage(
+                    role="user",
+                    content="Review related memories for duplicates, conflicts, superseded statements, and stale override relationships.",
+                ),
+                MemoryCuratorMessage(role="assistant", content="Choose a cleanup option."),
+                MemoryCuratorMessage(
+                    role="user",
+                    content="Adopt the bullet points instruction as the primary formatting guide.",
+                    choice_id="adopt-bullets",
+                ),
+            ],
+            llm_model="chat-model",
+            context_window=8192,
+        )
+    )
+
+    assert response["state"] == "no_changes"
+    assert response["choices"] == []
+    assert response["operations"] == []
     assert llm.ainvoke.await_count == 2
 
 

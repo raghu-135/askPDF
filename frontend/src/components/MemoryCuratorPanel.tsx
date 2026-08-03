@@ -329,10 +329,12 @@ export default function MemoryCuratorPanel({
     hasInput: false,
   }), [busy, llmModel, modelReady, workspaceIndexingStatus, workspaceReadiness?.embedding_model_ready, workspaceReadinessFailed]);
   const readyPlaceholder = intent.mode === 'memory_review'
-    ? 'Add context for this review...'
-    : intent.mode === 'edit'
-      ? 'Describe the correction...'
-      : 'Tell the curator what to remember...';
+    ? 'Add context for this existing-memory review...'
+    : intent.mode === 'conversation_review'
+      ? 'Add guidance for reusable thread memories...'
+      : intent.mode === 'edit'
+        ? 'Describe the correction...'
+        : 'Tell the curator what to remember...';
   const copyMessage = async (message: CuratorUiMessage) => {
     await navigator.clipboard.writeText(message.content);
     setCopiedId(message.id);
@@ -512,12 +514,12 @@ export default function MemoryCuratorPanel({
           {modelReady === false && <Alert severity="warning" sx={{ m: 1 }}>Select a ready chat model to continue.</Alert>}
           {decision?.review && (
             <Alert severity="info" sx={{ m: 1 }}>
-              Reviewed {decision.review.reviewed_count} turn(s). {decision.review.remaining_count} remain after this batch.
+              Reviewed {decision.review.reviewed_count} completed turn(s) for reusable Thread memories. {decision.review.remaining_count} remain after this batch.
             </Alert>
           )}
           {decision?.memory_review && (
             <Alert severity={decision.memory_review.representation_pending ? 'warning' : 'info'} sx={{ m: 1 }}>
-              Reviewed {decision.memory_review.reviewed_anchor_count} anchor(s). {decision.memory_review.remaining_anchor_count} remain.
+              Reviewed {decision.memory_review.reviewed_anchor_count} existing memory anchor(s) for conflicts or duplicates. {decision.memory_review.remaining_anchor_count} remain.
               {decision.memory_review.representation_pending
                 ? ` ${decision.memory_review.missing_representation_count} Global representation(s) are warming for ${decision.memory_review.embedding_model} and were omitted from this review.`
                 : ''}

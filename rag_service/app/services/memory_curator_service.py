@@ -435,6 +435,15 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
     pending_web_search: Dict[str, str] | None = None
     available_web_sources: Dict[str, Dict[str, Any]] = {}
     scope_ids = {scope.scope_id for scope in tool_context.visible_scopes}
+    last_prepare_error: str | None = None
+    selected_choice = next(
+        (
+            message
+            for message in reversed(req.messages)
+            if message.role == "user" and message.choice_id
+        ),
+        None,
+    )
 
     async def run_search(**kwargs):
         result = await search_memory_tool(tool_context, MemorySearchInput(**kwargs))
@@ -518,7 +527,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
     tools_by_name = {tool.name: tool for tool in tools}
 
     async def invoke_decision(correction: str | None = None):
-        nonlocal latest_intents, latest_prepared, tool_call_count
+        nonlocal latest_intents, latest_prepared, tool_call_count, last_prepare_error
         messages = [SystemMessage(content=system_prompt)]
         if correction:
             messages.append(SystemMessage(content=correction))
@@ -603,6 +612,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                         MemoryPrepareChangeInput(intents=intents),
                     )
                 except MemoryToolError as exc:
+                    last_prepare_error = str(exc)
                     parsed["message"] = str(exc)
                     state = "clarification"
         operations = list((latest_prepared or {}).get("operations", []))
@@ -652,6 +662,26 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
     elif state in {"clarification", "conflict"} and _permission_only_choices(choices):
         parsed, state, choices, operations, summaries = await invoke_decision(
             permission_retry_prompt
+        )
+        substantive_operations = [op for op in operations if op["action"] != "noop"]
+        if substantive_operations:
+            state = "proposal"
+            choices = []
+    if (
+        req.mode == "memory_review"
+        and selected_choice is not None
+        and last_prepare_error
+        and not substantive_operations
+    ):
+        parsed, state, choices, operations, summaries = await invoke_decision(
+            (
+                "The user already selected a memory-review resolution choice. "
+                f"choice_id={selected_choice.choice_id}; user_message={selected_choice.content}\n"
+                f"The previous proposed operation failed validation: {last_prepare_error}\n"
+                "Do not ask the same question again. Return one corrected concrete proposal using "
+                "only valid existing memory IDs from candidate_groups, or return no_changes if the "
+                "selected outcome is already represented."
+            )
         )
         substantive_operations = [op for op in operations if op["action"] != "noop"]
         if substantive_operations:

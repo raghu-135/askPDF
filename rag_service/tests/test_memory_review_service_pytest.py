@@ -78,11 +78,19 @@ def test_review_override_edges_include_only_relationships_inside_candidate_group
 
 def test_memory_review_prompt_teaches_scope_precedence_and_existing_overrides():
     prompt = load_prompt("memory_curator/system.md")
+    prompt_flat = " ".join(prompt.split())
 
+    assert "clean up existing stored memories and relationships" in prompt_flat
+    assert "Do not mine new facts from the conversation or invent unrelated new memories" in prompt_flat
+    assert "Same-scope conflicts are not hierarchy conflicts" in prompt_flat
+    assert "do not propose Thread overrides for two Global memories" in prompt_flat
     assert "Override in the narrower scope (recommended)" in prompt
     assert "override_edges" in prompt
     assert "Put the recommended contextual override first" in prompt
     assert "Update the broader memory" in prompt
     assert "changes behavior for every project or thread" in prompt
+    assert "Unrelated and additive memories require no operation" in prompt
+    assert "Do not create unrelated new memories from reviewer inference" in prompt_flat
     assert 'mode` is `conversation_review' in prompt
     assert 'only `create` intents with `scope_type="thread"`' in prompt
+    assert "Do not save incidental context, episode summaries, temporary task state, inferred personal facts" in prompt_flat
