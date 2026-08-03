@@ -84,3 +84,5 @@ def test_memory_review_prompt_teaches_scope_precedence_and_existing_overrides():
     assert "Put the recommended contextual override first" in prompt
     assert "Update the broader memory" in prompt
     assert "changes behavior for every project or thread" in prompt
+    assert 'mode` is `conversation_review' in prompt
+    assert 'only `create` intents with `scope_type="thread"`' in prompt

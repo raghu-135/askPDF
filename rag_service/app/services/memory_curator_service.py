@@ -268,6 +268,26 @@ def _sanitize_curator_intents(
     return sanitized, warnings
 
 
+def _restrict_conversation_review_intents(
+    intents: Sequence[MemoryChangeIntent],
+) -> List[MemoryChangeIntent]:
+    """Limit conversation-derived proposals to new memories in the active thread."""
+
+    restricted = []
+    for intent in intents:
+        if intent.action == "noop":
+            restricted.append(intent)
+            continue
+        if intent.action != "create":
+            raise MemoryToolError("Conversation review can only create new Thread memories")
+        if intent.scope_type not in {None, MemoryScopeType.THREAD.value}:
+            raise MemoryToolError("Conversation review cannot create Project or Global memory")
+        if intent.memory_id or intent.target_scope_type:
+            raise MemoryToolError("Conversation review cannot modify or move existing memory")
+        restricted.append(intent.model_copy(update={"scope_type": MemoryScopeType.THREAD.value}))
+    return restricted
+
+
 async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[str, Any]:
     try:
         tool_context, thread, project = await build_memory_tool_context(
@@ -431,6 +451,8 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             prepare_req.intents,
             scope_ids=scope_ids,
         )
+        if req.mode == "conversation_review":
+            intents = _restrict_conversation_review_intents(intents)
         latest_intents = list(intents)
         result = await prepare_memory_change(
             tool_context,
@@ -573,6 +595,8 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                         intents,
                         scope_ids=scope_ids,
                     )
+                    if req.mode == "conversation_review":
+                        intents = _restrict_conversation_review_intents(intents)
                     latest_intents = list(intents)
                     latest_prepared = await prepare_memory_change(
                         tool_context,
@@ -720,6 +744,16 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
     scopes, context_thread, _project = await _resolve_visible_scopes(req.context)
     visible_scopes = {(scope["scope_type"], scope["scope_id"]) for scope in scopes}
     operations = [operation for operation in req.operations if operation.action != "noop"]
+    if req.review_cursor:
+        if context_thread is None or req.review_cursor.thread_id != context_thread.id:
+            raise MemoryCuratorError("Conversation review cursor does not match this thread")
+        for operation in operations:
+            if operation.action != "create":
+                raise MemoryCuratorError("Conversation review can only create new Thread memories")
+            if _operation_scope(operation) != (MemoryScopeType.THREAD.value, context_thread.id):
+                raise MemoryCuratorError("Conversation review can only create memory in this thread")
+            if operation.semantic_action not in {None, "create"}:
+                raise MemoryCuratorError("Conversation review cannot modify existing memory")
     source_ids = [operation.memory_id for operation in operations if operation.memory_id]
     if len(source_ids) != len(set(source_ids)):
         raise MemoryCuratorError("A memory may only appear once in a change set")

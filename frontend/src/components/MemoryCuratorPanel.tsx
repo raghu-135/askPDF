@@ -57,7 +57,7 @@ const initialPrompt = (intent: MemoryCuratorIntent) => {
     return 'Review related memories for duplicates, conflicts, superseded statements, and stale override relationships.';
   }
   if (intent.mode === 'conversation_review') {
-    return 'Review the next eligible completed conversation turns and suggest only durable memory changes.';
+    return 'Review the next eligible completed conversation turns and suggest only durable memories for this thread.';
   }
   if (intent.mode === 'edit') {
     return `I want to review and edit this memory:\n\n${intent.memory?.content || ''}`;

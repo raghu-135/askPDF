@@ -20,6 +20,7 @@ from app.models.requests import (
 from app.models.memory_tools import (
     MEMORY_PROPOSE,
     MEMORY_READ_STORED,
+    MemoryChangeIntent,
     MemoryGetInput,
     MemoryPrepareChangeInput,
     MemorySearchInput,
@@ -130,6 +131,66 @@ def test_memory_curator_prompt_contains_relationship_examples():
     assert "Update the broader memory" in prompt
     assert "without asking for permission again" in prompt
     assert "Same-scope correction updates the existing record" in prompt
+
+
+def test_conversation_review_intents_are_thread_create_only():
+    restricted = memory_curator_service._restrict_conversation_review_intents([
+        MemoryChangeIntent(action="create", content="Use concise answers."),
+    ])
+
+    assert restricted[0].action == "create"
+    assert restricted[0].scope_type == "thread"
+
+    with pytest.raises(memory_tool_service.MemoryToolError, match="only create"):
+        memory_curator_service._restrict_conversation_review_intents([
+            MemoryChangeIntent(action="update", memory_id="memory-1", content="Changed"),
+        ])
+    with pytest.raises(memory_tool_service.MemoryToolError, match="Project or Global"):
+        memory_curator_service._restrict_conversation_review_intents([
+            MemoryChangeIntent(action="create", scope_type="project", content="Broader"),
+        ])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    [
+        MemoryCuratorOperation(
+            action="create",
+            scope_type="project",
+            scope_id="curator-project",
+            content="Do not create this from a conversation review.",
+        ),
+        MemoryCuratorOperation(
+            action="update",
+            scope_type="thread",
+            scope_id="curator-thread",
+            memory_id="existing-memory",
+            expected_updated_at="2026-08-03T00:00:00Z",
+            content="Do not update this from a conversation review.",
+        ),
+    ],
+)
+async def test_conversation_review_apply_rejects_non_thread_create_operations(
+    curator_sessionmaker,
+    operation,
+):
+    _project, thread = await _workspace(curator_sessionmaker)
+    now = utc_now()
+
+    with pytest.raises(memory_curator_service.MemoryCuratorError, match="Conversation review"):
+        await memory_curator_service.apply_memory_curator_change_set(
+            MemoryCuratorApplyRequest(
+                context=_context(),
+                confirmed=True,
+                operations=[operation],
+                review_cursor=MemoryReviewCursor(
+                    thread_id=thread.id,
+                    reviewed_through_turn_id="review-turn",
+                    reviewed_through_created_at=now,
+                ),
+            )
+        )
 
 
 @pytest.mark.asyncio
