@@ -18,6 +18,9 @@ from app.db import (
     mark_memory_indexing,
 )
 from app.db.vector import get_vector_db
+from app.db.connection_sqlmodel import async_session_maker
+from app.db.models_sqlmodel import GlobalMemoryRepresentation
+from sqlalchemy.future import select
 from app.models.llm_server_client import get_embedding_model
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z
@@ -130,9 +133,20 @@ async def index_memory_record(memory) -> int:
 
 
 async def _delete_memory_vectors(memory) -> str:
-    deleted = await get_vector_db().delete_memory_vectors(memory.id, memory.embedding_model)
-    if not deleted:
-        raise MemoryVectorCleanupError(f"Failed to delete memory vectors for memory {memory.id}")
+    models = [memory.embedding_model]
+    if memory.scope_type == MemoryScopeType.USER.value:
+        async with async_session_maker() as session:
+            models.extend(list((await session.execute(
+                select(GlobalMemoryRepresentation.embedding_model).where(
+                    GlobalMemoryRepresentation.memory_id == memory.id
+                )
+            )).scalars().all()))
+    for model in dict.fromkeys(models):
+        deleted = await get_vector_db().delete_memory_vectors(memory.id, model)
+        if not deleted:
+            raise MemoryVectorCleanupError(
+                f"Failed to delete memory vectors for memory {memory.id} using {model}"
+            )
     return "deleted"
 
 
@@ -210,17 +224,43 @@ async def search_thread_memory(
             "unavailable_memory_count": 0,
         }
     context = await resolve_thread_embedding_context(thread_id)
-    scopes_by_model: Dict[str, List[Dict[str, str]]] = {}
-    for scope in scopes:
-        model = (
-            GLOBAL_MEMORY_EMBEDDING_MODEL
-            if scope["scope_type"] == MemoryScopeType.USER.value
-            else context.embedding_model
-        )
-        scopes_by_model.setdefault(model, []).append(scope)
+    user_scope = next((scope for scope in scopes if scope["scope_type"] == MemoryScopeType.USER.value), None)
+    ordinary_scopes = [scope for scope in scopes if scope["scope_type"] != MemoryScopeType.USER.value]
+    use_project_model_for_global = False
+    if user_scope and context.embedding_model != GLOBAL_MEMORY_EMBEDDING_MODEL:
+        global_ids = {
+            memory.id for memory in effective_view["memory_records"]
+            if memory.scope_type == MemoryScopeType.USER.value
+        }
+        async with async_session_maker() as session:
+            indexed_global_ids = set((await session.execute(
+                select(GlobalMemoryRepresentation.memory_id).where(
+                    GlobalMemoryRepresentation.embedding_model == context.embedding_model,
+                    GlobalMemoryRepresentation.index_status == "indexed",
+                    GlobalMemoryRepresentation.memory_id.in_(global_ids),
+                )
+            )).scalars().all())
+        use_project_model_for_global = bool(global_ids) and indexed_global_ids == global_ids
+
+    search_groups: List[tuple[str, List[Dict[str, str]]]] = []
+    for scope in ordinary_scopes:
+        search_groups.append((context.embedding_model, [scope]))
+    if user_scope:
+        search_groups.append((
+            context.embedding_model if use_project_model_for_global else GLOBAL_MEMORY_EMBEDDING_MODEL,
+            [user_scope],
+        ))
 
     ranked_hit_groups: List[tuple[str, List[Dict[str, Any]]]] = []
-    for embedding_model, model_scopes in scopes_by_model.items():
+    degraded_representations: List[Dict[str, str]] = []
+    if user_scope and not use_project_model_for_global and context.embedding_model != GLOBAL_MEMORY_EMBEDDING_MODEL:
+        degraded_representations.append({
+            "scope_type": MemoryScopeType.USER.value,
+            "requested_model": context.embedding_model,
+            "fallback_model": GLOBAL_MEMORY_EMBEDDING_MODEL,
+            "reason": "global_representation_warming",
+        })
+    for embedding_model, model_scopes in search_groups:
         await require_embedding_model_ready(embedding_model)
         embedding_client = get_embedding_model(embedding_model)
         query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
@@ -237,6 +277,7 @@ async def search_thread_memory(
     effective_by_id = {memory.id: memory for memory in effective_view["memory_records"]}
     memories = []
     seen = set()
+    seen_hashes = set()
     for hit in hits:
         memory_id = hit.get("memory_id")
         if not memory_id or memory_id in seen:
@@ -245,10 +286,18 @@ async def search_thread_memory(
         memory = effective_by_id.get(str(memory_id))
         if memory is None:
             continue
+        if memory.content_hash in seen_hashes:
+            continue
+        seen_hashes.add(memory.content_hash)
         memories.append(
             {
                 "id": memory.id,
                 "scope_type": memory.scope_type,
+                "scope_rank": {
+                    MemoryScopeType.THREAD.value: 3,
+                    MemoryScopeType.PROJECT.value: 2,
+                    MemoryScopeType.USER.value: 1,
+                }.get(memory.scope_type, 0),
                 "scope_id": memory.scope_id,
                 "content": memory.content,
                 "source_refs": memory.source_refs_json or {},
@@ -269,15 +318,21 @@ async def search_thread_memory(
         "applied_overrides": effective_view["applied_overrides"],
         "suppressed_memory_ids": effective_view["suppressed_memory_ids"],
         "unavailable_memory_count": effective_view["unavailable_memory_count"],
+        "precedence": ["thread", "project", "user"],
+        "degraded_representations": degraded_representations,
     }
 
 
-async def retry_memory_index(memory_id: str):
+async def retry_memory_index(memory_id: str, embedding_model: str | None = None):
     """Retry one pending/failed canonical memory index operation."""
 
     memory = await get_memory(memory_id)
     if memory is None:
         return None
+    if embedding_model and embedding_model != memory.embedding_model:
+        from app.services.memory_representation_service import index_global_representation
+        await index_global_representation(memory_id, embedding_model)
+        return await get_memory(memory_id)
     if memory.index_status == "indexed":
         return memory
     await index_memory_record(memory)

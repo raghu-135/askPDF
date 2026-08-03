@@ -52,8 +52,23 @@ export const reviewCuratorIntent = (thread: Thread): MemoryCuratorIntent => ({
   projectId: thread.project_id,
 });
 
+export const memoryReviewCuratorIntent = ({
+  thread,
+  project,
+}: {
+  thread?: Thread | null;
+  project?: Project | null;
+}): MemoryCuratorIntent => ({
+  mode: 'memory_review',
+  scopeType: thread ? 'thread' : 'project',
+  scopeId: thread?.id || project?.id || '',
+  threadId: thread?.id,
+  projectId: project?.id || thread?.project_id,
+});
+
 export const curatorTitle = (intent: MemoryCuratorIntent) => {
   if (intent.mode === 'conversation_review') return 'Conversation Memory Review';
+  if (intent.mode === 'memory_review') return 'Memory Consistency Review';
   if (intent.mode === 'edit') return 'Edit Memory';
   return 'Add Memory';
 };

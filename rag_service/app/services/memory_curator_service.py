@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Sequence
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, delete, func, or_
 from sqlalchemy.future import select
 
@@ -60,6 +62,8 @@ from app.services.memory_tool_service import (
     search_memory_tool,
 )
 from app.services.memory_service import index_memory_record, memory_content_hash
+from app.services.web_search_service import WEB_SEARCH_CAPABILITY, format_search_context, search_internet
+from app.services.memory_review_service import build_memory_review_batch, complete_memory_review
 from app.services.effective_memory_service import (
     serialize_memories_with_relationships,
 )
@@ -71,6 +75,7 @@ logger = logging.getLogger(__name__)
 MAX_CURATOR_MEMORIES = 40
 MAX_REVIEW_TURNS = 20
 MAX_CURATOR_TOOL_CALLS = 4
+MAX_CURATOR_WEB_CALLS = 2
 
 _SCOPE_RANK = {
     MemoryScopeType.USER.value: 0,
@@ -89,6 +94,13 @@ class MemoryCuratorNotFoundError(MemoryCuratorError):
 
 class MemoryCuratorModelUnavailableError(MemoryCuratorError):
     code = "llm_model_unavailable"
+
+
+class CuratorWebSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=1000)
+    reason: str = Field(default="Verify current external information", max_length=500)
 
 
 class MemoryChangedError(MemoryCuratorError):
@@ -302,6 +314,7 @@ def _intent_from_raw(raw: Any) -> MemoryChangeIntent | None:
             target_scope_type=raw.get("target_scope_type"),
             content=raw.get("content"),
             override_target_ids=raw_targets,
+            web_source_ids=[str(item) for item in (raw.get("web_source_ids") or [])],
         )
     except Exception:
         return None
@@ -420,7 +433,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             selected_scope_id=req.context.selected_scope_id,
             thread_id=req.context.thread_id,
             project_id=req.context.project_id,
-            capabilities=[MEMORY_READ_STORED, MEMORY_PROPOSE],
+            capabilities=[MEMORY_READ_STORED, MEMORY_PROPOSE, WEB_SEARCH_CAPABILITY],
         )
     except MemoryToolNotFoundError as exc:
         raise MemoryCuratorNotFoundError(str(exc)) from exc
@@ -441,6 +454,38 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             "embedding_readiness": [],
             "consent": consent,
         }
+    memory_review = None
+    if req.mode == "memory_review":
+        context_type = "thread" if req.context.thread_id else "project"
+        context_id = req.context.thread_id or req.context.project_id
+        if not context_id:
+            raise MemoryCuratorError("Memory review requires a project or thread context")
+        position = req.memory_review_cursor.anchor_position if req.memory_review_cursor else 0
+        memory_review = await build_memory_review_batch(
+            context_type,
+            context_id,
+            anchor_position=position,
+            snapshot_at=(req.memory_review_cursor.snapshot_at if req.memory_review_cursor else None),
+            snapshot_scope_versions=(
+                req.memory_review_cursor.snapshot_scope_versions
+                if req.memory_review_cursor else None
+            ),
+        )
+        if not memory_review["candidate_groups"] and memory_review["remaining_anchor_count"] == 0:
+            return {
+                "message": "No related memory groups require changes in this review snapshot.",
+                "state": "no_changes",
+                "choices": [],
+                "operations": [],
+                "review": None,
+                "memory_review": memory_review,
+                "embedding_readiness": [{
+                    "embedding_model": memory_review["embedding_model"],
+                    "ready": True,
+                    "degraded": memory_review["degraded"],
+                }],
+                "consent": consent,
+            }
 
     transcript = [item.model_dump(mode="json", exclude_none=True) for item in req.messages]
     query_parts = [item["content"] for item in transcript[-4:]]
@@ -477,12 +522,21 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         "selected_memory_id": req.memory_id,
         "conversation": transcript,
         "review": review,
+        "memory_review": memory_review,
         "existing_memories_fallback": _curator_safe_payload(context_memories),
         "recall_consent": consent,
+        "web_search_mode": req.web_search_mode,
+        "web_search_decision": (
+            req.web_search_decision.model_dump(mode="json")
+            if req.web_search_decision else None
+        ),
     }
     latest_prepared: Dict[str, Any] | None = None
     latest_intents: List[MemoryChangeIntent] = []
     tool_call_count = 0
+    web_call_count = 0
+    pending_web_search: Dict[str, str] | None = None
+    available_web_sources: Dict[str, Dict[str, Any]] = {}
     scope_ids = {scope.scope_id for scope in tool_context.visible_scopes}
 
     async def run_search(**kwargs):
@@ -510,6 +564,29 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         latest_prepared = result
         return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
 
+    async def run_web_search(**kwargs):
+        nonlocal web_call_count, pending_web_search
+        if WEB_SEARCH_CAPABILITY not in tool_context.capabilities:
+            return json.dumps({"status": "denied", "message": "Web search capability is unavailable."})
+        search_req = CuratorWebSearchInput(**kwargs)
+        if req.web_search_mode == "off":
+            return json.dumps({"status": "disabled", "message": "Internet search is off."})
+        decision = req.web_search_decision
+        if req.web_search_mode == "ask" and not (
+            decision and decision.approved and decision.query == search_req.query
+        ):
+            if decision and not decision.approved and decision.query == search_req.query:
+                return json.dumps({"status": "denied", "message": "The user declined this search."})
+            pending_web_search = {"query": search_req.query, "reason": search_req.reason}
+            return json.dumps({"status": "approval_required", **pending_web_search})
+        if web_call_count >= MAX_CURATOR_WEB_CALLS:
+            return json.dumps({"status": "limit_reached"})
+        web_call_count += 1
+        result = await search_internet(search_req.query, max_results=6)
+        for source in result.get("sources") or []:
+            available_web_sources[source["id"]] = source
+        return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
+
     tools = [
         StructuredTool.from_function(
             coroutine=run_search,
@@ -529,6 +606,15 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             description="Validate semantic memory intents and prepare the one confirmable change set.",
             args_schema=MemoryPrepareChangeInput,
         ),
+        StructuredTool.from_function(
+            coroutine=run_web_search,
+            name="internet_search",
+            description=(
+                "Search current public internet information only when external facts need verification. "
+                "Do not use for preferences, supplied facts, scope changes, or memory conflicts."
+            ),
+            args_schema=CuratorWebSearchInput,
+        ),
     ]
     tools_by_name = {tool.name: tool for tool in tools}
 
@@ -542,16 +628,20 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         supports_tools = await check_model_supports_tools(req.llm_model)
         if supports_tools:
             bound = llm.bind_tools(tools)
-            while True:
+            loop_count = 0
+            while loop_count < MAX_CURATOR_TOOL_CALLS + MAX_CURATOR_WEB_CALLS:
+                loop_count += 1
                 response = await invoke_with_retry(bound.ainvoke, messages)
                 calls = list(getattr(response, "tool_calls", None) or [])
                 if not calls:
                     break
                 messages.append(response)
                 for call in calls:
-                    if tool_call_count >= MAX_CURATOR_TOOL_CALLS:
+                    is_web_call = str(call.get("name") or "") == "internet_search"
+                    if not is_web_call and tool_call_count >= MAX_CURATOR_TOOL_CALLS:
                         break
-                    tool_call_count += 1
+                    if not is_web_call:
+                        tool_call_count += 1
                     tool = tools_by_name.get(str(call.get("name") or ""))
                     try:
                         output = (
@@ -563,7 +653,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                         output = json.dumps({"error": str(exc)[:500]})
                     messages.append(ToolMessage(
                         content=str(output),
-                        tool_call_id=str(call.get("id") or f"memory-tool-{tool_call_count}"),
+                        tool_call_id=str(call.get("id") or f"curator-tool-{loop_count}"),
                     ))
                 if tool_call_count >= MAX_CURATOR_TOOL_CALLS:
                     messages.append(SystemMessage(content=tool_limit_prompt))
@@ -572,6 +662,20 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         else:
             response = await invoke_with_retry(llm.ainvoke, messages)
         parsed = safe_json_object(str(getattr(response, "content", "") or ""))
+        raw_web_search = parsed.get("web_search")
+        if not supports_tools and isinstance(raw_web_search, dict):
+            await run_web_search(**raw_web_search)
+            if available_web_sources and pending_web_search is None:
+                web_context = format_search_context({"sources": list(available_web_sources.values())})
+                response = await invoke_with_retry(llm.ainvoke, [
+                    *messages,
+                    SystemMessage(content=(
+                        "Use the following approved web evidence to finish the curator decision. "
+                        "Reference only source IDs you actually use in web_source_ids.\n\n"
+                        f"{web_context}"
+                    )),
+                ])
+                parsed = safe_json_object(str(getattr(response, "content", "") or ""))
         state = str(parsed.get("state") or "")
         if state not in {"clarification", "conflict", "proposal", "no_changes"}:
             state = "clarification"
@@ -602,9 +706,44 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                     state = "clarification"
         operations = list((latest_prepared or {}).get("operations", []))
         summaries = list((latest_prepared or {}).get("operation_summaries", []))
+        selected_source_ids = {
+            source_id
+            for intent in latest_intents
+            for source_id in intent.web_source_ids
+            if source_id in available_web_sources
+        }
+        selected_sources = [
+            {key: source[key] for key in ("id", "title", "url", "query", "searched_at")}
+            for source_id, source in available_web_sources.items()
+            if source_id in selected_source_ids
+        ]
+        if selected_sources:
+            for operation in operations:
+                if operation.get("action") in {"create", "update"}:
+                    operation["web_sources"] = selected_sources
         return parsed, state, choices, operations, summaries
 
     parsed, state, choices, operations, summaries = await invoke_decision()
+    if pending_web_search is not None:
+        return {
+            "message": (
+                f'The curator wants to search the internet for "{pending_web_search["query"]}". '
+                "Allow this search?"
+            ),
+            "state": "web_search_approval",
+            "choices": [],
+            "operations": [],
+            "operation_summaries": [],
+            "review": review,
+            "memory_review": memory_review,
+            "embedding_readiness": readiness,
+            "context_memory_count": len(context_memories),
+            "consent": consent,
+            "tool_calls_used": tool_call_count,
+            "web_calls_used": web_call_count,
+            "pending_web_search": pending_web_search,
+            "web_sources": [],
+        }
     cross_scope_targets = await _cross_scope_override_targets(tool_context, operations)
     new_cross_scope_targets = [item for item in cross_scope_targets if not item["existing"]]
     override_resolution = _selected_override_resolution(transcript)
@@ -689,10 +828,14 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         "operations": operations,
         "operation_summaries": summaries,
         "review": review,
+        "memory_review": memory_review,
         "embedding_readiness": readiness,
         "context_memory_count": len(context_memories),
         "consent": consent,
         "tool_calls_used": tool_call_count,
+        "web_calls_used": web_call_count,
+        "pending_web_search": None,
+        "web_sources": list(available_web_sources.values()),
     }
 
 
@@ -745,6 +888,14 @@ def _assert_acyclic(edges: Sequence[tuple[str, str]]) -> None:
 
 
 async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dict[str, Any]:
+    if req.memory_review_cursor:
+        expected_type = "thread" if req.context.thread_id else "project"
+        expected_id = req.context.thread_id or req.context.project_id
+        if (
+            req.memory_review_cursor.context_type != expected_type
+            or req.memory_review_cursor.context_id != expected_id
+        ):
+            raise MemoryCuratorError("Memory review cursor does not match this workspace")
     scopes, context_thread, _project = await _resolve_visible_scopes(req.context)
     visible_scopes = {(scope["scope_type"], scope["scope_id"]) for scope in scopes}
     operations = [operation for operation in req.operations if operation.action != "noop"]
@@ -928,6 +1079,10 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                         })
                     if operation.move_source_memory_id:
                         source_refs["curator_move_source_memory_id"] = operation.move_source_memory_id
+                    if operation.web_sources:
+                        source_refs["web_sources"] = [
+                            source.model_dump(mode="json") for source in operation.web_sources
+                        ]
                     if operation.action == "create":
                         memory = Memory(
                             id=create_ids[index],
@@ -965,6 +1120,9 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                         )
                     elif operation.action == "update":
                         memory = locked[operation.memory_id or ""]
+                        existing_source_refs = dict(memory.source_refs_json or {})
+                        existing_source_refs.update(source_refs)
+                        source_refs = existing_source_refs
                         content_changed = memory.content_hash != memory_content_hash(operation.content or "")
                         if content_changed:
                             updated = await MemoryRepository(session).update_memory(
@@ -985,6 +1143,22 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                                 raise MemoryCuratorNotFoundError("Memory disappeared during update")
                             memory = updated
                             to_index.append(memory)
+                        elif operation.web_sources:
+                            memory.source_refs_json = source_refs
+                            memory.updated_at = now
+                            session.add(MemoryEvent(
+                                memory_id=memory.id,
+                                event_type="curator_updated",
+                                actor_id=req.actor_id,
+                                payload_json={
+                                    "mode": "confirmed_change_set",
+                                    "semantic_action": operation.semantic_action or operation.action,
+                                    "operation_group_id": operation.operation_group_id,
+                                    "provenance_only": True,
+                                },
+                                created_at=now,
+                            ))
+                            await session.flush()
                         await MemoryRepository(session).replace_overrides(
                             memory.id,
                             [target.memory_id for target in operation.override_targets],
@@ -1016,6 +1190,14 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                 }
                 for project_id in touched_projects:
                     await touch_project_activity(session, project_id, occurred_at=now)
+                from app.services.memory_review_service import bump_memory_scope_activity
+                from app.services.memory_representation_service import invalidate_global_representations
+                await bump_memory_scope_activity(
+                    [_operation_scope(operation) for operation in operations],
+                    session=session,
+                )
+                for memory in changed:
+                    await invalidate_global_representations(memory, session=session)
                 await session.flush()
     except Exception:
         for memory_id, _embedding_model in cleaned_vector_targets:
@@ -1049,9 +1231,35 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
         if refreshed is not None:
             refreshed_records.append(refreshed)
     indexed_records = await serialize_memories_with_relationships(refreshed_records)
+    for memory in refreshed_records:
+        if memory.scope_type == MemoryScopeType.USER.value:
+            async with async_session_maker() as session:
+                from app.db.models_sqlmodel import GlobalMemoryRepresentation
+                models = list((await session.execute(
+                    select(GlobalMemoryRepresentation.embedding_model).where(
+                        GlobalMemoryRepresentation.memory_id == memory.id,
+                        GlobalMemoryRepresentation.index_status.in_(("pending", "failed")),
+                    )
+                )).scalars().all())
+            from app.services.memory_representation_service import warm_global_representations_for_model
+            for model in set(models):
+                asyncio.create_task(warm_global_representations_for_model(model))
+    memory_review_completed = False
+    if req.memory_review_cursor and req.memory_review_cursor.remaining_anchor_count == 0:
+        await complete_memory_review(
+            req.memory_review_cursor.context_type,
+            req.memory_review_cursor.context_id,
+            req.memory_review_cursor.snapshot_scope_versions,
+        )
+        memory_review_completed = True
     return {
         "changed_memories": indexed_records,
         "deleted_memory_ids": deleted_ids,
         "warnings": warnings,
         "review_cursor_advanced": bool(req.review_cursor),
+        "memory_review_completed": memory_review_completed,
+        "memory_review_cursor": (
+            req.memory_review_cursor.model_dump(mode="json")
+            if req.memory_review_cursor else None
+        ),
     }

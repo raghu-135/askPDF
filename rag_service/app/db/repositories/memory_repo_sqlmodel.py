@@ -72,6 +72,10 @@ class MemoryRepository:
         async with session.begin():
             session.add(memory)
             await session.flush()
+            from app.services.memory_review_service import bump_memory_scope_activity
+            from app.services.memory_representation_service import invalidate_global_representations
+            await bump_memory_scope_activity([(scope_type, scope_id)], session=session)
+            await invalidate_global_representations(memory, session=session)
             session.add(
                 MemoryEvent(
                     memory_id=memory.id,
@@ -203,6 +207,10 @@ class MemoryRepository:
                 created_at=now,
             ))
             await session.flush()
+            from app.services.memory_review_service import bump_memory_scope_activity
+            from app.services.memory_representation_service import invalidate_global_representations
+            await bump_memory_scope_activity([(memory.scope_type, memory.scope_id)], session=session)
+            await invalidate_global_representations(memory, session=session)
             if memory.scope_type == MemoryScopeType.PROJECT.value:
                 await touch_project_activity(session, memory.scope_id, occurred_at=now)
             return memory
@@ -239,6 +247,8 @@ class MemoryRepository:
                 if memory.scope_type == MemoryScopeType.PROJECT.value
                 else None
             )
+            from app.services.memory_review_service import bump_memory_scope_activity
+            await bump_memory_scope_activity([(memory.scope_type, memory.scope_id)], session=session)
             await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id == memory_id))
             await session.delete(memory)
             await session.flush()
@@ -257,6 +267,8 @@ class MemoryRepository:
             memory_ids = [str(row[0]) for row in result.all()]
             if not memory_ids:
                 return []
+            from app.services.memory_review_service import bump_memory_scope_activity
+            await bump_memory_scope_activity([(scope_type, scope_id)], session=session)
             await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id.in_(memory_ids)))
             await session.execute(delete(Memory).where(Memory.id.in_(memory_ids)))
             return memory_ids
@@ -292,6 +304,15 @@ class MemoryRepository:
         memory = await self._session.get(Memory, memory_id)
         if memory is None:
             raise ValueError(f"memory not found: {memory_id}")
+        existing_target_ids = list((await self._session.execute(
+            select(MemoryOverride.overridden_memory_id).where(
+                MemoryOverride.overriding_memory_id == memory_id
+            )
+        )).scalars().all())
+        affected_ids = sorted(set(existing_target_ids) | set(normalized_targets))
+        affected_memories = list((await self._session.execute(
+            select(Memory).where(Memory.id.in_(affected_ids))
+        )).scalars().all()) if affected_ids else []
         await self._session.execute(
             delete(MemoryOverride).where(MemoryOverride.overriding_memory_id == memory_id)
         )
@@ -310,4 +331,10 @@ class MemoryRepository:
             payload_json={"overridden_memory_ids": normalized_targets},
             created_at=now,
         ))
+        from app.services.memory_review_service import bump_memory_scope_activity
+        await bump_memory_scope_activity(
+            [(memory.scope_type, memory.scope_id)]
+            + [(target.scope_type, target.scope_id) for target in affected_memories],
+            session=self._session,
+        )
         await self._session.flush()

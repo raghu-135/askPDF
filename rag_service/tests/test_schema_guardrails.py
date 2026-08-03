@@ -21,6 +21,9 @@ EXPECTED_MODEL_TABLES = {
     "memories",
     "memory_events",
     "memory_overrides",
+    "global_memory_representations",
+    "memory_scope_activity",
+    "memory_review_states",
     "project_files",
     "thread_document_annotations",
     "thread_files",
@@ -50,7 +53,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
 
     cleanup = scripts.get_revision("c9e6a1b4d3f8")
 
-    assert scripts.get_heads() == ["3a8d7c5e1f2b"]
+    assert scripts.get_heads() == ["4b7e2d9a1c5f"]
     assert scripts.get_revision("a7c4e9f2b1d6") is not None
     assert scripts.get_revision("b8d5f0a3c2e7") is not None
     assert cleanup is not None
@@ -60,6 +63,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     assert scripts.get_revision("d9a4e7c2b1f6").down_revision == "f4b8c2d7e1a9"
     assert scripts.get_revision("1c7d9e4a2b6f").down_revision == "d9a4e7c2b1f6"
     assert scripts.get_revision("3a8d7c5e1f2b").down_revision == "1c7d9e4a2b6f"
+    assert scripts.get_revision("4b7e2d9a1c5f").down_revision == "3a8d7c5e1f2b"
 
 
 def test_project_files_has_composite_key_and_cascading_foreign_keys():
@@ -161,6 +165,27 @@ def test_memory_overrides_define_directional_key_and_cascades():
         for element in constraint.elements
         if constraint.ondelete == "CASCADE"
     } == {"overriding_memory_id", "overridden_memory_id"}
+
+
+def test_global_memory_representations_are_model_aware_and_cascade():
+    table = models_sqlmodel.GlobalMemoryRepresentation.__table__
+    assert [column.name for column in table.primary_key.columns] == ["memory_id", "embedding_model"]
+    assert "idx_global_memory_rep_retry" in {index.name for index in table.indexes}
+    assert {
+        element.parent.name
+        for constraint in table.foreign_key_constraints
+        for element in constraint.elements
+        if constraint.ondelete == "CASCADE"
+    } == {"memory_id"}
+
+
+def test_memory_review_state_tables_have_context_keys():
+    assert [column.name for column in models_sqlmodel.MemoryScopeActivity.__table__.primary_key.columns] == [
+        "scope_type", "scope_id"
+    ]
+    assert [column.name for column in models_sqlmodel.MemoryReviewState.__table__.primary_key.columns] == [
+        "context_type", "context_id"
+    ]
 
 
 @pytest.mark.asyncio

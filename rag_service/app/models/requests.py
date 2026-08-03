@@ -125,15 +125,35 @@ class MemoryCuratorContext(BaseModel):
     project_id: Optional[str] = None
 
 
+class MemoryCuratorWebSearchDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=1000)
+    approved: bool
+
+
+class MemoryCuratorWebSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=100)
+    title: str = Field(default="Internet Search", max_length=500)
+    url: str = Field(default="", max_length=4000)
+    query: str = Field(min_length=1, max_length=1000)
+    searched_at: str = Field(min_length=1, max_length=100)
+
+
 class MemoryCuratorRespondRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["create", "edit", "conversation_review"]
+    mode: Literal["create", "edit", "conversation_review", "memory_review"]
     context: MemoryCuratorContext
     memory_id: Optional[str] = None
     messages: List[MemoryCuratorMessage] = Field(default_factory=list, max_length=24)
     llm_model: str = Field(min_length=1)
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
+    web_search_mode: Literal["off", "ask", "on"] = "off"
+    web_search_decision: Optional[MemoryCuratorWebSearchDecision] = None
+    memory_review_cursor: Optional["MemoryConsistencyReviewCursor"] = None
 
 
 class MemoryOverrideTarget(BaseModel):
@@ -157,6 +177,7 @@ class MemoryCuratorOperation(BaseModel):
     operation_group_id: Optional[str] = Field(default=None, max_length=100)
     move_source_memory_id: Optional[str] = None
     move_destination_memory_id: Optional[str] = None
+    web_sources: List[MemoryCuratorWebSource] = Field(default_factory=list, max_length=12)
 
 
 class MemoryReviewCursor(BaseModel):
@@ -167,6 +188,18 @@ class MemoryReviewCursor(BaseModel):
     reviewed_through_created_at: datetime
 
 
+class MemoryConsistencyReviewCursor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    context_type: Literal["project", "thread"]
+    context_id: str = Field(min_length=1)
+    snapshot_at: datetime
+    snapshot_scope_versions: Dict[str, int] = Field(default_factory=dict)
+    anchor_position: int = Field(default=0, ge=0)
+    reviewed_anchor_count: int = Field(default=0, ge=0)
+    remaining_anchor_count: int = Field(default=0, ge=0)
+
+
 class MemoryCuratorApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -174,6 +207,7 @@ class MemoryCuratorApplyRequest(BaseModel):
     confirmed: Literal[True]
     operations: List[MemoryCuratorOperation] = Field(default_factory=list, max_length=20)
     review_cursor: Optional[MemoryReviewCursor] = None
+    memory_review_cursor: Optional[MemoryConsistencyReviewCursor] = None
     actor_id: str = Field(default="ui", min_length=1, max_length=200)
 
 

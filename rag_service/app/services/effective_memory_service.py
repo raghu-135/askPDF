@@ -9,7 +9,7 @@ from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import MemoryScopeType
-from app.db.models_sqlmodel import Memory, MemoryOverride, Project, Thread
+from app.db.models_sqlmodel import GlobalMemoryRepresentation, Memory, MemoryOverride, Project, Thread
 from app.services.embedding_model_service import EmbeddingModelResolutionError
 from app.services.memory_policy import (
     LOCAL_USER_MEMORY_SCOPE_ID,
@@ -47,6 +47,7 @@ def memory_payload(
     *,
     outgoing: Sequence[Memory] = (),
     incoming: Sequence[Memory] = (),
+    representations: Sequence[Dict[str, Any]] = (),
 ) -> Dict[str, Any]:
     return {
         "id": memory.id,
@@ -64,6 +65,14 @@ def memory_payload(
         "overridden_by": [_memory_ref(item) for item in incoming],
         "created_at": iso_utc_z(memory.created_at) if memory.created_at else None,
         "updated_at": iso_utc_z(memory.updated_at) if memory.updated_at else None,
+        "representations": [{
+            "embedding_model": memory.embedding_model,
+            "primary": True,
+            "index_status": memory.index_status,
+            "index_attempts": memory.index_attempts,
+            "indexed_at": iso_utc_z(memory.indexed_at) if memory.indexed_at else None,
+            "index_error": memory.index_error,
+        }, *list(representations)],
     }
 
 
@@ -113,6 +122,8 @@ async def _workspace_sections(
                 MemoryOverride.overridden_memory_id.in_(visible_ids),
             )
         )).scalars().all()) if visible_ids else []
+        from app.services.memory_representation_service import list_memory_representations
+        representations = await list_memory_representations(list(visible_ids), session=session)
 
     by_id = {memory.id: memory for memory in memories}
     outgoing: Dict[str, List[Memory]] = {}
@@ -160,6 +171,7 @@ async def _workspace_sections(
                 memory,
                 outgoing=outgoing.get(memory.id, []),
                 incoming=incoming.get(memory.id, []),
+                representations=representations.get(memory.id, []),
             )
             if memory.index_status != "indexed":
                 resolution_status = "unavailable"
@@ -212,7 +224,16 @@ async def serialize_memories_with_relationships(memories: Sequence[Memory]) -> L
         related = list((await session.execute(
             select(Memory).where(Memory.id.in_(related_ids))
         )).scalars().all()) if related_ids else []
+        representation_rows = list((await session.execute(
+            select(GlobalMemoryRepresentation).where(
+                GlobalMemoryRepresentation.memory_id.in_(selected_ids)
+            )
+        )).scalars().all())
     by_id = {memory.id: memory for memory in related}
+    from app.services.memory_representation_service import representation_payload
+    representations: Dict[str, List[Dict[str, Any]]] = {}
+    for row in representation_rows:
+        representations.setdefault(row.memory_id, []).append(representation_payload(row))
     outgoing: Dict[str, List[Memory]] = {}
     incoming: Dict[str, List[Memory]] = {}
     for edge in edges:
@@ -226,6 +247,7 @@ async def serialize_memories_with_relationships(memories: Sequence[Memory]) -> L
             memory,
             outgoing=outgoing.get(memory.id, []),
             incoming=incoming.get(memory.id, []),
+            representations=representations.get(memory.id, []),
         )
         for memory in memories
     ]
@@ -356,6 +378,7 @@ async def resolve_effective_memory_context(
         by_id = {memory.id: memory for memory in memories}
         memory_ids = list(by_id)
         edges = []
+        secondary_indexed_ids: set[str] = set()
         if memory_ids:
             edges = list((await session.execute(
                 select(MemoryOverride).where(
@@ -363,8 +386,21 @@ async def resolve_effective_memory_context(
                     MemoryOverride.overridden_memory_id.in_(memory_ids),
                 )
             )).scalars().all())
+            if project and project.embedding_model:
+                secondary_indexed_ids = set((await session.execute(
+                    select(GlobalMemoryRepresentation.memory_id).where(
+                        GlobalMemoryRepresentation.memory_id.in_(memory_ids),
+                        GlobalMemoryRepresentation.embedding_model == project.embedding_model,
+                        GlobalMemoryRepresentation.index_status == "indexed",
+                    )
+                )).scalars().all())
+        from app.services.memory_representation_service import list_memory_representations
+        representations = await list_memory_representations(memory_ids, session=session)
 
-    indexed_ids = {memory.id for memory in memories if memory.index_status == "indexed"}
+    indexed_ids = {
+        memory.id for memory in memories
+        if memory.index_status == "indexed" or memory.id in secondary_indexed_ids
+    }
     unavailable_ids = {memory.id for memory in memories if memory.id not in indexed_ids}
     adjacency: Dict[str, List[MemoryOverride]] = {}
     for edge in edges:
@@ -420,6 +456,7 @@ async def resolve_effective_memory_context(
                 memory,
                 outgoing=outgoing.get(memory.id, []),
                 incoming=incoming.get(memory.id, []),
+                representations=representations.get(memory.id, []),
             )
             for memory in visible
         ],

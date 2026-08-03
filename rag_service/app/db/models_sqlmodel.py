@@ -513,6 +513,83 @@ class MemoryOverride(SQLModel, table=True):
     )
 
 
+class GlobalMemoryRepresentation(SQLModel, table=True):
+    """Secondary model-specific vector state for canonical Global memory."""
+    __tablename__ = "global_memory_representations"
+
+    memory_id: str = Field(
+        sa_column=Column(String, ForeignKey("memories.id", ondelete="CASCADE"), primary_key=True)
+    )
+    embedding_model: str = Field(primary_key=True)
+    content_hash: str
+    index_status: str = Field(default="pending", index=True)
+    index_attempts: int = Field(default=0)
+    indexed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    index_error: Optional[str] = None
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    updated_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(btrim(embedding_model)) > 0", name="ck_global_memory_rep_model_nonempty"),
+        CheckConstraint("length(btrim(content_hash)) > 0", name="ck_global_memory_rep_hash_nonempty"),
+        CheckConstraint(
+            "index_status in ('pending', 'indexing', 'indexed', 'failed')",
+            name="ck_global_memory_rep_status",
+        ),
+        CheckConstraint("index_attempts >= 0", name="ck_global_memory_rep_attempts"),
+        Index("idx_global_memory_rep_retry", "embedding_model", "index_status", "updated_at"),
+    )
+
+
+class MemoryScopeActivity(SQLModel, table=True):
+    """Monotonic mutation version for one canonical memory scope."""
+    __tablename__ = "memory_scope_activity"
+
+    scope_type: str = Field(primary_key=True)
+    scope_id: str = Field(primary_key=True)
+    version: int = Field(default=1)
+    changed_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope_type in ('user', 'project', 'thread')", name="ck_memory_scope_activity_type"),
+        CheckConstraint("version >= 1", name="ck_memory_scope_activity_version"),
+    )
+
+
+class MemoryReviewState(SQLModel, table=True):
+    """Last completed consistency-review versions for a project or thread."""
+    __tablename__ = "memory_review_states"
+
+    context_type: str = Field(primary_key=True)
+    context_id: str = Field(primary_key=True)
+    reviewed_scope_versions_json: Dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
+    last_reviewed_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True)))
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    updated_at: datetime = Field(
+        default_factory=utc_now,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+
+    __table_args__ = (
+        CheckConstraint("context_type in ('project', 'thread')", name="ck_memory_review_context_type"),
+    )
+
+
 class MemoryEvent(SQLModel, table=True):
     """Audit event for durable memory changes."""
     __tablename__ = "memory_events"

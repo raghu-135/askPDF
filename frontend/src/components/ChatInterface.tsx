@@ -11,9 +11,6 @@ import {
     Chip,
     CircularProgress,
 } from '@mui/material';
-import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
-import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
-import WifiPasswordIcon from '@mui/icons-material/WifiPassword';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import MemoryIcon from '@mui/icons-material/Memory';
@@ -102,7 +99,10 @@ import {
     ConversationTranscriptFrame,
     DecisionChoiceList,
     ResizableDecisionPanel,
+    WebSearchModeControl,
+    WebSourceList,
 } from './conversation';
+import { useWebSearchMode, type WebSearchMode } from '../hooks/useWebSearchMode';
 
 interface ChatMessage extends Message {
     isRecollected?: boolean;
@@ -120,8 +120,6 @@ interface ChatMessage extends Message {
     agent_route_reason?: string;
     pending_human_review?: boolean;
 }
-
-type WebSearchMode = 'on' | 'ask' | 'off';
 
 type LiveChatExecution = {
     messageId: string;
@@ -585,66 +583,8 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
                         </details>
                     </Box>
                 )}
-                {msg.role === MessageRole.Assistant && msg.web_sources && msg.web_sources.length > 0 && (
-                    <Box sx={{ mt: 1 }}>
-                        <details>
-                            <summary style={{ cursor: 'pointer', fontSize: '0.75rem', opacity: 0.8 }}>
-                                🌐 Web sources used ({msg.web_sources.length})
-                            </summary>
-                            <Box sx={{ mt: 0.75, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-                                {msg.web_sources.map((source, i) => (
-                                    <Box
-                                        key={i}
-                                        sx={{
-                                            p: 1,
-                                            borderRadius: 1,
-                                            bgcolor: theme.palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                                            borderLeft: '3px solid',
-                                            borderColor: 'primary.light',
-                                        }}
-                                    >
-                                        {source.url ? (
-                                            <Typography
-                                                variant="caption"
-                                                component="a"
-                                                href={source.url}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                sx={{
-                                                    color: 'primary.main',
-                                                    display: 'block',
-                                                    fontWeight: 600,
-                                                    textDecoration: 'none',
-                                                    mb: 0.25,
-                                                    '&:hover': { textDecoration: 'underline' },
-                                                }}
-                                            >
-                                                {source.title || source.url}
-                                            </Typography>
-                                        ) : (
-                                            <Typography variant="caption" sx={{ fontWeight: 600, display: 'block', mb: 0.25 }}>
-                                                {source.title || 'Web result'}
-                                            </Typography>
-                                        )}
-                                        {source.url && (
-                                            <Typography
-                                                variant="caption"
-                                                sx={{ color: 'text.secondary', display: 'block', wordBreak: 'break-all', mb: 0.25 }}
-                                            >
-                                                {source.url}
-                                            </Typography>
-                                        )}
-                                        <Typography
-                                            variant="caption"
-                                            sx={{ display: 'block', opacity: 0.85, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                                        >
-                                            {source.text}
-                                        </Typography>
-                                    </Box>
-                                ))}
-                            </Box>
-                        </details>
-                    </Box>
+                {msg.role === MessageRole.Assistant && (
+                    <WebSourceList sources={msg.web_sources || []} />
                 )}
                 </>
             )}
@@ -756,6 +696,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const [indexingStatus, setIndexingStatus] = useState<ChatComposerIndexingStatusValue>(ChatComposerIndexingStatus.Checking);
     const [useWebSearch, setUseWebSearch] = useState(false);
+    const { mode: webSearchMode, setMode: setSharedWebSearchMode } = useWebSearchMode();
     const [contextWindow, setContextWindow] = useState<number>(0);
     const [replans, setReplans] = useState(1);
     const [replansLimit, setReplansLimit] = useState<number | null>(null);
@@ -836,7 +777,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setSystemRole(settings?.system_role ?? defaultSystemRole);
         setToolInstructions(settings?.tool_instructions ?? {});
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
-        setHitlWebApproval(settings?.hitl_web_approval ?? defaultHitlWebApproval);
+        setHitlWebApproval(webSearchMode === 'ask');
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
         setUseProjectMemory(settings?.memory?.thread_reads_project_memory ?? true);
         setUseGlobalMemory(settings?.memory?.thread_reads_user_memory ?? false);
@@ -844,8 +785,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     }, [
         defaultCustomInstructions,
         defaultSystemRole,
-        defaultHitlWebApproval,
         defaultUseReranker,
+        webSearchMode,
     ]);
 
     const loadProjectMemorySettings = useCallback(async () => {
@@ -1289,19 +1230,13 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         }
     };
 
-    const webSearchMode: WebSearchMode = !useWebSearch
-        ? 'off'
-        : hitlWebApproval
-            ? 'ask'
-            : 'on';
+    useEffect(() => {
+        setUseWebSearch(webSearchMode !== 'off');
+        setHitlWebApproval(webSearchMode === 'ask');
+    }, [webSearchMode]);
 
-    const handleWebSearchModeChange = async () => {
+    const handleWebSearchModeChange = async (nextMode: WebSearchMode) => {
         if (savingWebSearchMode) return;
-        const nextMode: WebSearchMode = webSearchMode === 'off'
-            ? 'ask'
-            : webSearchMode === 'ask'
-                ? 'on'
-                : 'off';
         const previousUseWebSearch = useWebSearch;
         const previousHitlWebApproval = hitlWebApproval;
         const nextUseWebSearch = nextMode !== 'off';
@@ -1309,6 +1244,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
 
         setUseWebSearch(nextUseWebSearch);
         setHitlWebApproval(nextHitlWebApproval);
+        setSharedWebSearchMode(nextMode);
 
         if (isTestRuntime || !activeThread) return;
 
@@ -1324,6 +1260,7 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             console.error('Failed to update internet search mode:', error);
             setUseWebSearch(previousUseWebSearch);
             setHitlWebApproval(previousHitlWebApproval);
+            setSharedWebSearchMode(previousUseWebSearch ? (previousHitlWebApproval ? 'ask' : 'on') : 'off');
             if (typeof window !== 'undefined') {
                 localStorage.setItem('last_use_web_search', previousUseWebSearch ? '1' : '0');
             }
@@ -1331,17 +1268,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             setSavingWebSearchMode(false);
         }
     };
-
-    const webSearchModeLabel = webSearchMode === 'on'
-        ? 'Internet Search On'
-        : webSearchMode === 'ask'
-            ? 'Ask me every time before internet search'
-            : 'Internet Search Off';
-    const nextWebSearchModeLabel = webSearchMode === 'off'
-        ? 'Ask me every time'
-        : webSearchMode === 'ask'
-            ? 'Internet Search On'
-            : 'Internet Search Off';
 
     // Polling for indexing and embedding model status
     useEffect(() => {
@@ -1435,10 +1361,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
             }
         }
 
-        const savedWebSearch = localStorage.getItem('last_use_web_search');
-        if (savedWebSearch === '1' || savedWebSearch === '0') {
-            setUseWebSearch(savedWebSearch === '1');
-        }
     }, [llmModel]);
 
     const cancelQuestionEdit = useCallback(() => {
@@ -2501,31 +2423,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                     </>
                 )}
                 beforeModelControls={(
-                    <Tooltip
-                        title={`${webSearchModeLabel}. Click to switch to ${nextWebSearchModeLabel}.`}
-                        placement="top"
-                    >
-                        <span>
-                            <IconButton
-                                aria-label={webSearchModeLabel}
-                                color={webSearchMode === 'on'
-                                    ? 'primary'
-                                    : webSearchMode === 'ask'
-                                        ? 'warning'
-                                        : 'default'}
-                                onClick={handleWebSearchModeChange}
-                                disabled={savingWebSearchMode}
-                                size="small"
-                                sx={{ p: 0.5 }}
-                            >
-                                {webSearchMode === 'on'
-                                    ? <WifiTwoToneIcon />
-                                    : webSearchMode === 'ask'
-                                        ? <WifiPasswordIcon />
-                                        : <WifiOffTwoToneIcon />}
-                            </IconButton>
-                        </span>
-                    </Tooltip>
+                    <WebSearchModeControl
+                        mode={webSearchMode}
+                        disabled={savingWebSearchMode}
+                        onChange={handleWebSearchModeChange}
+                    />
                 )}
             />
             )}

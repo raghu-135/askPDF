@@ -5,6 +5,7 @@ import {
   buildCuratorContext,
   createCuratorIntent,
   curatorTitle,
+  memoryReviewCuratorIntent,
   reviewCuratorIntent,
 } from '../src/lib/memory-curator.ts';
 
@@ -26,6 +27,23 @@ test('curator intents preserve workspace scope and canonical global ID', () => {
     thread_id: 'thread-1',
     project_id: 'project-1',
   });
+});
+
+test('consistency review binds to the active project or thread context', () => {
+  const projectReview = memoryReviewCuratorIntent({ project });
+  const threadReview = memoryReviewCuratorIntent({ thread, project });
+
+  assert.deepEqual(projectReview, {
+    mode: 'memory_review',
+    scopeType: 'project',
+    scopeId: 'project-1',
+    threadId: undefined,
+    projectId: 'project-1',
+  });
+  assert.equal(threadReview.mode, 'memory_review');
+  assert.equal(threadReview.scopeType, 'thread');
+  assert.equal(threadReview.scopeId, 'thread-1');
+  assert.equal(curatorTitle(threadReview), 'Memory Consistency Review');
 });
 
 test('selected memory opens edit mode and conversation review stays thread-scoped', () => {

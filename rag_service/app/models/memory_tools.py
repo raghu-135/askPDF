@@ -59,6 +59,7 @@ class MemoryChangeIntent(BaseModel):
     target_scope_type: Optional[Literal["user", "project", "thread"]] = None
     content: Optional[str] = Field(default=None, max_length=12000)
     override_target_ids: Optional[List[str]] = Field(default=None, max_length=20)
+    web_source_ids: List[str] = Field(default_factory=list, max_length=12)
 
 
 class MemoryPrepareChangeInput(BaseModel):

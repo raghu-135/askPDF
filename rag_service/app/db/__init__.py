@@ -26,6 +26,9 @@ from app.db.models_sqlmodel import (
     Memory,
     MemoryEvent,
     MemoryOverride,
+    GlobalMemoryRepresentation,
+    MemoryScopeActivity,
+    MemoryReviewState,
 )
 from app.db.enums import (
     EmbeddingReadinessStatus,

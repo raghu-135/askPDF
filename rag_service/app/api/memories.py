@@ -24,7 +24,9 @@ from app.services.memory_tool_service import (
 from app.services.effective_memory_service import (
     memory_payload,
     resolve_effective_memory_context,
+    serialize_memories_with_relationships,
 )
+from app.services.memory_review_service import get_memory_review_status
 from app.services.memory_service import (
     MemoryVectorCleanupError,
     hard_delete_memory,
@@ -129,6 +131,14 @@ async def thread_effective_memories_endpoint(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/threads/{thread_id}/memories/review-status")
+async def thread_memory_review_status_endpoint(thread_id: str):
+    try:
+        return await get_memory_review_status("thread", thread_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.delete("/memories/{memory_id}")
 async def delete_memory_endpoint(
     memory_id: str,
@@ -185,11 +195,15 @@ async def memory_curator_apply_endpoint(req: MemoryCuratorApplyRequest):
 
 
 @router.post("/memories/{memory_id}/index")
-async def retry_memory_index_endpoint(memory_id: str):
+async def retry_memory_index_endpoint(
+    memory_id: str,
+    embedding_model: str | None = Query(default=None),
+):
     try:
-        memory = await retry_memory_index(memory_id)
+        memory = await retry_memory_index(memory_id, embedding_model=embedding_model)
     except EmbeddingModelUnavailableError as exc:
         raise HTTPException(status_code=409, detail={"code": "embedding_model_unavailable", "message": str(exc)}) from exc
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory not found")
-    return memory_payload(memory)
+    serialized = await serialize_memories_with_relationships([memory])
+    return serialized[0]

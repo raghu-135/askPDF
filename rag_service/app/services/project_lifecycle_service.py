@@ -21,6 +21,8 @@ from app.db.models_sqlmodel import (
     Memory,
     MemoryEvent,
     MemoryOverride,
+    MemoryReviewState,
+    MemoryScopeActivity,
     Project,
     ProjectFile,
     Thread,
@@ -608,6 +610,7 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
         project = await session.get(Project, project_id)
         if project is None:
             raise ProjectNotFoundError("Project not found")
+        deleted_project_model = project.embedding_model
         thread_ids = list((await session.execute(
             select(Thread.id).where(Thread.project_id == project_id)
         )).scalars().all())
@@ -722,7 +725,23 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
                 await session.execute(delete(MemoryEvent).where(MemoryEvent.memory_id.in_(memory_ids)))
                 await session.execute(delete(Memory).where(Memory.id.in_(memory_ids)))
             if current_thread_ids:
+                await session.execute(delete(MemoryReviewState).where(
+                    MemoryReviewState.context_type == "thread",
+                    MemoryReviewState.context_id.in_(current_thread_ids),
+                ))
+                await session.execute(delete(MemoryScopeActivity).where(
+                    MemoryScopeActivity.scope_type == MemoryScopeType.THREAD.value,
+                    MemoryScopeActivity.scope_id.in_(current_thread_ids),
+                ))
                 await session.execute(delete(Thread).where(Thread.id.in_(current_thread_ids)))
+            await session.execute(delete(MemoryReviewState).where(
+                MemoryReviewState.context_type == "project",
+                MemoryReviewState.context_id == project_id,
+            ))
+            await session.execute(delete(MemoryScopeActivity).where(
+                MemoryScopeActivity.scope_type == MemoryScopeType.PROJECT.value,
+                MemoryScopeActivity.scope_id == project_id,
+            ))
             await session.execute(delete(ProjectFile).where(ProjectFile.project_id == project_id))
             await session.flush()
             for file_hash in orphan_file_hashes:
@@ -732,6 +751,11 @@ async def delete_project(project_id: str) -> Dict[str, Any]:
             await session.delete(project)
 
     cleanup_warnings = []
+    try:
+        from app.services.memory_representation_service import cleanup_unused_global_representation_model
+        await cleanup_unused_global_representation_model(deleted_project_model)
+    except Exception as exc:
+        cleanup_warnings.append(str(exc)[:500])
     for file_hash in orphan_file_hashes:
         try:
             await delete_file_artifacts(file_hash)

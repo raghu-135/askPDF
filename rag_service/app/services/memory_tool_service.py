@@ -198,6 +198,27 @@ async def search_memory_tool(context: MemoryToolContext, req: MemorySearchInput)
     if req.view == "effective":
         _require_capability(context, MEMORY_READ_EFFECTIVE)
         allowed = list(req.scope_types) if req.scope_types is not None else None
+        if context.thread_id and req.query.strip():
+            from app.services.memory_service import search_thread_memory
+            result = await search_thread_memory(
+                thread_id=context.thread_id,
+                query=req.query,
+                allowed_scopes=allowed,
+                max_results=req.max_results,
+            )
+            return {
+                **result,
+                "readiness": [
+                    {
+                        "embedding_model": item.get("fallback_model"),
+                        "scopes": [{"scope_type": item.get("scope_type"), "scope_id": "default"}],
+                        "ready": True,
+                        "degraded": True,
+                        "reason": item.get("reason"),
+                    }
+                    for item in result.get("degraded_representations", [])
+                ],
+            }
         effective = await resolve_effective_memory_context(
             thread_id=context.thread_id,
             project_id=None if context.thread_id else context.project_id,

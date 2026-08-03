@@ -12,19 +12,16 @@ import json
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
-from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.tools import BaseTool, StructuredTool, tool
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
 from app.rag.enums import TimelineEventType
 from app.rag.retrieval import rerank_document_chunks
+from app.services.web_search_service import search_internet
 from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
-
-search_tool = DuckDuckGoSearchResults(output_format="list", num_results=6)
-
 
 def _import_attr(module_path: str, attr_name: str) -> Any:
     module = importlib.import_module(module_path)
@@ -43,29 +40,15 @@ def _normalize_web_results(raw: Any, query: str) -> List[Dict[str, str]]:
 
 
 async def _run_web_search(query: str, max_results: Optional[int]) -> Optional[Dict[str, List[str]]]:
-    raw = await asyncio.to_thread(search_tool.invoke, query)
-    logger.info(f"Raw search results for '{query}': {raw}")
-    results_list = _normalize_web_results(raw, query)
-    if not results_list:
+    result = await search_internet(query, max_results=max_results or 6, use_reranker=False)
+    sources = result.get("sources") or []
+    if not sources:
         return None
-
-    texts = [r.get("snippet", r.get("body", "")) for r in results_list]
-    urls = [r.get("link", r.get("href", "")) for r in results_list]
-    titles = [r.get("title", "") for r in results_list]
-
-    valid = [(t, u, ti) for t, u, ti in zip(texts, urls, titles) if t.strip()]
-    if not valid:
-        return None
-
-    texts, urls, titles = zip(*valid)
-    texts = list(texts)
-    urls = list(urls)
-    titles = list(titles)
-    if max_results is not None:
-        texts = texts[:max_results]
-        urls = urls[:max_results]
-        titles = titles[:max_results]
-    return {"texts": texts, "urls": urls, "titles": titles}
+    return {
+        "texts": [item["snippet"] for item in sources],
+        "urls": [item["url"] for item in sources],
+        "titles": [item["title"] for item in sources],
+    }
 
 
 def _format_web_context(

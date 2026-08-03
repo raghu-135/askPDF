@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict
+import asyncio
 
 from fastapi import APIRouter, HTTPException, status
 
@@ -32,6 +33,11 @@ from app.services.project_lifecycle_service import (
     delete_project,
     get_project_lifecycle_summary,
 )
+from app.services.memory_representation_service import (
+    ensure_global_representations_for_model,
+    warm_global_representations_for_model,
+)
+from app.services.memory_review_service import get_memory_review_status
 
 
 router = APIRouter(tags=["projects"])
@@ -83,6 +89,8 @@ async def create_project_endpoint(req: ProjectCreateRequest):
         description=req.description,
         settings_json=req.settings_json,
     )
+    await ensure_global_representations_for_model(project.embedding_model)
+    asyncio.create_task(warm_global_representations_for_model(project.embedding_model))
     return _project_payload(project)
 
 
@@ -91,7 +99,17 @@ async def get_project_endpoint(project_id: str):
     project = await get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    await ensure_global_representations_for_model(project.embedding_model)
+    asyncio.create_task(warm_global_representations_for_model(project.embedding_model))
     return _project_payload(project)
+
+
+@router.get("/projects/{project_id}/memories/review-status")
+async def project_memory_review_status_endpoint(project_id: str):
+    try:
+        return await get_memory_review_status("project", project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.put("/projects/{project_id}")

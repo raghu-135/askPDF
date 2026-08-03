@@ -31,8 +31,10 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import MemoryIcon from '@mui/icons-material/Memory';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ReplayIcon from '@mui/icons-material/Replay';
+import FactCheckIcon from '@mui/icons-material/FactCheck';
 import {
   deleteMemory,
+  getMemoryReviewStatus,
   listEffectiveMemories,
   listProjects,
   retryMemoryIndex,
@@ -40,6 +42,7 @@ import {
   type MemoryScopeType,
   type MemoryWorkspaceRecord,
   type MemoryWorkspaceSection,
+  type MemoryReviewStatus,
   type Project,
   type Thread,
 } from '../../lib/api';
@@ -47,7 +50,7 @@ import {
   filterMemoryWorkspaceSections,
   memorySectionKey,
 } from '../../lib/memory-workspace';
-import { createCuratorIntent, type MemoryCuratorIntent } from '../../lib/memory-curator';
+import { createCuratorIntent, memoryReviewCuratorIntent, type MemoryCuratorIntent } from '../../lib/memory-curator';
 import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
 
 const MEMORY_LIMIT = 500;
@@ -119,8 +122,17 @@ function RelationshipTooltip({
   );
 }
 
-function MemoryDetails({ memory }: { memory: MemoryWorkspaceRecord }) {
+function MemoryDetails({
+  memory,
+  busy,
+  onRetry,
+}: {
+  memory: MemoryWorkspaceRecord;
+  busy: boolean;
+  onRetry: (embeddingModel?: string) => void;
+}) {
   const sourceRefs = memory.source_refs_json || memory.source_refs || {};
+  const webSources = Array.isArray(sourceRefs.web_sources) ? sourceRefs.web_sources : [];
   return (
     <Box component="details" sx={{ mt: 0.75, minWidth: 0 }}>
       <Typography component="summary" variant="caption" color="text.secondary" sx={{ cursor: 'pointer' }}>
@@ -131,6 +143,46 @@ function MemoryDetails({ memory }: { memory: MemoryWorkspaceRecord }) {
         <Typography variant="caption">Updated: {formatTimestamp(memory.updated_at || memory.created_at)}</Typography>
         <Typography variant="caption">Embedding: {memory.embedding_model}</Typography>
       </Box>
+      {Boolean(memory.representations?.length) && (
+        <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+          <Typography variant="caption" color="text.secondary">Vector representations</Typography>
+          {memory.representations?.map((representation) => (
+            <Stack key={representation.embedding_model} direction="row" spacing={0.75} alignItems="center" useFlexGap flexWrap="wrap">
+              <Chip size="small" variant="outlined" label={representation.primary ? 'Primary' : 'Secondary'} />
+              <Typography variant="caption" sx={{ overflowWrap: 'anywhere' }}>{representation.embedding_model}</Typography>
+              <Chip size="small" color={statusColor(representation.index_status)} label={representation.index_status} />
+              {['failed', 'pending'].includes(representation.index_status) && (
+                <Tooltip title={`Retry ${representation.embedding_model}`}>
+                  <span>
+                    <IconButton size="small" disabled={busy} onClick={() => onRetry(representation.primary ? undefined : representation.embedding_model)}>
+                      <ReplayIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              )}
+              {representation.index_error && <Typography variant="caption" color="error.main">{representation.index_error}</Typography>}
+            </Stack>
+          ))}
+        </Stack>
+      )}
+      {webSources.length > 0 && (
+        <Box sx={{ mt: 0.75 }}>
+          <Typography variant="caption" color="text.secondary">Web provenance</Typography>
+          {webSources.map((source: Record<string, unknown>, index: number) => (
+            <Typography
+              key={`${String(source.url || source.title || '')}-${index}`}
+              variant="caption"
+              component={source.url ? 'a' : 'span'}
+              href={source.url ? String(source.url) : undefined}
+              target={source.url ? '_blank' : undefined}
+              rel={source.url ? 'noopener noreferrer' : undefined}
+              sx={{ display: 'block', color: source.url ? 'primary.main' : 'text.primary', overflowWrap: 'anywhere' }}
+            >
+              {String(source.title || source.url || 'Internet source')}
+            </Typography>
+          ))}
+        </Box>
+      )}
       {Object.keys(sourceRefs).length > 0 && (
         <JsonPreview value={{ source_refs: sourceRefs }} maxHeight={180} />
       )}
@@ -162,6 +214,7 @@ export default function MemoryWorkspace({
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [actionId, setActionId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MemoryWorkspaceRecord | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<MemoryReviewStatus | null>(null);
 
   useEffect(() => {
     setQuery('');
@@ -219,6 +272,18 @@ export default function MemoryWorkspace({
     return () => { cancelled = true; };
   }, [activeThread?.id, contextKey, curatorRefreshVersion, refreshVersion, requestedProjectId]);
 
+  useEffect(() => {
+    if (!activeThread && !projectContext) {
+      setReviewStatus(null);
+      return;
+    }
+    let cancelled = false;
+    getMemoryReviewStatus({ threadId: activeThread?.id, projectId: projectContext?.id })
+      .then((status) => { if (!cancelled) setReviewStatus(status); })
+      .catch(() => { if (!cancelled) setReviewStatus(null); });
+    return () => { cancelled = true; };
+  }, [activeThread?.id, curatorRefreshVersion, projectContext?.id, refreshVersion]);
+
   const filteredSections = useMemo(
     () => filterMemoryWorkspaceSections(sections, query),
     [query, sections],
@@ -249,11 +314,11 @@ export default function MemoryWorkspace({
     }
   };
 
-  const handleRetry = async (memory: MemoryWorkspaceRecord) => {
+  const handleRetry = async (memory: MemoryWorkspaceRecord, embeddingModel?: string) => {
     try {
       setActionId(memory.id);
       setLoadError(null);
-      await retryMemoryIndex(memory.id);
+      await retryMemoryIndex(memory.id, embeddingModel);
       setRefreshVersion((value) => value + 1);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : 'Unable to retry memory indexing.');
@@ -267,6 +332,23 @@ export default function MemoryWorkspace({
     <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
       <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', borderBottom: 1, borderColor: 'divider' }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Memory</Typography>
+        {(activeThread || projectContext) && (
+          <Tooltip title="Review related memories for duplicates, conflicts, and stale overrides">
+            <span>
+              <Button
+                size="small"
+                startIcon={<FactCheckIcon />}
+                color={reviewStatus?.status === 'review_suggested' ? 'warning' : 'primary'}
+                onClick={() => onOpenCurator?.(memoryReviewCuratorIntent({ thread: activeThread, project: projectContext }))}
+                disabled={!onOpenCurator}
+              >
+                Review memories
+              </Button>
+            </span>
+          </Tooltip>
+        )}
+        {reviewStatus?.status === 'review_suggested' && <Chip size="small" color="warning" label="Review suggested" />}
+        {reviewStatus?.status === 'never_reviewed' && <Chip size="small" variant="outlined" label="Not reviewed" />}
         {!activeThread && !projectContext && projects.length > 0 && (
           <FormControl size="small" sx={{ minWidth: 190, maxWidth: 300 }}>
             <InputLabel>Project</InputLabel>
@@ -360,7 +442,7 @@ export default function MemoryWorkspace({
                                 {memory.content}
                               </Typography>
                               {memory.index_error && <Alert severity="error" sx={{ mt: 0.75, py: 0 }}>{memory.index_error}</Alert>}
-                              <MemoryDetails memory={memory} />
+                              <MemoryDetails memory={memory} busy={busy} onRetry={(model) => void handleRetry(memory, model)} />
                             </Box>
                             <Stack direction="row" spacing={0.25}>
                               <Tooltip title="Edit memory">

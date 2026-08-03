@@ -338,6 +338,16 @@ export interface MemoryRecord {
   overridden_by: MemoryOverrideRef[];
   created_at?: string | null;
   updated_at?: string | null;
+  representations?: MemoryRepresentation[];
+}
+
+export interface MemoryRepresentation {
+  embedding_model: string;
+  primary: boolean;
+  index_status: string;
+  index_attempts?: number;
+  indexed_at?: string | null;
+  index_error?: string | null;
 }
 
 export type MemoryResolutionStatus = 'effective' | 'overridden' | 'recall_disabled' | 'unavailable';
@@ -357,8 +367,18 @@ export interface MemoryWorkspaceSection {
   truncated: boolean;
 }
 
-export type MemoryCuratorMode = 'create' | 'edit' | 'conversation_review';
-export type MemoryCuratorState = 'clarification' | 'conflict' | 'proposal' | 'no_changes';
+export type MemoryCuratorMode = 'create' | 'edit' | 'conversation_review' | 'memory_review';
+export type MemoryCuratorState = 'clarification' | 'conflict' | 'proposal' | 'no_changes' | 'web_search_approval';
+
+export interface MemoryCuratorWebSource {
+  id: string;
+  title: string;
+  url: string;
+  snippet: string;
+  query: string;
+  searched_at: string;
+  score?: number;
+}
 
 export interface MemoryCuratorContext {
   selected_scope_type: MemoryScopeType;
@@ -388,6 +408,7 @@ export interface MemoryCuratorOperation {
   operation_group_id?: string;
   move_source_memory_id?: string;
   move_destination_memory_id?: string;
+  web_sources?: Array<Omit<MemoryCuratorWebSource, 'snippet' | 'score'>>;
 }
 
 export interface MemoryOperationSummary {
@@ -424,6 +445,26 @@ export interface MemoryReviewCursor {
   reviewed_through_created_at: string;
 }
 
+export interface MemoryConsistencyReviewCursor {
+  context_type: 'project' | 'thread';
+  context_id: string;
+  snapshot_at: string;
+  snapshot_scope_versions: Record<string, number>;
+  anchor_position: number;
+  reviewed_anchor_count: number;
+  remaining_anchor_count: number;
+}
+
+export interface MemoryReviewStatus {
+  context_type: 'project' | 'thread';
+  context_id: string;
+  status: 'current' | 'review_suggested' | 'never_reviewed';
+  embedding_model: string;
+  current_scope_versions: Record<string, number>;
+  reviewed_scope_versions: Record<string, number>;
+  last_reviewed_at?: string | null;
+}
+
 export interface MemoryCuratorResponse {
   message: string;
   state: MemoryCuratorState;
@@ -440,6 +481,14 @@ export interface MemoryCuratorResponse {
     remaining_count: number;
     cursor?: MemoryReviewCursor | null;
   } | null;
+  memory_review?: (MemoryConsistencyReviewCursor & {
+    candidate_groups: Array<{
+      anchor_id: string;
+      memories: Array<Pick<MemoryRecord, 'id' | 'scope_type' | 'scope_id' | 'content' | 'updated_at'> & { scope_rank: number }>;
+    }>;
+    degraded: boolean;
+    embedding_model: string;
+  }) | null;
   embedding_readiness: Array<{
     embedding_model: string;
     scopes?: Array<{ scope_type: MemoryScopeType; scope_id: string }>;
@@ -456,6 +505,9 @@ export interface MemoryCuratorResponse {
   };
   context_memory_count?: number;
   tool_calls_used?: number;
+  web_calls_used?: number;
+  pending_web_search?: { query: string; reason: string } | null;
+  web_sources?: MemoryCuratorWebSource[];
 }
 
 export interface MemoryChangeReceipt {
@@ -478,6 +530,8 @@ export interface MemoryCuratorApplyResponse {
   warnings: Array<{ code: string; memory_id?: string; message: string }>;
   review_cursor_advanced: boolean;
   receipts: MemoryChangeReceipt[];
+  memory_review_completed?: boolean;
+  memory_review_cursor?: MemoryConsistencyReviewCursor | null;
 }
 
 // ============ Agent Workflow Builder API ============
@@ -1150,8 +1204,9 @@ export async function deleteMemory(memoryId: string): Promise<{
   return res.json();
 }
 
-export async function retryMemoryIndex(memoryId: string): Promise<MemoryRecord> {
-  const res = await fetch(`${API_BASE}/api/memories/${encodeURIComponent(memoryId)}/index`, {
+export async function retryMemoryIndex(memoryId: string, embeddingModel?: string): Promise<MemoryRecord> {
+  const query = embeddingModel ? `?embedding_model=${encodeURIComponent(embeddingModel)}` : '';
+  const res = await fetch(`${API_BASE}/api/memories/${encodeURIComponent(memoryId)}/index${query}`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(await res.text());
@@ -1165,6 +1220,9 @@ export async function respondToMemoryCurator(input: {
   messages: MemoryCuratorMessage[];
   llm_model: string;
   context_window: number;
+  web_search_mode: 'off' | 'ask' | 'on';
+  web_search_decision?: { query: string; approved: boolean };
+  memory_review_cursor?: MemoryConsistencyReviewCursor | null;
 }): Promise<MemoryCuratorResponse> {
   const res = await fetch(`${API_BASE}/api/memory-curator/respond`, {
     method: 'POST',
@@ -1179,6 +1237,7 @@ export async function applyMemoryCuratorChanges(input: {
   context: MemoryCuratorContext;
   operations: MemoryCuratorOperation[];
   review_cursor?: MemoryReviewCursor | null;
+  memory_review_cursor?: MemoryConsistencyReviewCursor | null;
   actor_id?: string;
 }): Promise<MemoryCuratorApplyResponse> {
   const res = await fetch(`${API_BASE}/api/memory-curator/apply`, {
@@ -1186,6 +1245,18 @@ export async function applyMemoryCuratorChanges(input: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...input, confirmed: true }),
   });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getMemoryReviewStatus(input: {
+  threadId?: string | null;
+  projectId?: string | null;
+}): Promise<MemoryReviewStatus> {
+  const path = input.threadId
+    ? `/api/threads/${encodeURIComponent(input.threadId)}/memories/review-status`
+    : `/api/projects/${encodeURIComponent(String(input.projectId || ''))}/memories/review-status`;
+  const res = await fetch(`${API_BASE}${path}`);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();
 }

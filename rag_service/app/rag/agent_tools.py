@@ -542,7 +542,11 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                 },
             ).to_json()
 
-        lines = ["[LONG-TERM MEMORY]"]
+        lines = [
+            "[LONG-TERM MEMORY]",
+            "Memory precedence: when statements directly contradict, Thread overrides Project, "
+            "and Project overrides Global. Related or additive statements should be combined.",
+        ]
         memory_refs = []
         scopes = []
         for index, item in enumerate(memories, start=1):
@@ -559,6 +563,7 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                 "score_type": memory.get("score_type"),
                 "raw_score": memory.get("raw_score"),
                 "embedding_model": memory.get("embedding_model"),
+                "scope_rank": memory.get("scope_rank"),
             })
             scope_key = {"scope_type": scope_type, "scope_id": scope_id}
             if scope_key not in scopes:
@@ -575,6 +580,8 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
                 "memory_scope_policy": memory_scope_policy,
                 "memory_applied_overrides": applied_overrides,
                 "memory_suppressed_ids": suppressed_memory_ids,
+                "memory_precedence": result.get("precedence", ["thread", "project", "user"]),
+                "memory_degraded_representations": result.get("degraded_representations", []),
             },
         ).to_json()
     except Exception as e:

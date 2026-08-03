@@ -574,7 +574,9 @@ async def test_normal_recall_fuses_project_and_default_user_memory(monkeypatch):
     assert result["memories"][1]["scope_id"] == LOCAL_USER_MEMORY_SCOPE_ID
     assert result["memories"][1]["embedding_model"] == memory_service.GLOBAL_MEMORY_EMBEDDING_MODEL
     assert all(item["score_type"] == "rrf" for item in result["memories"])
-    assert vector_db.search_memory.await_count == 2
+    # Each eligible scope receives its own bounded query so broader results cannot
+    # crowd thread-local memories out before final fusion.
+    assert vector_db.search_memory.await_count == 3
     assert all(
         call.kwargs["excluded_memory_ids"] == ["unavailable-memory"]
         for call in vector_db.search_memory.await_args_list

@@ -821,6 +821,81 @@ async def test_curator_native_tool_call_prepares_proposal(curator_sessionmaker, 
 
 
 @pytest.mark.asyncio
+async def test_curator_ask_mode_requires_exact_query_approval(curator_sessionmaker, monkeypatch):
+    await _workspace(curator_sessionmaker)
+    monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
+    monkeypatch.setattr(memory_curator_service, "check_model_supports_tools", AsyncMock(return_value=True))
+    tool_call = AIMessage(content="", tool_calls=[{
+        "name": "internet_search",
+        "args": {"query": "current Python packaging standard", "reason": "Verify its current name"},
+        "id": "call-web-1",
+        "type": "tool_call",
+    }])
+    final = AIMessage(content=json.dumps({
+        "message": "Waiting for search approval.",
+        "state": "clarification",
+        "choices": [],
+        "intents": [],
+    }))
+    bound = SimpleNamespace(ainvoke=AsyncMock(side_effect=[tool_call, final]))
+    monkeypatch.setattr(
+        memory_curator_service,
+        "get_llm",
+        lambda *_args, **_kwargs: SimpleNamespace(bind_tools=lambda _tools: bound, ainvoke=AsyncMock()),
+    )
+    search = AsyncMock()
+    monkeypatch.setattr(memory_curator_service, "search_internet", search)
+
+    response = await memory_curator_service.respond_to_memory_curator(
+        MemoryCuratorRespondRequest(
+            mode="create",
+            context=_context(),
+            messages=[MemoryCuratorMessage(role="user", content="Remember its current official name.")],
+            llm_model="tool-chat-model",
+            context_window=8192,
+            web_search_mode="ask",
+        )
+    )
+
+    assert response["state"] == "web_search_approval"
+    assert response["pending_web_search"]["query"] == "current Python packaging standard"
+    search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_web_provenance_is_persisted_without_snippet(curator_sessionmaker):
+    await _workspace(curator_sessionmaker)
+    result = await memory_curator_service.apply_memory_curator_change_set(
+        MemoryCuratorApplyRequest(
+            context=_context(),
+            confirmed=True,
+            operations=[MemoryCuratorOperation(
+                action="create",
+                scope_type="thread",
+                scope_id="curator-thread",
+                content="Use the current official packaging standard.",
+                web_sources=[{
+                    "id": "source-1",
+                    "title": "Python Packaging User Guide",
+                    "url": "https://packaging.python.org/",
+                    "query": "current Python packaging standard",
+                    "searched_at": "2026-08-03T12:00:00Z",
+                }],
+            )],
+        )
+    )
+    async with curator_sessionmaker() as session:
+        memory = await session.get(Memory, result["changed_memories"][0]["id"])
+    assert memory.source_refs_json["web_sources"] == [{
+        "id": "source-1",
+        "title": "Python Packaging User Guide",
+        "url": "https://packaging.python.org/",
+        "query": "current Python packaging standard",
+        "searched_at": "2026-08-03T12:00:00Z",
+    }]
+
+
+@pytest.mark.asyncio
 async def test_curator_ignores_project_id_mistaken_for_override_memory_id(
     curator_sessionmaker,
     monkeypatch,
