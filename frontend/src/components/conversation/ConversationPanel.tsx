@@ -1,6 +1,7 @@
 import React, { useId, useState } from 'react';
 import {
   Box,
+  IconButton,
   FormControl,
   InputLabel,
   List,
@@ -11,6 +12,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 export const ConversationPanelTemplate = React.forwardRef<HTMLDivElement, {
@@ -192,6 +194,59 @@ export function ConversationHeader({
         </FormControl>
         {trailingActions}
       </Box>
+    </Box>
+  );
+}
+
+export function WorkspaceContextHeader({
+  title,
+  subtitle,
+  icon,
+  onBack,
+  backLabel = 'Back',
+  actions,
+}: {
+  title: string;
+  subtitle?: React.ReactNode;
+  icon?: React.ReactNode;
+  onBack?: () => void;
+  backLabel?: string;
+  actions?: React.ReactNode;
+}) {
+  return (
+    <Box
+      sx={{
+        minHeight: 49,
+        px: 1,
+        borderBottom: 1,
+        borderColor: 'divider',
+        bgcolor: 'background.paper',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        flexShrink: 0,
+        minWidth: 0,
+      }}
+    >
+      {onBack && (
+        <Tooltip title={backLabel}>
+          <IconButton size="small" onClick={onBack} aria-label={backLabel}>
+            <ArrowBackIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
+      {icon}
+      <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography variant="subtitle2" fontWeight={800} noWrap>
+          {title}
+        </Typography>
+        {subtitle && (
+          <Typography variant="caption" color="text.secondary" component="div" noWrap>
+            {subtitle}
+          </Typography>
+        )}
+      </Box>
+      {actions}
     </Box>
   );
 }

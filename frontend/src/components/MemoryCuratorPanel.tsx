@@ -11,7 +11,6 @@ import {
   Typography,
 } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
-import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import MemoryIcon from '@mui/icons-material/Memory';
 import {
@@ -22,7 +21,6 @@ import {
   type MemoryCuratorMessage,
   type MemoryCuratorOperation,
   type MemoryCuratorResponse,
-  type MemoryChangeReceipt,
   type MemoryCuratorWebSource,
   type MemoryConsistencyReviewCursor,
   type MemoryWorkspaceReadiness,
@@ -44,11 +42,17 @@ import {
   ResizableDecisionPanel,
   WebSearchModeControl,
   WebSourceList,
+  WorkspaceContextHeader,
 } from './conversation';
 import { useWebSearchMode } from '../hooks/useWebSearchMode';
 import { getChatComposerState } from '../lib/chat-composer-state';
 import { ChatComposerIndexingStatus, ChatComposerStatus } from '../lib/enums';
 import EmbeddingModelReadinessIndicator from './EmbeddingModelReadinessIndicator';
+import {
+  memoryOperationLabel,
+  memoryReceiptMessage,
+  memoryWorkspaceTitle,
+} from '../lib/memory-ui';
 
 const defaultContextWindow = 8192;
 
@@ -93,37 +97,18 @@ const initialAssistantMessage = (intent: MemoryCuratorIntent): CuratorUiMessage 
   );
 };
 
-const operationLabel = (operation: MemoryCuratorOperation) => {
-  const scope = operation.scope_type === 'user' ? 'Global' : operation.scope_type === 'project' ? 'Project' : 'Thread';
-  return `${operation.action.toUpperCase()} ${scope || ''}`.trim();
-};
-
-const scopeLabel = (scope?: { scope_type: string; scope_id: string }) => {
-  if (!scope) return 'Stored';
-  if (scope.scope_type === 'user') return 'Global';
-  if (scope.scope_type === 'project') return 'Project';
-  return 'Thread';
-};
-
-const receiptMessage = (receipt: MemoryChangeReceipt) => {
-  const result = receipt.result_memory_id ? ` (${receipt.result_memory_id})` : '';
-  if (receipt.action === 'move') {
-    return `Moved the memory from ${scopeLabel(receipt.source_scope)} to ${scopeLabel(receipt.destination_scope)}${result}.`;
-  }
-  if (receipt.action === 'delete') return `Deleted the ${scopeLabel(receipt.source_scope)} memory.`;
-  if (receipt.action === 'set_overrides') return `Updated the memory's override relationships${result}.`;
-  if (receipt.action === 'update') return `Updated the ${scopeLabel(receipt.destination_scope)} memory${result}.`;
-  return `Created the ${scopeLabel(receipt.destination_scope)} memory${result}.`;
-};
-
 export default function MemoryCuratorPanel({
   intent,
-  onClose,
+  onBack,
+  backLabel = 'Back',
+  contextSubtitle,
   onDirtyChange,
   onApplied,
 }: {
   intent: MemoryCuratorIntent;
-  onClose: () => void;
+  onBack: () => void;
+  backLabel?: string;
+  contextSubtitle?: React.ReactNode;
   onDirtyChange: (dirty: boolean) => void;
   onApplied: () => void;
 }) {
@@ -306,7 +291,7 @@ export default function MemoryCuratorPanel({
         ? `\n${result.warnings.length} indexing warning(s) occurred. Failed records remain available for Retry.`
         : '';
       const summary = result.receipts?.length
-        ? `${result.receipts.map(receiptMessage).join('\n')}${warningSuffix}`
+        ? `${result.receipts.map(memoryReceiptMessage).join('\n')}${warningSuffix}`
         : result.warnings.length
         ? `Changes were saved with ${result.warnings.length} indexing warning(s). Failed records remain available for Retry.`
         : result.review_cursor_advanced && result.changed_memories.length === 0
@@ -422,7 +407,7 @@ export default function MemoryCuratorPanel({
           : decision.operations.filter((operation) => operation.action !== 'noop').map((operation) => ({
               operation_group_id: operation.operation_group_id || `${operation.action}-${operation.memory_id || ''}`,
               action: operation.semantic_action || operation.action,
-              label: operationLabel(operation),
+              label: memoryOperationLabel(operation),
               content: operation.content,
               override_target_ids: operation.override_targets?.map((target) => target.memory_id) || [],
               removed_incoming_override_count: 0,
@@ -474,46 +459,47 @@ export default function MemoryCuratorPanel({
       ref={panelRef}
       sx={{ p: 1, cursor: 'default' }}
       header={(
-        <ConversationHeader
-          models={models}
-          model={llmModel}
-          contextWindow={contextWindow}
-          disabled={busy}
-          onModelChange={setLlmModel}
-          onContextWindowChange={(value) => {
-            setContextWindow(value);
-            if (value > 0) window.localStorage.setItem('last_context_window', String(value));
-          }}
-          beforeModelControls={(
-            <WebSearchModeControl mode={webSearchMode} disabled={busy} onChange={setWebSearchMode} />
-          )}
-          leading={(
-            <>
-              {curatorEmbeddingModel && (
-                <EmbeddingModelReadinessIndicator
-                  model={curatorEmbeddingModel}
-                  ready={workspaceReadiness?.embedding_model_ready ?? null}
-                  size={18}
-                />
-              )}
-              <MemoryIcon color="primary" fontSize="small" />
-              <Typography
-                variant="subtitle2"
-                noWrap
-                sx={{ fontWeight: 700, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
-              >
-                {curatorTitle(intent)}
-              </Typography>
-            </>
-          )}
-          trailingActions={(
-            <Tooltip title="Close memory curator">
-              <IconButton size="small" onClick={onClose} aria-label="Close memory curator">
-                <CloseIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          )}
-        />
+        <>
+          <WorkspaceContextHeader
+            title={memoryWorkspaceTitle(intent.scopeType)}
+            subtitle={contextSubtitle || curatorTitle(intent)}
+            icon={<MemoryIcon color="primary" fontSize="small" />}
+            onBack={onBack}
+            backLabel={backLabel}
+          />
+          <ConversationHeader
+            models={models}
+            model={llmModel}
+            contextWindow={contextWindow}
+            disabled={busy}
+            onModelChange={setLlmModel}
+            onContextWindowChange={(value) => {
+              setContextWindow(value);
+              if (value > 0) window.localStorage.setItem('last_context_window', String(value));
+            }}
+            beforeModelControls={(
+              <WebSearchModeControl mode={webSearchMode} disabled={busy} onChange={setWebSearchMode} />
+            )}
+            leading={(
+              <>
+                {curatorEmbeddingModel && (
+                  <EmbeddingModelReadinessIndicator
+                    model={curatorEmbeddingModel}
+                    ready={workspaceReadiness?.embedding_model_ready ?? null}
+                    size={18}
+                  />
+                )}
+                <Typography
+                  variant="subtitle2"
+                  noWrap
+                  sx={{ fontWeight: 700, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
+                >
+                  {curatorTitle(intent)}
+                </Typography>
+              </>
+            )}
+          />
+        </>
       )}
       status={(
         <Box sx={{ maxHeight: '35%', overflowY: 'auto', flexShrink: 0 }}>

@@ -76,5 +76,6 @@ export const buildProjectWorkspaceTabs = (documents: readonly PdfTab[]): Workspa
 ];
 
 export const buildHomeWorkspaceTabs = (): WorkspaceTab[] => [
+  { kind: 'home', id: 'home-tab', label: 'Home' },
   { kind: 'memory', id: 'memory-tab', label: 'Memory' },
 ];

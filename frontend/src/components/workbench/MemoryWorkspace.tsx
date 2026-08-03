@@ -50,37 +50,16 @@ import {
   filterMemoryWorkspaceSections,
   memorySectionKey,
 } from '../../lib/memory-workspace';
+import {
+  formatMemoryTimestamp,
+  memoryIndexStatusColor,
+  memoryRecallReasonLabel,
+  memoryScopeLabel,
+} from '../../lib/memory-ui';
 import { createCuratorIntent, memoryReviewCuratorIntent, type MemoryCuratorIntent } from '../../lib/memory-curator';
 import { JsonPreview } from '../agent-graph/AgentGraphInspectorPrimitives';
 
 const MEMORY_LIMIT = 500;
-
-const scopeLabel = (scope: MemoryScopeType) => {
-  if (scope === 'thread') return 'This thread';
-  if (scope === 'project') return 'Project';
-  return 'Global';
-};
-
-const formatTimestamp = (value?: string | null) => {
-  if (!value) return 'Unknown';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-};
-
-const statusColor = (status: string): 'default' | 'success' | 'warning' | 'error' | 'info' => {
-  if (status === 'indexed') return 'success';
-  if (status === 'failed') return 'error';
-  if (status === 'indexing') return 'info';
-  if (status === 'pending') return 'warning';
-  return 'default';
-};
-
-const recallReason = (reason?: string | null) => {
-  if (reason === 'project_opt_out') return 'Project recall off';
-  if (reason === 'thread_opt_out') return 'Thread recall off';
-  if (reason === 'not_requested') return 'Recall off';
-  return 'Recall off';
-};
 
 function RelationshipTooltip({
   label,
@@ -104,7 +83,7 @@ function RelationshipTooltip({
           {relationships.map((item) => (
             <Box key={item.id}>
               <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mb: 0.25 }}>
-                <Chip size="small" label={scopeLabel(item.scope_type)} sx={{ height: 20 }} />
+                <Chip size="small" label={memoryScopeLabel(item.scope_type, 'This thread')} sx={{ height: 20 }} />
                 <Typography variant="caption" sx={{ fontWeight: 700 }}>
                   {appliedIds.has(item.id) ? 'Applied here' : 'Inactive here'}
                 </Typography>
@@ -139,8 +118,8 @@ function MemoryDetails({
         Details
       </Typography>
       <Box sx={{ mt: 0.75, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 0.75 }}>
-        <Typography variant="caption">Created: {formatTimestamp(memory.created_at)}</Typography>
-        <Typography variant="caption">Updated: {formatTimestamp(memory.updated_at || memory.created_at)}</Typography>
+        <Typography variant="caption">Created: {formatMemoryTimestamp(memory.created_at)}</Typography>
+        <Typography variant="caption">Updated: {formatMemoryTimestamp(memory.updated_at || memory.created_at)}</Typography>
         <Typography variant="caption">Embedding: {memory.embedding_model}</Typography>
       </Box>
       {Boolean(memory.representations?.length) && (
@@ -150,7 +129,7 @@ function MemoryDetails({
             <Stack key={representation.embedding_model} direction="row" spacing={0.75} alignItems="center" useFlexGap flexWrap="wrap">
               <Chip size="small" variant="outlined" label={representation.primary ? 'Primary' : 'Secondary'} />
               <Typography variant="caption" sx={{ overflowWrap: 'anywhere' }}>{representation.embedding_model}</Typography>
-              <Chip size="small" color={statusColor(representation.index_status)} label={representation.index_status} />
+              <Chip size="small" color={memoryIndexStatusColor(representation.index_status)} label={representation.index_status} />
               {['failed', 'pending'].includes(representation.index_status) && (
                 <Tooltip title={`Retry ${representation.embedding_model}`}>
                   <span>
@@ -389,17 +368,17 @@ export default function MemoryWorkspace({
                     sx={{ flex: 1, minWidth: 0, justifyContent: 'flex-start', gap: 0.75, py: 1, textAlign: 'left' }}
                   >
                     {isExpanded ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
-                    <Chip size="small" label={scopeLabel(section.scope_type)} variant="outlined" />
+                    <Chip size="small" label={memoryScopeLabel(section.scope_type, 'This thread')} variant="outlined" />
                     <Typography variant="caption" color="text.secondary">{totalCount}</Typography>
                     <Chip
                       size="small"
                       variant="outlined"
                       color={section.recall_enabled ? 'success' : 'warning'}
-                      label={section.recall_enabled ? 'Recall enabled' : recallReason(section.recall_skip_reason)}
+                      label={section.recall_enabled ? 'Recall enabled' : memoryRecallReasonLabel(section.recall_skip_reason)}
                     />
                     {section.truncated && <Chip size="small" color="info" label={`First ${MEMORY_LIMIT}`} />}
                   </ButtonBase>
-                  <Tooltip title={`Add ${scopeLabel(section.scope_type).toLowerCase()} memory`}>
+                  <Tooltip title={`Add ${memoryScopeLabel(section.scope_type, 'this thread').toLowerCase()} memory`}>
                     <span>
                       <IconButton
                         size="small"
@@ -425,7 +404,7 @@ export default function MemoryWorkspace({
                               <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
                                 {overridden && <Chip size="small" color="warning" variant="outlined" label="Not used here" />}
                                 {recallDisabled && <Chip size="small" color="warning" variant="outlined" label="Recall off" />}
-                                {memory.resolution_status === 'unavailable' && <Chip size="small" label={memory.index_status} color={statusColor(memory.index_status)} />}
+                                {memory.resolution_status === 'unavailable' && <Chip size="small" label={memory.index_status} color={memoryIndexStatusColor(memory.index_status)} />}
                                 <RelationshipTooltip label="Overrides" relationships={memory.overrides || []} applied={memory.applied_overrides || []} color="info" />
                                 <RelationshipTooltip label="Overridden by" relationships={memory.overridden_by || []} applied={memory.applied_overridden_by || []} color="warning" />
                               </Stack>
@@ -465,7 +444,7 @@ export default function MemoryWorkspace({
                     <Box sx={{ minHeight: 92, display: 'grid', placeItems: 'center', color: 'text.secondary', p: 2 }}>
                       <Stack alignItems="center" spacing={0.5}>
                         <MemoryIcon sx={{ fontSize: 28, opacity: 0.4 }} />
-                        <Typography variant="body2">{query.trim() ? 'No matching memories' : `No ${scopeLabel(section.scope_type).toLowerCase()} memories`}</Typography>
+                        <Typography variant="body2">{query.trim() ? 'No matching memories' : `No ${memoryScopeLabel(section.scope_type, 'this thread').toLowerCase()} memories`}</Typography>
                       </Stack>
                     </Box>
                   )}

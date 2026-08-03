@@ -4,6 +4,7 @@ import { isBrowserWorkspaceActive, type PdfTab } from '../../lib/document-tabs';
 import TraceWorkspace, { type TraceRunTab } from './TraceWorkspace';
 import BrowserWorkspaceFrame from './BrowserWorkspaceFrame';
 import MemoryWorkspace from './MemoryWorkspace';
+import HomeInstructions from './HomeInstructions';
 import type { Project, Thread } from '../../lib/api';
 import type { MemoryCuratorIntent } from '../../lib/memory-curator';
 
@@ -62,7 +63,9 @@ export default function ThreadWorkspaceContent({
 }) {
   return (
     <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden' }}>
-      {activeTabId === 'trace-tab' ? (
+      {activeTabId === 'home-tab' ? (
+        <HomeInstructions darkMode={darkMode} />
+      ) : activeTabId === 'trace-tab' ? (
         <TraceWorkspace
           tabs={traceTabs}
           activeRunId={activeTraceId}

@@ -43,10 +43,10 @@ test('document workspace tabs are empty when disabled', () => {
   assert.deepEqual(buildDocumentWorkspaceTabs({ enabled: false, documents: [document], traces: [] }), []);
 });
 
-test('home workspace opens memory', () => {
+test('home workspace opens instructions first and memory explicitly', () => {
   const tabs = buildHomeWorkspaceTabs();
-  assert.deepEqual(tabs.map((tab) => tab.kind), ['memory']);
-  assert.deepEqual(tabs.map((tab) => tab.id), ['memory-tab']);
+  assert.deepEqual(tabs.map((tab) => tab.kind), ['home', 'memory']);
+  assert.deepEqual(tabs.map((tab) => tab.id), ['home-tab', 'memory-tab']);
 });
 
 test('project workspace includes memory, browser, and shared documents without debug trace', () => {
