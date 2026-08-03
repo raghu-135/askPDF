@@ -13,7 +13,8 @@ import {
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
-import MemoryIcon from '@mui/icons-material/Memory';
+import PsychologyIcon from '@mui/icons-material/Psychology';
+import PsychologyAltIcon from '@mui/icons-material/PsychologyAlt';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
@@ -323,7 +324,7 @@ const ChatComposer = React.memo(function ChatComposer({
                             aria-label="Review conversation for memory"
                             sx={{ color: 'text.secondary' }}
                         >
-                            <MemoryIcon fontSize="medium" />
+                            <PsychologyAltIcon fontSize="medium" />
                         </IconButton>
                     </Tooltip>
                 )}
@@ -415,7 +416,7 @@ const ChatMessageItem = React.memo(function ChatMessageItem({
             wide={showAgentRunDebug}
             badge={isRecollected ? (
                     <Chip
-                        icon={<MemoryIcon fontSize="small" />}
+                        icon={<PsychologyIcon fontSize="small" />}
                         label="Used as context"
                         size="small"
                         color="secondary"

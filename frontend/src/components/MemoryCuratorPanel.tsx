@@ -12,7 +12,8 @@ import {
 } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import MemoryIcon from '@mui/icons-material/Memory';
+import PsychologyIcon from '@mui/icons-material/Psychology';
+import PsychologyAltIcon from '@mui/icons-material/PsychologyAlt';
 import {
   applyMemoryCuratorChanges,
   getMemoryWorkspaceStatus,
@@ -462,10 +463,14 @@ export default function MemoryCuratorPanel({
         <>
           <WorkspaceContextHeader
             title={memoryWorkspaceTitle(intent.scopeType)}
-            subtitle={contextSubtitle || curatorTitle(intent)}
-            icon={<MemoryIcon color="primary" fontSize="small" />}
+            icon={
+              intent.mode === 'conversation_review'
+                ? <PsychologyAltIcon color="primary" fontSize="small" />
+                : <PsychologyIcon color="primary" fontSize="small" />
+            }
             onBack={onBack}
             backLabel={backLabel}
+            backContextLabel={contextSubtitle || backLabel}
           />
           <ConversationHeader
             models={models}
@@ -523,7 +528,7 @@ export default function MemoryCuratorPanel({
               <Button
                 size="small"
                 variant="outlined"
-                startIcon={<MemoryIcon />}
+                startIcon={intent.mode === 'conversation_review' ? <PsychologyAltIcon /> : <PsychologyIcon />}
                 disabled={busy || modelReady !== true}
                 onClick={() => {
                   setReviewCanContinue(false);

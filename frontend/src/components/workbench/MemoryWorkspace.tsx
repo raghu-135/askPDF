@@ -28,7 +28,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import MemoryIcon from '@mui/icons-material/Memory';
+import PsychologyIcon from '@mui/icons-material/Psychology';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ReplayIcon from '@mui/icons-material/Replay';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
@@ -310,7 +310,7 @@ export default function MemoryWorkspace({
   return (
     <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
       <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Memory</Typography>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Memory &amp; Settings</Typography>
         {(activeThread || projectContext) && (
           <Tooltip title="Review related memories for duplicates, conflicts, and stale overrides">
             <span>
@@ -443,7 +443,7 @@ export default function MemoryWorkspace({
                   ) : (
                     <Box sx={{ minHeight: 92, display: 'grid', placeItems: 'center', color: 'text.secondary', p: 2 }}>
                       <Stack alignItems="center" spacing={0.5}>
-                        <MemoryIcon sx={{ fontSize: 28, opacity: 0.4 }} />
+                        <PsychologyIcon sx={{ fontSize: 28, opacity: 0.4 }} />
                         <Typography variant="body2">{query.trim() ? 'No matching memories' : `No ${memoryScopeLabel(section.scope_type, 'this thread').toLowerCase()} memories`}</Typography>
                       </Stack>
                     </Box>
@@ -454,7 +454,7 @@ export default function MemoryWorkspace({
           })
         ) : (
           <Box sx={{ height: '100%', minHeight: 220, display: 'grid', placeItems: 'center', color: 'text.secondary', p: 3 }}>
-            <Stack alignItems="center" spacing={0.5}><MemoryIcon sx={{ fontSize: 40, opacity: 0.45 }} /><Typography>No memory scopes available</Typography></Stack>
+            <Stack alignItems="center" spacing={0.5}><PsychologyIcon sx={{ fontSize: 40, opacity: 0.45 }} /><Typography>No memory scopes available</Typography></Stack>
           </Box>
         )}
       </Box>

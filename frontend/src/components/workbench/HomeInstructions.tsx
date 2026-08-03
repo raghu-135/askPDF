@@ -4,30 +4,24 @@ import {
   Divider,
   List,
   ListItem,
-  ListItemIcon,
   ListItemText,
   Paper,
   Stack,
   Typography,
 } from '@mui/material';
-import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AutoAwesomeSharpIcon from '@mui/icons-material/AutoAwesomeSharp';
 import ChatIcon from '@mui/icons-material/Chat';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
 import FolderCopyIcon from '@mui/icons-material/FolderCopy';
-import LanguageIcon from '@mui/icons-material/Language';
-import MemoryIcon from '@mui/icons-material/Memory';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
-import RouteIcon from '@mui/icons-material/Route';
-import SettingsIcon from '@mui/icons-material/Settings';
-import VolumeUpIcon from '@mui/icons-material/VolumeUp';
+import PsychologyIcon from '@mui/icons-material/Psychology';
 import { HOME_INSTRUCTION_SECTIONS } from '../../lib/home-instructions';
 
 const sectionIcon = (title: string) => {
   if (title === 'Projects and Threads') return <FolderCopyIcon color="primary" />;
   if (title === 'Documents and Browser Sources') return <PictureAsPdfIcon color="primary" />;
   if (title === 'Chat and Retrieval') return <ChatIcon color="primary" />;
-  if (title === 'Memory Workspace') return <MemoryIcon color="primary" />;
+  if (title === 'Memory & Settings') return <PsychologyIcon color="primary" />;
   if (title === 'Agent Workflows') return <AutoAwesomeSharpIcon color="primary" />;
   return <FactCheckIcon color="primary" />;
 };
@@ -49,7 +43,7 @@ export default function HomeInstructions({ darkMode = false }: { darkMode?: bool
             <Typography variant="h4" sx={{ fontWeight: 800 }}>
               Welcome to AskPDF
             </Typography>
-            <Chip icon={<MemoryIcon />} label="Projects, chat, memory, workflows" size="small" color="primary" variant="outlined" />
+            <Chip icon={<PsychologyIcon />} label="Projects, chat, memory, workflows" size="small" color="primary" variant="outlined" />
           </Stack>
           <Typography color="text.secondary" sx={{ maxWidth: 760 }}>
             Start from the Projects panel on the right. Create a project, add sources, open a thread, and use memory or workflows when the work needs durable context or a more structured agent.
@@ -82,20 +76,17 @@ export default function HomeInstructions({ darkMode = false }: { darkMode?: bool
                 </Typography>
               </Stack>
               <Divider />
-              <List dense disablePadding>
+              <List
+                dense
+                disablePadding
+                sx={{
+                  listStyleType: 'disc',
+                  pl: 3,
+                  pr: 1.5,
+                }}
+              >
                 {section.items.map((item) => (
-                  <ListItem key={item} alignItems="flex-start" sx={{ px: 1.5, py: 0.75 }}>
-                    <ListItemIcon sx={{ minWidth: 26, mt: 0.25 }}>
-                      {section.title === 'Agent Workflows'
-                        ? <RouteIcon fontSize="small" color="action" />
-                        : section.title === 'Chat and Retrieval'
-                          ? <SettingsIcon fontSize="small" color="action" />
-                          : section.title === 'Review, Trace, and Playback'
-                            ? <VolumeUpIcon fontSize="small" color="action" />
-                            : section.title === 'Documents and Browser Sources'
-                              ? <LanguageIcon fontSize="small" color="action" />
-                              : <AccountTreeIcon fontSize="small" color="action" />}
-                    </ListItemIcon>
+                  <ListItem key={item} alignItems="flex-start" sx={{ display: 'list-item', pl: 0, pr: 0, py: 0.75 }}>
                     <ListItemText
                       primary={item}
                       primaryTypographyProps={{ variant: 'body2', sx: { lineHeight: 1.45 } }}

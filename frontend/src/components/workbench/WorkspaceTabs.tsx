@@ -21,10 +21,10 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import LanguageIcon from '@mui/icons-material/Language';
 import HomeIcon from '@mui/icons-material/Home';
-import MemoryIcon from '@mui/icons-material/Memory';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import PsychologyIcon from '@mui/icons-material/Psychology';
 import PublicIcon from '@mui/icons-material/Public';
 import RouteIcon from '@mui/icons-material/Route';
 import ErrorIcon from '@mui/icons-material/Error';
@@ -203,12 +203,27 @@ export default React.memo(function WorkspaceTabs({
       >
         {tabs.map((tab) => {
           if (tab.kind === 'home') {
-            return <Tab key={tab.id} icon={<HomeIcon fontSize="small" />} iconPosition="start" label={tab.label} sx={commonTabSx} />;
+            const active = tab.id === activeTabId;
+            return (
+              <Tooltip key={tab.id} title="Home">
+                <Tab
+                  aria-label="Home"
+                  icon={<HomeIcon fontSize="small" />}
+                  iconPosition="start"
+                  label={active ? tab.label : undefined}
+                  sx={{
+                    ...commonTabSx,
+                    minWidth: active ? undefined : 44,
+                    px: active ? 1.5 : 1,
+                  }}
+                />
+              </Tooltip>
+            );
           }
           if (tab.kind === 'memory') {
             return renderSystemTab({
               tab,
-              icon: <MemoryIcon fontSize="small" />,
+              icon: <PsychologyIcon fontSize="small" />,
               tooltip: 'Memory',
             });
           }
@@ -337,7 +352,7 @@ export default React.memo(function WorkspaceTabs({
                     </Tooltip>
                   )}
                   {tab.associationScope === 'project' && (
-                    <Tooltip title="Project knowledge"><MemoryIcon sx={{ fontSize: 14, color: 'primary.main', flex: '0 0 auto' }} /></Tooltip>
+                    <Tooltip title="Project knowledge"><CreateNewFolderIcon sx={{ fontSize: 14, color: 'primary.main', flex: '0 0 auto' }} /></Tooltip>
                   )}
                   <Tooltip title="Document actions">
                     <span>

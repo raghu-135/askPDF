@@ -9,7 +9,7 @@ test('home instructions cover the major app workflows', () => {
     'Projects and Threads',
     'Documents and Browser Sources',
     'Chat and Retrieval',
-    'Memory Workspace',
+    'Memory & Settings',
     'Agent Workflows',
     'Review, Trace, and Playback',
   ]);

@@ -112,19 +112,21 @@ export function ConversationHeader({
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: 2,
+      flexWrap: 'wrap',
       flexShrink: 0,
       minWidth: 0,
     }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, flex: '1 1 220px' }}>
         {leading}
       </Box>
       <Box sx={{
         display: 'flex',
         alignItems: 'center',
-        flexGrow: 1,
-        maxWidth: 350,
+        justifyContent: 'flex-end',
+        flex: '1 1 380px',
         minWidth: 0,
         gap: 1,
+        flexWrap: { xs: 'wrap', sm: 'nowrap' },
       }}>
         {beforeModelControls}
         <Tooltip
@@ -165,8 +167,8 @@ export function ConversationHeader({
             onClick={dismissContextHelp}
             onFocus={dismissContextHelp}
             sx={{
-              width: 100,
-              flex: '0 0 auto',
+              width: 116,
+              flex: '0 0 116px',
               '& .MuiOutlinedInput-root': {
                 transition: 'all 0.3s ease',
                 backgroundColor: showContextHighlight ? 'rgba(255, 235, 59, 0.1)' : 'transparent',
@@ -180,7 +182,7 @@ export function ConversationHeader({
             slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
           />
         </Tooltip>
-        <FormControl fullWidth size="small" disabled={disabled}>
+        <FormControl size="small" disabled={disabled} sx={{ flex: '1 1 220px', minWidth: 220 }}>
           <InputLabel id={labelId}>Select LLM</InputLabel>
           <Select
             labelId={labelId}
@@ -204,6 +206,7 @@ export function WorkspaceContextHeader({
   icon,
   onBack,
   backLabel = 'Back',
+  backContextLabel,
   actions,
 }: {
   title: string;
@@ -211,8 +214,94 @@ export function WorkspaceContextHeader({
   icon?: React.ReactNode;
   onBack?: () => void;
   backLabel?: string;
+  backContextLabel?: React.ReactNode;
   actions?: React.ReactNode;
 }) {
+  if (onBack && backContextLabel) {
+    return (
+      <Box
+        sx={{
+          minHeight: 49,
+          minWidth: 0,
+          borderBottom: 1,
+          borderColor: 'divider',
+          bgcolor: 'background.paper',
+          display: 'flex',
+          alignItems: 'stretch',
+          flexShrink: 0,
+        }}
+      >
+        <Box
+          sx={{
+            flex: '0 1 min(42%, 220px)',
+            maxWidth: '42%',
+            px: 1,
+            display: 'flex',
+            alignItems: 'center',
+            minWidth: 0,
+          }}
+        >
+          <Tooltip title={backLabel}>
+            <Box
+              component="button"
+              type="button"
+              onClick={onBack}
+              aria-label={backLabel}
+              sx={{
+                border: 0,
+                bgcolor: 'transparent',
+                color: 'primary.main',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.75,
+                px: 0,
+                py: 0.5,
+                font: 'inherit',
+                textAlign: 'left',
+                minWidth: 0,
+                maxWidth: '100%',
+                '&:hover .back-context-label': {
+                  textDecoration: 'underline',
+                },
+              }}
+            >
+              <ArrowBackIcon fontSize="small" sx={{ flex: '0 0 auto' }} />
+              <Typography
+                className="back-context-label"
+                variant="subtitle2"
+                fontWeight={700}
+                noWrap
+                sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
+              >
+                {backContextLabel}
+              </Typography>
+            </Box>
+          </Tooltip>
+        </Box>
+        <Box
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            px: 1.5,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+            {icon}
+            <Typography variant="subtitle2" fontWeight={800} noWrap sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {title}
+            </Typography>
+          </Box>
+          {actions}
+        </Box>
+      </Box>
+    );
+  }
+
   return (
     <Box
       sx={{

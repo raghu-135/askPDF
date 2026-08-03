@@ -32,7 +32,7 @@ export const HOME_INSTRUCTION_SECTIONS: HomeInstructionSection[] = [
     ],
   },
   {
-    title: 'Memory Workspace',
+    title: 'Memory & Settings',
     items: [
       'Use Global memory for cross-project preferences, Project memory for shared project facts, and Thread memory for local context.',
       'Open Memory to browse stored memories, recall status, override relationships, indexing status, and web provenance.',
