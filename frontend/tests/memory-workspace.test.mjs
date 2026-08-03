@@ -4,10 +4,12 @@ import test from 'node:test';
 import {
   LOCAL_USER_MEMORY_SCOPE_ID,
   filterMemoryRecords,
+  filterMemoryWorkspaceSections,
   isMemoryResultTruncated,
   memoryConsentStatus,
   memoryScopesForContext,
   resolveMemoryScopeTarget,
+  sortMemoryRecordsByActivity,
 } from '../src/lib/memory-workspace.ts';
 
 const project = {
@@ -38,6 +40,46 @@ test('memory filtering searches content and related memories', () => {
   assert.deepEqual(filterMemoryRecords(memories, 'concise'), [memories[0]]);
   assert.deepEqual(filterMemoryRecords(memories, 'travel'), [memories[1]]);
   assert.deepEqual(filterMemoryRecords(memories, '  '), memories);
+});
+
+test('hierarchical sections filter applied relationships without hiding sections', () => {
+  const sections = [
+    {
+      scope_type: 'thread',
+      scope_id: 'thread-1',
+      recall_enabled: true,
+      truncated: false,
+      memories: [{
+        id: 'newer',
+        content: 'Thread preference',
+        updated_at: '2026-08-03T12:00:00Z',
+        overrides: [],
+        overridden_by: [],
+        applied_overrides: [{ content: 'Project research focus' }],
+        applied_overridden_by: [],
+      }],
+    },
+    {
+      scope_type: 'project',
+      scope_id: 'project-1',
+      recall_enabled: true,
+      truncated: false,
+      memories: [],
+    },
+  ];
+  const filtered = filterMemoryWorkspaceSections(sections, 'research focus');
+  assert.equal(filtered.length, 2);
+  assert.equal(filtered[0].memories.length, 1);
+  assert.equal(filtered[1].memories.length, 0);
+});
+
+test('memory rows sort by update time and then creation time', () => {
+  const rows = [
+    { id: 'older', content: '', created_at: '2026-08-01T00:00:00Z' },
+    { id: 'newer', content: '', created_at: '2026-08-02T00:00:00Z' },
+    { id: 'updated', content: '', created_at: '2026-07-01T00:00:00Z', updated_at: '2026-08-03T00:00:00Z' },
+  ];
+  assert.deepEqual(sortMemoryRecordsByActivity(rows).map((row) => row.id), ['updated', 'newer', 'older']);
 });
 
 test('memory result limit reports possible truncation', () => {

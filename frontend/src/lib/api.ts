@@ -340,6 +340,23 @@ export interface MemoryRecord {
   updated_at?: string | null;
 }
 
+export type MemoryResolutionStatus = 'effective' | 'overridden' | 'recall_disabled' | 'unavailable';
+
+export interface MemoryWorkspaceRecord extends MemoryRecord {
+  resolution_status: MemoryResolutionStatus;
+  applied_overrides: MemoryOverrideRef[];
+  applied_overridden_by: MemoryOverrideRef[];
+}
+
+export interface MemoryWorkspaceSection {
+  scope_type: MemoryScopeType;
+  scope_id: string;
+  recall_enabled: boolean;
+  recall_skip_reason?: string | null;
+  memories: MemoryWorkspaceRecord[];
+  truncated: boolean;
+}
+
 export type MemoryCuratorMode = 'create' | 'edit' | 'conversation_review';
 export type MemoryCuratorState = 'clarification' | 'conflict' | 'proposal' | 'no_changes';
 
@@ -398,6 +415,7 @@ export interface EffectiveMemoryResponse {
   suppressed_memory_ids: string[];
   unavailable_memory_count: number;
   truncated: boolean;
+  workspace_sections: MemoryWorkspaceSection[];
 }
 
 export interface MemoryReviewCursor {

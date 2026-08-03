@@ -683,6 +683,19 @@ async def test_effective_view_applies_indexed_overrides_and_restores_on_delete(r
     assert [memory["id"] for memory in failed_view["memories"]] == [project_memory.id]
     assert failed_view["suppressed_memory_ids"] == [global_memory.id]
     assert failed_view["unavailable_memory_count"] == 1
+    assert [section["scope_type"] for section in failed_view["workspace_sections"]] == [
+        "thread", "project", "user",
+    ]
+    failed_rows = {
+        memory["id"]: memory
+        for section in failed_view["workspace_sections"]
+        for memory in section["memories"]
+    }
+    assert failed_rows[thread_memory.id]["resolution_status"] == "unavailable"
+    assert failed_rows[project_memory.id]["resolution_status"] == "effective"
+    assert failed_rows[global_memory.id]["resolution_status"] == "overridden"
+    assert failed_rows[thread_memory.id]["applied_overrides"] == []
+    assert [item["id"] for item in failed_rows[project_memory.id]["applied_overrides"]] == [global_memory.id]
 
     await repo.mark_memory_indexed(thread_memory.id)
     indexed_view = await resolve_effective_memory_context(thread_id=thread.id)
@@ -691,13 +704,98 @@ async def test_effective_view_applies_indexed_overrides_and_restores_on_delete(r
         global_memory.id,
         project_memory.id,
     }
+    indexed_rows = {
+        memory["id"]: memory
+        for section in indexed_view["workspace_sections"]
+        for memory in section["memories"]
+    }
+    assert indexed_rows[thread_memory.id]["resolution_status"] == "effective"
+    assert indexed_rows[project_memory.id]["resolution_status"] == "overridden"
+    assert indexed_rows[global_memory.id]["resolution_status"] == "overridden"
+    assert [item["id"] for item in indexed_rows[project_memory.id]["applied_overridden_by"]] == [thread_memory.id]
+
+    sibling = await ThreadRepository().create("Sibling thread", project.id)
+    await ThreadRepository().update_settings(
+        sibling.id,
+        {"memory": {
+            "thread_reads_project_memory": True,
+            "thread_reads_user_memory": True,
+        }},
+    )
+    sibling_view = await resolve_effective_memory_context(thread_id=sibling.id)
+    sibling_rows = {
+        memory["id"]: memory
+        for section in sibling_view["workspace_sections"]
+        for memory in section["memories"]
+    }
+    assert sibling_rows[project_memory.id]["resolution_status"] == "effective"
+    assert sibling_rows[project_memory.id]["overridden_by"] == []
+    assert sibling_rows[project_memory.id]["applied_overridden_by"] == []
+    assert [item["id"] for item in sibling_rows[global_memory.id]["overridden_by"]] == [project_memory.id]
+
     project_view = await resolve_effective_memory_context(project_id=project.id)
     assert [memory["id"] for memory in project_view["memories"]] == [project_memory.id]
     assert project_view["suppressed_memory_ids"] == [global_memory.id]
+    assert [section["scope_type"] for section in project_view["workspace_sections"]] == ["project", "user"]
 
+    await ThreadRepository().update_settings(
+        thread.id,
+        {"memory": {
+            "thread_reads_project_memory": False,
+            "thread_reads_user_memory": False,
+        }},
+    )
+    disabled_view = await resolve_effective_memory_context(thread_id=thread.id)
+    disabled_sections = {section["scope_type"]: section for section in disabled_view["workspace_sections"]}
+    assert disabled_sections["project"]["recall_enabled"] is False
+    assert disabled_sections["project"]["recall_skip_reason"] == "thread_opt_out"
+    assert disabled_sections["project"]["memories"][0]["resolution_status"] == "recall_disabled"
+    assert disabled_sections["user"]["memories"][0]["resolution_status"] == "recall_disabled"
+    assert [memory["id"] for memory in disabled_view["memories"]] == [thread_memory.id]
+
+    await ThreadRepository().update_settings(
+        thread.id,
+        {"memory": {
+            "thread_reads_project_memory": True,
+            "thread_reads_user_memory": True,
+        }},
+    )
     await repo.delete_memory(thread_memory.id)
     restored_view = await resolve_effective_memory_context(thread_id=thread.id)
     assert [memory["id"] for memory in restored_view["memories"]] == [project_memory.id]
+
+
+@pytest.mark.asyncio
+async def test_workspace_sections_apply_limits_independently(repo_sessionmaker):
+    project = await ProjectRepository().create(
+        name="Limited memory",
+        embedding_model="BAAI/bge-m3",
+        settings_json={"memory": {"project_reads_user_memory": True}},
+    )
+    repo = MemoryRepository()
+    for index in range(2):
+        project_memory = await repo.create_memory(
+            scope_type="project",
+            scope_id=project.id,
+            content=f"Project memory {index}",
+            embedding_model="BAAI/bge-m3",
+            content_hash=f"limited-project-{index}",
+        )
+        global_memory = await repo.create_memory(
+            scope_type="user",
+            scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
+            content=f"Global memory {index}",
+            embedding_model="BAAI/bge-m3",
+            content_hash=f"limited-global-{index}",
+        )
+        await repo.mark_memory_indexed(project_memory.id)
+        await repo.mark_memory_indexed(global_memory.id)
+
+    view = await resolve_effective_memory_context(project_id=project.id, limit=1)
+    assert len(view["memories"]) == 1
+    assert [section["scope_type"] for section in view["workspace_sections"]] == ["project", "user"]
+    assert [len(section["memories"]) for section in view["workspace_sections"]] == [1, 1]
+    assert [section["truncated"] for section in view["workspace_sections"]] == [True, True]
 
 
 def test_memory_rank_fusion_does_not_compare_raw_scores_across_models():

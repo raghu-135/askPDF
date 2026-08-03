@@ -14,7 +14,6 @@ import {
 import WifiTwoToneIcon from '@mui/icons-material/WifiTwoTone';
 import WifiOffTwoToneIcon from '@mui/icons-material/WifiOffTwoTone';
 import WifiPasswordIcon from '@mui/icons-material/WifiPassword';
-import SendIcon from '@mui/icons-material/Send';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import MemoryIcon from '@mui/icons-material/Memory';
@@ -101,6 +100,7 @@ import {
     ConversationMessageBubble,
     ConversationPanelTemplate,
     ConversationTranscriptFrame,
+    DecisionChoiceList,
     ResizableDecisionPanel,
 } from './conversation';
 
@@ -2597,66 +2597,31 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                         rootRef={chatRootRef}
                         onClose={clarificationOptions ? () => setClarificationOptions(null) : undefined}
                     >
-                            {clarificationOptions && clarificationOptions.map((choice, i) => {
-                                const choiceText = clarificationChoiceText(choice.text);
-                                const trimmedChoiceText = choiceText.trim();
-                                return (
-                                    <Box
-                                        key={i}
-                                        sx={{
-                                            display: 'grid',
-                                            gridTemplateColumns: 'minmax(0, 1fr) 2.5rem',
-                                            gap: 1,
-                                            alignItems: 'flex-start',
-                                            width: '100%',
-                                            minWidth: 0,
-                                        }}
-                                    >
-                                        <TextField
-                                            fullWidth
-                                            size="small"
-                                            multiline
-                                            label={choice.isOriginal ? 'Original question' : `Option ${i + 1}`}
-                                            value={choiceText}
-                                            sx={{
-                                                '& .MuiOutlinedInput-root': {
-                                                    bgcolor: 'action.hover',
-                                                },
-                                            }}
-                                            onChange={(event) => {
-                                                const nextText = event.target.value;
-                                                setClarificationOptions(prev => prev?.map((item, index) => (
-                                                    index === i ? { ...item, text: nextText } : item
-                                                )) ?? null);
-                                            }}
-                                        />
-                                        <Tooltip title="Send this question">
-                                            <Box
-                                                component="span"
-                                                sx={{
-                                                    width: '2.5rem',
-                                                    display: 'flex',
-                                                    justifyContent: 'center',
-                                                    flex: '0 0 auto',
-                                                }}
-                                            >
-                                                <IconButton
-                                                    color="primary"
-                                                    size="medium"
-                                                    disabled={!trimmedChoiceText || loading}
-                                                    onClick={() => handleSend(
-                                                        trimmedChoiceText,
-                                                        { bypassClarification: choice.isOriginal },
-                                                    )}
-                                                    sx={{ mt: 0.25 }}
-                                                >
-                                                    <SendIcon fontSize="medium" />
-                                                </IconButton>
-                                            </Box>
-                                        </Tooltip>
-                                    </Box>
-                                );
-                            })}
+                            {clarificationOptions && (
+                                <DecisionChoiceList
+                                    presentation="editable"
+                                    choices={clarificationOptions.map((choice, index) => ({
+                                        id: String(index),
+                                        label: choice.isOriginal ? 'Original question' : `Option ${index + 1}`,
+                                        text: clarificationChoiceText(choice.text),
+                                    }))}
+                                    disabled={loading}
+                                    onChoiceTextChange={(selectedChoice, text) => {
+                                        const selectedIndex = Number(selectedChoice.id);
+                                        setClarificationOptions(prev => prev?.map((item, index) => (
+                                            index === selectedIndex ? { ...item, text } : item
+                                        )) ?? null);
+                                    }}
+                                    onSelect={(selectedChoice, text) => {
+                                        const selectedIndex = Number(selectedChoice.id);
+                                        void handleSend(text, {
+                                            bypassClarification: Boolean(clarificationOptions[selectedIndex]?.isOriginal),
+                                        });
+                                    }}
+                                    onCustomSubmit={(text) => void handleSend(text)}
+                                    customPlaceholder="Ask or explain it in your own words"
+                                />
+                            )}
                             {pendingReviewInterrupt && (
                                 <>
                                     {(pendingReviewInterrupt.prompt || pendingReviewInterrupt.body) && (

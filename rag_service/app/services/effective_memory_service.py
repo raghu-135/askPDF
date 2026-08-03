@@ -67,6 +67,128 @@ def memory_payload(
     }
 
 
+def _workspace_scopes(
+    *,
+    thread: Optional[Thread],
+    project: Optional[Project],
+) -> List[Dict[str, str]]:
+    scopes: List[Dict[str, str]] = []
+    if thread is not None:
+        scopes.append({"scope_type": MemoryScopeType.THREAD.value, "scope_id": thread.id})
+    if project is not None:
+        scopes.append({"scope_type": MemoryScopeType.PROJECT.value, "scope_id": project.id})
+    scopes.append({
+        "scope_type": MemoryScopeType.USER.value,
+        "scope_id": LOCAL_USER_MEMORY_SCOPE_ID,
+    })
+    return scopes
+
+
+async def _workspace_sections(
+    *,
+    thread: Optional[Thread],
+    project: Optional[Project],
+    policy: Dict[str, Any],
+    applied_edges: Sequence[MemoryOverride],
+    suppressed_ids: set[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Build the administrative hierarchy without changing recall eligibility."""
+
+    scopes = _workspace_scopes(thread=thread, project=project)
+    clauses = [
+        and_(Memory.scope_type == scope["scope_type"], Memory.scope_id == scope["scope_id"])
+        for scope in scopes
+    ]
+    async with async_session_maker() as session:
+        memories = list((await session.execute(
+            select(Memory)
+            .where(or_(*clauses))
+            .order_by(Memory.updated_at.desc().nullslast(), Memory.created_at.desc(), Memory.id)
+        )).scalars().all())
+        visible_ids = {memory.id for memory in memories}
+        edges = list((await session.execute(
+            select(MemoryOverride).where(
+                MemoryOverride.overriding_memory_id.in_(visible_ids),
+                MemoryOverride.overridden_memory_id.in_(visible_ids),
+            )
+        )).scalars().all()) if visible_ids else []
+
+    by_id = {memory.id: memory for memory in memories}
+    outgoing: Dict[str, List[Memory]] = {}
+    incoming: Dict[str, List[Memory]] = {}
+    for edge in edges:
+        source = by_id.get(edge.overriding_memory_id)
+        target = by_id.get(edge.overridden_memory_id)
+        if source and target:
+            outgoing.setdefault(source.id, []).append(target)
+            incoming.setdefault(target.id, []).append(source)
+
+    applied_keys = {
+        (edge.overriding_memory_id, edge.overridden_memory_id)
+        for edge in applied_edges
+    }
+    applied_outgoing: Dict[str, List[Memory]] = {}
+    applied_incoming: Dict[str, List[Memory]] = {}
+    for source_id, target_id in applied_keys:
+        source = by_id.get(source_id)
+        target = by_id.get(target_id)
+        if source and target:
+            applied_outgoing.setdefault(source_id, []).append(target)
+            applied_incoming.setdefault(target_id, []).append(source)
+
+    searched = {
+        (scope["scope_type"], scope["scope_id"])
+        for scope in policy["searched_scopes"]
+    }
+    skipped_reasons = {
+        scope["scope_type"]: scope["reason"]
+        for scope in policy["skipped_scopes"]
+    }
+    bounded_limit = max(1, min(int(limit), 500))
+    sections: List[Dict[str, Any]] = []
+    for scope in scopes:
+        scope_key = (scope["scope_type"], scope["scope_id"])
+        recall_enabled = scope_key in searched
+        scoped = [
+            memory for memory in memories
+            if (memory.scope_type, memory.scope_id) == scope_key
+        ]
+        records: List[Dict[str, Any]] = []
+        for memory in scoped[:bounded_limit]:
+            payload = memory_payload(
+                memory,
+                outgoing=outgoing.get(memory.id, []),
+                incoming=incoming.get(memory.id, []),
+            )
+            if memory.index_status != "indexed":
+                resolution_status = "unavailable"
+            elif not recall_enabled:
+                resolution_status = "recall_disabled"
+            elif memory.id in suppressed_ids:
+                resolution_status = "overridden"
+            else:
+                resolution_status = "effective"
+            payload.update({
+                "resolution_status": resolution_status,
+                "applied_overrides": [
+                    _memory_ref(item) for item in applied_outgoing.get(memory.id, [])
+                ],
+                "applied_overridden_by": [
+                    _memory_ref(item) for item in applied_incoming.get(memory.id, [])
+                ],
+            })
+            records.append(payload)
+        sections.append({
+            **scope,
+            "recall_enabled": recall_enabled,
+            "recall_skip_reason": None if recall_enabled else skipped_reasons.get(scope["scope_type"], "not_requested"),
+            "memories": records,
+            "truncated": len(scoped) > bounded_limit,
+        })
+    return sections
+
+
 async def serialize_memories_with_relationships(memories: Sequence[Memory]) -> List[Dict[str, Any]]:
     """Serialize stored memories with compact incoming and outgoing relation details."""
 
@@ -200,6 +322,14 @@ async def resolve_effective_memory_context(
     )
     scopes = policy["searched_scopes"]
     if not scopes:
+        workspace_sections = await _workspace_sections(
+            thread=thread,
+            project=project,
+            policy=policy,
+            applied_edges=[],
+            suppressed_ids=set(),
+            limit=limit,
+        )
         return {
             "context": {"type": "thread" if thread_id else "project" if project_id else "global", "id": thread_id or project_id or LOCAL_USER_MEMORY_SCOPE_ID},
             "policy": policy,
@@ -210,6 +340,7 @@ async def resolve_effective_memory_context(
             "excluded_memory_ids": [],
             "unavailable_memory_count": 0,
             "truncated": False,
+            "workspace_sections": workspace_sections,
         }
 
     clauses = [
@@ -269,6 +400,14 @@ async def resolve_effective_memory_context(
 
     bounded_limit = max(1, min(int(limit), 500))
     visible = effective[:bounded_limit]
+    workspace_sections = await _workspace_sections(
+        thread=thread,
+        project=project,
+        policy=policy,
+        applied_edges=applied_edges,
+        suppressed_ids=suppressed_ids,
+        limit=limit,
+    )
     return {
         "context": {
             "type": "thread" if thread else "project" if project else "global",
@@ -296,6 +435,7 @@ async def resolve_effective_memory_context(
         "excluded_memory_ids": sorted(suppressed_ids | unavailable_ids),
         "unavailable_memory_count": len(memories) - len(indexed_ids),
         "truncated": len(effective) > bounded_limit,
+        "workspace_sections": workspace_sections,
     }
 
 

@@ -34,6 +34,7 @@ import {
   ConversationMessageBubble,
   ConversationPanelTemplate,
   ConversationTranscriptFrame,
+  DecisionChoiceList,
   ResizableDecisionPanel,
 } from './conversation';
 
@@ -259,21 +260,18 @@ export default function MemoryCuratorPanel({
         horizontalInset={1}
         minHeight={80}
       >
-        {decision.choices.map((choice) => (
-          <Button
-            key={choice.id}
-            variant="outlined"
-            size="small"
-            onClick={() => submitMessage(choice.user_message, choice.id)}
-            disabled={busy}
-            sx={{ justifyContent: 'flex-start', textAlign: 'left' }}
-          >
-            <Box>
-              <Typography variant="body2">{choice.label}</Typography>
-              {choice.description && <Typography variant="caption" color="text.secondary">{choice.description}</Typography>}
-            </Box>
-          </Button>
-        ))}
+        <DecisionChoiceList
+          choices={decision.choices.map((choice) => ({
+            id: choice.id,
+            label: choice.label,
+            description: choice.description,
+            text: choice.user_message,
+          }))}
+          disabled={busy}
+          onSelect={(choice, text) => submitMessage(text, choice.id)}
+          onCustomSubmit={(text) => submitMessage(text)}
+          customPlaceholder="Tell the curator what outcome you prefer"
+        />
       </ResizableDecisionPanel>
     );
   } else if (decision?.state === 'proposal') {
