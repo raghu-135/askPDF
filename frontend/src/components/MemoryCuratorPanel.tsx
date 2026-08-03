@@ -31,6 +31,7 @@ import { checkLlmModelReady, fetchAvailableLlmModels } from '../lib/models-api';
 import {
   buildCuratorContext,
   curatorTitle,
+  toMemoryConsistencyReviewCursor,
   type MemoryCuratorIntent,
 } from '../lib/memory-curator';
 import {
@@ -229,7 +230,6 @@ export default function MemoryCuratorPanel({
     webSearchDecision?: { query: string; approved: boolean },
   ) => {
     if (!llmModel || modelReady !== true) return;
-    const boundedMessages = nextMessages.slice(-24);
     setBusy(true);
     setError(null);
     setApplied(false);
@@ -238,7 +238,7 @@ export default function MemoryCuratorPanel({
         mode: intent.mode,
         context,
         memory_id: intent.memory?.id,
-        messages: boundedMessages.map(({ role, content, choice_id }) => ({
+        messages: nextMessages.map(({ role, content, choice_id }) => ({
           role,
           content,
           ...(choice_id ? { choice_id } : {}),
@@ -249,7 +249,7 @@ export default function MemoryCuratorPanel({
         ...(webSearchDecision ? { web_search_decision: webSearchDecision } : {}),
         ...(intent.mode === 'memory_review' && reviewCursor ? { memory_review_cursor: reviewCursor } : {}),
       });
-      setMessages([...boundedMessages, {
+      setMessages([...nextMessages, {
         ...curatorMessage('assistant', response.message),
         web_sources: response.web_sources || [],
       }]);
@@ -284,7 +284,9 @@ export default function MemoryCuratorPanel({
         context,
         operations: decision.operations,
         review_cursor: decision.review?.cursor || undefined,
-        memory_review_cursor: decision.memory_review || undefined,
+        memory_review_cursor: decision.memory_review
+          ? toMemoryConsistencyReviewCursor(decision.memory_review)
+          : undefined,
         actor_id: 'ui',
       });
       setApplied(true);
@@ -294,7 +296,9 @@ export default function MemoryCuratorPanel({
         && decision.memory_review.remaining_anchor_count > 0
         && !result.memory_review_completed
       ));
-      if (decision.memory_review) setReviewCursor(decision.memory_review);
+      if (decision.memory_review) {
+        setReviewCursor(toMemoryConsistencyReviewCursor(decision.memory_review));
+      }
       onDirtyChange(false);
       onApplied();
       setWorkspaceReadinessVersion((version) => version + 1);

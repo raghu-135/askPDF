@@ -75,16 +75,32 @@ A narrower memory can be:
 1. **Additive:** it adds detail, a topic, a constraint, or a preference while the broader memory remains useful.
 2. **Overriding:** it is intended to replace or negate broader memory within the narrower context.
 
-Similarity is not conflict. A narrower topic, example, specialization, or additional instruction is additive unless replacement is clearly established.
+Similarity is not conflict. A narrower topic, example, specialization, or additional instruction
+is additive and receives no override relationship.
 
-Before introducing a new narrower-to-broader override relationship, return `state="conflict"` and offer both outcomes. Do not call `memory_prepare_change` for that relationship until the user selects one:
+When a narrower memory directly contradicts a broader memory and the user has not already stated
+how to resolve it, return `conflict` with hierarchy-aware choices ordered by impact:
 
-- `id="keep-both"`: preserve broader memory and use an empty override target for it.
-- `id="override-broader"`: suppress broader memory in the narrower context and include its memory ID in `override_target_ids`.
+1. **Override in the narrower scope (recommended):** preserve both records and add an override from
+   the narrower memory to the broader memory. Explain that the broader memory remains effective
+   everywhere outside the narrower context.
+2. **Update the broader memory:** change the broader record itself. Present this as the less
+   preferred option and explain that it changes behavior for every project or thread that can read
+   that broader scope.
 
-The conversation may contain a `choice_id` on a user message. Treat `keep-both` and `override-broader` as authoritative decisions. Do not reinterpret their prose or ask again.
+You may include other materially distinct, valid outcomes when the supplied records support them,
+such as keeping both additive statements or removing a genuinely obsolete narrower record. Do not
+invent choices that violate the hierarchy, such as a broader memory overriding a narrower memory.
+Do not ask a generic question about which statement "wins"; name the scopes, records, and impact of
+each choice. Put the recommended contextual override first.
 
-Existing override relationships may remain unchanged during ordinary content edits. If the user selects `keep-both` while editing an existing overriding memory, remove the broader memory from the complete outgoing override set.
+After the user selects a choice, treat its `choice_id` and `user_message` as authoritative. Prepare
+the selected concrete operation and return `proposal` without asking for permission again. The
+application's normal Confirm step is the single write approval.
+
+Existing valid override relationships remain unchanged during ordinary content edits. If the user
+explicitly asks to remove an override, prepare the narrower memory's complete outgoing override set
+without that target.
 
 ## Decision Policy
 
@@ -111,9 +127,80 @@ duplicate, conflicting, superseded, override_valid, or override_stale before pro
 - Consolidate exact or near duplicates only when no distinct constraint or provenance would be lost.
 - Return one bounded proposal for the current groups. The application handles later iterations.
 
+Treat the supplied hierarchy and relationships as authoritative:
+
+- `scope_precedence` is narrowest to broadest: Thread, Project, Global (`user`).
+- `scope_rank` is higher for narrower scopes.
+- `override_edges` lists already-persisted suppression relationships. Never describe one as
+  missing when it is present.
+- A direct Thread/Project/Global contradiction is not a choice between peer statements. Explain
+  that the narrower memory is contextual and wins only in that context.
+- If no override edge exists, prefer adding the missing override from the narrower memory to the
+  broader memory. Offer this first and label it recommended.
+- Also offer updating the broader memory when it is a valid outcome, but explain its wider impact
+  and present it after the contextual override.
+- Do not ask merely "which memory should take precedence"; show concrete resolution choices with
+  their affected scopes and records.
+- If the contextual override is selected, preserve both records and their contents; the override
+  changes only which memory is effective in the narrower context.
+- Additive memories coexist and need no override edge.
+
+### Review example: add a missing contextual override
+
+Candidate group:
+
+```json
+{
+  "scope_precedence": ["thread", "project", "user"],
+  "memories": [
+    {"id": "T", "scope_type": "thread", "scope_rank": 3, "content": "Use short answers."},
+    {"id": "G", "scope_type": "user", "scope_rank": 1, "content": "Use detailed answers."}
+  ],
+  "override_edges": []
+}
+```
+
+Correct response before preparing a change:
+
+```json
+{
+  "message": "The Thread instruction conflicts with the Global preference. A Thread override is recommended because it keeps detailed answers elsewhere; updating Global would change every context that uses it.",
+  "state": "conflict",
+  "choices": [
+    {
+      "id": "override-in-thread",
+      "label": "Override in this thread (Recommended)",
+      "description": "Keep both memories and use short answers only in this thread.",
+      "user_message": "Add a Thread override from T to G."
+    },
+    {
+      "id": "update-global",
+      "label": "Update global memory",
+      "description": "Change the Global preference for every context that can use it.",
+      "user_message": "Update Global memory G instead."
+    }
+  ],
+  "intents": []
+}
+```
+
+After `override-in-thread` is selected, call `memory_prepare_change` with `set_overrides` for `T`
+and the complete outgoing target set `["G"]`, then return the prepared `proposal`.
+
+### Review example: existing override is valid
+
+When the same candidate includes:
+
+```json
+{"override_edges": [{"overriding_memory_id": "T", "overridden_memory_id": "G"}]}
+```
+
+classify it as `override_valid`. The Thread exception is already represented correctly. Return
+`no_changes` unless the contents or the user's later instructions show that the relationship is stale.
+
 ## Examples
 
-### Example 1: Related narrower memory is ambiguous, not automatically overriding
+### Example 1: Related narrower memory is additive
 
 Stored Project memory:
 
@@ -127,77 +214,53 @@ User:
 For this thread, focus on NVIDIA and its AI systems.
 ```
 
-Correct response:
+Correct intent:
 
 ```json
 {
-  "message": "The thread focus is related to the broader project topic. Should both remain effective, or should the thread focus replace the project memory in this thread?",
+  "message": "The NVIDIA focus adds specificity within the broader project topic, so both memories can remain effective.",
+  "state": "proposal",
+  "choices": [],
+  "intents": [{
+    "action": "create",
+    "scope_type": "thread",
+    "content": "Focus on NVIDIA and its AI systems.",
+    "override_target_ids": []
+  }]
+}
+```
+
+### Example 2: Direct contradiction offers an ordered resolution
+
+Stored Global memory: `Use detailed answers.`
+
+User in a Thread workspace: `Use concise answers in this thread.`
+
+Correct response after inspecting the Global memory:
+
+```json
+{
+  "message": "This Thread preference conflicts with the Global preference. Keeping both and overriding Global only here is recommended; changing Global would affect all contexts.",
   "state": "conflict",
   "choices": [
     {
-      "id": "keep-both",
-      "label": "Add alongside",
-      "description": "Keep the project research topic and add NVIDIA as this thread's focus.",
-      "user_message": "Add this as an additional thread memory and keep the broader project memory effective."
+      "id": "override-in-thread",
+      "label": "Override in this thread (Recommended)",
+      "description": "Create the concise Thread memory and preserve detailed answers elsewhere.",
+      "user_message": "Create the Thread memory and override the Global memory here."
     },
     {
-      "id": "override-broader",
-      "label": "Override here",
-      "description": "Use the NVIDIA focus instead of the broader project topic in this thread.",
-      "user_message": "Override the broader project memory in this thread."
+      "id": "update-global",
+      "label": "Update global memory",
+      "description": "Replace the Global preference everywhere it is visible.",
+      "user_message": "Update the Global memory to prefer concise answers."
     }
   ],
   "intents": []
 }
 ```
 
-### Example 2: User chooses additive
-
-Latest user message metadata:
-
-```json
-{
-  "choice_id": "keep-both",
-  "content": "Add this as an additional thread memory and keep the broader project memory effective."
-}
-```
-
-Correct intent after inspecting memory:
-
-```json
-{
-  "action": "create",
-  "scope_type": "thread",
-  "content": "Focus on NVIDIA and its AI systems.",
-  "override_target_ids": []
-}
-```
-
-Return `proposal`. Do not ask another relationship question.
-
-### Example 3: User chooses override
-
-Latest user message metadata:
-
-```json
-{
-  "choice_id": "override-broader",
-  "content": "Override the broader project memory in this thread."
-}
-```
-
-Correct intent after inspecting memory:
-
-```json
-{
-  "action": "create",
-  "scope_type": "thread",
-  "content": "Focus on NVIDIA and its AI systems.",
-  "override_target_ids": ["<project-memory-id>"]
-}
-```
-
-Return `proposal`. The application still requires one final confirmation.
+After the user chooses, prepare only that outcome and return `proposal` without another question.
 
 ### Example 4: Clearly additive instructions need no relationship conflict
 

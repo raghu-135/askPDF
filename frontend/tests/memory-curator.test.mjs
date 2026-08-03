@@ -8,6 +8,7 @@ import {
   defaultMemoryCuratorIntent,
   memoryReviewCuratorIntent,
   reviewCuratorIntent,
+  toMemoryConsistencyReviewCursor,
 } from '../src/lib/memory-curator.ts';
 
 const project = { id: 'project-1' };
@@ -30,6 +31,28 @@ test('default curator intent follows the active workspace context', () => {
     defaultMemoryCuratorIntent({ project: readyProject }).embeddingModel,
     'project-model',
   );
+});
+
+test('review cursor serialization excludes transient candidate metadata', () => {
+  assert.deepEqual(toMemoryConsistencyReviewCursor({
+    context_type: 'thread',
+    context_id: 'thread-1',
+    snapshot_at: '2026-08-03T00:00:00Z',
+    snapshot_scope_versions: { 'thread:thread-1': 2 },
+    anchor_position: 5,
+    reviewed_anchor_count: 5,
+    remaining_anchor_count: 1,
+    candidate_groups: [{ anchor_id: 'memory-1' }],
+    representation_pending: false,
+  }), {
+    context_type: 'thread',
+    context_id: 'thread-1',
+    snapshot_at: '2026-08-03T00:00:00Z',
+    snapshot_scope_versions: { 'thread:thread-1': 2 },
+    anchor_position: 5,
+    reviewed_anchor_count: 5,
+    remaining_anchor_count: 1,
+  });
 });
 
 test('curator intents preserve workspace scope and canonical global ID', () => {

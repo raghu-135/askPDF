@@ -24,7 +24,7 @@ from app.models.memory_tools import (
     MemoryPrepareChangeInput,
     MemorySearchInput,
 )
-from app.services import memory_curator_service, memory_tool_service
+from app.services import memory_curator_service, memory_review_service, memory_tool_service
 from app.time_utils import iso_utc_z, utc_now
 
 
@@ -122,30 +122,63 @@ def test_curator_payload_hides_scope_ids_but_preserves_memory_ids():
     assert "scope_id" not in payload["overrides"][0]
 
 
-def test_curator_uses_typed_choice_for_cross_scope_override_resolution():
-    assert memory_curator_service._selected_override_resolution([{
-        "role": "user",
-        "content": "For this thread, focus on NVIDIA and its AI systems.",
-    }]) is None
-    assert memory_curator_service._selected_override_resolution([{
-        "role": "user",
-        "content": "Keep both.",
-        "choice_id": "keep-both",
-    }]) == "additive"
-    assert memory_curator_service._selected_override_resolution([{
-        "role": "user",
-        "content": "Use the narrower memory here.",
-        "choice_id": "override-broader",
-    }]) == "override"
-
-
 def test_memory_curator_prompt_contains_relationship_examples():
     prompt = memory_curator_service.load_prompt("memory_curator/system.md")
 
     assert "Similarity is not conflict" in prompt
-    assert 'id="keep-both"' in prompt
-    assert 'id="override-broader"' in prompt
+    assert "Override in the narrower scope (recommended)" in prompt
+    assert "Update the broader memory" in prompt
+    assert "without asking for permission again" in prompt
     assert "Same-scope correction updates the existing record" in prompt
+
+
+@pytest.mark.asyncio
+async def test_curator_preserves_ordered_hierarchy_resolution_choices(
+    curator_sessionmaker,
+    monkeypatch,
+):
+    await _workspace(curator_sessionmaker)
+    monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
+    llm = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps({
+        "message": "The Thread preference conflicts with Global memory.",
+        "state": "conflict",
+        "choices": [
+            {
+                "id": "override-in-thread",
+                "label": "Override in this thread (Recommended)",
+                "description": "Preserve Global memory outside this thread.",
+                "user_message": "Add the Thread override.",
+            },
+            {
+                "id": "update-global",
+                "label": "Update global memory",
+                "description": "Change the preference in every context.",
+                "user_message": "Update the Global memory instead.",
+            },
+        ],
+        "intents": [],
+    }))))
+    monkeypatch.setattr(memory_curator_service, "get_llm", lambda *_args, **_kwargs: llm)
+
+    response = await memory_curator_service.respond_to_memory_curator(
+        MemoryCuratorRespondRequest(
+            mode="create",
+            context=_context(),
+            messages=[MemoryCuratorMessage(
+                role="user",
+                content="Use concise answers in this thread.",
+            )],
+            llm_model="chat-model",
+            context_window=8192,
+        )
+    )
+
+    assert response["state"] == "conflict"
+    assert response["operations"] == []
+    assert [choice["id"] for choice in response["choices"]] == [
+        "override-in-thread",
+        "update-global",
+    ]
 
 
 @pytest.mark.asyncio
@@ -471,7 +504,7 @@ async def test_no_change_confirmation_advances_review_cursor(curator_sessionmake
 
 
 @pytest.mark.asyncio
-async def test_review_batches_latest_twenty_then_oldest_after_cursor(curator_sessionmaker):
+async def test_review_batch_size_scales_with_context_then_continues_after_cursor(curator_sessionmaker):
     _project, thread = await _workspace(curator_sessionmaker)
     started = utc_now() - timedelta(days=2)
     async with curator_sessionmaker() as session:
@@ -482,16 +515,27 @@ async def test_review_batches_latest_twenty_then_oldest_after_cursor(curator_ses
                     id=f"initial-{index:02d}",
                     thread_id=thread.id,
                     status="completed",
-                    payload={"question": f"Q{index}", "answer": f"A{index}"},
+                    payload={
+                        "question": f"Q{index} " + ("q" * 900),
+                        "answer": f"A{index} " + ("a" * 900),
+                    },
                     created_at=occurred_at,
                     completed_at=occurred_at,
                 ))
 
-    first = await memory_curator_service._review_batch(thread)
-    assert first["reviewed_count"] == 20
-    assert [turn["id"] for turn in first["turns"]] == [
-        f"initial-{index:02d}" for index in range(5, 25)
-    ]
+    first = await memory_review_service.build_conversation_review_batch(
+        thread,
+        context_window=2048,
+        session_factory=curator_sessionmaker,
+    )
+    large = await memory_review_service.build_conversation_review_batch(
+        thread,
+        context_window=40000,
+        session_factory=curator_sessionmaker,
+    )
+    assert 1 <= first["reviewed_count"] < large["reviewed_count"] <= 25
+    assert first["turns"][-1]["id"] == "initial-24"
+    assert large["turns"][-1]["id"] == "initial-24"
 
     async with curator_sessionmaker() as session:
         async with session.begin():
@@ -508,18 +552,23 @@ async def test_review_batches_latest_twenty_then_oldest_after_cursor(curator_ses
                     id=f"later-{index:02d}",
                     thread_id=thread.id,
                     status="completed",
-                    payload={"question": f"Q{index}", "answer": f"A{index}"},
+                    payload={
+                        "question": f"Q{index} " + ("q" * 900),
+                        "answer": f"A{index} " + ("a" * 900),
+                    },
                     created_at=occurred_at,
                     completed_at=occurred_at,
                 ))
         await session.refresh(stored_thread)
 
-    second = await memory_curator_service._review_batch(stored_thread)
-    assert second["reviewed_count"] == 20
-    assert second["remaining_count"] == 5
-    assert [turn["id"] for turn in second["turns"]] == [
-        f"later-{index:02d}" for index in range(25, 45)
-    ]
+    second = await memory_review_service.build_conversation_review_batch(
+        stored_thread,
+        context_window=2048,
+        session_factory=curator_sessionmaker,
+    )
+    assert second["reviewed_count"] == first["reviewed_count"]
+    assert second["remaining_count"] == 25 - second["reviewed_count"]
+    assert second["turns"][0]["id"] == "later-25"
 
 
 @pytest.mark.asyncio
@@ -938,7 +987,7 @@ async def test_curator_ignores_project_id_mistaken_for_override_memory_id(
 
 
 @pytest.mark.asyncio
-async def test_curator_asks_before_new_thread_memory_overrides_project_memory(
+async def test_curator_proposes_new_thread_override_without_an_extra_decision(
     curator_sessionmaker,
     monkeypatch,
 ):
@@ -983,79 +1032,13 @@ async def test_curator_asks_before_new_thread_memory_overrides_project_memory(
         )
     )
 
-    assert response["state"] == "conflict"
-    assert response["operations"] == []
-    assert [choice["id"] for choice in response["choices"]] == ["keep-both", "override-broader"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("decision_message", "decision_choice_id", "expected_override_count"),
-    [
-        (
-            "Add this as an additional thread memory and keep the broader project memory effective. "
-            "Do not override it.",
-            "keep-both",
-            0,
-        ),
-        ("Override the broader project memory in this thread context.", "override-broader", 1),
-    ],
-)
-async def test_curator_honors_explicit_cross_scope_override_choice(
-    curator_sessionmaker,
-    monkeypatch,
-    decision_message,
-    decision_choice_id,
-    expected_override_count,
-):
-    await _workspace(curator_sessionmaker)
-    project_result = await memory_curator_service.apply_memory_curator_change_set(
-        MemoryCuratorApplyRequest(
-            context=_context(),
-            confirmed=True,
-            operations=[MemoryCuratorOperation(
-                action="create",
-                scope_type="project",
-                scope_id="curator-project",
-                content="Research AI, LLMs, and deep learning for this project.",
-            )],
-        )
-    )
-    project_memory_id = project_result["changed_memories"][0]["id"]
-    monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
-    llm = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps({
-        "message": "Create the selected thread memory.",
-        "state": "proposal",
-        "choices": [],
-        "intents": [{
-            "action": "create",
-            "scope_type": "thread",
-            "content": "Focus on NVIDIA and its AI systems.",
-            "override_target_ids": [project_memory_id],
-        }],
-    }))))
-    monkeypatch.setattr(memory_curator_service, "get_llm", lambda *_args, **_kwargs: llm)
-
-    response = await memory_curator_service.respond_to_memory_curator(
-        MemoryCuratorRespondRequest(
-            mode="create",
-            context=_context(),
-            messages=[MemoryCuratorMessage(
-                role="user",
-                content=decision_message,
-                choice_id=decision_choice_id,
-            )],
-            llm_model="chat-model",
-            context_window=8192,
-        )
-    )
-
     assert response["state"] == "proposal"
-    assert len(response["operations"][0]["override_targets"]) == expected_override_count
+    assert len(response["operations"][0]["override_targets"]) == 1
+    assert response["choices"] == []
 
 
 @pytest.mark.asyncio
-async def test_curator_additive_choice_removes_existing_cross_scope_override(
+async def test_curator_can_remove_existing_override_when_user_explicitly_requests_it(
     curator_sessionmaker,
     monkeypatch,
 ):
@@ -1098,7 +1081,7 @@ async def test_curator_additive_choice_removes_existing_cross_scope_override(
         "intents": [{
             "action": "set_overrides",
             "memory_id": thread_memory["id"],
-            "override_target_ids": [project_memory["id"]],
+            "override_target_ids": [],
         }],
     }))))
     monkeypatch.setattr(memory_curator_service, "get_llm", lambda *_args, **_kwargs: llm)
@@ -1111,7 +1094,6 @@ async def test_curator_additive_choice_removes_existing_cross_scope_override(
             messages=[MemoryCuratorMessage(
                 role="user",
                 content="Keep both memories effective. Do not override the broader project memory.",
-                choice_id="keep-both",
             )],
             llm_model="chat-model",
             context_window=8192,

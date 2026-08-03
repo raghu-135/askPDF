@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Sequence
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.connection_sqlmodel import async_session_maker
-from app.db.enums import MemoryScopeType
-from app.db.models_sqlmodel import GlobalMemoryRepresentation, Memory, MemoryOverride, MemoryReviewState, MemoryScopeActivity, Project, Thread
+from app.db.enums import ChatTurnStatus, MemoryScopeType
+from app.db.models_sqlmodel import ChatTurn, GlobalMemoryRepresentation, Memory, MemoryOverride, MemoryReviewState, MemoryScopeActivity, Project, Thread
 from app.db.vector import get_vector_db
 from app.models.llm_server_client import get_embedding_model
+from app.models.memory_curator_budget import (
+    MAX_MEMORY_SEARCH_QUERY_CHARS,
+    MAX_REVIEW_FETCH_ROWS,
+    compute_curator_budget,
+)
 from app.models.retry import invoke_with_retry
 from app.services.embedding_model_service import GLOBAL_MEMORY_EMBEDDING_MODEL, require_embedding_model_ready
 from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
@@ -25,6 +31,141 @@ from app.time_utils import iso_utc_z, utc_now
 
 SCOPE_RANK = {"thread": 3, "project": 2, "user": 1}
 logger = logging.getLogger(__name__)
+
+
+def _turn_text(turn: ChatTurn) -> Dict[str, Any]:
+    payload = turn.payload if isinstance(turn.payload, dict) else {}
+    return {
+        "id": turn.id,
+        "question": str(payload.get("question") or ""),
+        "answer": str(payload.get("answer") or ""),
+        "created_at": iso_utc_z(turn.created_at),
+    }
+
+
+async def build_conversation_review_batch(
+    thread: Thread | None,
+    *,
+    context_window: int,
+    session_factory=async_session_maker,
+) -> Dict[str, Any] | None:
+    """Return the next stable batch of completed turns for memory curation."""
+
+    if thread is None:
+        return None
+    metadata = thread.thread_metadata if isinstance(thread.thread_metadata, dict) else {}
+    curator_meta = metadata.get("memory_curator") if isinstance(metadata.get("memory_curator"), dict) else {}
+    cursor_at_raw = curator_meta.get("reviewed_through_created_at")
+    cursor_id = str(curator_meta.get("reviewed_through_turn_id") or "")
+    cursor_at = None
+    if cursor_at_raw:
+        try:
+            cursor_at = datetime.fromisoformat(str(cursor_at_raw).replace("Z", "+00:00"))
+        except ValueError:
+            cursor_at = None
+
+    base_filters = [
+        ChatTurn.thread_id == thread.id,
+        ChatTurn.status == ChatTurnStatus.COMPLETED.value,
+        ChatTurn.payload["question"].astext.isnot(None),
+        ChatTurn.payload["question"].astext != "",
+        ChatTurn.payload["answer"].astext.isnot(None),
+        ChatTurn.payload["answer"].astext != "",
+    ]
+    review_budget = compute_curator_budget(context_window)["review_context_chars"]
+    async with session_factory() as session:
+        if cursor_at is None:
+            result = await session.execute(
+                select(ChatTurn)
+                .where(*base_filters)
+                .order_by(ChatTurn.created_at.desc(), ChatTurn.id.desc())
+                .limit(MAX_REVIEW_FETCH_ROWS)
+            )
+            candidates = list(result.scalars().all())
+            remaining = 0
+        else:
+            after_cursor = or_(
+                ChatTurn.created_at > cursor_at,
+                and_(ChatTurn.created_at == cursor_at, ChatTurn.id > cursor_id),
+            )
+            result = await session.execute(
+                select(ChatTurn)
+                .where(*base_filters, after_cursor)
+                .order_by(ChatTurn.created_at.asc(), ChatTurn.id.asc())
+                .limit(MAX_REVIEW_FETCH_ROWS)
+            )
+            candidates = list(result.scalars().all())
+
+        turns = []
+        used_chars = 0
+        for candidate in candidates:
+            serialized = json.dumps(_turn_text(candidate), ensure_ascii=True)
+            if turns and used_chars + len(serialized) > review_budget:
+                break
+            turns.append(candidate)
+            used_chars += len(serialized)
+
+        if cursor_at is None:
+            turns.reverse()
+        else:
+            if turns:
+                last = turns[-1]
+                remaining = int((await session.execute(
+                    select(func.count(ChatTurn.id)).where(
+                        *base_filters,
+                        or_(
+                            ChatTurn.created_at > last.created_at,
+                            and_(ChatTurn.created_at == last.created_at, ChatTurn.id > last.id),
+                        ),
+                    )
+                )).scalar() or 0)
+            else:
+                remaining = 0
+    reviewed_through = turns[-1] if turns else None
+    return {
+        "turns": [_turn_text(turn) for turn in turns],
+        "reviewed_count": len(turns),
+        "remaining_count": remaining,
+        "context_budget_chars": review_budget,
+        "cursor": (
+            {
+                "thread_id": thread.id,
+                "reviewed_through_turn_id": reviewed_through.id,
+                "reviewed_through_created_at": iso_utc_z(reviewed_through.created_at),
+            }
+            if reviewed_through else None
+        ),
+    }
+
+
+def build_review_memory_search_query(
+    messages: Sequence[Dict[str, Any]],
+    conversation_review: Dict[str, Any] | None = None,
+    *,
+    max_chars: int = MAX_MEMORY_SEARCH_QUERY_CHARS,
+) -> str:
+    """Build a bounded similarity query while retaining evidence from every reviewed turn."""
+
+    message_text = "\n".join(
+        str(item.get("content") or "").strip()
+        for item in messages[-4:]
+        if str(item.get("content") or "").strip()
+    )[: min(max_chars, 2000)]
+    turns = list((conversation_review or {}).get("turns") or [])
+    if not turns:
+        return message_text[:max_chars]
+
+    separator_budget = len(turns) - 1 + (1 if message_text else 0)
+    remaining = max(0, max_chars - len(message_text) - separator_budget)
+    per_turn = max(1, remaining // len(turns)) if turns else 0
+    turn_text = []
+    for turn in turns:
+        text = (
+            f'Question: {str(turn.get("question") or "").strip()}\n'
+            f'Answer: {str(turn.get("answer") or "").strip()}'
+        ).strip()
+        turn_text.append(text[:per_turn])
+    return "\n".join(([message_text] if message_text else []) + turn_text)[:max_chars]
 
 
 def _visible_review_neighbors(anchor_id: str, hit_ids, edges, visible_by_id) -> List[str]:
@@ -44,6 +185,18 @@ def _visible_review_neighbors(anchor_id: str, hit_ids, edges, visible_by_id) -> 
         seen.add(memory_id)
         visible.append(memory_id)
     return visible
+
+
+def _review_override_edges(memory_ids, edges) -> List[Dict[str, str]]:
+    member_ids = set(memory_ids)
+    return [
+        {
+            "overriding_memory_id": edge.overriding_memory_id,
+            "overridden_memory_id": edge.overridden_memory_id,
+        }
+        for edge in edges
+        if edge.overriding_memory_id in member_ids and edge.overridden_memory_id in member_ids
+    ]
 
 
 def scope_key(scope_type: str, scope_id: str) -> str:
@@ -144,7 +297,7 @@ async def build_memory_review_batch(
     context_id: str,
     *,
     anchor_position: int = 0,
-    max_clusters: int = 5,
+    context_window: int,
     snapshot_at: datetime | None = None,
     snapshot_scope_versions: Dict[str, int] | None = None,
 ) -> Dict[str, Any]:
@@ -195,7 +348,9 @@ async def build_memory_review_batch(
         global_ids = {memory.id for memory in all_memories if memory.scope_type == MemoryScopeType.USER.value}
     by_id = {memory.id: memory for memory in all_memories}
     start = max(0, anchor_position)
-    selected_anchors = anchors[start:start + max_clusters]
+    review_budget = compute_curator_budget(context_window)["review_context_chars"]
+    max_anchors = min(100, max(1, review_budget // 1500))
+    selected_anchors = anchors[start:start + max_anchors]
     missing_global_ids = global_ids - represented_global_ids
     representation_pending = bool(missing_global_ids)
     if representation_pending and model != GLOBAL_MEMORY_EMBEDDING_MODEL:
@@ -224,6 +379,8 @@ async def build_memory_review_batch(
             "blocked": True,
         }
     groups: List[Dict[str, Any]] = []
+    group_chars = 0
+    processed_anchor_count = 0
     seen_pairs: set[tuple[str, str]] = set()
     try:
         await require_embedding_model_ready(model)
@@ -256,6 +413,7 @@ async def build_memory_review_batch(
             if len(member_ids) > 1:
                 candidate = {
                     "anchor_id": anchor.id,
+                    "scope_precedence": ["thread", "project", "user"],
                     "memories": [{
                         "id": by_id[item].id,
                         "scope_type": by_id[item].scope_type,
@@ -264,6 +422,7 @@ async def build_memory_review_batch(
                         "content": by_id[item].content,
                         "updated_at": iso_utc_z(by_id[item].updated_at or by_id[item].created_at),
                     } for item in member_ids],
+                    "override_edges": _review_override_edges(member_ids, edges),
                 }
                 candidate_ids = {item["id"] for item in candidate["memories"]}
                 overlapping = next((
@@ -271,7 +430,11 @@ async def build_memory_review_batch(
                     if candidate_ids.intersection(item["id"] for item in group["memories"])
                 ), None)
                 if overlapping is None:
+                    candidate_size = len(json.dumps(candidate, ensure_ascii=True))
+                    if groups and group_chars + candidate_size > review_budget:
+                        break
                     groups.append(candidate)
+                    group_chars += candidate_size
                 else:
                     existing_ids = {item["id"] for item in overlapping["memories"]}
                     overlapping["memories"].extend(
@@ -279,6 +442,11 @@ async def build_memory_review_batch(
                         if item["id"] not in existing_ids
                     )
                     overlapping["memories"] = overlapping["memories"][:8]
+                    overlapping["override_edges"] = _review_override_edges(
+                        [item["id"] for item in overlapping["memories"]],
+                        edges,
+                    )
+            processed_anchor_count += 1
     except Exception:
         logger.exception(
             "Memory consistency similarity search failed | context=%s:%s model=%s",
@@ -287,7 +455,7 @@ async def build_memory_review_batch(
             model,
         )
         raise
-    next_position = start + len(selected_anchors)
+    next_position = start + processed_anchor_count
     return {
         "context_type": context_type,
         "context_id": context_id,

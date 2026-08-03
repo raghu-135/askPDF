@@ -6,13 +6,12 @@ import json
 import logging
 import uuid
 import asyncio
-from datetime import datetime
 from typing import Any, Dict, List, Sequence
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import and_, delete, func, or_
+from sqlalchemy import delete, or_
 from sqlalchemy.future import select
 
 from app.agent_workflows.runtime_invocation import safe_json_object
@@ -28,6 +27,7 @@ from app.models.llm_server_client import (
     check_model_supports_tools,
     get_llm,
 )
+from app.models.memory_curator_budget import bound_curator_transcript, compute_curator_budget
 from app.models.memory_tools import (
     MEMORY_PROPOSE,
     MEMORY_READ_STORED,
@@ -63,7 +63,12 @@ from app.services.memory_tool_service import (
 )
 from app.services.memory_service import index_memory_record, memory_content_hash
 from app.services.web_search_service import WEB_SEARCH_CAPABILITY, format_search_context, search_internet
-from app.services.memory_review_service import build_memory_review_batch, complete_memory_review
+from app.services.memory_review_service import (
+    build_conversation_review_batch,
+    build_memory_review_batch,
+    build_review_memory_search_query,
+    complete_memory_review,
+)
 from app.services.effective_memory_service import (
     serialize_memories_with_relationships,
 )
@@ -72,17 +77,8 @@ from app.time_utils import iso_utc_z, utc_now
 
 logger = logging.getLogger(__name__)
 
-MAX_CURATOR_MEMORIES = 40
-MAX_REVIEW_TURNS = 20
 MAX_CURATOR_TOOL_CALLS = 4
 MAX_CURATOR_WEB_CALLS = 2
-
-_SCOPE_RANK = {
-    MemoryScopeType.USER.value: 0,
-    MemoryScopeType.PROJECT.value: 1,
-    MemoryScopeType.THREAD.value: 2,
-}
-
 
 class MemoryCuratorError(ValueError):
     code = "memory_curator_error"
@@ -147,89 +143,6 @@ async def _resolve_visible_scopes(
     if (selected_type, selected_id) not in deduped:
         raise MemoryCuratorError("Selected memory scope is not available in this workspace")
     return list(deduped.values()), thread, project
-
-
-def _turn_text(turn: ChatTurn) -> Dict[str, Any]:
-    payload = turn.payload if isinstance(turn.payload, dict) else {}
-    return {
-        "id": turn.id,
-        "question": str(payload.get("question") or ""),
-        "answer": str(payload.get("answer") or ""),
-        "created_at": iso_utc_z(turn.created_at),
-    }
-
-
-async def _review_batch(thread: Thread | None) -> Dict[str, Any] | None:
-    if thread is None:
-        return None
-    metadata = thread.thread_metadata if isinstance(thread.thread_metadata, dict) else {}
-    curator_meta = metadata.get("memory_curator") if isinstance(metadata.get("memory_curator"), dict) else {}
-    cursor_at_raw = curator_meta.get("reviewed_through_created_at")
-    cursor_id = str(curator_meta.get("reviewed_through_turn_id") or "")
-    cursor_at = None
-    if cursor_at_raw:
-        try:
-            cursor_at = datetime.fromisoformat(str(cursor_at_raw).replace("Z", "+00:00"))
-        except ValueError:
-            cursor_at = None
-
-    base_filters = [
-        ChatTurn.thread_id == thread.id,
-        ChatTurn.status == ChatTurnStatus.COMPLETED.value,
-        ChatTurn.payload["question"].astext.isnot(None),
-        ChatTurn.payload["question"].astext != "",
-        ChatTurn.payload["answer"].astext.isnot(None),
-        ChatTurn.payload["answer"].astext != "",
-    ]
-    async with async_session_maker() as session:
-        if cursor_at is None:
-            result = await session.execute(
-                select(ChatTurn)
-                .where(*base_filters)
-                .order_by(ChatTurn.created_at.desc(), ChatTurn.id.desc())
-                .limit(MAX_REVIEW_TURNS)
-            )
-            turns = list(reversed(result.scalars().all()))
-            remaining = 0
-        else:
-            after_cursor = or_(
-                ChatTurn.created_at > cursor_at,
-                and_(ChatTurn.created_at == cursor_at, ChatTurn.id > cursor_id),
-            )
-            result = await session.execute(
-                select(ChatTurn)
-                .where(*base_filters, after_cursor)
-                .order_by(ChatTurn.created_at.asc(), ChatTurn.id.asc())
-                .limit(MAX_REVIEW_TURNS)
-            )
-            turns = list(result.scalars().all())
-            if turns:
-                last = turns[-1]
-                remaining = int((await session.execute(
-                    select(func.count(ChatTurn.id)).where(
-                        *base_filters,
-                        or_(
-                            ChatTurn.created_at > last.created_at,
-                            and_(ChatTurn.created_at == last.created_at, ChatTurn.id > last.id),
-                        ),
-                    )
-                )).scalar() or 0)
-            else:
-                remaining = 0
-    reviewed_through = turns[-1] if turns else None
-    return {
-        "turns": [_turn_text(turn) for turn in turns],
-        "reviewed_count": len(turns),
-        "remaining_count": remaining,
-        "cursor": (
-            {
-                "thread_id": thread.id,
-                "reviewed_through_turn_id": reviewed_through.id,
-                "reviewed_through_created_at": iso_utc_z(reviewed_through.created_at),
-            }
-            if reviewed_through else None
-        ),
-    }
 
 
 def _consent_snapshot(thread: Thread | None, project: Project | None) -> Dict[str, Any]:
@@ -355,77 +268,6 @@ def _sanitize_curator_intents(
     return sanitized, warnings
 
 
-def _selected_override_resolution(messages: Sequence[Dict[str, Any]]) -> str | None:
-    """Read the latest typed relationship decision emitted by the curator UI."""
-
-    latest_choice = next(
-        (
-            str(item.get("choice_id") or "")
-            for item in reversed(messages)
-            if item.get("role") == "user" and item.get("choice_id")
-        ),
-        "",
-    )
-    return {
-        "keep-both": "additive",
-        "override-broader": "override",
-    }.get(latest_choice)
-
-
-async def _cross_scope_override_targets(
-    tool_context,
-    operations: Sequence[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """Describe proposed narrower-to-broader relationships and whether they already exist."""
-
-    target_ids = list(dict.fromkeys(
-        str(target.get("memory_id") or "")
-        for operation in operations
-        if operation.get("action") in {"create", "update"}
-        for target in operation.get("override_targets") or []
-        if target.get("memory_id")
-    ))
-    source_ids = list(dict.fromkeys(
-        str(operation.get("memory_id") or "")
-        for operation in operations
-        if operation.get("action") == "update" and operation.get("memory_id")
-    ))
-    if not target_ids:
-        return []
-    records = await get_memory_tool(
-        tool_context,
-        MemoryGetInput(memory_ids=list(dict.fromkeys([*target_ids, *source_ids]))),
-    )
-    by_id = {str(item["id"]): item for item in records.get("memories", [])}
-    details: List[Dict[str, Any]] = []
-    for operation in operations:
-        if operation.get("action") not in {"create", "update"}:
-            continue
-        source_scope = str(operation.get("scope_type") or "")
-        source = by_id.get(str(operation.get("memory_id") or ""))
-        existing_targets = {
-            str(item.get("id") or "") for item in (source or {}).get("overrides", [])
-        }
-        for target in operation.get("override_targets") or []:
-            target_id = str(target.get("memory_id") or "")
-            target_record = by_id.get(target_id)
-            target_scope = str((target_record or {}).get("scope_type") or "")
-            if (
-                target_id
-                and source_scope in _SCOPE_RANK
-                and target_scope in _SCOPE_RANK
-                and _SCOPE_RANK[source_scope] > _SCOPE_RANK[target_scope]
-            ):
-                details.append({
-                    "memory_id": target_id,
-                    "source_scope_type": source_scope,
-                    "target_scope_type": target_scope,
-                    "target_content": str((target_record or {}).get("content") or ""),
-                    "existing": target_id in existing_targets,
-                })
-    return details
-
-
 async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[str, Any]:
     try:
         tool_context, thread, project = await build_memory_tool_context(
@@ -443,7 +285,15 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
     consent = _consent_snapshot(thread, project)
     if not await check_chat_model_ready(req.llm_model):
         raise MemoryCuratorModelUnavailableError(f"Chat model {req.llm_model} is unavailable")
-    review = await _review_batch(thread) if req.mode == "conversation_review" else None
+    review = (
+        await build_conversation_review_batch(
+            thread,
+            context_window=req.context_window,
+            session_factory=async_session_maker,
+        )
+        if req.mode == "conversation_review"
+        else None
+    )
     if req.mode == "conversation_review" and not (review or {}).get("turns"):
         return {
             "message": "There are no new completed conversation turns to review.",
@@ -464,6 +314,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         memory_review = await build_memory_review_batch(
             context_type,
             context_id,
+            context_window=req.context_window,
             anchor_position=position,
             snapshot_at=(req.memory_review_cursor.snapshot_at if req.memory_review_cursor else None),
             snapshot_scope_versions=(
@@ -513,21 +364,21 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                 "consent": consent,
             }
 
-    transcript = [item.model_dump(mode="json", exclude_none=True) for item in req.messages]
-    query_parts = [item["content"] for item in transcript[-4:]]
-    if review:
-        for turn in review["turns"]:
-            query_parts.extend([turn["question"], turn["answer"]])
-    query = "\n".join(part for part in query_parts if part).strip()
+    transcript = bound_curator_transcript(
+        [item.model_dump(mode="json", exclude_none=True) for item in req.messages],
+        context_window=req.context_window,
+    )
+    query = build_review_memory_search_query(transcript, review)
+    curator_budget = compute_curator_budget(req.context_window)
     search_result = await search_memory_tool(tool_context, MemorySearchInput(
         query=query,
         view="stored",
-        max_results=MAX_CURATOR_MEMORIES,
+        max_results=curator_budget["memory_result_limit"],
         selected_memory_id=req.memory_id,
     ))
     readiness = search_result.get("readiness", [])
     context_memories = list(search_result.get("memories", []))
-    char_budget = max(1, int(req.context_window * 4 * 0.25))
+    char_budget = curator_budget["memory_context_chars"]
     used_chars = 0
     bounded_memories = []
     for memory in context_memories:
@@ -770,62 +621,6 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             "pending_web_search": pending_web_search,
             "web_sources": [],
         }
-    cross_scope_targets = await _cross_scope_override_targets(tool_context, operations)
-    new_cross_scope_targets = [item for item in cross_scope_targets if not item["existing"]]
-    override_resolution = _selected_override_resolution(transcript)
-    if cross_scope_targets and override_resolution == "additive" and latest_intents:
-        cross_scope_ids = {item["memory_id"] for item in cross_scope_targets}
-        latest_intents = [
-            intent.model_copy(update={
-                "override_target_ids": [
-                    memory_id
-                    for memory_id in (intent.override_target_ids or [])
-                    if memory_id not in cross_scope_ids
-                ]
-            })
-            if intent.override_target_ids is not None else intent
-            for intent in latest_intents
-        ]
-        latest_prepared = await prepare_memory_change(
-            tool_context,
-            MemoryPrepareChangeInput(intents=latest_intents),
-        )
-        operations = list(latest_prepared.get("operations", []))
-        summaries = list(latest_prepared.get("operation_summaries", []))
-        cross_scope_targets = []
-        new_cross_scope_targets = []
-    elif new_cross_scope_targets and override_resolution is None:
-        source_scope = new_cross_scope_targets[0]["source_scope_type"]
-        target_scopes = sorted({item["target_scope_type"] for item in new_cross_scope_targets})
-        target_label = " and ".join(target_scopes)
-        preview = new_cross_scope_targets[0]["target_content"]
-        parsed["message"] = (
-            f"This {source_scope} memory is related to broader {target_label} memory. "
-            "Should it be an additional instruction, or should it replace the broader memory "
-            f"in this context? Broader memory: {preview[:500]}"
-        )
-        state = "conflict"
-        operations = []
-        summaries = []
-        choices = [
-            {
-                "id": "keep-both",
-                "label": "Add alongside",
-                "description": "Keep the broader memory effective and add this as a more specific instruction.",
-                "user_message": (
-                    f"Add this as an additional {source_scope} memory and keep the broader "
-                    f"{target_label} memory effective. Do not override it."
-                ),
-            },
-            {
-                "id": "override-broader",
-                "label": "Override here",
-                "description": "Use the new memory instead of the broader memory in this narrower context.",
-                "user_message": (
-                    f"Override the broader {target_label} memory in this {source_scope} context."
-                ),
-            },
-        ]
     substantive_operations = [op for op in operations if op["action"] != "noop"]
     if substantive_operations:
         state = "proposal"

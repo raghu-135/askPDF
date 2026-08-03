@@ -12,6 +12,7 @@ from app.models.llm_server_client import (
     REPLANS_LIMIT,
     MAX_SYSTEM_ROLE_CHARS,
 )
+from app.models.memory_curator_budget import MAX_CURATOR_REQUEST_MESSAGES
 
 
 class ThreadCreateRequest(BaseModel):
@@ -148,7 +149,10 @@ class MemoryCuratorRespondRequest(BaseModel):
     mode: Literal["create", "edit", "conversation_review", "memory_review"]
     context: MemoryCuratorContext
     memory_id: Optional[str] = None
-    messages: List[MemoryCuratorMessage] = Field(default_factory=list, max_length=24)
+    messages: List[MemoryCuratorMessage] = Field(
+        default_factory=list,
+        max_length=MAX_CURATOR_REQUEST_MESSAGES,
+    )
     llm_model: str = Field(min_length=1)
     context_window: int = Field(default=DEFAULT_TOKEN_BUDGET, ge=256, le=2_000_000)
     web_search_mode: Literal["off", "ask", "on"] = "off"

@@ -1,5 +1,6 @@
 import type {
   MemoryCuratorContext,
+  MemoryConsistencyReviewCursor,
   MemoryCuratorMode,
   MemoryRecord,
   MemoryScopeType,
@@ -22,6 +23,18 @@ export const buildCuratorContext = (intent: MemoryCuratorIntent): MemoryCuratorC
   selected_scope_id: intent.scopeType === 'user' ? 'default' : intent.scopeId,
   thread_id: intent.threadId || undefined,
   project_id: intent.projectId || undefined,
+});
+
+export const toMemoryConsistencyReviewCursor = (
+  review: MemoryConsistencyReviewCursor,
+): MemoryConsistencyReviewCursor => ({
+  context_type: review.context_type,
+  context_id: review.context_id,
+  snapshot_at: review.snapshot_at,
+  snapshot_scope_versions: review.snapshot_scope_versions,
+  anchor_position: review.anchor_position,
+  reviewed_anchor_count: review.reviewed_anchor_count,
+  remaining_anchor_count: review.remaining_anchor_count,
 });
 
 export const createCuratorIntent = ({
