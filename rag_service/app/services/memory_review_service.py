@@ -27,6 +27,25 @@ SCOPE_RANK = {"thread": 3, "project": 2, "user": 1}
 logger = logging.getLogger(__name__)
 
 
+def _visible_review_neighbors(anchor_id: str, hit_ids, edges, visible_by_id) -> List[str]:
+    """Return deterministic review neighbors limited to the resolved context."""
+
+    candidates = [str(memory_id) for memory_id in hit_ids]
+    candidates.extend(
+        edge.overridden_memory_id if edge.overriding_memory_id == anchor_id else edge.overriding_memory_id
+        for edge in edges
+        if anchor_id in {edge.overriding_memory_id, edge.overridden_memory_id}
+    )
+    visible = []
+    seen = set()
+    for memory_id in candidates:
+        if memory_id == anchor_id or memory_id not in visible_by_id or memory_id in seen:
+            continue
+        seen.add(memory_id)
+        visible.append(memory_id)
+    return visible
+
+
 def scope_key(scope_type: str, scope_id: str) -> str:
     return f"{scope_type}:{scope_id}"
 
@@ -220,11 +239,11 @@ async def build_memory_review_batch(
                 limit=7,
                 query_text=anchor.content,
             )
-            related_ids = [str(hit.get("memory_id")) for hit in hits if str(hit.get("memory_id")) in by_id]
-            related_ids.extend(
-                edge.overridden_memory_id if edge.overriding_memory_id == anchor.id else edge.overriding_memory_id
-                for edge in edges
-                if anchor.id in {edge.overriding_memory_id, edge.overridden_memory_id}
+            related_ids = _visible_review_neighbors(
+                anchor.id,
+                [hit.get("memory_id") for hit in hits if hit.get("memory_id")],
+                edges,
+                by_id,
             )
             member_ids = [anchor.id]
             for related_id in related_ids:
