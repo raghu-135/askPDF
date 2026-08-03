@@ -353,6 +353,7 @@ export interface MemoryCuratorContext {
 export interface MemoryCuratorMessage {
   role: 'user' | 'assistant';
   content: string;
+  choice_id?: string;
 }
 
 export interface MemoryCuratorOperation {

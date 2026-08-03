@@ -41,6 +41,7 @@ from app.models.requests import (
     MemoryCuratorRespondRequest,
 )
 from app.models.retry import invoke_with_retry
+from app.prompts.loaders import load_prompt
 from app.services.embedding_model_service import (
     require_embedding_model_ready,
     resolve_scope_embedding_model,
@@ -70,6 +71,12 @@ logger = logging.getLogger(__name__)
 MAX_CURATOR_MEMORIES = 40
 MAX_REVIEW_TURNS = 20
 MAX_CURATOR_TOOL_CALLS = 4
+
+_SCOPE_RANK = {
+    MemoryScopeType.USER.value: 0,
+    MemoryScopeType.PROJECT.value: 1,
+    MemoryScopeType.THREAD.value: 2,
+}
 
 
 class MemoryCuratorError(ValueError):
@@ -335,6 +342,77 @@ def _sanitize_curator_intents(
     return sanitized, warnings
 
 
+def _selected_override_resolution(messages: Sequence[Dict[str, Any]]) -> str | None:
+    """Read the latest typed relationship decision emitted by the curator UI."""
+
+    latest_choice = next(
+        (
+            str(item.get("choice_id") or "")
+            for item in reversed(messages)
+            if item.get("role") == "user" and item.get("choice_id")
+        ),
+        "",
+    )
+    return {
+        "keep-both": "additive",
+        "override-broader": "override",
+    }.get(latest_choice)
+
+
+async def _cross_scope_override_targets(
+    tool_context,
+    operations: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Describe proposed narrower-to-broader relationships and whether they already exist."""
+
+    target_ids = list(dict.fromkeys(
+        str(target.get("memory_id") or "")
+        for operation in operations
+        if operation.get("action") in {"create", "update"}
+        for target in operation.get("override_targets") or []
+        if target.get("memory_id")
+    ))
+    source_ids = list(dict.fromkeys(
+        str(operation.get("memory_id") or "")
+        for operation in operations
+        if operation.get("action") == "update" and operation.get("memory_id")
+    ))
+    if not target_ids:
+        return []
+    records = await get_memory_tool(
+        tool_context,
+        MemoryGetInput(memory_ids=list(dict.fromkeys([*target_ids, *source_ids]))),
+    )
+    by_id = {str(item["id"]): item for item in records.get("memories", [])}
+    details: List[Dict[str, Any]] = []
+    for operation in operations:
+        if operation.get("action") not in {"create", "update"}:
+            continue
+        source_scope = str(operation.get("scope_type") or "")
+        source = by_id.get(str(operation.get("memory_id") or ""))
+        existing_targets = {
+            str(item.get("id") or "") for item in (source or {}).get("overrides", [])
+        }
+        for target in operation.get("override_targets") or []:
+            target_id = str(target.get("memory_id") or "")
+            target_record = by_id.get(target_id)
+            target_scope = str((target_record or {}).get("scope_type") or "")
+            if (
+                target_id
+                and source_scope in _SCOPE_RANK
+                and target_scope in _SCOPE_RANK
+                and _SCOPE_RANK[source_scope] > _SCOPE_RANK[target_scope]
+            ):
+                details.append({
+                    "memory_id": target_id,
+                    "source_scope_type": source_scope,
+                    "target_scope_type": target_scope,
+                    "target_content": str((target_record or {}).get("content") or ""),
+                    "existing": target_id in existing_targets,
+                })
+    return details
+
+
 async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[str, Any]:
     try:
         tool_context, thread, project = await build_memory_tool_context(
@@ -364,7 +442,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
             "consent": consent,
         }
 
-    transcript = [{"role": item.role, "content": item.content} for item in req.messages]
+    transcript = [item.model_dump(mode="json", exclude_none=True) for item in req.messages]
     query_parts = [item["content"] for item in transcript[-4:]]
     if review:
         for turn in review["turns"]:
@@ -389,29 +467,9 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         used_chars += len(encoded)
     context_memories = bounded_memories
 
-    system_prompt = (
-        "You are AskPDF's memory curator. Help the user create, correct, consolidate, or remove "
-        "durable memory. Never write memory directly. Use memory_search and memory_get to inspect "
-        "current records, then memory_prepare_change to validate a proposal. Return one strict JSON "
-        "object with keys message, state, choices, and intents. state must be clarification, conflict, "
-        "proposal, or no_changes. choices is an array of {id,label,description,user_message}. intents "
-        "use action create, update, delete, move, set_overrides, or noop. Identify scopes by type only; "
-        "the server binds canonical scope IDs. Every create/update/move/set_overrides intent must include "
-        "the complete override_target_ids array. Use move when the user wants the same statement removed "
-        "from one scope and retained in another. Prefer updating an existing memory over "
-        "creating a duplicate. When a narrower memory preserves a broader conflicting memory, create "
-        "the narrower memory and explicitly target the broader memory. Surface contradictions as "
-        "conflict choices. The frontend provides the one final Confirm action for every proposal. "
-        "Never ask whether to save, update, apply, proceed, or confirm, and never return yes/no choices. "
-        "When the latest user message clearly states what to remember, immediately return state=proposal "
-        "with the complete intents. Use clarification only when the desired content or scope is truly "
-        "ambiguous. Use conflict only for two or more materially different resolutions. After the user "
-        "selects a clarification or conflict choice, immediately return proposal or no_changes. Do not "
-        "repeat a question already answered. Do not infer sensitive facts or broaden scope without the "
-        "user's clear direction. A proposal is never approval. Scope identifiers are never memory "
-        "identifiers. Only values explicitly returned as a memory record's id may be used as memory_id "
-        "or override_target_ids."
-    )
+    system_prompt = load_prompt("memory_curator/system.md")
+    tool_limit_prompt = load_prompt("memory_curator/tool_limit.md")
+    permission_retry_prompt = load_prompt("memory_curator/permission_retry.md")
     prompt_payload = {
         "mode": req.mode,
         "selected_scope_type": req.context.selected_scope_type,
@@ -423,6 +481,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         "recall_consent": consent,
     }
     latest_prepared: Dict[str, Any] | None = None
+    latest_intents: List[MemoryChangeIntent] = []
     tool_call_count = 0
     scope_ids = {scope.scope_id for scope in tool_context.visible_scopes}
 
@@ -435,12 +494,13 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
 
     async def run_prepare(**kwargs):
-        nonlocal latest_prepared
+        nonlocal latest_intents, latest_prepared
         prepare_req = MemoryPrepareChangeInput(**kwargs)
         intents, input_warnings = _sanitize_curator_intents(
             prepare_req.intents,
             scope_ids=scope_ids,
         )
+        latest_intents = list(intents)
         result = await prepare_memory_change(
             tool_context,
             MemoryPrepareChangeInput(intents=intents),
@@ -473,7 +533,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
     tools_by_name = {tool.name: tool for tool in tools}
 
     async def invoke_decision(correction: str | None = None):
-        nonlocal latest_prepared, tool_call_count
+        nonlocal latest_intents, latest_prepared, tool_call_count
         messages = [SystemMessage(content=system_prompt)]
         if correction:
             messages.append(SystemMessage(content=correction))
@@ -506,9 +566,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                         tool_call_id=str(call.get("id") or f"memory-tool-{tool_call_count}"),
                     ))
                 if tool_call_count >= MAX_CURATOR_TOOL_CALLS:
-                    messages.append(SystemMessage(
-                        content="The memory tool-call limit is reached. Return the final JSON decision now."
-                    ))
+                    messages.append(SystemMessage(content=tool_limit_prompt))
                     response = await invoke_with_retry(llm.ainvoke, messages)
                     break
         else:
@@ -534,6 +592,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
                         intents,
                         scope_ids=scope_ids,
                     )
+                    latest_intents = list(intents)
                     latest_prepared = await prepare_memory_change(
                         tool_context,
                         MemoryPrepareChangeInput(intents=intents),
@@ -546,15 +605,69 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         return parsed, state, choices, operations, summaries
 
     parsed, state, choices, operations, summaries = await invoke_decision()
+    cross_scope_targets = await _cross_scope_override_targets(tool_context, operations)
+    new_cross_scope_targets = [item for item in cross_scope_targets if not item["existing"]]
+    override_resolution = _selected_override_resolution(transcript)
+    if cross_scope_targets and override_resolution == "additive" and latest_intents:
+        cross_scope_ids = {item["memory_id"] for item in cross_scope_targets}
+        latest_intents = [
+            intent.model_copy(update={
+                "override_target_ids": [
+                    memory_id
+                    for memory_id in (intent.override_target_ids or [])
+                    if memory_id not in cross_scope_ids
+                ]
+            })
+            if intent.override_target_ids is not None else intent
+            for intent in latest_intents
+        ]
+        latest_prepared = await prepare_memory_change(
+            tool_context,
+            MemoryPrepareChangeInput(intents=latest_intents),
+        )
+        operations = list(latest_prepared.get("operations", []))
+        summaries = list(latest_prepared.get("operation_summaries", []))
+        cross_scope_targets = []
+        new_cross_scope_targets = []
+    elif new_cross_scope_targets and override_resolution is None:
+        source_scope = new_cross_scope_targets[0]["source_scope_type"]
+        target_scopes = sorted({item["target_scope_type"] for item in new_cross_scope_targets})
+        target_label = " and ".join(target_scopes)
+        preview = new_cross_scope_targets[0]["target_content"]
+        parsed["message"] = (
+            f"This {source_scope} memory is related to broader {target_label} memory. "
+            "Should it be an additional instruction, or should it replace the broader memory "
+            f"in this context? Broader memory: {preview[:500]}"
+        )
+        state = "conflict"
+        operations = []
+        summaries = []
+        choices = [
+            {
+                "id": "keep-both",
+                "label": "Add alongside",
+                "description": "Keep the broader memory effective and add this as a more specific instruction.",
+                "user_message": (
+                    f"Add this as an additional {source_scope} memory and keep the broader "
+                    f"{target_label} memory effective. Do not override it."
+                ),
+            },
+            {
+                "id": "override-broader",
+                "label": "Override here",
+                "description": "Use the new memory instead of the broader memory in this narrower context.",
+                "user_message": (
+                    f"Override the broader {target_label} memory in this {source_scope} context."
+                ),
+            },
+        ]
     substantive_operations = [op for op in operations if op["action"] != "noop"]
     if substantive_operations:
         state = "proposal"
         choices = []
     elif state in {"clarification", "conflict"} and _permission_only_choices(choices):
         parsed, state, choices, operations, summaries = await invoke_decision(
-            "Your previous answer redundantly asked the user for permission. The UI already provides "
-            "final confirmation. Return the concrete proposal now, or no_changes when the requested "
-            "state is already stored. Do not ask another question or return approval choices."
+            permission_retry_prompt
         )
         substantive_operations = [op for op in operations if op["action"] != "noop"]
         if substantive_operations:

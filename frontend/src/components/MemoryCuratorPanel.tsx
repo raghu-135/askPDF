@@ -55,10 +55,12 @@ let curatorMessageSequence = 0;
 const curatorMessage = (
   role: MemoryCuratorMessage['role'],
   content: string,
+  choiceId?: string,
 ): CuratorUiMessage => ({
   id: `curator-message-${Date.now()}-${curatorMessageSequence++}`,
   role,
   content,
+  ...(choiceId ? { choice_id: choiceId } : {}),
 });
 
 const initialAssistantMessage = (intent: MemoryCuratorIntent): CuratorUiMessage | null => {
@@ -175,7 +177,11 @@ export default function MemoryCuratorPanel({
         mode: intent.mode,
         context,
         memory_id: intent.memory?.id,
-        messages: boundedMessages.map(({ role, content }) => ({ role, content })),
+        messages: boundedMessages.map(({ role, content, choice_id }) => ({
+          role,
+          content,
+          ...(choice_id ? { choice_id } : {}),
+        })),
         llm_model: llmModel,
         context_window: contextWindow,
       });
@@ -195,8 +201,8 @@ export default function MemoryCuratorPanel({
     void respond([firstMessage]);
   }, [intent, llmModel, messages.length, modelReady, respond]);
 
-  const submitMessage = (text: string) => {
-    const next = [...messages, curatorMessage('user', text)];
+  const submitMessage = (text: string, choiceId?: string) => {
+    const next = [...messages, curatorMessage('user', text, choiceId)];
     setDecision(null);
     setMessages(next);
     void respond(next);
@@ -258,7 +264,7 @@ export default function MemoryCuratorPanel({
             key={choice.id}
             variant="outlined"
             size="small"
-            onClick={() => submitMessage(choice.user_message)}
+            onClick={() => submitMessage(choice.user_message, choice.id)}
             disabled={busy}
             sx={{ justifyContent: 'flex-start', textAlign: 'left' }}
           >

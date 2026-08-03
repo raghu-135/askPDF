@@ -113,6 +113,7 @@ class MemoryCuratorMessage(BaseModel):
 
     role: Literal["user", "assistant"]
     content: str = Field(min_length=1, max_length=12000)
+    choice_id: Optional[str] = Field(default=None, max_length=100)
 
 
 class MemoryCuratorContext(BaseModel):
