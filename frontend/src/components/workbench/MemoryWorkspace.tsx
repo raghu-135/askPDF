@@ -341,8 +341,6 @@ export default function MemoryWorkspace({
                           <ListItem key={memory.id} divider alignItems="flex-start" sx={{ px: 2, py: 1.5, gap: 1.5, opacity: recallDisabled ? 0.68 : 1 }}>
                             <Box sx={{ flex: 1, minWidth: 0 }}>
                               <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-                                <Chip size="small" label={scopeLabel(memory.scope_type)} variant="outlined" />
-                                {memory.resolution_status === 'effective' && <Chip size="small" color="success" label="Effective" />}
                                 {overridden && <Chip size="small" color="warning" variant="outlined" label="Not used here" />}
                                 {recallDisabled && <Chip size="small" color="warning" variant="outlined" label="Recall off" />}
                                 {memory.resolution_status === 'unavailable' && <Chip size="small" label={memory.index_status} color={statusColor(memory.index_status)} />}
