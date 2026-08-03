@@ -12,6 +12,7 @@ import {
 } from '@mui/material';
 import CheckIcon from '@mui/icons-material/Check';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DriveFileMoveRtlIcon from '@mui/icons-material/DriveFileMoveRtl';
 import PsychologyIcon from '@mui/icons-material/Psychology';
 import PsychologyAltIcon from '@mui/icons-material/PsychologyAlt';
 import {
@@ -29,7 +30,6 @@ import {
 import { checkLlmModelReady, fetchAvailableLlmModels } from '../lib/models-api';
 import {
   buildCuratorContext,
-  curatorTitle,
   toMemoryConsistencyReviewCursor,
   type MemoryCuratorIntent,
 } from '../lib/memory-curator';
@@ -460,7 +460,7 @@ export default function MemoryCuratorPanel({
   return (
     <ConversationPanelTemplate
       ref={panelRef}
-      sx={{ p: 1, cursor: 'default' }}
+      sx={{ cursor: 'default' }}
       header={(
         <>
           <WorkspaceContextHeader
@@ -471,6 +471,7 @@ export default function MemoryCuratorPanel({
                 : <PsychologyIcon color="primary" fontSize="small" />
             }
             onBack={onBack}
+            backIcon={backLabel === 'Back to Project' ? <DriveFileMoveRtlIcon fontSize="small" sx={{ flex: '0 0 auto' }} /> : undefined}
             backLabel={backLabel}
             backContextLabel={contextSubtitle || backLabel}
           />
@@ -484,11 +485,17 @@ export default function MemoryCuratorPanel({
               setContextWindow(value);
               if (value > 0) window.localStorage.setItem('last_context_window', String(value));
             }}
+            sx={{
+              minHeight: 72,
+              px: 1.5,
+              py: 1,
+              mb: 0,
+            }}
             beforeModelControls={(
               <WebSearchModeControl mode={webSearchMode} disabled={busy} onChange={setWebSearchMode} />
             )}
             leading={(
-              <>
+              <Box sx={{ minWidth: 0, overflow: 'hidden' }}>
                 {curatorEmbeddingModel && (
                   <EmbeddingModelReadinessIndicator
                     model={curatorEmbeddingModel}
@@ -496,14 +503,7 @@ export default function MemoryCuratorPanel({
                     size={18}
                   />
                 )}
-                <Typography
-                  variant="subtitle2"
-                  noWrap
-                  sx={{ fontWeight: 700, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
-                >
-                  {curatorTitle(intent)}
-                </Typography>
-              </>
+              </Box>
             )}
           />
         </>
@@ -575,7 +575,7 @@ export default function MemoryCuratorPanel({
       )}
       decision={decisionPanel}
       composer={hasUnconfirmedDecision ? null : (
-        <Box sx={{ py: 1 }}>
+        <Box sx={{ px: 1, py: 1 }}>
           <ConversationComposer
             placeholder={composerState.status === ChatComposerStatus.Ready ? readyPlaceholder : composerState.placeholder}
             disabled={composerState.disabled || contextWindow < 256}

@@ -18,7 +18,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import CodeIcon from '@mui/icons-material/Code';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
-import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
+import FolderIcon from '@mui/icons-material/Folder';
 import LanguageIcon from '@mui/icons-material/Language';
 import HomeIcon from '@mui/icons-material/Home';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -352,7 +352,7 @@ export default React.memo(function WorkspaceTabs({
                     </Tooltip>
                   )}
                   {tab.associationScope === 'project' && (
-                    <Tooltip title="Project knowledge"><CreateNewFolderIcon sx={{ fontSize: 14, color: 'primary.main', flex: '0 0 auto' }} /></Tooltip>
+                    <Tooltip title="Project knowledge"><FolderIcon sx={{ fontSize: 14, color: 'primary.main', flex: '0 0 auto' }} /></Tooltip>
                   )}
                   <Tooltip title="Document actions">
                     <span>
@@ -427,7 +427,7 @@ export default React.memo(function WorkspaceTabs({
               closeDocumentMenu();
             }}
           >
-            <ListItemIcon><CreateNewFolderIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon><FolderIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Add to project knowledge</ListItemText>
           </MenuItem>
         )}

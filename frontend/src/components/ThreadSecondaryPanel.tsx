@@ -11,7 +11,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import ClearIcon from '@mui/icons-material/Clear';
 import DeleteIcon from '@mui/icons-material/Delete';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import DriveFileMoveRtlIcon from '@mui/icons-material/DriveFileMoveRtl';
 import FolderCopyIcon from '@mui/icons-material/FolderCopy';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import ThreadSidebar, { type ThreadSidebarHeaderState } from './ThreadSidebar';
@@ -190,7 +190,7 @@ export default function ThreadSecondaryPanel({
                   },
                 }}
               >
-                <ArrowBackIcon fontSize="small" sx={{ flex: '0 0 auto' }} />
+                <DriveFileMoveRtlIcon fontSize="small" sx={{ flex: '0 0 auto' }} />
                 <Typography
                   className="back-project-label"
                   variant="subtitle2"

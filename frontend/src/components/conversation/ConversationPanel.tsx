@@ -64,6 +64,7 @@ export function ConversationHeader({
   leading,
   beforeModelControls,
   trailingActions,
+  sx,
   onModelChange,
   onContextWindowChange,
 }: {
@@ -74,6 +75,7 @@ export function ConversationHeader({
   leading?: React.ReactNode;
   beforeModelControls?: React.ReactNode;
   trailingActions?: React.ReactNode;
+  sx?: SxProps<Theme>;
   onModelChange: (model: string) => void;
   onContextWindowChange: (contextWindow: number) => void;
 }) {
@@ -112,23 +114,28 @@ export function ConversationHeader({
       alignItems: 'center',
       justifyContent: 'space-between',
       gap: 2,
-      flexWrap: 'wrap',
+      flexWrap: 'nowrap',
       flexShrink: 0,
       minWidth: 0,
+      ...sx,
     }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, flex: '1 1 220px' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, overflow: 'hidden', flex: '1 1 auto' }}>
         {leading}
       </Box>
       <Box sx={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'flex-end',
-        flex: '1 1 380px',
+        flex: '0 0 auto',
         minWidth: 0,
         gap: 1,
-        flexWrap: { xs: 'wrap', sm: 'nowrap' },
+        flexWrap: 'nowrap',
       }}>
-        {beforeModelControls}
+        {beforeModelControls && (
+          <Box sx={{ minWidth: 0, overflow: 'hidden', flex: '1 1 auto' }}>
+            {beforeModelControls}
+          </Box>
+        )}
         <Tooltip
           title={
             <Box sx={{ p: 0.5 }}>
@@ -182,7 +189,7 @@ export function ConversationHeader({
             slotProps={{ htmlInput: { min: 1, step: 1, style: { textAlign: 'right' } } }}
           />
         </Tooltip>
-        <FormControl size="small" disabled={disabled} sx={{ flex: '1 1 220px', minWidth: 220 }}>
+        <FormControl size="small" disabled={disabled} sx={{ flex: '0 0 220px', minWidth: 220 }}>
           <InputLabel id={labelId}>Select LLM</InputLabel>
           <Select
             labelId={labelId}
@@ -205,6 +212,7 @@ export function WorkspaceContextHeader({
   subtitle,
   icon,
   onBack,
+  backIcon,
   backLabel = 'Back',
   backContextLabel,
   actions,
@@ -213,10 +221,13 @@ export function WorkspaceContextHeader({
   subtitle?: React.ReactNode;
   icon?: React.ReactNode;
   onBack?: () => void;
+  backIcon?: React.ReactNode;
   backLabel?: string;
   backContextLabel?: React.ReactNode;
   actions?: React.ReactNode;
 }) {
+  const resolvedBackIcon = backIcon || <ArrowBackIcon fontSize="small" sx={{ flex: '0 0 auto' }} />;
+
   if (onBack && backContextLabel) {
     return (
       <Box
@@ -266,7 +277,7 @@ export function WorkspaceContextHeader({
                 },
               }}
             >
-              <ArrowBackIcon fontSize="small" sx={{ flex: '0 0 auto' }} />
+              {resolvedBackIcon}
               <Typography
                 className="back-context-label"
                 variant="subtitle2"
@@ -320,7 +331,7 @@ export function WorkspaceContextHeader({
       {onBack && (
         <Tooltip title={backLabel}>
           <IconButton size="small" onClick={onBack} aria-label={backLabel}>
-            <ArrowBackIcon fontSize="small" />
+            {backIcon || <ArrowBackIcon fontSize="small" />}
           </IconButton>
         </Tooltip>
       )}
