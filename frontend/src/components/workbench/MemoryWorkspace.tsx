@@ -276,16 +276,23 @@ export default function MemoryWorkspace({
     }
   };
 
+  const reviewStatusChip = reviewStatus?.status === 'review_suggested'
+    ? { label: 'Review needed', color: 'warning' as const, variant: 'filled' as const }
+    : reviewStatus?.status === 'current'
+      ? { label: 'No review needed', color: 'success' as const, variant: 'outlined' as const }
+      : reviewStatus?.status === 'never_reviewed'
+        ? { label: 'Not reviewed', color: 'default' as const, variant: 'outlined' as const }
+        : { label: 'Review status loading', color: 'default' as const, variant: 'outlined' as const };
+
   return (
     <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
       <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Memory &amp; Settings</Typography>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Memory</Typography>
         <Tooltip title="Review related memories for duplicates, conflicts, and stale overrides">
           <span>
             <Button
               size="small"
               startIcon={<FactCheckIcon />}
-              color={reviewStatus?.status === 'review_suggested' ? 'warning' : 'primary'}
               onClick={() => onOpenCurator?.(memoryReviewCuratorIntent({ thread: activeThread, project: projectContext }))}
               disabled={!onOpenCurator}
             >
@@ -293,8 +300,12 @@ export default function MemoryWorkspace({
             </Button>
           </span>
         </Tooltip>
-        {reviewStatus?.status === 'review_suggested' && <Chip size="small" color="warning" label="Review suggested" />}
-        {reviewStatus?.status === 'never_reviewed' && <Chip size="small" variant="outlined" label="Not reviewed" />}
+        <Chip
+          size="small"
+          color={reviewStatusChip.color}
+          variant={reviewStatusChip.variant}
+          label={reviewStatusChip.label}
+        />
         <TextField
           size="small"
           value={query}
