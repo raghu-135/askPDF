@@ -34,6 +34,7 @@ from app.services.memory_service import (
     retry_memory_index,
     search_thread_memory,
 )
+from app.services.memory_workspace_service import get_memory_workspace_readiness
 from app.services.embedding_model_service import (
     EmbeddingModelResolutionError,
     EmbeddingModelUnavailableError,
@@ -45,6 +46,35 @@ router = APIRouter(tags=["memories"])
 
 def _bad_request_from_value_error(exc: ValueError) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/memory-workspace/prepare")
+async def prepare_memory_workspace_endpoint(
+    thread_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+):
+    try:
+        return await get_memory_workspace_readiness(
+            thread_id=thread_id,
+            project_id=project_id,
+            prepare=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/memory-workspace/status")
+async def memory_workspace_status_endpoint(
+    thread_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+):
+    try:
+        return await get_memory_workspace_readiness(
+            thread_id=thread_id,
+            project_id=project_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 def _raise_curator_http(exc: Exception):

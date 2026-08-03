@@ -1073,6 +1073,56 @@ export async function getProject(projectId: string): Promise<Project> {
   return mapProject(await res.json());
 }
 
+export interface MemoryWorkspaceReadiness {
+  context_type: 'global' | 'project' | 'thread';
+  thread_id?: string | null;
+  project_id?: string | null;
+  embedding_model: string;
+  embedding_model_ready: boolean;
+  status: 'ready' | 'indexing' | 'blocked' | 'error';
+  ready: boolean;
+  canonical: Record<string, number>;
+  global_representations: {
+    embedding_model: string;
+    ready: boolean;
+    total_count: number;
+    indexed_count: number;
+    pending_count: number;
+    failed_count: number;
+  };
+}
+
+const memoryWorkspaceReadinessPath = (
+  action: 'prepare' | 'status',
+  input: { threadId?: string | null; projectId?: string | null },
+) => {
+  const params = new URLSearchParams();
+  if (input.threadId) params.set('thread_id', input.threadId);
+  if (input.projectId) params.set('project_id', input.projectId);
+  const query = params.toString();
+  return `/api/memory-workspace/${action}${query ? `?${query}` : ''}`;
+};
+
+export async function prepareMemoryWorkspace(input: {
+  threadId?: string | null;
+  projectId?: string | null;
+}): Promise<MemoryWorkspaceReadiness> {
+  const res = await fetch(`${API_BASE}${memoryWorkspaceReadinessPath('prepare', input)}`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getMemoryWorkspaceStatus(input: {
+  threadId?: string | null;
+  projectId?: string | null;
+}): Promise<MemoryWorkspaceReadiness> {
+  const res = await fetch(`${API_BASE}${memoryWorkspaceReadinessPath('status', input)}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
 export async function createProject(
   name: string,
   embeddingModel: string,

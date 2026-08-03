@@ -16,6 +16,8 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import MemoryIcon from '@mui/icons-material/Memory';
 import {
   applyMemoryCuratorChanges,
+  getMemoryWorkspaceStatus,
+  prepareMemoryWorkspace,
   respondToMemoryCurator,
   type MemoryCuratorMessage,
   type MemoryCuratorOperation,
@@ -23,6 +25,7 @@ import {
   type MemoryChangeReceipt,
   type MemoryCuratorWebSource,
   type MemoryConsistencyReviewCursor,
+  type MemoryWorkspaceReadiness,
 } from '../lib/api';
 import { checkLlmModelReady, fetchAvailableLlmModels } from '../lib/models-api';
 import {
@@ -42,6 +45,9 @@ import {
   WebSourceList,
 } from './conversation';
 import { useWebSearchMode } from '../hooks/useWebSearchMode';
+import { getChatComposerState } from '../lib/chat-composer-state';
+import { ChatComposerIndexingStatus, ChatComposerStatus } from '../lib/enums';
+import EmbeddingModelReadinessIndicator from './EmbeddingModelReadinessIndicator';
 
 const defaultContextWindow = 8192;
 
@@ -124,6 +130,9 @@ export default function MemoryCuratorPanel({
   const [llmModel, setLlmModel] = useState('');
   const [contextWindow, setContextWindow] = useState(defaultContextWindow);
   const [modelReady, setModelReady] = useState<boolean | null>(null);
+  const [workspaceReadiness, setWorkspaceReadiness] = useState<MemoryWorkspaceReadiness | null>(null);
+  const [workspaceReadinessFailed, setWorkspaceReadinessFailed] = useState(false);
+  const [workspaceReadinessVersion, setWorkspaceReadinessVersion] = useState(0);
   const { mode: webSearchMode, setMode: setWebSearchMode } = useWebSearchMode();
   const [messages, setMessages] = useState<CuratorUiMessage[]>(() => {
     const initial = initialAssistantMessage(intent);
@@ -138,6 +147,10 @@ export default function MemoryCuratorPanel({
   const [reviewCanContinue, setReviewCanContinue] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const context = useMemo(() => buildCuratorContext(intent), [intent]);
+  const curatorEmbeddingModel = intent.embeddingModel
+    || workspaceReadiness?.embedding_model
+    || decision?.embedding_readiness[0]?.embedding_model
+    || '';
   const hasUnconfirmedDecision = Boolean(
     decision?.state === 'proposal'
     || decision?.state === 'web_search_approval'
@@ -178,6 +191,38 @@ export default function MemoryCuratorPanel({
       cancelled = true;
     };
   }, [llmModel]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async (prepare: boolean) => {
+      try {
+        const status = prepare
+          ? await prepareMemoryWorkspace({ threadId: intent.threadId, projectId: intent.projectId })
+          : await getMemoryWorkspaceStatus({ threadId: intent.threadId, projectId: intent.projectId });
+        if (cancelled) return;
+        setWorkspaceReadinessFailed(false);
+        setWorkspaceReadiness(status);
+        if (status.status === 'indexing') {
+          timer = window.setTimeout(() => void poll(false), 1500);
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setWorkspaceReadinessFailed(true);
+          setError(requestError instanceof Error
+            ? requestError.message
+            : 'Memory workspace readiness could not be checked.');
+        }
+      }
+    };
+    setWorkspaceReadiness(null);
+    setWorkspaceReadinessFailed(false);
+    void poll(true);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [intent.projectId, intent.threadId, workspaceReadinessVersion]);
 
   const respond = useCallback(async (
     nextMessages: CuratorUiMessage[],
@@ -252,6 +297,7 @@ export default function MemoryCuratorPanel({
       if (decision.memory_review) setReviewCursor(decision.memory_review);
       onDirtyChange(false);
       onApplied();
+      setWorkspaceReadinessVersion((version) => version + 1);
       const warningSuffix = result.warnings.length
         ? `\n${result.warnings.length} indexing warning(s) occurred. Failed records remain available for Retry.`
         : '';
@@ -270,8 +316,33 @@ export default function MemoryCuratorPanel({
     }
   };
 
-  const modelChecking = Boolean(llmModel) && modelReady === null;
-  const canCompose = Boolean(llmModel && contextWindow >= 256 && modelReady === true && !busy);
+  const workspaceIndexingStatus = workspaceReadinessFailed
+    ? ChatComposerIndexingStatus.Error
+    : workspaceReadiness === null
+    ? ChatComposerIndexingStatus.Checking
+    : workspaceReadiness.status === 'ready'
+      ? ChatComposerIndexingStatus.Ready
+      : workspaceReadiness.status === 'blocked'
+        ? ChatComposerIndexingStatus.Blocked
+        : workspaceReadiness.status === 'error'
+          ? ChatComposerIndexingStatus.Error
+          : ChatComposerIndexingStatus.Indexing;
+  const composerState = useMemo(() => getChatComposerState({
+    loading: busy,
+    llmModel,
+    isLlmModelValid: modelReady,
+    isLlmToolsSupported: true,
+    isEmbeddingModelValid: workspaceReadinessFailed
+      ? true
+      : workspaceReadiness?.embedding_model_ready ?? null,
+    indexingStatus: workspaceIndexingStatus,
+    hasInput: false,
+  }), [busy, llmModel, modelReady, workspaceIndexingStatus, workspaceReadiness?.embedding_model_ready, workspaceReadinessFailed]);
+  const readyPlaceholder = intent.mode === 'memory_review'
+    ? 'Add context for this review...'
+    : intent.mode === 'edit'
+      ? 'Describe the correction...'
+      : 'Tell the curator what to remember...';
   const copyMessage = async (message: CuratorUiMessage) => {
     await navigator.clipboard.writeText(message.content);
     setCopiedId(message.id);
@@ -414,6 +485,13 @@ export default function MemoryCuratorPanel({
           )}
           leading={(
             <>
+              {curatorEmbeddingModel && (
+                <EmbeddingModelReadinessIndicator
+                  model={curatorEmbeddingModel}
+                  ready={workspaceReadiness?.embedding_model_ready ?? null}
+                  size={18}
+                />
+              )}
               <MemoryIcon color="primary" fontSize="small" />
               <Typography
                 variant="subtitle2"
@@ -466,19 +544,6 @@ export default function MemoryCuratorPanel({
               </Button>
             </Box>
           )}
-          {Boolean(decision?.embedding_readiness.length) && (
-            <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap" sx={{ px: 1, pb: 0.5 }}>
-              {decision?.embedding_readiness.map((item) => (
-                <Chip
-                  key={item.embedding_model}
-                  size="small"
-                  variant="outlined"
-                  color={item.ready ? 'success' : 'warning'}
-                  label={`${item.embedding_model}: ${item.ready ? 'ready' : item.reason === 'global_representation_warming' ? 'warming' : 'unavailable'}`}
-                />
-              ))}
-            </Stack>
-          )}
           {decision?.consent?.effective_user_recall === false && (
             <Alert severity="info" sx={{ m: 1 }}>
               Global recall is disabled for this thread. You can still inspect and manage stored memory here.
@@ -515,9 +580,9 @@ export default function MemoryCuratorPanel({
       composer={hasUnconfirmedDecision ? null : (
         <Box sx={{ py: 1 }}>
           <ConversationComposer
-            placeholder={intent.mode === 'memory_review' ? 'Add context for this review...' : intent.mode === 'edit' ? 'Describe the correction...' : 'Tell the curator what to remember...'}
-            disabled={!canCompose}
-            busy={busy || modelChecking}
+            placeholder={composerState.status === ChatComposerStatus.Ready ? readyPlaceholder : composerState.placeholder}
+            disabled={composerState.disabled || contextWindow < 256}
+            busy={composerState.busy}
             disableWhenEmpty
             onSubmit={submitMessage}
           />

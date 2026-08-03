@@ -43,6 +43,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import LockIcon from '@mui/icons-material/Lock';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
+import EmbeddingModelReadinessIndicator from './EmbeddingModelReadinessIndicator';
 import ClearIcon from '@mui/icons-material/Clear';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -1188,19 +1189,13 @@ const ThreadSidebar: React.FC<ThreadSidebarProps> = ({
                         {row.group.project && !selectionOnly ? (
                           <Box sx={{ display: 'flex', alignItems: 'center', flex: '0 0 auto' }}>
                           {activeProjectId === row.group.project.id && (
-                            <Tooltip title={`${row.group.project.embeddingModel}: ${
-                              projectReadiness[row.group.project.id] === null
-                                ? 'checking'
-                                : projectReadiness[row.group.project.id] ? 'ready' : 'unavailable'
-                            }`}>
-                              <Box sx={{ display: 'flex', mr: 0.25 }}>
-                                {projectReadiness[row.group.project.id] === null
-                                  ? <CircularProgress size={14} />
-                                  : projectReadiness[row.group.project.id]
-                                    ? <CheckCircleIcon color="success" sx={{ fontSize: 16 }} />
-                                    : <ErrorIcon color="error" sx={{ fontSize: 16 }} />}
-                              </Box>
-                            </Tooltip>
+                            <Box sx={{ display: 'flex', mr: 0.25 }}>
+                              <EmbeddingModelReadinessIndicator
+                                model={row.group.project.embeddingModel}
+                                ready={projectReadiness[row.group.project.id]}
+                                size={16}
+                              />
+                            </Box>
                           )}
                           <Tooltip title={`Create thread in ${row.group.project.name}`}>
                             <IconButton

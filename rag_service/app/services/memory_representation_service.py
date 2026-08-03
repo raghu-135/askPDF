@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any, Dict, List
 
 from sqlalchemy import and_, delete, func
@@ -193,6 +194,67 @@ async def warm_global_representations_for_model(embedding_model: str, *, limit: 
         except Exception:
             failed.append(row.memory_id)
     return {"embedding_model": embedding_model, "indexed_ids": indexed, "failed_ids": failed}
+
+
+async def global_representation_status_for_model(embedding_model: str) -> Dict[str, Any]:
+    """Return whether every Global memory is searchable in one project model."""
+
+    model = str(embedding_model or "").strip()
+    if not model:
+        raise ValueError("embedding_model is required")
+    if model == GLOBAL_MEMORY_EMBEDDING_MODEL:
+        return {
+            "embedding_model": model,
+            "ready": True,
+            "total_count": 0,
+            "indexed_count": 0,
+            "pending_count": 0,
+            "failed_count": 0,
+        }
+    await ensure_global_representations_for_model(model)
+    async with async_session_maker() as session:
+        rows = (await session.execute(
+            select(GlobalMemoryRepresentation.index_status, func.count())
+            .where(GlobalMemoryRepresentation.embedding_model == model)
+            .group_by(GlobalMemoryRepresentation.index_status)
+        )).all()
+    counts = {str(status): int(count) for status, count in rows}
+    total = sum(counts.values())
+    indexed = counts.get("indexed", 0)
+    return {
+        "embedding_model": model,
+        "ready": indexed == total,
+        "total_count": total,
+        "indexed_count": indexed,
+        "pending_count": counts.get("pending", 0) + counts.get("indexing", 0),
+        "failed_count": counts.get("failed", 0),
+    }
+
+
+async def reset_stale_global_representation_indexes(
+    embedding_model: str,
+    *,
+    stale_after_seconds: int = 300,
+) -> int:
+    """Make interrupted indexing rows retryable after a worker restart."""
+
+    cutoff = utc_now() - timedelta(seconds=max(30, stale_after_seconds))
+    reset_count = 0
+    async with async_session_maker() as session:
+        async with session.begin():
+            rows = list((await session.execute(
+                select(GlobalMemoryRepresentation).where(
+                    GlobalMemoryRepresentation.embedding_model == embedding_model,
+                    GlobalMemoryRepresentation.index_status == "indexing",
+                    GlobalMemoryRepresentation.updated_at < cutoff,
+                )
+            )).scalars().all())
+            for row in rows:
+                row.index_status = "failed"
+                row.index_error = "Indexing was interrupted; retry scheduled by Memory workspace readiness."
+                row.updated_at = utc_now()
+            reset_count = len(rows)
+    return reset_count
 
 
 async def list_memory_representations(

@@ -5,12 +5,32 @@ import {
   buildCuratorContext,
   createCuratorIntent,
   curatorTitle,
+  defaultMemoryCuratorIntent,
   memoryReviewCuratorIntent,
   reviewCuratorIntent,
 } from '../src/lib/memory-curator.ts';
 
 const project = { id: 'project-1' };
 const thread = { id: 'thread-1', project_id: 'project-1' };
+
+test('default curator intent follows the active workspace context', () => {
+  assert.deepEqual(defaultMemoryCuratorIntent({}), {
+    mode: 'create',
+    scopeType: 'user',
+    scopeId: 'default',
+    threadId: undefined,
+    projectId: undefined,
+    memory: null,
+  });
+  assert.equal(defaultMemoryCuratorIntent({ project }).scopeType, 'project');
+  assert.equal(defaultMemoryCuratorIntent({ thread, project }).scopeType, 'thread');
+
+  const readyProject = { ...project, embeddingModel: 'project-model' };
+  assert.equal(
+    defaultMemoryCuratorIntent({ project: readyProject }).embeddingModel,
+    'project-model',
+  );
+});
 
 test('curator intents preserve workspace scope and canonical global ID', () => {
   const intent = createCuratorIntent({

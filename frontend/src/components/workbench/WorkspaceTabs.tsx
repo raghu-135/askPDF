@@ -154,6 +154,7 @@ export default React.memo(function WorkspaceTabs({
           icon={icon}
           iconPosition="start"
           label={active ? (label ?? tab.label) : undefined}
+          onClick={active && tab.kind === 'memory' ? () => onTabChange(tab.id) : undefined}
           sx={{
             ...commonTabSx,
             minWidth: active ? undefined : 44,

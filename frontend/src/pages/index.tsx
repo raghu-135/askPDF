@@ -34,7 +34,7 @@ import { ProcessStatus, ThreadFileSourceType } from "../lib/enums";
 import type { ResolvedWorkbenchPlacement } from '../lib/workbench-layout';
 import { checkEmbeddingModelReady } from '../lib/models-api';
 import { flexTruncateSx, singleLineTruncateSx } from '../lib/truncation';
-import { reviewCuratorIntent, type MemoryCuratorIntent } from '../lib/memory-curator';
+import { defaultMemoryCuratorIntent, reviewCuratorIntent, type MemoryCuratorIntent } from '../lib/memory-curator';
 
 export default function Home() {
   // Multiple PDF tabs state
@@ -612,7 +612,17 @@ export default function Home() {
     }
     setActiveTabId(tabId);
     setIsBrowserActive(tabId === 'browser-tab');
-  }, [confirmDiscardMemoryCurator, memoryCuratorIntent]);
+    if (tabId === 'memory-tab') {
+      const memoryProject = activeProject || threadProject;
+      if (!memoryCuratorIntent) {
+        setMemoryCuratorDirty(false);
+        setMemoryCuratorIntent(defaultMemoryCuratorIntent({
+          thread: activeThread,
+          project: memoryProject,
+        }));
+      }
+    }
+  }, [activeProject, activeThread, confirmDiscardMemoryCurator, memoryCuratorIntent, threadProject]);
 
   const handleOpenMemoryCurator = useCallback((intent: MemoryCuratorIntent) => {
     if (memoryCuratorIntent && memoryCuratorDirtyRef.current && !confirmDiscardMemoryCurator()) return;

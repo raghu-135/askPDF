@@ -14,8 +14,6 @@ import {
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import MemoryIcon from '@mui/icons-material/Memory';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ErrorIcon from '@mui/icons-material/Error';
 import SettingsIcon from '@mui/icons-material/Settings';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import VolumeUpIcon from '@mui/icons-material/VolumeUp';
@@ -78,6 +76,7 @@ import {
 import ChatSettingsDialog from './ChatSettingsDialog';
 import ThreadLineageTooltipContent from './ThreadLineageTooltipContent';
 import ThreadForkDialog, { MemoryCopyMode } from './ThreadForkDialog';
+import EmbeddingModelReadinessIndicator from './EmbeddingModelReadinessIndicator';
 import { buildLiveTraceView, buildRunTraceView } from './agent-debug/agent-trace-projection';
 import type { TraceRunView } from './agent-debug/agent-trace-projection';
 import useBatchedExecutionEvents from './agent-graph/useBatchedExecutionEvents';
@@ -2378,25 +2377,11 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 onContextWindowChange={handleContextWindowChange}
                 leading={(
                     <>
-                    <Tooltip title={
-                        isEmbeddingModelValid === null ? "Checking embedding model status..." :
-                            isEmbeddingModelValid ? `Embedding model: ${activeThread.embeddingModel}` :
-                                `Embedding model ${activeThread.embeddingModel} not found`
-                    }>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            {isEmbeddingModelValid === true ? (
-                                <CheckCircleIcon fontSize="medium" color="primary" />
-                            ) : isEmbeddingModelValid === false ? (
-                                <ErrorIcon fontSize="medium" color="error" />
-                            ) : (
-                                <CircularProgress size={20} />
-                            )}
-                            {isEmbeddingModelValid === null && (
-                                <Typography variant="caption" color="warning.main" sx={{ ml: 0.5, fontWeight: 'bold' }}>CHECKING...</Typography>
-                            )}
-                            {isEmbeddingModelValid === false && <Typography variant="caption" color="error" sx={{ fontWeight: 'bold' }}>OFFLINE</Typography>}
-                        </Box>
-                    </Tooltip>
+                    <EmbeddingModelReadinessIndicator
+                        model={activeThread.embeddingModel}
+                        ready={isEmbeddingModelValid}
+                        showStatusLabel
+                    />
                     {hasLineage && (
                         <Tooltip
                             title={

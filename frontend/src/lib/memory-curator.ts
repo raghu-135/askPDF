@@ -14,6 +14,7 @@ export interface MemoryCuratorIntent {
   threadId?: string | null;
   projectId?: string | null;
   memory?: MemoryRecord | null;
+  embeddingModel?: string | null;
 }
 
 export const buildCuratorContext = (intent: MemoryCuratorIntent): MemoryCuratorContext => ({
@@ -42,7 +43,38 @@ export const createCuratorIntent = ({
   threadId: thread?.id,
   projectId: project?.id || thread?.project_id,
   memory,
+  ...((memory?.embedding_model || (scopeType !== 'user' && (thread?.embeddingModel || project?.embeddingModel)))
+    ? { embeddingModel: memory?.embedding_model || thread?.embeddingModel || project?.embeddingModel }
+    : {}),
 });
+
+export const defaultMemoryCuratorIntent = ({
+  thread,
+  project,
+}: {
+  thread?: Thread | null;
+  project?: Project | null;
+}): MemoryCuratorIntent => {
+  if (thread) {
+    return createCuratorIntent({
+      scopeType: 'thread',
+      scopeId: thread.id,
+      thread,
+      project,
+    });
+  }
+  if (project) {
+    return createCuratorIntent({
+      scopeType: 'project',
+      scopeId: project.id,
+      project,
+    });
+  }
+  return createCuratorIntent({
+    scopeType: 'user',
+    scopeId: 'default',
+  });
+};
 
 export const reviewCuratorIntent = (thread: Thread): MemoryCuratorIntent => ({
   mode: 'conversation_review',
@@ -50,6 +82,7 @@ export const reviewCuratorIntent = (thread: Thread): MemoryCuratorIntent => ({
   scopeId: thread.id,
   threadId: thread.id,
   projectId: thread.project_id,
+  ...(thread.embeddingModel ? { embeddingModel: thread.embeddingModel } : {}),
 });
 
 export const memoryReviewCuratorIntent = ({
@@ -64,6 +97,9 @@ export const memoryReviewCuratorIntent = ({
   scopeId: thread?.id || project?.id || '',
   threadId: thread?.id,
   projectId: project?.id || thread?.project_id,
+  ...((thread?.embeddingModel || project?.embeddingModel)
+    ? { embeddingModel: thread?.embeddingModel || project?.embeddingModel }
+    : {}),
 });
 
 export const curatorTitle = (intent: MemoryCuratorIntent) => {
