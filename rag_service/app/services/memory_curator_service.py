@@ -288,6 +288,18 @@ def _restrict_conversation_review_intents(
     return restricted
 
 
+def _memory_review_context_from_request(
+    context: MemoryCuratorContext,
+) -> tuple[str, str]:
+    if context.thread_id:
+        return "thread", context.thread_id
+    if context.project_id:
+        return "project", context.project_id
+    if context.selected_scope_type == MemoryScopeType.USER.value:
+        return "user", LOCAL_USER_MEMORY_SCOPE_ID
+    raise MemoryCuratorError("Memory review requires a user, project, or thread context")
+
+
 async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[str, Any]:
     try:
         tool_context, thread, project = await build_memory_tool_context(
@@ -326,10 +338,7 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         }
     memory_review = None
     if req.mode == "memory_review":
-        context_type = "thread" if req.context.thread_id else "project"
-        context_id = req.context.thread_id or req.context.project_id
-        if not context_id:
-            raise MemoryCuratorError("Memory review requires a project or thread context")
+        context_type, context_id = _memory_review_context_from_request(req.context)
         position = req.memory_review_cursor.anchor_position if req.memory_review_cursor else 0
         memory_review = await build_memory_review_batch(
             context_type,
@@ -764,8 +773,7 @@ def _assert_acyclic(edges: Sequence[tuple[str, str]]) -> None:
 
 async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dict[str, Any]:
     if req.memory_review_cursor:
-        expected_type = "thread" if req.context.thread_id else "project"
-        expected_id = req.context.thread_id or req.context.project_id
+        expected_type, expected_id = _memory_review_context_from_request(req.context)
         if (
             req.memory_review_cursor.context_type != expected_type
             or req.memory_review_cursor.context_id != expected_id

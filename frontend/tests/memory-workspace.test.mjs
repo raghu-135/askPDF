@@ -28,7 +28,7 @@ const thread = {
 };
 
 test('memory scopes differ between home and thread contexts', () => {
-  assert.deepEqual(memoryScopesForContext(false), ['user', 'project']);
+  assert.deepEqual(memoryScopesForContext(false), ['user']);
   assert.deepEqual(memoryScopesForContext(true), ['thread', 'project', 'user']);
 });
 

@@ -243,7 +243,11 @@ async def _review_context(context_type: str, context_id: str):
             if project is None:
                 raise ValueError("Project not found")
             return [("project", project.id), ("user", LOCAL_USER_MEMORY_SCOPE_ID)], project.embedding_model
-    raise ValueError("Memory review requires a project or thread context")
+        if context_type == "user":
+            if context_id != LOCAL_USER_MEMORY_SCOPE_ID:
+                raise ValueError("Global memory review context not found")
+            return [("user", LOCAL_USER_MEMORY_SCOPE_ID)], GLOBAL_MEMORY_EMBEDDING_MODEL
+    raise ValueError("Memory review requires a user, project, or thread context")
 
 
 async def get_memory_review_status(context_type: str, context_id: str) -> Dict[str, Any]:

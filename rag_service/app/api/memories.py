@@ -27,6 +27,7 @@ from app.services.effective_memory_service import (
     serialize_memories_with_relationships,
 )
 from app.services.memory_review_service import get_memory_review_status
+from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 from app.services.memory_service import (
     MemoryVectorCleanupError,
     hard_delete_memory,
@@ -165,6 +166,14 @@ async def thread_effective_memories_endpoint(
 async def thread_memory_review_status_endpoint(thread_id: str):
     try:
         return await get_memory_review_status("thread", thread_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/memories/review-status")
+async def global_memory_review_status_endpoint():
+    try:
+        return await get_memory_review_status("user", LOCAL_USER_MEMORY_SCOPE_ID)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

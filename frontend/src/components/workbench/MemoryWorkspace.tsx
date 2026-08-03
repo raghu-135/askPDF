@@ -11,13 +11,9 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  FormControl,
   IconButton,
-  InputLabel,
   List,
   ListItem,
-  MenuItem,
-  Select,
   Stack,
   TextField,
   Tooltip,
@@ -36,7 +32,6 @@ import {
   deleteMemory,
   getMemoryReviewStatus,
   listEffectiveMemories,
-  listProjects,
   retryMemoryIndex,
   type MemoryOverrideRef,
   type MemoryScopeType,
@@ -172,7 +167,6 @@ function MemoryDetails({
 export default function MemoryWorkspace({
   activeThread,
   activeProject: projectContext = null,
-  projectInventoryVersion = 0,
   curatorRefreshVersion = 0,
   onOpenCurator,
 }: {
@@ -182,8 +176,6 @@ export default function MemoryWorkspace({
   curatorRefreshVersion?: number;
   onOpenCurator?: (intent: MemoryCuratorIntent) => void;
 }) {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState('');
   const [sections, setSections] = useState<MemoryWorkspaceSection[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const expansionContext = useRef('');
@@ -199,28 +191,9 @@ export default function MemoryWorkspace({
     setQuery('');
   }, [activeThread?.id, projectContext?.id]);
 
-  useEffect(() => {
-    let cancelled = false;
-    listProjects()
-      .then(({ projects: rows }) => {
-        if (cancelled) return;
-        setProjects(rows);
-        setSelectedProjectId((current) => (
-          activeThread?.project_id || projectContext?.id || current || rows[0]?.id || ''
-        ));
-      })
-      .catch((error) => {
-        if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Unable to load projects.');
-      });
-    return () => { cancelled = true; };
-  }, [activeThread?.id, activeThread?.project_id, projectContext?.id, projectInventoryVersion]);
-
   const requestedProjectId = activeThread
     ? null
-    : projectContext?.id || selectedProjectId || null;
-  const activeProject = projectContext || projects.find((project) => (
-    project.id === (activeThread?.project_id || selectedProjectId)
-  )) || null;
+    : projectContext?.id || null;
   const contextKey = activeThread
     ? `thread:${activeThread.id}`
     : requestedProjectId ? `project:${requestedProjectId}` : 'global:default';
@@ -252,10 +225,6 @@ export default function MemoryWorkspace({
   }, [activeThread?.id, contextKey, curatorRefreshVersion, refreshVersion, requestedProjectId]);
 
   useEffect(() => {
-    if (!activeThread && !projectContext) {
-      setReviewStatus(null);
-      return;
-    }
     let cancelled = false;
     getMemoryReviewStatus({ threadId: activeThread?.id, projectId: projectContext?.id })
       .then((status) => { if (!cancelled) setReviewStatus(status); })
@@ -273,7 +242,7 @@ export default function MemoryWorkspace({
       scopeType,
       scopeId,
       thread: activeThread,
-      project: activeProject,
+      project: projectContext,
       memory,
     }));
   };
@@ -311,31 +280,21 @@ export default function MemoryWorkspace({
     <Box sx={{ height: '100%', minHeight: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', bgcolor: 'background.default' }}>
       <Box sx={{ px: 2, py: 1.25, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', borderBottom: 1, borderColor: 'divider' }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Memory &amp; Settings</Typography>
-        {(activeThread || projectContext) && (
-          <Tooltip title="Review related memories for duplicates, conflicts, and stale overrides">
-            <span>
-              <Button
-                size="small"
-                startIcon={<FactCheckIcon />}
-                color={reviewStatus?.status === 'review_suggested' ? 'warning' : 'primary'}
-                onClick={() => onOpenCurator?.(memoryReviewCuratorIntent({ thread: activeThread, project: projectContext }))}
-                disabled={!onOpenCurator}
-              >
-                Review memories
-              </Button>
-            </span>
-          </Tooltip>
-        )}
+        <Tooltip title="Review related memories for duplicates, conflicts, and stale overrides">
+          <span>
+            <Button
+              size="small"
+              startIcon={<FactCheckIcon />}
+              color={reviewStatus?.status === 'review_suggested' ? 'warning' : 'primary'}
+              onClick={() => onOpenCurator?.(memoryReviewCuratorIntent({ thread: activeThread, project: projectContext }))}
+              disabled={!onOpenCurator}
+            >
+              Review memories
+            </Button>
+          </span>
+        </Tooltip>
         {reviewStatus?.status === 'review_suggested' && <Chip size="small" color="warning" label="Review suggested" />}
         {reviewStatus?.status === 'never_reviewed' && <Chip size="small" variant="outlined" label="Not reviewed" />}
-        {!activeThread && !projectContext && projects.length > 0 && (
-          <FormControl size="small" sx={{ minWidth: 190, maxWidth: 300 }}>
-            <InputLabel>Project</InputLabel>
-            <Select value={selectedProjectId} label="Project" onChange={(event) => setSelectedProjectId(String(event.target.value))}>
-              {projects.map((project) => <MenuItem key={project.id} value={project.id}>{project.name}</MenuItem>)}
-            </Select>
-          </FormControl>
-        )}
         <TextField
           size="small"
           value={query}

@@ -566,7 +566,7 @@ class MemoryScopeActivity(SQLModel, table=True):
 
 
 class MemoryReviewState(SQLModel, table=True):
-    """Last completed consistency-review versions for a project or thread."""
+    """Last completed consistency-review versions for a memory review context."""
     __tablename__ = "memory_review_states"
 
     context_type: str = Field(primary_key=True)
@@ -586,7 +586,7 @@ class MemoryReviewState(SQLModel, table=True):
     )
 
     __table_args__ = (
-        CheckConstraint("context_type in ('project', 'thread')", name="ck_memory_review_context_type"),
+        CheckConstraint("context_type in ('user', 'project', 'thread')", name="ck_memory_review_context_type"),
     )
 
 

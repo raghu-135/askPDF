@@ -446,7 +446,7 @@ export interface MemoryReviewCursor {
 }
 
 export interface MemoryConsistencyReviewCursor {
-  context_type: 'project' | 'thread';
+  context_type: 'user' | 'project' | 'thread';
   context_id: string;
   snapshot_at: string;
   snapshot_scope_versions: Record<string, number>;
@@ -456,7 +456,7 @@ export interface MemoryConsistencyReviewCursor {
 }
 
 export interface MemoryReviewStatus {
-  context_type: 'project' | 'thread';
+  context_type: 'user' | 'project' | 'thread';
   context_id: string;
   status: 'current' | 'review_suggested' | 'never_reviewed';
   embedding_model: string;
@@ -1306,7 +1306,9 @@ export async function getMemoryReviewStatus(input: {
 }): Promise<MemoryReviewStatus> {
   const path = input.threadId
     ? `/api/threads/${encodeURIComponent(input.threadId)}/memories/review-status`
-    : `/api/projects/${encodeURIComponent(String(input.projectId || ''))}/memories/review-status`;
+    : input.projectId
+      ? `/api/projects/${encodeURIComponent(input.projectId)}/memories/review-status`
+      : '/api/memories/review-status';
   const res = await fetch(`${API_BASE}${path}`);
   if (!res.ok) throw new Error(await readApiError(res));
   return res.json();

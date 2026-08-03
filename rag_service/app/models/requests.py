@@ -195,7 +195,7 @@ class MemoryReviewCursor(BaseModel):
 class MemoryConsistencyReviewCursor(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    context_type: Literal["project", "thread"]
+    context_type: Literal["user", "project", "thread"]
     context_id: str = Field(min_length=1)
     snapshot_at: datetime
     snapshot_scope_versions: Dict[str, int] = Field(default_factory=dict)

@@ -15,7 +15,7 @@ export type MemoryScopeTarget = {
 };
 
 export const memoryScopesForContext = (hasThread: boolean): MemoryScopeType[] => (
-  hasThread ? ['thread', 'project', 'user'] : ['user', 'project']
+  hasThread ? ['thread', 'project', 'user'] : ['user']
 );
 
 export const filterMemoryRecords = <T extends MemoryRecord>(

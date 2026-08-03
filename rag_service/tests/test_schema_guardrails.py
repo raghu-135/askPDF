@@ -53,7 +53,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
 
     cleanup = scripts.get_revision("c9e6a1b4d3f8")
 
-    assert scripts.get_heads() == ["4b7e2d9a1c5f"]
+    assert scripts.get_heads() == ["6d2f8a9b3c1e"]
     assert scripts.get_revision("a7c4e9f2b1d6") is not None
     assert scripts.get_revision("b8d5f0a3c2e7") is not None
     assert cleanup is not None
@@ -64,6 +64,7 @@ def test_alembic_graph_retains_applied_memory_compatibility_revisions():
     assert scripts.get_revision("1c7d9e4a2b6f").down_revision == "d9a4e7c2b1f6"
     assert scripts.get_revision("3a8d7c5e1f2b").down_revision == "1c7d9e4a2b6f"
     assert scripts.get_revision("4b7e2d9a1c5f").down_revision == "3a8d7c5e1f2b"
+    assert scripts.get_revision("6d2f8a9b3c1e").down_revision == "4b7e2d9a1c5f"
 
 
 def test_project_files_has_composite_key_and_cascading_foreign_keys():
@@ -186,6 +187,12 @@ def test_memory_review_state_tables_have_context_keys():
     assert [column.name for column in models_sqlmodel.MemoryReviewState.__table__.primary_key.columns] == [
         "context_type", "context_id"
     ]
+    constraints = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in models_sqlmodel.MemoryReviewState.__table__.constraints
+        if constraint.name
+    }
+    assert "user" in constraints["ck_memory_review_context_type"]
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,8 @@ from app.models.memory_tools import (
     MemorySearchInput,
 )
 from app.services import memory_curator_service, memory_review_service, memory_tool_service
+from app.services.embedding_model_service import GLOBAL_MEMORY_EMBEDDING_MODEL
+from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 from app.time_utils import iso_utc_z, utc_now
 
 
@@ -34,10 +36,12 @@ def curator_sessionmaker(engine, monkeypatch):
     maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     import app.services.effective_memory_service as effective_memory_service
     import app.services.memory_tool_service as memory_tool_service
+    import app.services.memory_review_service as memory_review_service
 
     monkeypatch.setattr(memory_curator_service, "async_session_maker", maker)
     monkeypatch.setattr(effective_memory_service, "async_session_maker", maker)
     monkeypatch.setattr(memory_tool_service, "async_session_maker", maker)
+    monkeypatch.setattr(memory_review_service, "async_session_maker", maker)
     monkeypatch.setattr(
         memory_curator_service,
         "check_model_supports_tools",
@@ -96,6 +100,51 @@ def _context():
         thread_id="curator-thread",
         project_id="curator-project",
     )
+
+
+def _global_context():
+    return MemoryCuratorContext(
+        selected_scope_type="user",
+        selected_scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
+    )
+
+
+@pytest.mark.asyncio
+async def test_global_memory_review_context_uses_only_global_scope(curator_sessionmaker):
+    scopes, embedding_model = await memory_review_service._review_context(
+        "user",
+        LOCAL_USER_MEMORY_SCOPE_ID,
+    )
+
+    assert scopes == [("user", LOCAL_USER_MEMORY_SCOPE_ID)]
+    assert embedding_model == GLOBAL_MEMORY_EMBEDDING_MODEL
+
+
+@pytest.mark.asyncio
+async def test_global_memory_review_status_reports_global_scope_activity(curator_sessionmaker):
+    await _workspace(curator_sessionmaker)
+    await memory_curator_service.apply_memory_curator_change_set(
+        MemoryCuratorApplyRequest(
+            context=_global_context(),
+            confirmed=True,
+            operations=[MemoryCuratorOperation(
+                action="create",
+                scope_type="user",
+                scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
+                content="Prefer concise answers globally.",
+            )],
+        )
+    )
+
+    status = await memory_review_service.get_memory_review_status(
+        "user",
+        LOCAL_USER_MEMORY_SCOPE_ID,
+    )
+
+    assert status["context_type"] == "user"
+    assert status["context_id"] == LOCAL_USER_MEMORY_SCOPE_ID
+    assert status["embedding_model"] == GLOBAL_MEMORY_EMBEDDING_MODEL
+    assert status["current_scope_versions"]["user:default"] >= 1
 
 
 def test_permission_only_choice_detection_preserves_real_conflict_options():
@@ -665,6 +714,49 @@ async def test_curator_malformed_model_output_becomes_clarification(
     assert response["state"] == "clarification"
     assert response["operations"] == []
     assert response["choices"]
+
+
+@pytest.mark.asyncio
+async def test_global_memory_review_request_builds_user_review_batch(
+    curator_sessionmaker,
+    monkeypatch,
+):
+    await _workspace(curator_sessionmaker)
+    monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
+    review_batch = {
+        "context_type": "user",
+        "context_id": LOCAL_USER_MEMORY_SCOPE_ID,
+        "snapshot_at": iso_utc_z(utc_now()),
+        "snapshot_scope_versions": {},
+        "anchor_position": 0,
+        "reviewed_anchor_count": 0,
+        "remaining_anchor_count": 0,
+        "candidate_groups": [],
+        "representation_pending": False,
+        "missing_representation_count": 0,
+        "embedding_model": GLOBAL_MEMORY_EMBEDDING_MODEL,
+        "blocked": False,
+    }
+    build_review = AsyncMock(return_value=review_batch)
+    monkeypatch.setattr(memory_curator_service, "build_memory_review_batch", build_review)
+
+    response = await memory_curator_service.respond_to_memory_curator(
+        MemoryCuratorRespondRequest(
+            mode="memory_review",
+            context=_global_context(),
+            messages=[MemoryCuratorMessage(
+                role="user",
+                content="Review related memories for duplicates, conflicts, superseded statements, and stale override relationships.",
+            )],
+            llm_model="chat-model",
+            context_window=8192,
+        )
+    )
+
+    build_review.assert_awaited_once()
+    assert build_review.await_args.args[:2] == ("user", LOCAL_USER_MEMORY_SCOPE_ID)
+    assert response["state"] == "no_changes"
+    assert response["memory_review"]["context_type"] == "user"
 
 
 @pytest.mark.asyncio

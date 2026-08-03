@@ -73,9 +73,17 @@ test('curator intents preserve workspace scope and canonical global ID', () => {
 });
 
 test('consistency review binds to the active project or thread context', () => {
+  const globalReview = memoryReviewCuratorIntent({});
   const projectReview = memoryReviewCuratorIntent({ project });
   const threadReview = memoryReviewCuratorIntent({ thread, project });
 
+  assert.deepEqual(globalReview, {
+    mode: 'memory_review',
+    scopeType: 'user',
+    scopeId: 'default',
+    threadId: undefined,
+    projectId: undefined,
+  });
   assert.deepEqual(projectReview, {
     mode: 'memory_review',
     scopeType: 'project',

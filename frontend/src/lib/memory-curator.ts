@@ -106,8 +106,8 @@ export const memoryReviewCuratorIntent = ({
   project?: Project | null;
 }): MemoryCuratorIntent => ({
   mode: 'memory_review',
-  scopeType: thread ? 'thread' : 'project',
-  scopeId: thread?.id || project?.id || '',
+  scopeType: thread ? 'thread' : project ? 'project' : 'user',
+  scopeId: thread?.id || project?.id || 'default',
   threadId: thread?.id,
   projectId: project?.id || thread?.project_id,
   ...((thread?.embeddingModel || project?.embeddingModel)
