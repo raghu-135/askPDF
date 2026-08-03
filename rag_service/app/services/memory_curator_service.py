@@ -383,6 +383,31 @@ def _normalize_choice(raw: Any, index: int) -> Dict[str, str] | None:
     }
 
 
+def _permission_only_choices(choices: Sequence[Dict[str, str]]) -> bool:
+    """Detect redundant approval prompts that belong to the proposal UI."""
+
+    if not choices or len(choices) > 2:
+        return False
+    approval_prefixes = (
+        "yes",
+        "no",
+        "confirm",
+        "cancel",
+        "save",
+        "apply",
+        "proceed",
+        "update it",
+        "do it",
+    )
+    return all(
+        any(
+            str(choice.get(field) or "").strip().casefold().startswith(approval_prefixes)
+            for field in ("label", "user_message")
+        )
+        for choice in choices
+    )
+
+
 def _normalize_operation(
     raw: Any,
     *,
@@ -487,8 +512,14 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         "Update/delete operations require memory_id. Prefer updating an existing memory over "
         "creating a duplicate. When a narrower memory preserves a broader conflicting memory, create "
         "the narrower memory and explicitly target the broader memory. Surface contradictions as "
-        "conflict choices. Do not infer sensitive "
-        "facts or broaden scope without the user's clear direction. A proposal is never approval."
+        "conflict choices. The frontend provides the one final Confirm action for every proposal. "
+        "Never ask whether to save, update, apply, proceed, or confirm, and never return yes/no choices. "
+        "When the latest user message clearly states what to remember, immediately return state=proposal "
+        "with the complete operations. Use clarification only when the desired content or scope is truly "
+        "ambiguous. Use conflict only for two or more materially different resolutions. After the user "
+        "selects a clarification or conflict choice, immediately return proposal or no_changes. Do not "
+        "repeat a question already answered. Do not infer sensitive facts or broaden scope without the "
+        "user's clear direction. A proposal is never approval."
     )
     prompt_payload = {
         "mode": req.mode,
@@ -507,33 +538,53 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         "existing_memories": context_memories,
         "recall_consent": consent,
     }
-    response = await invoke_with_retry(
-        get_llm(req.llm_model, temperature=0.0).ainvoke,
-        [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=json.dumps(prompt_payload, ensure_ascii=True)),
-        ],
-    )
-    parsed = safe_json_object(str(getattr(response, "content", "") or ""))
-    state = str(parsed.get("state") or "")
-    if state not in {"clarification", "conflict", "proposal", "no_changes"}:
-        state = "clarification"
-    choices = [
-        choice
-        for index, raw in enumerate(parsed.get("choices") or [])
-        if (choice := _normalize_choice(raw, index)) is not None
-    ][:6]
     memory_lookup = {memory.id: memory for memory in memories}
-    operations = [
-        operation
-        for raw in (parsed.get("operations") or [])
-        if (operation := _normalize_operation(
-            raw,
-            memory_lookup=memory_lookup,
-            visible_scopes=visible_scope_set,
-        )) is not None
-    ][:20]
-    if state == "proposal" and not [op for op in operations if op["action"] != "noop"]:
+
+    async def invoke_decision(correction: str | None = None):
+        messages = [SystemMessage(content=system_prompt)]
+        if correction:
+            messages.append(SystemMessage(content=correction))
+        messages.append(HumanMessage(content=json.dumps(prompt_payload, ensure_ascii=True)))
+        response = await invoke_with_retry(
+            get_llm(req.llm_model, temperature=0.0).ainvoke,
+            messages,
+        )
+        parsed = safe_json_object(str(getattr(response, "content", "") or ""))
+        state = str(parsed.get("state") or "")
+        if state not in {"clarification", "conflict", "proposal", "no_changes"}:
+            state = "clarification"
+        choices = [
+            choice
+            for index, raw in enumerate(parsed.get("choices") or [])
+            if (choice := _normalize_choice(raw, index)) is not None
+        ][:6]
+        operations = [
+            operation
+            for raw in (parsed.get("operations") or [])
+            if (operation := _normalize_operation(
+                raw,
+                memory_lookup=memory_lookup,
+                visible_scopes=visible_scope_set,
+            )) is not None
+        ][:20]
+        return parsed, state, choices, operations
+
+    parsed, state, choices, operations = await invoke_decision()
+    substantive_operations = [op for op in operations if op["action"] != "noop"]
+    if substantive_operations:
+        state = "proposal"
+        choices = []
+    elif state in {"clarification", "conflict"} and _permission_only_choices(choices):
+        parsed, state, choices, operations = await invoke_decision(
+            "Your previous answer redundantly asked the user for permission. The UI already provides "
+            "final confirmation. Return the concrete proposal now, or no_changes when the requested "
+            "state is already stored. Do not ask another question or return approval choices."
+        )
+        substantive_operations = [op for op in operations if op["action"] != "noop"]
+        if substantive_operations:
+            state = "proposal"
+            choices = []
+    if state == "proposal" and not substantive_operations:
         state = "clarification"
     if state in {"clarification", "conflict"} and not choices:
         choices = [{

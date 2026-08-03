@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -74,6 +75,17 @@ def _context():
         thread_id="curator-thread",
         project_id="curator-project",
     )
+
+
+def test_permission_only_choice_detection_preserves_real_conflict_options():
+    assert memory_curator_service._permission_only_choices([
+        {"label": "Yes, update it", "user_message": "Yes, update it."},
+        {"label": "Cancel", "user_message": "No, cancel."},
+    ]) is True
+    assert memory_curator_service._permission_only_choices([
+        {"label": "Update Project", "user_message": "Update the project memory."},
+        {"label": "Override in Thread", "user_message": "Keep the project memory and override it here."},
+    ]) is False
 
 
 @pytest.mark.asyncio
@@ -482,3 +494,103 @@ async def test_curator_malformed_model_output_becomes_clarification(
     assert response["state"] == "clarification"
     assert response["operations"] == []
     assert response["choices"]
+
+
+@pytest.mark.asyncio
+async def test_curator_complete_operation_skips_redundant_permission_step(
+    curator_sessionmaker,
+    monkeypatch,
+):
+    await _workspace(curator_sessionmaker)
+    monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        memory_curator_service,
+        "_curator_memory_context",
+        AsyncMock(return_value=([], [])),
+    )
+    llm = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content=json.dumps({
+        "message": "I can save that preference.",
+        "state": "clarification",
+        "choices": [{
+            "id": "yes",
+            "label": "Yes, save it",
+            "description": "",
+            "user_message": "Yes, save it.",
+        }],
+        "operations": [{
+            "action": "create",
+            "scope_type": "thread",
+            "scope_id": "curator-thread",
+            "content": "Answer in a funny way.",
+            "override_targets": [],
+        }],
+    }))))
+    monkeypatch.setattr(memory_curator_service, "get_llm", lambda *_args, **_kwargs: llm)
+
+    response = await memory_curator_service.respond_to_memory_curator(
+        MemoryCuratorRespondRequest(
+            mode="create",
+            context=_context(),
+            messages=[MemoryCuratorMessage(role="user", content="Answer in a funny way.")],
+            llm_model="chat-model",
+            context_window=8192,
+        )
+    )
+
+    assert response["state"] == "proposal"
+    assert response["choices"] == []
+    assert response["operations"][0]["content"] == "Answer in a funny way."
+    assert llm.ainvoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_curator_repairs_permission_only_response_without_another_user_turn(
+    curator_sessionmaker,
+    monkeypatch,
+):
+    await _workspace(curator_sessionmaker)
+    monkeypatch.setattr(memory_curator_service, "check_chat_model_ready", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        memory_curator_service,
+        "_curator_memory_context",
+        AsyncMock(return_value=([], [])),
+    )
+    permission = SimpleNamespace(content=json.dumps({
+        "message": "Would you like me to save this?",
+        "state": "clarification",
+        "choices": [{
+            "id": "yes",
+            "label": "Yes, save this",
+            "description": "",
+            "user_message": "Yes, save this.",
+        }],
+        "operations": [],
+    }))
+    proposal = SimpleNamespace(content=json.dumps({
+        "message": "This will update the thread preference.",
+        "state": "proposal",
+        "choices": [],
+        "operations": [{
+            "action": "create",
+            "scope_type": "thread",
+            "scope_id": "curator-thread",
+            "content": "Answer in a funny way.",
+            "override_targets": [],
+        }],
+    }))
+    llm = SimpleNamespace(ainvoke=AsyncMock(side_effect=[permission, proposal]))
+    monkeypatch.setattr(memory_curator_service, "get_llm", lambda *_args, **_kwargs: llm)
+
+    response = await memory_curator_service.respond_to_memory_curator(
+        MemoryCuratorRespondRequest(
+            mode="create",
+            context=_context(),
+            messages=[MemoryCuratorMessage(role="user", content="Answer in a funny way.")],
+            llm_model="chat-model",
+            context_window=8192,
+        )
+    )
+
+    assert response["state"] == "proposal"
+    assert response["choices"] == []
+    assert llm.ainvoke.await_count == 2

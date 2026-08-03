@@ -70,7 +70,7 @@ const initialAssistantMessage = (intent: MemoryCuratorIntent): CuratorUiMessage 
   }
   return curatorMessage(
     'assistant',
-    'What should be remembered? I will check for related or conflicting memory before proposing a change.',
+    'What should be remembered?',
   );
 };
 
@@ -269,7 +269,7 @@ export default function MemoryCuratorPanel({
         ))}
         <Stack direction="row" spacing={1}>
           <Button variant="contained" size="small" onClick={() => void apply()} disabled={busy}>Confirm</Button>
-          <Button size="small" onClick={() => setDecision(null)} disabled={busy}>Reject</Button>
+          <Button size="small" onClick={() => setDecision(null)} disabled={busy}>Revise</Button>
         </Stack>
       </ResizableDecisionPanel>
     );
@@ -384,7 +384,7 @@ export default function MemoryCuratorPanel({
         </ConversationTranscriptFrame>
       )}
       decision={decisionPanel}
-      composer={(
+      composer={hasUnconfirmedDecision ? null : (
         <Box sx={{ py: 1 }}>
           <ConversationComposer
             placeholder={intent.mode === 'edit' ? 'Describe the correction...' : 'Tell the curator what to remember...'}
