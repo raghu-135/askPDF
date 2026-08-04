@@ -32,6 +32,7 @@ export const memoryIndexStatusColor = (status: string): 'default' | 'success' | 
 };
 
 export const memoryRecallReasonLabel = (reason?: string | null) => {
+  if (reason === 'memory_disabled') return 'Memory recall off';
   if (reason === 'project_opt_out') return 'Project recall off';
   if (reason === 'thread_opt_out') return 'Thread recall off';
   if (reason === 'not_requested') return 'Recall off';

@@ -8,6 +8,7 @@
       "allowed_tool_ids": [
         "document_evidence",
         "thread_conversation_history",
+        "durable_memory",
         "thread_events",
         "live_web_recon",
         "clarify_intent"
@@ -51,6 +52,10 @@
           },
           {
             "from": "thread_conversation_history_worker",
+            "to": "durable_memory_worker"
+          },
+          {
+            "from": "durable_memory_worker",
             "to": "thread_events_worker"
           },
           {
@@ -106,6 +111,10 @@
             "type": "thread_conversation_history_worker"
           },
           {
+            "id": "durable_memory_worker",
+            "type": "durable_memory_worker"
+          },
+          {
             "id": "thread_events_worker",
             "type": "thread_events_worker"
           },
@@ -137,10 +146,11 @@
       },
       "loop_policy": {
         "default_max_node_visits": 1,
-        "max_total_visits": 16,
+        "max_total_visits": 18,
         "node_visit_limits": {
           "evidence_evaluator": 2,
           "thread_conversation_history_worker": 2,
+          "durable_memory_worker": 2,
           "replanner": 1,
           "retrieval_worker": 2,
           "thread_events_worker": 2,
@@ -170,7 +180,7 @@
       "success_context": "Context retrieved by compiled Evaluator/Replanner RAG Agent workflow."
     },
     "schema_version": 2,
-    "version": 3
+    "version": 4
   },
   "visibility": "builtin"
 }

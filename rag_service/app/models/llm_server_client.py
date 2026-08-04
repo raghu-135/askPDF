@@ -5,6 +5,7 @@ import httpx
 import asyncio
 import logging
 import time
+import math
 from typing import Dict, Tuple, List, Optional
 from fastapi import HTTPException
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -147,10 +148,11 @@ RATIO_MEMORY_HARD_LIMIT = 0.10               # Truncate if > 10% of total window
 CHARS_PER_TOKEN = 4
 
 # Pre-fetch budget allocation ratios
-# These three sum to 0.68; the remaining 0.32 is reserved for answer generation +
+# These four sum to 0.68; the remaining 0.32 is reserved for answer generation +
 # system prompt overhead (tool schemas, locked sections, etc.)
 RATIO_PREFETCH_RECENT = 0.22    # Recent verbatim conversation turns injected inline
-RATIO_PREFETCH_SEMANTIC = 0.18  # Semantic chat-memory recall from all past QA pairs
+RATIO_PREFETCH_SEMANTIC = 0.12  # Semantic chat-memory recall from all past QA pairs
+RATIO_PREFETCH_DURABLE_MEMORY = 0.06  # Durable user/project/thread memory
 RATIO_PREFETCH_DOCUMENT = 0.28       # Document evidence (top-K chunks, raw question query)
 
 # Average char estimates used to derive item-count limits from char budgets
@@ -174,10 +176,12 @@ def compute_prefetch_budget(context_window: int) -> dict:
         # Character budgets
         "recent_history_chars":   int(usable * RATIO_PREFETCH_RECENT),
         "semantic_history_chars": int(usable * RATIO_PREFETCH_SEMANTIC),
+        "durable_memory_chars":   max(800, min(8000, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))),
         "document_context_chars":      int(usable * RATIO_PREFETCH_DOCUMENT),
         # Derived item-count limits
         "document_limit":              max(3, int(usable * RATIO_PREFETCH_DOCUMENT)      // AVG_CHUNK_CHARS),
         "semantic_limit":         max(3, int(usable * RATIO_PREFETCH_SEMANTIC) // AVG_CHUNK_CHARS),
+        "durable_memory_limit":   max(5, min(20, math.ceil(max(800, min(8000, int(usable * RATIO_PREFETCH_DURABLE_MEMORY))) / 400) * 2)),
         "recent_turn_limit":      max(4, int(usable * RATIO_PREFETCH_RECENT)   // AVG_TURN_CHARS),
     }
 

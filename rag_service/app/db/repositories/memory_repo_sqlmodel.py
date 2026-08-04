@@ -12,6 +12,7 @@ from app.db.connection_sqlmodel import async_session_maker
 from app.db.enums import MemoryScopeType
 from app.db.models_sqlmodel import Memory, MemoryEvent, MemoryOverride
 from app.db.project_activity import touch_project_activity
+from app.models.memory_tools import normalize_memory_attributes
 from app.time_utils import utc_now
 
 
@@ -52,6 +53,7 @@ class MemoryRepository:
         embedding_model: str,
         content_hash: str,
         source_refs_json: Optional[Dict[str, Any]] = None,
+        attributes_json: Optional[Dict[str, Any]] = None,
         actor_id: Optional[str] = None,
         event_payload: Optional[Dict[str, Any]] = None,
     ) -> Memory:
@@ -66,6 +68,7 @@ class MemoryRepository:
             content_hash=_require_nonempty(content_hash, "content_hash"),
             index_status="pending",
             source_refs_json=source_refs_json or {},
+            attributes_json=normalize_memory_attributes(attributes_json),
             created_at=utc_now(),
         )
         session = await self._get_session()
@@ -173,6 +176,7 @@ class MemoryRepository:
         content: str,
         content_hash: str,
         source_refs_json: Optional[Dict[str, Any]] = None,
+        attributes_json: Optional[Dict[str, Any]] = None,
         actor_id: Optional[str] = None,
         event_type: str = "updated",
         event_payload: Optional[Dict[str, Any]] = None,
@@ -195,6 +199,8 @@ class MemoryRepository:
                 **dict(memory.source_refs_json or {}),
                 **dict(source_refs_json or {}),
             }
+            if attributes_json is not None:
+                memory.attributes_json = normalize_memory_attributes(attributes_json)
             memory.index_status = "pending"
             memory.indexed_at = None
             memory.index_error = None

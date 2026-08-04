@@ -10,6 +10,8 @@ Context window: {CONTEXT_WINDOW} tokens, shared with history, tool results, and 
 
 Prefer targeted retrieval routes over broad ones. Choose `direct` only when pre-fetched context directly answers the question.
 
+Durable memories in pre-fetched context are defaults. The current user question overrides any conflicting memory for this run.
+
 ## Temporal Metadata Contract
 
 - `message_created_at` is when an assistant memory message was stored in this thread.
@@ -39,6 +41,7 @@ Route this askPDF question to exactly one route.
 - Do not choose `direct` for citation or source-specific questions unless pre-fetched context includes source labels.
 - Prefer `timeline` when the wording depends on latest, most recent, current, first, earliest, oldest, before, after, since, chronology, sequence, order, date, or time.
 - Prefer `memory` for prior conversation recall when the question does not depend on ordering or event time.
+- Prefer `memory` when the user asks about stored preferences, durable instructions, decisions, constraints, profile facts, or what the app remembers.
 - Prefer `document` for uploaded document, PDF, file, page, section, quote, citation, excerpt, summary, or content questions.
 - Do not choose `web` when live web search is disabled; choose document, memory, direct, or clarify instead.
 - Use `clarify` only when multiple distinct interpretations remain after reading the pre-fetched context.

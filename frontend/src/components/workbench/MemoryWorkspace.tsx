@@ -117,6 +117,15 @@ function MemoryDetails({
         <Typography variant="caption">Updated: {formatMemoryTimestamp(memory.updated_at || memory.created_at)}</Typography>
         <Typography variant="caption">Embedding: {memory.embedding_model}</Typography>
       </Box>
+      {memory.attributes && (
+        <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap" sx={{ mt: 0.75 }}>
+          <Chip size="small" variant="outlined" label={memory.attributes.kind} />
+          <Chip size="small" variant="outlined" label={memory.attributes.durability.replace('_', ' ')} />
+          {memory.attributes.applicability.map((value) => (
+            <Chip key={value} size="small" label={value.replace('_', ' ')} />
+          ))}
+        </Stack>
+      )}
       {Boolean(memory.representations?.length) && (
         <Stack spacing={0.5} sx={{ mt: 0.75 }}>
           <Typography variant="caption" color="text.secondary">Vector representations</Typography>

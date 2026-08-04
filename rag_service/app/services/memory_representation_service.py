@@ -137,6 +137,7 @@ async def index_global_representation(memory_id: str, embedding_model: str) -> i
             content = memory.content
             content_hash = memory.content_hash
             source_refs = memory.source_refs_json or {}
+            attributes = memory.attributes_json or {}
             created_at = memory.created_at
             updated_at = memory.updated_at
     try:
@@ -147,7 +148,7 @@ async def index_global_representation(memory_id: str, embedding_model: str) -> i
             scope_type=MemoryScopeType.USER.value,
             scope_id=LOCAL_USER_MEMORY_SCOPE_ID,
             content=content,
-            metadata={"source_refs": source_refs, "content_hash": content_hash, "secondary": True},
+            metadata={"source_refs": source_refs, "content_hash": content_hash, "attributes": attributes, "secondary": True},
             created_at=iso_utc_z(created_at) if created_at else None,
             updated_at=iso_utc_z(updated_at) if updated_at else None,
             embedding=vector,

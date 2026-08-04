@@ -55,6 +55,8 @@ def format_prefetch_summary(bundle: Dict[str, Any]) -> str:
         parts.append("Recent conversation:\n" + bundle["recent_history_text"])
     if bundle.get("semantic_history_text"):
         parts.append("Semantic memory:\n" + bundle["semantic_history_text"])
+    if bundle.get("durable_memory_text"):
+        parts.append(bundle["durable_memory_text"])
     if bundle.get("document_evidence_text"):
         parts.append("Document evidence:\n" + bundle["document_evidence_text"])
     documents = bundle.get("documents") or []
@@ -263,6 +265,7 @@ def prefetch_refs(bundle: Dict[str, Any]) -> Dict[str, Any]:
         {
             "recent_messages": refs_from_messages(bundle.get("recent_message_refs")),
             "semantic_matches": refs_from_messages(bundle.get("semantic_memory_refs") or bundle.get("used_chat_ids")),
+            "memories": bundle.get("durable_memory_refs") or [],
             "document_matches": refs_from_documents(bundle.get("document_sources")),
             "web_sources": refs_from_web(bundle.get("web_sources")),
             "available_documents": available_document_refs(bundle.get("documents")),
@@ -276,5 +279,6 @@ def state_evidence_refs(state: Dict[str, Any]) -> Dict[str, Any]:
             "document_matches": refs_from_documents(state.get("document_sources")),
             "web_sources": refs_from_web(state.get("web_sources")),
             "messages": refs_from_messages(state.get("used_chat_ids")),
+            "memories": [{"memory_id": item} for item in state.get("used_memory_ids", []) if item],
         }
     )

@@ -516,15 +516,47 @@ async def search_durable_memory(query: str, max_results: int = 10, config: Runna
             thread_id=thread_id,
             capabilities=[MEMORY_READ_EFFECTIVE],
         )
-        result = await search_memory_tool(
-            memory_context,
-            MemorySearchInput(query=query, view="effective", max_results=max_results),
-        )
+        prefetched = conf.get("prefetched_durable_memories")
+        prefetch_debug = conf.get("prefetched_durable_memory_debug") or {}
+        prefetch_policy = conf.get("prefetched_durable_memory_scope_policy") or {}
+        recall_eligible = bool(prefetch_policy.get("searched_scopes"))
+        budget_rejected = int((prefetch_debug.get("rejection_reasons") or {}).get("budget_exhausted") or 0)
+        should_expand = isinstance(prefetched, list) and recall_eligible and (len(prefetched) < 3 or budget_rejected > 0)
+        if isinstance(prefetched, list) and not should_expand:
+            result = {
+                "memories": prefetched,
+                "scopes": conf.get("prefetched_durable_memory_scopes") or [],
+                "scope_policy": conf.get("prefetched_durable_memory_scope_policy") or {},
+                "retrieval_debug": {**prefetch_debug, "expanded_search": False, "reused_prefetch": True},
+            }
+        else:
+            from app.services.memory_retrieval_policy import compute_memory_retrieval_budget
+
+            expanded_budget = compute_memory_retrieval_budget(
+                int(conf.get("context_window") or DEFAULT_TOKEN_BUDGET),
+                expanded=True,
+            )
+            result = await search_memory_tool(
+                memory_context,
+                MemorySearchInput(
+                    query=query,
+                    view="effective",
+                    max_results=int(expanded_budget["candidate_limit"]),
+                    char_budget=int(expanded_budget["char_budget"]),
+                ),
+                query_vector=conf.get("prefetched_durable_memory_query_vector"),
+            )
+            result["retrieval_debug"] = {
+                **(result.get("retrieval_debug") or {}),
+                "expanded_search": True,
+                "reused_prefetch": False,
+            }
         memories = result.get("memories", []) if isinstance(result, dict) else []
         memory_scopes = result.get("scopes", []) if isinstance(result, dict) else []
         memory_scope_policy = result.get("scope_policy", {}) if isinstance(result, dict) else {}
         applied_overrides = result.get("applied_overrides", []) if isinstance(result, dict) else []
         suppressed_memory_ids = result.get("suppressed_memory_ids", []) if isinstance(result, dict) else []
+        retrieval_debug = result.get("retrieval_debug", {}) if isinstance(result, dict) else {}
 
         if not memories:
             return make_tool_result(
@@ -539,13 +571,14 @@ async def search_durable_memory(query: str, max_results: int = 10, config: Runna
                     "memory_scope_policy": memory_scope_policy,
                     "memory_applied_overrides": applied_overrides,
                     "memory_suppressed_ids": suppressed_memory_ids,
+                    "memory_retrieval_debug": retrieval_debug,
                 },
             ).to_json()
 
         lines = [
             "[LONG-TERM MEMORY]",
-            "Memory precedence: when statements directly contradict, Thread overrides Project, "
-            "and Project overrides Global. Related or additive statements should be combined.",
+            "These memories are defaults. Explicit instructions in the current user request override them for this run. "
+            "Otherwise Thread overrides Project, and Project overrides Personal memory.",
         ]
         memory_refs = []
         scopes = []
@@ -553,8 +586,9 @@ async def search_durable_memory(query: str, max_results: int = 10, config: Runna
             memory = item if isinstance(item, dict) else {}
             scope_type = memory.get("scope_type") or "unknown"
             scope_id = memory.get("scope_id") or "unknown"
-            content = memory.get("content") or ""
-            lines.append(f"{index}. {scope_type}:{scope_id}: {_short_excerpt(content, limit=500)}")
+            content = memory.get("excerpt") or memory.get("content") or ""
+            attributes = memory.get("attributes") or {}
+            lines.append(f"{index}. {scope_type}:{scope_id} ({attributes.get('kind', 'fact')}): {content}")
             memory_refs.append({
                 "memory_id": memory.get("id"),
                 "scope_type": scope_type,
@@ -564,6 +598,7 @@ async def search_durable_memory(query: str, max_results: int = 10, config: Runna
                 "raw_score": memory.get("raw_score"),
                 "embedding_model": memory.get("embedding_model"),
                 "scope_rank": memory.get("scope_rank"),
+                "attributes": attributes,
             })
             scope_key = {"scope_type": scope_type, "scope_id": scope_id}
             if scope_key not in scopes:
@@ -582,6 +617,7 @@ async def search_durable_memory(query: str, max_results: int = 10, config: Runna
                 "memory_suppressed_ids": suppressed_memory_ids,
                 "memory_precedence": result.get("precedence", ["thread", "project", "user"]),
                 "memory_representation_issues": result.get("representation_issues", []),
+                "memory_retrieval_debug": retrieval_debug,
             },
         ).to_json()
     except Exception as e:

@@ -178,12 +178,54 @@ class TestAskPdfToolContract:
                 "score_type": "similarity",
                 "raw_score": 0.83,
                 "embedding_model": "BAAI/bge-m3",
-                "scope_rank": None,
+                    "scope_rank": None,
+                    "attributes": {},
             }
         ]
         assert payload["artifacts"]["memory_scope_policy"]["skipped_scopes"] == [
             {"scope_type": "user", "reason": "thread_opt_out"}
         ]
+
+    @pytest.mark.asyncio
+    async def test_long_term_memory_tool_reuses_sufficient_prefetch_without_second_search(self):
+        prefetched = [
+            {
+                "id": f"memory-{index}",
+                "scope_type": "thread",
+                "scope_id": "thread-1",
+                "content": f"Preference {index}",
+                "excerpt": f"Preference {index}",
+                "score": 0.9 - (index * 0.01),
+                "attributes": {"kind": "preference"},
+            }
+            for index in range(3)
+        ]
+        expanded_search = AsyncMock()
+        with patch(
+            "app.services.memory_tool_service.build_memory_tool_context",
+            new_callable=AsyncMock,
+            return_value=(object(), None, None),
+        ), patch(
+            "app.services.memory_tool_service.search_memory_tool",
+            new=expanded_search,
+        ):
+            raw = await search_durable_memory.ainvoke(
+                {"query": "preferences"},
+                config={"configurable": {
+                    "app_thread_id": "thread-1",
+                    "prefetched_durable_memories": prefetched,
+                    "prefetched_durable_memory_scopes": [{"scope_type": "thread", "scope_id": "thread-1"}],
+                    "prefetched_durable_memory_scope_policy": {
+                        "searched_scopes": [{"scope_type": "thread", "scope_id": "thread-1"}],
+                    },
+                    "prefetched_durable_memory_debug": {"rejection_reasons": {}},
+                }},
+            )
+
+        payload = normalize_tool_result(raw, tool_name="search_durable_memory")
+        expanded_search.assert_not_awaited()
+        assert payload["artifacts"]["memory_retrieval_debug"]["reused_prefetch"] is True
+        assert payload["artifacts"]["memory_retrieval_debug"]["expanded_search"] is False
 
     @pytest.mark.asyncio
     async def test_long_term_memory_tool_reports_policy_when_no_memory_matches(self):

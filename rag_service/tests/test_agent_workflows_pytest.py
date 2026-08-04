@@ -60,12 +60,12 @@ TRACE_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "docs" / "agent_debug_
 ROUTER_RAG_AGENT_ID = "router_rag_agent"
 PLAN_EXECUTE_RAG_AGENT_ID = "plan_execute_rag_agent"
 EVALUATOR_REPLANNER_RAG_AGENT_ID = "evaluator_replanner_rag_agent"
-ROUTER_RAG_AGENT_VERSION = 2
-PLAN_EXECUTE_RAG_AGENT_VERSION = 2
-EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 2
-ROUTER_RAG_AGENT_V2_VERSION = 2
-PLAN_EXECUTE_RAG_AGENT_V2_VERSION = 2
-EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION = 2
+ROUTER_RAG_AGENT_VERSION = 3
+PLAN_EXECUTE_RAG_AGENT_VERSION = 4
+EVALUATOR_REPLANNER_RAG_AGENT_VERSION = 4
+ROUTER_RAG_AGENT_V2_VERSION = 3
+PLAN_EXECUTE_RAG_AGENT_V2_VERSION = 4
+EVALUATOR_REPLANNER_RAG_AGENT_V2_VERSION = 4
 
 
 def test_builder_test_initial_state_includes_only_transient_request_history():
@@ -795,7 +795,7 @@ class TestRouterRagWorkflowValidator:
         assert evaluator_resolved["config"]["replans"] == 3
         assert evaluator_resolved["config"]["loop_policy"]["node_visit_limits"]["replanner"] == 3
         assert evaluator_resolved["config"]["loop_policy"]["node_visit_limits"]["evidence_evaluator"] == 4
-        assert evaluator_resolved["config"]["loop_policy"]["max_total_visits"] == 28
+        assert evaluator_resolved["config"]["loop_policy"]["max_total_visits"] == 32
 
     def test_rejects_zero_replan_budget(self):
         spec = builtin_evaluator_replanner_rag_v2_spec()
@@ -1011,11 +1011,12 @@ class TestRouterRagWorkflowValidator:
         spec = builtin_evaluator_replanner_rag_v2_spec()
         spec["config"]["replans"] = 2
         spec["config"]["loop_policy"] = {
-            "max_total_visits": 22,
+            "max_total_visits": 25,
             "default_max_node_visits": 1,
             "node_visit_limits": {
                 "retrieval_worker": 3,
                 "thread_conversation_history_worker": 3,
+                "durable_memory_worker": 3,
                 "thread_events_worker": 3,
                 "web_worker": 3,
                 "evidence_evaluator": 3,
@@ -1124,12 +1125,13 @@ class TestRouterRagWorkflowValidator:
             (
                 builtin_plan_execute_rag_v2_spec,
                 {
-                    "node_ids": ["context_loader", "planner", "retrieval_worker", "thread_conversation_history_worker", "thread_events_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
+                    "node_ids": ["context_loader", "planner", "retrieval_worker", "thread_conversation_history_worker", "durable_memory_worker", "thread_events_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
                     "node_types": {
                         "context_loader": "context_loader",
                         "planner": "planner",
                         "retrieval_worker": "retrieval_worker",
                         "thread_conversation_history_worker": "thread_conversation_history_worker",
+                        "durable_memory_worker": "durable_memory_worker",
                         "thread_events_worker": "thread_events_worker",
                         "web_worker": "web_worker",
                         "direct_answer": "direct_answer",
@@ -1140,7 +1142,8 @@ class TestRouterRagWorkflowValidator:
                         ("START", "context_loader"),
                         ("context_loader", "planner"),
                         ("retrieval_worker", "thread_conversation_history_worker"),
-                        ("thread_conversation_history_worker", "thread_events_worker"),
+                        ("thread_conversation_history_worker", "durable_memory_worker"),
+                        ("durable_memory_worker", "thread_events_worker"),
                         ("thread_events_worker", "web_worker"),
                         ("web_worker", "synthesizer"),
                         ("direct_answer", "finalizer"),
@@ -1167,6 +1170,7 @@ class TestRouterRagWorkflowValidator:
                         "planner",
                         "retrieval_worker",
                         "thread_conversation_history_worker",
+                        "durable_memory_worker",
                         "thread_events_worker",
                         "web_worker",
                         "evidence_evaluator",
@@ -1180,6 +1184,7 @@ class TestRouterRagWorkflowValidator:
                         "planner": "planner",
                         "retrieval_worker": "retrieval_worker",
                         "thread_conversation_history_worker": "thread_conversation_history_worker",
+                        "durable_memory_worker": "durable_memory_worker",
                         "thread_events_worker": "thread_events_worker",
                         "web_worker": "web_worker",
                         "evidence_evaluator": "evidence_evaluator",
@@ -1192,7 +1197,8 @@ class TestRouterRagWorkflowValidator:
                         ("START", "context_loader"),
                         ("context_loader", "planner"),
                         ("retrieval_worker", "thread_conversation_history_worker"),
-                        ("thread_conversation_history_worker", "thread_events_worker"),
+                        ("thread_conversation_history_worker", "durable_memory_worker"),
+                        ("durable_memory_worker", "thread_events_worker"),
                         ("thread_events_worker", "web_worker"),
                         ("web_worker", "evidence_evaluator"),
                         ("replanner", "retrieval_worker"),
@@ -1697,6 +1703,12 @@ class TestRouterRagWorkflowValidator:
         assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
         assert "Do not choose `direct` for latest, first, since, before, after, or current questions" in prompt
         assert "`thread_events_worker` queries should preserve temporal anchor words" in prompt
+        assert "current user question overrides any conflicting memory" in prompt
+
+        final_prompt = (Path(__file__).resolve().parents[1] / "app" / "prompts" / "agent_workflows" / "final_answer.md").read_text(encoding="utf-8")
+        assert "Explicit instructions in the current user question" in final_prompt
+        assert "report it faithfully rather than applying it" in final_prompt
+        assert "without claiming or implying that the stored memory changed" in final_prompt
 
     def test_clarification_prompts_require_directly_submittable_questions(self):
         prompt_root = Path(__file__).resolve().parents[1] / "app" / "prompts" / "agent_workflows"
@@ -6381,15 +6393,15 @@ class TestRouterRagRuntime:
             assert result["tool_events"][0]["tool_name"] == "search_thread_conversation_history"
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
             assert result["used_chat_ids"] == ["turn-1"]
-            assert result["answer"] == "Final answer from memory route."
+            assert result["answer"] == "Final answer from thread_conversation_history route."
         elif route == "durable_memory":
             assert result["tool_events"][0]["tool_name"] == "search_durable_memory"
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
-            assert result["answer"] == "Final answer from long_term_memory route."
+            assert result["answer"] == "Final answer from durable_memory route."
         elif route == "thread_events":
             assert result["tool_events"][0]["tool_name"] == "search_thread_events"
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
-            assert result["answer"] == "Final answer from timeline route."
+            assert result["answer"] == "Final answer from thread_events route."
         elif route == "web":
             assert result["tool_events"][0]["tool_name"] == "search_web"
             assert result["tool_events"][0]["tool_input"] == "Route coverage?"

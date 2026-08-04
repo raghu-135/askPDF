@@ -191,6 +191,15 @@ def tool_config(state: RouterRagState, config: RunnableConfig, *, caller_node: s
             "tool_name": tool_name,
         }
     )
+    if caller_node_type == "durable_memory_worker":
+        bundle = state.get("pre_fetch_bundle") or {}
+        configurable.update({
+            "prefetched_durable_memories": bundle.get("durable_memories") or [],
+            "prefetched_durable_memory_scopes": bundle.get("durable_memory_scopes") or [],
+            "prefetched_durable_memory_scope_policy": bundle.get("durable_memory_scope_policy") or {},
+            "prefetched_durable_memory_debug": bundle.get("durable_memory_retrieval_debug") or {},
+            "prefetched_durable_memory_query_vector": bundle.get("_shared_query_vector"),
+        })
     updated["configurable"] = configurable
     metadata = dict(updated.get("metadata") or {})
     metadata.update(

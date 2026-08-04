@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.db import (
@@ -23,6 +25,7 @@ from app.db.connection_sqlmodel import async_session_maker
 from app.db.models_sqlmodel import GlobalMemoryRepresentation
 from sqlalchemy.future import select
 from app.models.llm_server_client import get_embedding_model
+from app.models.memory_tools import normalize_memory_attributes
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z
 from app.services.embedding_model_service import (
@@ -34,6 +37,14 @@ from app.services.effective_memory_service import (
     memory_scope_policy_for_thread,
     resolve_effective_memory_context,
     serialize_memories_with_relationships,
+)
+from app.services.memory_retrieval_policy import (
+    DEFAULT_RELATIVE_SCORE_RATIO,
+    NEAR_DUPLICATE_TOKEN_SIMILARITY,
+    memory_is_applicable,
+    memory_score_floor,
+    pack_memory_results,
+    token_similarity,
 )
 
 
@@ -107,6 +118,7 @@ async def index_memory_record(memory) -> int:
             metadata={
                 "source_refs": memory.source_refs_json or {},
                 "content_hash": memory.content_hash,
+                "attributes": normalize_memory_attributes(memory.attributes_json),
             },
             created_at=iso_utc_z(memory.created_at) if memory.created_at else None,
             updated_at=iso_utc_z(memory.updated_at) if memory.updated_at else None,
@@ -193,9 +205,14 @@ async def search_thread_memory(
     query: str,
     allowed_scopes: Optional[List[str]] = None,
     max_results: int = 10,
+    query_vector: Optional[List[float]] = None,
+    char_budget: Optional[int] = None,
+    score_floor: Optional[float] = None,
+    relative_score_ratio: float = DEFAULT_RELATIVE_SCORE_RATIO,
 ) -> Dict[str, Any]:
     """Search durable memory for a thread using scope policy."""
 
+    started = time.perf_counter()
     effective_view = await resolve_effective_memory_context(
         thread_id=thread_id,
         allowed_scopes=allowed_scopes,
@@ -210,10 +227,28 @@ async def search_thread_memory(
             "applied_overrides": [],
             "suppressed_memory_ids": [],
             "unavailable_memory_count": 0,
+            "retrieval_debug": {
+                "budget_chars": int(char_budget or 0),
+                "candidate_limit": max_results,
+                "candidate_count": 0,
+                "candidates_retrieved": 0,
+                "accepted_count": 0,
+                "candidates_accepted": 0,
+                "rejected_count": 0,
+                "candidates_rejected": 0,
+                "rejection_reasons": {},
+                "packed_chars": 0,
+                "final_packed_chars": 0,
+                "searched_scopes": [],
+                "skipped_scopes": policy.get("skipped_scopes", []),
+                "recalled_ids": [],
+                "expanded_search": False,
+                "query_latency_ms": round((time.perf_counter() - started) * 1000, 2),
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
         }
     context = await resolve_thread_embedding_context(thread_id)
     user_scope = next((scope for scope in scopes if scope["scope_type"] == MemoryScopeType.USER.value), None)
-    ordinary_scopes = [scope for scope in scopes if scope["scope_type"] != MemoryScopeType.USER.value]
     missing_global_ids: set[str] = set()
     if user_scope and context.embedding_model != GLOBAL_MEMORY_EMBEDDING_MODEL:
         global_ids = {
@@ -239,16 +274,6 @@ async def search_thread_memory(
             from app.services.memory_representation_service import warm_global_representations_for_model
             asyncio.create_task(warm_global_representations_for_model(context.embedding_model))
 
-    search_groups: List[tuple[str, List[Dict[str, str]]]] = []
-    for scope in ordinary_scopes:
-        search_groups.append((context.embedding_model, [scope]))
-    if user_scope:
-        search_groups.append((
-            context.embedding_model,
-            [user_scope],
-        ))
-
-    ranked_hit_groups: List[List[Dict[str, Any]]] = []
     representation_issues: List[Dict[str, Any]] = []
     if missing_global_ids:
         representation_issues.append({
@@ -257,24 +282,31 @@ async def search_thread_memory(
             "missing_count": len(missing_global_ids),
             "reason": "global_representation_warming",
         })
-    for embedding_model, model_scopes in search_groups:
-        await require_embedding_model_ready(embedding_model)
-        embedding_client = get_embedding_model(embedding_model)
+    await require_embedding_model_ready(context.embedding_model)
+    if query_vector is None:
+        embedding_client = get_embedding_model(context.embedding_model)
         query_vector = await invoke_with_retry(embedding_client.aembed_query, query)
-        model_hits = await get_vector_db().search_memory(
-            query_vector=query_vector,
-            embedding_model=embedding_model,
-            scope_filters=model_scopes,
-            excluded_memory_ids=effective_view["excluded_memory_ids"],
-            limit=max_results,
-            query_text=query,
-        )
-        ranked_hit_groups.append(model_hits)
-    hits = _merge_same_model_memory_hits(context.embedding_model, ranked_hit_groups)
+    model_hits = await get_vector_db().search_memory(
+        query_vector=query_vector,
+        embedding_model=context.embedding_model,
+        scope_filters=scopes,
+        excluded_memory_ids=effective_view["excluded_memory_ids"],
+        limit=max_results,
+        query_text=query,
+    )
+    hits = _merge_same_model_memory_hits(context.embedding_model, [model_hits])
     effective_by_id = {memory.id: memory for memory in effective_view["memory_records"]}
-    memories = []
+    candidates: List[Dict[str, Any]] = []
     seen = set()
-    seen_hashes = set()
+    rejection_reasons: Dict[str, int] = {}
+    floor = memory_score_floor(context.embedding_model) if score_floor is None else max(0.0, float(score_floor))
+
+    def reject(reason: str) -> None:
+        rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+
+    # Establish the relative cutoff from candidates that are both effective and
+    # applicable. An unrelated high-scoring hit must not raise the floor for a
+    # useful lower-scoring preference.
     for hit in hits:
         memory_id = hit.get("memory_id")
         if not memory_id or memory_id in seen:
@@ -282,11 +314,14 @@ async def search_thread_memory(
         seen.add(memory_id)
         memory = effective_by_id.get(str(memory_id))
         if memory is None:
+            reject("not_effective")
             continue
-        if memory.content_hash in seen_hashes:
+        score = float(hit.get("score") or 0.0)
+        attributes = normalize_memory_attributes(getattr(memory, "attributes_json", None))
+        if not memory_is_applicable(attributes, query):
+            reject("not_applicable")
             continue
-        seen_hashes.add(memory.content_hash)
-        memories.append(
+        candidates.append(
             {
                 "id": memory.id,
                 "scope_type": memory.scope_type,
@@ -297,19 +332,66 @@ async def search_thread_memory(
                 }.get(memory.scope_type, 0),
                 "scope_id": memory.scope_id,
                 "content": memory.content,
+                "attributes": attributes,
                 "source_refs": memory.source_refs_json or {},
-                "score": hit.get("score"),
-                "score_type": "similarity",
+                "score": score,
+                "score_type": hit.get("score_type") or "similarity",
                 "raw_score": hit.get("raw_score"),
                 "embedding_model": hit.get("embedding_model"),
                 "created_at": iso_utc_z(memory.created_at) if memory.created_at else None,
                 "updated_at": iso_utc_z(memory.updated_at) if memory.updated_at else None,
+                "content_hash": memory.content_hash,
             }
         )
-        if len(memories) >= max_results:
-            break
+
+    best_score = max((float(item.get("score") or 0.0) for item in candidates), default=0.0)
+    effective_floor = max(floor, best_score * max(0.0, min(1.0, relative_score_ratio)))
+    relevant_candidates: List[Dict[str, Any]] = []
+    for item in candidates:
+        if float(item.get("score") or 0.0) < effective_floor:
+            reject("below_relevance_threshold")
+            continue
+        relevant_candidates.append(item)
+
+    # Deduplicate in relevance order, using narrower scope only when scores tie.
+    # Final kind/recency ranking happens after the representative is selected.
+    relevant_candidates.sort(key=lambda item: (
+        -float(item.get("score") or 0.0),
+        -int(item.get("scope_rank") or 0),
+    ))
+    memories: List[Dict[str, Any]] = []
+    seen_hashes = set()
+    for item in relevant_candidates:
+        if item.get("content_hash") in seen_hashes:
+            reject("exact_duplicate")
+            continue
+        if any(token_similarity(str(item.get("content") or ""), str(existing.get("content") or "")) >= NEAR_DUPLICATE_TOKEN_SIMILARITY for existing in memories):
+            reject("near_duplicate")
+            continue
+        seen_hashes.add(item.get("content_hash"))
+        memories.append(item)
+    kind_priority = {"instruction": 0, "constraint": 1, "preference": 2, "decision": 3, "profile": 4, "fact": 5}
+    def recency_rank(item: Dict[str, Any]) -> float:
+        if (item.get("attributes") or {}).get("durability") != "time_sensitive":
+            return 0.0
+        try:
+            return -datetime.fromisoformat(str(item.get("updated_at") or "").replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError):
+            return 0.0
+
+    memories.sort(key=lambda item: (
+        -float(item.get("score") or 0.0),
+        kind_priority.get(str((item.get("attributes") or {}).get("kind")), 9),
+        -int(item.get("scope_rank") or 0),
+        recency_rank(item),
+    ))
+    for item in memories:
+        item.pop("content_hash", None)
+    packed, packed_chars = pack_memory_results(memories, char_budget or 16000)
+    rejected_count = sum(rejection_reasons.values()) + max(0, len(memories) - len(packed))
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
     return {
-        "memories": memories,
+        "memories": packed,
         "scopes": scopes,
         "scope_policy": policy,
         "applied_overrides": effective_view["applied_overrides"],
@@ -317,6 +399,31 @@ async def search_thread_memory(
         "unavailable_memory_count": effective_view["unavailable_memory_count"],
         "precedence": ["thread", "project", "user"],
         "representation_issues": representation_issues,
+        "retrieval_debug": {
+            "budget_chars": int(char_budget or 16000),
+            "candidate_limit": max_results,
+            "candidate_count": len(hits),
+            "candidates_retrieved": len(hits),
+            "accepted_count": len(packed),
+            "candidates_accepted": len(packed),
+            "rejected_count": rejected_count,
+            "candidates_rejected": rejected_count,
+            "rejection_reasons": {
+                **rejection_reasons,
+                **({"budget_exhausted": len(memories) - len(packed)} if len(memories) > len(packed) else {}),
+            },
+            "score_floor": floor,
+            "effective_score_floor": effective_floor,
+            "relative_score_ratio": relative_score_ratio,
+            "packed_chars": packed_chars,
+            "final_packed_chars": packed_chars,
+            "searched_scopes": scopes,
+            "skipped_scopes": policy.get("skipped_scopes", []),
+            "recalled_ids": [item.get("id") for item in packed if item.get("id")],
+            "expanded_search": False,
+            "query_latency_ms": elapsed_ms,
+            "elapsed_ms": elapsed_ms,
+        },
     }
 
 

@@ -461,6 +461,14 @@ class Memory(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, default=dict)
     )
+    attributes_json: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "kind": "fact",
+            "applicability": ["task_specific"],
+            "durability": "stable",
+        },
+        sa_column=Column(JSONB, nullable=False, default=dict),
+    )
     created_at: datetime = Field(
         default_factory=utc_now,
         sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -483,6 +491,15 @@ class Memory(SQLModel, table=True):
         CheckConstraint("length(btrim(content_hash)) > 0", name="ck_memories_content_hash_nonempty"),
         CheckConstraint("index_status in ('pending', 'indexing', 'indexed', 'failed')", name="ck_memories_index_status"),
         CheckConstraint("index_attempts >= 0", name="ck_memories_index_attempts"),
+        CheckConstraint(
+            "jsonb_typeof(attributes_json) = 'object' "
+            "and attributes_json ->> 'kind' in ('preference', 'profile', 'instruction', 'constraint', 'decision', 'fact') "
+            "and jsonb_typeof(attributes_json -> 'applicability') = 'array' "
+            "and jsonb_array_length(attributes_json -> 'applicability') > 0 "
+            "and (attributes_json -> 'applicability') <@ '[\"all_answers\",\"writing\",\"code\",\"research\",\"project\",\"task_specific\"]'::jsonb "
+            "and attributes_json ->> 'durability' in ('stable', 'time_sensitive')",
+            name="ck_memories_attributes_json",
+        ),
         Index("idx_memory_scope", "scope_type", "scope_id"),
         Index("idx_memory_index_retry", "index_status", "updated_at"),
         Index("idx_memory_created_at", "created_at"),

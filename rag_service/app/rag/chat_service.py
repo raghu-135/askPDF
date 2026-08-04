@@ -44,11 +44,12 @@ async def prefetch_context(
     """
     Gather all retrieval context in parallel BEFORE any LLM call.
 
-    Runs four async tasks concurrently:
+    Runs five async tasks concurrently:
       1. Recent verbatim conversation turns (DB, position-based)
       2. Semantic chat-memory recall (vector search, raw question)
       3. Document evidence (vector search, raw question)
       4. Conversation stats + uploaded document list (DB metadata)
+      5. Policy-scoped durable memory using the shared query embedding
 
     Returns a bundle dict with text strings ready for injection into LLM
     system prompts, plus structured metadata (document_sources, used_chat_ids,
@@ -189,12 +190,33 @@ async def prefetch_context(
             logger.warning(f"Prefetch document evidence failed: {exc}")
             return "", []
 
+    async def _fetch_durable_memory() -> Dict[str, Any]:
+        try:
+            from app.services.memory_service import search_thread_memory
+
+            return await search_thread_memory(
+                thread_id=thread_id,
+                query=raw_question,
+                max_results=budget["durable_memory_limit"],
+                query_vector=shared_query_vector,
+                char_budget=budget["durable_memory_chars"],
+            )
+        except Exception as exc:
+            logger.warning("Prefetch durable memory failed: %s", exc)
+            return {
+                "memories": [],
+                "scopes": [],
+                "scope_policy": {},
+                "retrieval_debug": {"error": str(exc)[:300]},
+            }
+
     # Run all fetches in parallel
     results = await asyncio.gather(
         _fetch_recent(),
         _fetch_stats_and_docs(),
         _fetch_semantic(),
         _fetch_documents(),
+        _fetch_durable_memory(),
         return_exceptions=True,
     )
 
@@ -203,6 +225,7 @@ async def prefetch_context(
     meta = cast(Dict[str, Any], results[1]) if not isinstance(results[1], Exception) else {"stats": {}, "documents": []}
     semantic_result = results[2] if not isinstance(results[2], Exception) else ("", [])
     document_result = results[3] if not isinstance(results[3], Exception) else ("", [])
+    durable_result = results[4] if not isinstance(results[4], Exception) and isinstance(results[4], dict) else {}
     web_result = ("", [])
 
     if isinstance(semantic_result, tuple) and len(semantic_result) >= 3:
@@ -214,12 +237,40 @@ async def prefetch_context(
         semantic_text, used_chat_ids, semantic_memory_refs = "", [], []
     document_text, document_sources = document_result if isinstance(document_result, tuple) else ("", [])
     web_text, web_sources = web_result if isinstance(web_result, tuple) else ("", [])
+    durable_memories = durable_result.get("memories", [])
+    durable_lines = [
+        "[DURABLE MEMORY DEFAULTS]",
+        "Apply these only when they do not conflict with the current user request.",
+        *[
+            f"{index}. {item.get('scope_type')} ({(item.get('attributes') or {}).get('kind', 'fact')}): {item.get('excerpt') or item.get('content') or ''}"
+            for index, item in enumerate(durable_memories, start=1)
+        ],
+    ] if durable_memories else []
 
     return {
         "recent_history_text":   recent_text,
         "recent_message_refs":   recent_message_refs,
         "semantic_history_text": semantic_text,
         "semantic_memory_refs":  semantic_memory_refs,
+        "durable_memory_text":   "\n".join(durable_lines),
+        "durable_memories":      durable_memories,
+        "durable_memory_refs":   [
+            {
+                "memory_id": item.get("id"),
+                "scope_type": item.get("scope_type"),
+                "scope_id": item.get("scope_id"),
+                "score": item.get("score"),
+                "score_type": item.get("score_type"),
+                "attributes": item.get("attributes"),
+            }
+            for item in durable_memories
+        ],
+        "durable_memory_scopes": durable_result.get("scopes", []),
+        "durable_memory_scope_policy": durable_result.get("scope_policy", {}),
+        "durable_memory_retrieval_debug": durable_result.get("retrieval_debug", {}),
+        # Internal-only reuse for the sole allowed expanded durable-memory query.
+        # Prompt formatters and trace refs intentionally do not expose this vector.
+        "_shared_query_vector": shared_query_vector,
         "document_evidence_text":     document_text,
         "web_evidence_text":     web_text,
         "stats":                 meta.get("stats", {}),

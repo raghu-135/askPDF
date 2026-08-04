@@ -17,6 +17,7 @@ from app.services.memory_policy import (
     normalize_thread_memory_settings,
 )
 from app.time_utils import iso_utc_z
+from app.models.memory_tools import normalize_memory_attributes
 
 
 _SCOPE_ORDER = (
@@ -38,6 +39,7 @@ def _memory_ref(memory: Memory) -> Dict[str, Any]:
         "scope_type": memory.scope_type,
         "scope_id": memory.scope_id,
         "content": memory.content,
+        "attributes": normalize_memory_attributes(memory.attributes_json),
         "updated_at": iso_utc_z(memory.updated_at or memory.created_at),
     }
 
@@ -61,6 +63,7 @@ def memory_payload(
         "indexed_at": iso_utc_z(memory.indexed_at) if memory.indexed_at else None,
         "index_error": memory.index_error,
         "source_refs_json": memory.source_refs_json or {},
+        "attributes": normalize_memory_attributes(memory.attributes_json),
         "overrides": [_memory_ref(item) for item in outgoing],
         "overridden_by": [_memory_ref(item) for item in incoming],
         "created_at": iso_utc_z(memory.created_at) if memory.created_at else None,
@@ -282,10 +285,20 @@ async def _scope_policy(
     if thread is not None:
         thread_settings = normalize_thread_memory_settings(thread.settings)
         project_settings = normalize_project_memory_settings(project.settings_json if project else {})
-        if MemoryScopeType.THREAD.value in allowed:
-            scopes.append({"scope_type": "thread", "scope_id": thread.id})
-        else:
+        if not thread_settings["memory_enabled"]:
+            for scope_type in requested:
+                skipped.append({"scope_type": scope_type, "reason": "memory_disabled"})
+            return ({
+                "requested_scopes": requested,
+                "searched_scopes": [],
+                "skipped_scopes": skipped,
+            }, thread, project)
+        if MemoryScopeType.THREAD.value not in allowed:
             skipped.append({"scope_type": "thread", "reason": "not_requested"})
+        elif not thread_settings["thread_reads_thread_memory"]:
+            skipped.append({"scope_type": "thread", "reason": "thread_opt_out"})
+        else:
+            scopes.append({"scope_type": "thread", "scope_id": thread.id})
         if MemoryScopeType.PROJECT.value not in allowed:
             skipped.append({"scope_type": "project", "reason": "not_requested"})
         elif not thread_settings["thread_reads_project_memory"]:

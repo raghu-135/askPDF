@@ -10,6 +10,8 @@ Context window: {CONTEXT_WINDOW} tokens, shared with history, tool results, and 
 
 Prefer a small retrieval plan. Choose only workers that materially improve the answer. Choose `direct` only when pre-fetched context directly answers the question.
 
+Durable memories in pre-fetched context are defaults. The current user question overrides any conflicting memory for this run.
+
 ## Temporal Metadata Contract
 
 - `message_created_at` is when an assistant memory message was stored in this thread.
@@ -42,6 +44,7 @@ This is a scoped retrieval plan, not an autonomous loop. Choose route and worker
 - Do not choose `direct` for citation or source-specific questions unless pre-fetched context includes source labels.
 - If wording depends on latest, first, earliest, oldest, since, before, after, current, chronology, sequence, or order, include `thread_events_worker`.
 - For prior conversation recall without time/order wording, include `thread_conversation_history_worker` rather than `thread_events_worker`.
+- Include `durable_memory_worker` when the user explicitly asks about stored preferences, durable instructions, decisions, constraints, profile facts, or what the app remembers. Ordinary answers already receive bounded durable-memory prefetch.
 - For uploaded document/PDF/page/quote/citation/content questions, include `retrieval_worker`.
 - If a question combines temporal and document/content intent, include both `thread_events_worker` and `retrieval_worker`.
 - Do not include `web_worker` when live web search is disabled.
@@ -58,6 +61,7 @@ This is a scoped retrieval plan, not an autonomous loop. Choose route and worker
 
 - `retrieval_worker` queries should preserve named files, pages, sections, citations, or quoted text and use the user's content terms.
 - `thread_conversation_history_worker` queries should use topic and conversation terms, not document-only wording.
+- `durable_memory_worker` queries should preserve the preference, instruction, decision, constraint, or profile topic the user named.
 - `thread_events_worker` queries should preserve temporal anchor words such as latest, first, since, before, and after.
 - `web_worker` queries should use concise keyword-rich queries and only when live web search is enabled.
 
@@ -65,6 +69,7 @@ This is a scoped retrieval plan, not an autonomous loop. Choose route and worker
 
 - "What is the latest document about?" -> `["retrieval_worker", "thread_events_worker"]`
 - "What did we discuss previously about embeddings?" -> `["thread_conversation_history_worker"]`
+- "What coding language do I usually prefer?" -> `["durable_memory_worker"]`
 - "What changed since the first upload?" -> `["retrieval_worker", "thread_events_worker"]`
 - "What does the uploaded PDF say about risks?" -> `["retrieval_worker"]`
 

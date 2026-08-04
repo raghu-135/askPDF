@@ -271,6 +271,8 @@ class NodeRegistry:
             "document_source_count": len(bundle.get("document_sources", [])),
             "web_source_count": len(bundle.get("web_sources", [])),
             "used_chat_id_count": len(bundle.get("used_chat_ids", [])),
+            "used_memory_id_count": len(bundle.get("durable_memory_refs", [])),
+            "memory_retrieval": bundle.get("durable_memory_retrieval_debug", {}),
             "input_preview": {
                 "question": compact_preview(state.get("question")),
                 "settings": {
@@ -284,16 +286,29 @@ class NodeRegistry:
                 "recent_history": compact_preview(bundle.get("recent_history_text")),
                 "semantic_history": compact_preview(bundle.get("semantic_history_text")),
                 "document_evidence": compact_preview(bundle.get("document_evidence_text")),
+                "durable_memory": compact_preview(bundle.get("durable_memory_text")),
             },
         }
         _log_node_end(state, WorkflowNodeType.CONTEXT_LOADER.value, started, data)
-        return {
+        update = {
             "pre_fetch_bundle": bundle,
             "document_sources": list(bundle.get("document_sources", [])),
             "web_sources": list(bundle.get("web_sources", [])),
             "used_chat_ids": list(bundle.get("used_chat_ids", [])),
+            "used_memory_ids": [
+                item.get("memory_id") for item in bundle.get("durable_memory_refs", []) if item.get("memory_id")
+            ],
             "node_events": _append_event(state, WorkflowNodeType.CONTEXT_LOADER.value, data, started=started, config=config),
         }
+        if bundle.get("durable_memory_text"):
+            update["evidence_packets"] = _append_evidence_packet(
+                state,
+                config,
+                kind="durable_memory",
+                content=bundle["durable_memory_text"],
+                refs={"memories": bundle.get("durable_memory_refs", [])},
+            )
+        return update
 
     async def planner(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         started = time.perf_counter()

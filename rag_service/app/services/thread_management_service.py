@@ -246,6 +246,7 @@ async def fork_thread(
                             **copy.deepcopy(memory.source_refs_json or {}),
                             "fork_origin": fork_origin,
                         },
+                        attributes_json=copy.deepcopy(memory.attributes_json or {}),
                         created_at=forked_at,
                         updated_at=forked_at,
                     )
@@ -297,6 +298,7 @@ async def fork_thread(
                             **copy.deepcopy(memory.source_refs_json or {}),
                             "fork_origin": fork_origin,
                         },
+                        attributes_json=copy.deepcopy(memory.attributes_json or {}),
                         created_at=forked_at,
                         updated_at=forked_at,
                     )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.future import select
@@ -41,6 +41,7 @@ from app.services.embedding_model_service import (
 )
 from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 from app.services.memory_service import _merge_same_model_memory_hits, memory_content_hash
+from app.models.memory_tools import normalize_memory_attributes
 from app.time_utils import iso_utc_z
 
 
@@ -240,7 +241,12 @@ async def _semantic_stored_search(
     return ordered[:limit], readiness
 
 
-async def search_memory_tool(context: MemoryToolContext, req: MemorySearchInput) -> Dict[str, Any]:
+async def search_memory_tool(
+    context: MemoryToolContext,
+    req: MemorySearchInput,
+    *,
+    query_vector: Optional[List[float]] = None,
+) -> Dict[str, Any]:
     """Search effective or administratively stored memory inside trusted scopes."""
 
     if req.view == "effective":
@@ -253,6 +259,10 @@ async def search_memory_tool(context: MemoryToolContext, req: MemorySearchInput)
                 query=req.query,
                 allowed_scopes=allowed,
                 max_results=req.max_results,
+                char_budget=req.char_budget,
+                score_floor=req.score_floor,
+                relative_score_ratio=req.relative_score_ratio,
+                query_vector=query_vector,
             )
             return {
                 **result,
@@ -308,9 +318,10 @@ async def search_memory_tool(context: MemoryToolContext, req: MemorySearchInput)
                 "scope_type": memory.scope_type,
                 "scope_id": memory.scope_id,
                 "content": memory.content,
+                "attributes": normalize_memory_attributes(memory.attributes_json),
                 "source_refs": memory.source_refs_json or {},
                 "score": hit.get("score"),
-                "score_type": "similarity",
+                "score_type": hit.get("score_type") or "similarity",
                 "raw_score": hit.get("raw_score"),
                 "embedding_model": hit.get("embedding_model"),
                 "created_at": iso_utc_z(memory.created_at) if memory.created_at else None,
@@ -507,6 +518,7 @@ async def prepare_memory_change(
                 scope_type=scope.scope_type,
                 scope_id=scope.scope_id,
                 content=content,
+                attributes=intent.attributes,
                 override_targets=specs,
                 semantic_action="create",
                 operation_group_id=group_id,
@@ -516,6 +528,7 @@ async def prepare_memory_change(
                 action="create",
                 label=f"Create {scope.scope_type} memory",
                 content=content,
+                attributes=intent.attributes,
                 destination_scope=scope,
                 override_target_ids=list(target_ids or []),
             ))
@@ -559,6 +572,7 @@ async def prepare_memory_change(
                 memory_id=source.id,
                 expected_updated_at=expected,
                 content=content,
+                attributes=intent.attributes,
                 override_targets=specs,
                 semantic_action=intent.action,
                 operation_group_id=group_id,
@@ -568,6 +582,7 @@ async def prepare_memory_change(
                 action=intent.action,
                 label="Update memory" if intent.action == "update" else "Update memory relationships",
                 content=content,
+                attributes=intent.attributes,
                 source_memory_id=source.id,
                 source_scope=source_scope,
                 destination_memory_id=source.id,
@@ -583,6 +598,7 @@ async def prepare_memory_change(
             raise MemoryToolError("A moved memory cannot override its source record")
         _validate_target_scopes(destination_scope, targets)
         duplicate = await _find_exact_duplicate(destination_scope, source.content)
+        moved_attributes = intent.attributes or normalize_memory_attributes(source.attributes_json)
         if duplicate is not None:
             duplicate_expected = iso_utc_z(duplicate.updated_at or duplicate.created_at)
             operations.append(MemoryCuratorOperation(
@@ -592,6 +608,7 @@ async def prepare_memory_change(
                 memory_id=duplicate.id,
                 expected_updated_at=duplicate_expected,
                 content=duplicate.content,
+                attributes=moved_attributes,
                 override_targets=specs,
                 semantic_action="move",
                 operation_group_id=group_id,
@@ -605,6 +622,7 @@ async def prepare_memory_change(
                 scope_type=destination_scope.scope_type,
                 scope_id=destination_scope.scope_id,
                 content=source.content,
+                attributes=moved_attributes,
                 override_targets=specs,
                 semantic_action="move",
                 operation_group_id=group_id,

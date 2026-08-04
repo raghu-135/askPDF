@@ -239,6 +239,8 @@ export interface ThreadSettings {
     workflow_id: string;
   };
   memory: {
+    memory_enabled: boolean;
+    thread_reads_thread_memory: boolean;
     thread_reads_project_memory: boolean;
     thread_reads_user_memory: boolean;
   };
@@ -313,6 +315,12 @@ const mapProject = (raw: RawProject): Project => ({
 
 export type MemoryScopeType = 'user' | 'project' | 'thread';
 
+export interface MemoryAttributes {
+  kind: 'preference' | 'profile' | 'instruction' | 'constraint' | 'decision' | 'fact';
+  applicability: Array<'all_answers' | 'writing' | 'code' | 'research' | 'project' | 'task_specific'>;
+  durability: 'stable' | 'time_sensitive';
+}
+
 export interface MemoryOverrideRef {
   id: string;
   scope_type: MemoryScopeType;
@@ -326,6 +334,7 @@ export interface MemoryRecord {
   scope_type: MemoryScopeType;
   scope_id: string;
   content: string;
+  attributes?: MemoryAttributes;
   embedding_model: string;
   content_hash?: string;
   index_status: 'pending' | 'indexing' | 'indexed' | 'failed' | string;
@@ -400,6 +409,7 @@ export interface MemoryCuratorOperation {
   memory_id?: string;
   expected_updated_at?: string;
   content?: string;
+  attributes?: MemoryAttributes;
   override_targets?: Array<{
     memory_id: string;
     expected_updated_at: string;
@@ -416,6 +426,7 @@ export interface MemoryOperationSummary {
   action: 'create' | 'update' | 'delete' | 'move' | 'set_overrides';
   label: string;
   content?: string;
+  attributes?: MemoryAttributes;
   source_memory_id?: string;
   source_scope?: { scope_type: MemoryScopeType; scope_id: string };
   destination_memory_id?: string;
@@ -499,6 +510,8 @@ export interface MemoryCuratorResponse {
   }>;
   consent?: {
     administration_available: boolean;
+    memory_enabled?: boolean | null;
+    thread_reads_thread_memory?: boolean | null;
     thread_reads_project_memory?: boolean | null;
     project_reads_user_memory?: boolean | null;
     thread_reads_user_memory?: boolean | null;

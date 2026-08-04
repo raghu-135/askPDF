@@ -35,6 +35,7 @@ from app.models.memory_tools import (
     MemoryGetInput,
     MemoryPrepareChangeInput,
     MemorySearchInput,
+    normalize_memory_attributes,
 )
 from app.models.requests import (
     MemoryCuratorApplyRequest,
@@ -150,6 +151,10 @@ def _consent_snapshot(thread: Thread | None, project: Project | None) -> Dict[st
     project_memory = normalize_project_memory_settings(project.settings_json if project else {})
     return {
         "administration_available": True,
+        "memory_enabled": thread_memory["memory_enabled"] if thread else None,
+        "thread_reads_thread_memory": (
+            thread_memory["thread_reads_thread_memory"] if thread else None
+        ),
         "thread_reads_project_memory": (
             thread_memory["thread_reads_project_memory"] if thread else None
         ),
@@ -226,6 +231,7 @@ def _intent_from_raw(raw: Any) -> MemoryChangeIntent | None:
             scope_type=raw.get("scope_type"),
             target_scope_type=raw.get("target_scope_type"),
             content=raw.get("content"),
+            attributes=raw.get("attributes"),
             override_target_ids=raw_targets,
             web_source_ids=[str(item) for item in (raw.get("web_source_ids") or [])],
         )
@@ -829,6 +835,7 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
     deleted_ids: List[str] = []
     cleanup_targets: List[tuple[str, str]] = []
     cleaned_vector_targets: List[tuple[str, str]] = []
+    metadata_only_representations: Dict[str, List[Dict[str, Any]]] = {}
     try:
         async with async_session_maker() as session:
             async with session.begin():
@@ -867,6 +874,9 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                             content=str(operation.content or "").strip(),
                             embedding_model=create_models[index],
                             content_hash=memory_content_hash(operation.content or ""),
+                            attributes_json=normalize_memory_attributes(
+                                operation.attributes.model_dump(mode="json") if operation.attributes else None
+                            ),
                         )
                         source = source_memory_by_index[index]
                     else:
@@ -987,6 +997,7 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                             index_status="pending",
                             index_attempts=0,
                             source_refs_json=source_refs,
+                            attributes_json=(operation.attributes.model_dump(mode="json") if operation.attributes else {}),
                             created_at=now,
                             updated_at=now,
                         )
@@ -1023,6 +1034,7 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                                 content=str(operation.content or "").strip(),
                                 content_hash=memory_content_hash(operation.content or ""),
                                 source_refs_json=source_refs,
+                                attributes_json=(operation.attributes.model_dump(mode="json") if operation.attributes else None),
                                 actor_id=req.actor_id,
                                 event_type="curator_updated",
                                 event_payload={
@@ -1036,8 +1048,10 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                                 raise MemoryCuratorNotFoundError("Memory disappeared during update")
                             memory = updated
                             to_index.append(memory)
-                        elif operation.web_sources:
+                        elif operation.web_sources or operation.attributes is not None:
                             memory.source_refs_json = source_refs
+                            if operation.attributes is not None:
+                                memory.attributes_json = operation.attributes.model_dump(mode="json")
                             memory.updated_at = now
                             session.add(MemoryEvent(
                                 memory_id=memory.id,
@@ -1047,10 +1061,16 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                                     "mode": "confirmed_change_set",
                                     "semantic_action": operation.semantic_action or operation.action,
                                     "operation_group_id": operation.operation_group_id,
-                                    "provenance_only": True,
+                                    "provenance_only": operation.attributes is None,
+                                    "attributes_only": operation.attributes is not None and not operation.web_sources,
                                 },
                                 created_at=now,
                             ))
+                            from app.services.memory_review_service import bump_memory_scope_activity
+                            await bump_memory_scope_activity(
+                                [(memory.scope_type, memory.scope_id)],
+                                session=session,
+                            )
                             await session.flush()
                         await MemoryRepository(session).replace_overrides(
                             memory.id,
@@ -1089,8 +1109,15 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                     [_operation_scope(operation) for operation in operations],
                     session=session,
                 )
+                reindexed_ids = {memory.id for memory in to_index}
                 for memory in changed:
-                    await invalidate_global_representations(memory, session=session)
+                    if memory.id in reindexed_ids:
+                        await invalidate_global_representations(memory, session=session)
+                from app.services.memory_representation_service import list_memory_representations
+                metadata_only_representations = await list_memory_representations(
+                    [memory.id for memory in changed if memory.id not in reindexed_ids],
+                    session=session,
+                )
                 await session.flush()
     except Exception:
         for memory_id, _embedding_model in cleaned_vector_targets:
@@ -1113,6 +1140,32 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
         try:
             if memory.id in to_index_ids:
                 await index_memory_record(memory)
+            elif memory.index_status == "indexed":
+                representation_models = [memory.embedding_model, *[
+                    str(item.get("embedding_model"))
+                    for item in metadata_only_representations.get(memory.id, [])
+                    if item.get("index_status") == "indexed" and item.get("embedding_model")
+                ]]
+                metadata_results = [
+                    await get_vector_db().update_memory_metadata(
+                        memory_id=memory.id,
+                        embedding_model=model,
+                        metadata={
+                            "source_refs": memory.source_refs_json or {},
+                            "content_hash": memory.content_hash,
+                            "attributes": normalize_memory_attributes(memory.attributes_json),
+                            **({"secondary": True} if model != memory.embedding_model else {}),
+                        },
+                        updated_at=iso_utc_z(memory.updated_at),
+                    )
+                    for model in dict.fromkeys(representation_models)
+                ]
+                if not all(metadata_results):
+                    warnings.append({
+                        "code": "memory_metadata_sync_failed",
+                        "memory_id": memory.id,
+                        "message": "Stored attributes were updated, but vector metadata sync is pending.",
+                    })
         except Exception as exc:
             warnings.append({
                 "code": "memory_index_failed",

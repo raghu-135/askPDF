@@ -12,6 +12,26 @@ MEMORY_READ_STORED = "memory:read_stored"
 MEMORY_PROPOSE = "memory:propose"
 MEMORY_APPLY_CONFIRMED = "memory:apply_confirmed"
 
+MemoryKind = Literal["preference", "profile", "instruction", "constraint", "decision", "fact"]
+MemoryApplicability = Literal["all_answers", "writing", "code", "research", "project", "task_specific"]
+MemoryDurability = Literal["stable", "time_sensitive"]
+
+
+class MemoryAttributes(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: MemoryKind = "fact"
+    applicability: List[MemoryApplicability] = Field(default_factory=lambda: ["task_specific"], min_length=1)
+    durability: MemoryDurability = "stable"
+
+
+def normalize_memory_attributes(value: Any) -> Dict[str, Any]:
+    """Return canonical, safe attributes for stored and model-proposed memory."""
+    try:
+        return MemoryAttributes.model_validate(value or {}).model_dump(mode="json")
+    except Exception:
+        return MemoryAttributes().model_dump(mode="json")
+
 
 class MemoryToolScope(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -39,6 +59,9 @@ class MemorySearchInput(BaseModel):
     view: Literal["effective", "stored"] = "effective"
     scope_types: Optional[List[Literal["user", "project", "thread"]]] = None
     max_results: int = Field(default=10, ge=1, le=500)
+    char_budget: Optional[int] = Field(default=None, ge=200, le=16000)
+    score_floor: Optional[float] = Field(default=None, ge=0.0)
+    relative_score_ratio: float = Field(default=0.60, ge=0.0, le=1.0)
     selected_memory_id: Optional[str] = None
 
 
@@ -58,6 +81,7 @@ class MemoryChangeIntent(BaseModel):
     scope_type: Optional[Literal["user", "project", "thread"]] = None
     target_scope_type: Optional[Literal["user", "project", "thread"]] = None
     content: Optional[str] = Field(default=None, max_length=12000)
+    attributes: Optional[MemoryAttributes] = None
     override_target_ids: Optional[List[str]] = Field(default=None, max_length=20)
     web_source_ids: List[str] = Field(default_factory=list, max_length=12)
 
@@ -75,6 +99,7 @@ class MemoryOperationSummary(BaseModel):
     action: Literal["create", "update", "delete", "move", "set_overrides"]
     label: str
     content: Optional[str] = None
+    attributes: Optional[MemoryAttributes] = None
     source_memory_id: Optional[str] = None
     source_scope: Optional[MemoryToolScope] = None
     destination_memory_id: Optional[str] = None

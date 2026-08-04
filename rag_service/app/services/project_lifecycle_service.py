@@ -404,6 +404,7 @@ def _clone_memory(
             **copy.deepcopy(source.source_refs_json or {}),
             "fork_origin": fork_origin,
         },
+        attributes_json=copy.deepcopy(source.attributes_json or {}),
         created_at=cloned_at,
         updated_at=cloned_at,
     )

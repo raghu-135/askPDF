@@ -12,6 +12,8 @@ DEFAULT_PROJECT_MEMORY_SETTINGS = {
 }
 
 DEFAULT_THREAD_MEMORY_SETTINGS = {
+    "memory_enabled": True,
+    "thread_reads_thread_memory": True,
     "thread_reads_project_memory": True,
     "thread_reads_user_memory": False,
 }
@@ -46,6 +48,15 @@ def normalize_thread_memory_settings(settings: Any) -> Dict[str, bool]:
         reads_user_memory = reads_user_memory and bool(memory.get("global_memory_enabled"))
 
     return {
+        "memory_enabled": bool(
+            memory.get("memory_enabled", DEFAULT_THREAD_MEMORY_SETTINGS["memory_enabled"])
+        ),
+        "thread_reads_thread_memory": bool(
+            memory.get(
+                "thread_reads_thread_memory",
+                DEFAULT_THREAD_MEMORY_SETTINGS["thread_reads_thread_memory"],
+            )
+        ),
         "thread_reads_project_memory": bool(
             memory.get(
                 "thread_reads_project_memory",

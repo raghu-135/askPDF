@@ -31,6 +31,7 @@ UNIT_TEST_FILES = [
     "test_external_research_tools.py",
     "test_first_party_tool_contracts.py",
     "test_llm_server_client_pytest.py",
+    "test_memory_retrieval_policy_pytest.py",
     "test_message_api_pytest.py",
     "test_model_aware_collections.py",
     "test_model_registry_edge_cases.py",

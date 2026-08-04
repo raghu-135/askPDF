@@ -13,6 +13,7 @@ from app.models.llm_server_client import (
     MAX_SYSTEM_ROLE_CHARS,
 )
 from app.models.memory_curator_budget import MAX_CURATOR_REQUEST_MESSAGES
+from app.models.memory_tools import MemoryAttributes
 
 
 class ThreadCreateRequest(BaseModel):
@@ -176,6 +177,7 @@ class MemoryCuratorOperation(BaseModel):
     memory_id: Optional[str] = None
     expected_updated_at: Optional[str] = None
     content: Optional[str] = Field(default=None, max_length=12000)
+    attributes: Optional[MemoryAttributes] = None
     override_targets: List[MemoryOverrideTarget] = Field(default_factory=list, max_length=20)
     semantic_action: Optional[Literal["create", "update", "delete", "move", "set_overrides"]] = None
     operation_group_id: Optional[str] = Field(default=None, max_length=100)
@@ -266,6 +268,8 @@ class ThreadChatRequest(BaseModel):
 class ThreadMemorySettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    memory_enabled: bool = True
+    thread_reads_thread_memory: bool = True
     thread_reads_project_memory: bool = True
     thread_reads_user_memory: bool = False
 

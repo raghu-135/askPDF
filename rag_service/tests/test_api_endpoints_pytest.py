@@ -162,6 +162,8 @@ class TestThreadEndpoints:
         defaults_response = client.get(f"/api/threads/{thread['id']}/settings")
         assert defaults_response.status_code == 200
         assert defaults_response.json()["memory"] == {
+            "memory_enabled": True,
+            "thread_reads_thread_memory": True,
             "thread_reads_project_memory": True,
             "thread_reads_user_memory": False,
         }
@@ -170,6 +172,8 @@ class TestThreadEndpoints:
             f"/api/threads/{thread['id']}/settings",
             json={
                 "memory": {
+                    "memory_enabled": False,
+                    "thread_reads_thread_memory": False,
                     "thread_reads_project_memory": False,
                     "thread_reads_user_memory": True,
                 }
@@ -177,6 +181,8 @@ class TestThreadEndpoints:
         )
         assert updated_response.status_code == 200
         assert updated_response.json()["memory"] == {
+            "memory_enabled": False,
+            "thread_reads_thread_memory": False,
             "thread_reads_project_memory": False,
             "thread_reads_user_memory": True,
         }

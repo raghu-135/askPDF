@@ -31,6 +31,8 @@ interface ChatSettingsDialogProps {
     replans: number;
     replansLimit: number | null;
     useReranker: boolean;
+    useMemory: boolean;
+    useThreadMemory: boolean;
     useProjectMemory: boolean;
     useGlobalMemory: boolean;
     projectAllowsGlobalMemory: boolean;
@@ -47,6 +49,8 @@ interface ChatSettingsDialogProps {
     // Change handlers
     onReplansChange: (value: number) => void;
     onRerankerChange: (checked: boolean) => void;
+    onMemoryChange: (checked: boolean) => void;
+    onThreadMemoryChange: (checked: boolean) => void;
     onProjectMemoryChange: (checked: boolean) => void;
     onGlobalMemoryChange: (checked: boolean) => void;
     onAgentWorkflowChange: (value: string) => void;
@@ -72,6 +76,8 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     replans,
     replansLimit,
     useReranker,
+    useMemory,
+    useThreadMemory,
     useProjectMemory,
     useGlobalMemory,
     projectAllowsGlobalMemory,
@@ -86,6 +92,8 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
     promptPreview,
     onReplansChange,
     onRerankerChange,
+    onMemoryChange,
+    onThreadMemoryChange,
     onProjectMemoryChange,
     onGlobalMemoryChange,
     onAgentWorkflowChange,
@@ -185,9 +193,24 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                 <Box>
                     <Typography variant="subtitle2">Memory</Typography>
                     <FormControlLabel
+                        control={<Switch checked={useMemory} onChange={(event) => onMemoryChange(event.target.checked)} />}
+                        label="Use memories"
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5 }}>
+                        Recall durable memories for answers in this thread. Turning this off does not delete or stop memory management.
+                    </Typography>
+                    <FormControlLabel
+                        control={<Switch checked={useThreadMemory} disabled={!useMemory} onChange={(event) => onThreadMemoryChange(event.target.checked)} />}
+                        label="Use thread memory"
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 0.5 }}>
+                        Recall memories saved specifically for this thread.
+                    </Typography>
+                    <FormControlLabel
                         control={
                             <Switch
                                 checked={useProjectMemory}
+                                disabled={!useMemory}
                                 onChange={(event) => onProjectMemoryChange(event.target.checked)}
                             />
                         }
@@ -200,7 +223,7 @@ const ChatSettingsDialog: React.FC<ChatSettingsDialogProps> = ({
                         control={
                             <Switch
                                 checked={useGlobalMemory}
-                                disabled={!projectAllowsGlobalMemory}
+                                disabled={!useMemory || !projectAllowsGlobalMemory}
                                 onChange={(event) => onGlobalMemoryChange(event.target.checked)}
                             />
                         }

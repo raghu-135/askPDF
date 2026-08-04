@@ -33,7 +33,7 @@ from app.db.vector.helpers import (
     _validate_embeddings_match_texts,
     _metadata_json,
     _parse_metadata,
-    _score,
+    _score, _score_type,
 )
 from app.db.vector.model_registry import get_embedding_model_registry
 from app.db.vector.collection_manager import ModelAwareCollectionManager
@@ -678,7 +678,7 @@ class WeaviateAdapter:
         kwargs = {
             "filters": filt,
             "limit": limit,
-            "return_metadata": wvc.query.MetadataQuery(score=True),
+            "return_metadata": wvc.query.MetadataQuery(score=True, distance=True),
         }
         try:
             if query_text:
@@ -712,9 +712,37 @@ class WeaviateAdapter:
                     "created_at": p.get("created_at"),
                     "updated_at": p.get("updated_at"),
                     "score": _score(obj),
+                    "score_type": _score_type(obj),
                 }
             )
         return out
+
+    async def update_memory_metadata(
+        self,
+        *,
+        memory_id: str,
+        embedding_model: str,
+        metadata: Dict[str, Any],
+        updated_at: Optional[str] = None,
+    ) -> bool:
+        """Update non-vector memory properties without recomputing its embedding."""
+        _validate_not_empty(memory_id, "memory_id")
+        _validate_not_empty(embedding_model, "embedding_model")
+        collection = await self.collection_manager.get_collection(CollectionNames.MEMORY, embedding_model)
+        deterministic_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"askpdf:memory:{embedding_model}:{memory_id}"))
+        try:
+            await asyncio.to_thread(
+                collection.data.update,
+                uuid=deterministic_uuid,
+                properties={
+                    "metadata_json": _metadata_json(metadata or {}),
+                    "updated_at": updated_at or "",
+                },
+            )
+            return True
+        except WeaviateBaseError as exc:
+            logger.warning("Failed to update memory vector metadata | memory_id=%s model=%s: %s", memory_id, embedding_model, exc)
+            return False
 
     async def delete_memory_vectors(self, memory_id: str, embedding_model: str) -> bool:
         """Delete vector rows for a single durable memory in a model-aware collection."""

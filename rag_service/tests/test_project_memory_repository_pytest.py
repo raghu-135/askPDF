@@ -353,6 +353,8 @@ def test_memory_setting_normalization_removes_legacy_flags():
             "project_reads_user_memory": True,
         }
     }) == {
+        "memory_enabled": True,
+        "thread_reads_thread_memory": True,
         "thread_reads_project_memory": False,
         "thread_reads_user_memory": True,
     }
@@ -455,6 +457,39 @@ async def test_explicit_scope_filter_is_upper_bound_and_empty_means_none(repo_se
 
 
 @pytest.mark.asyncio
+async def test_master_and_thread_local_recall_switches_are_independent(repo_sessionmaker):
+    project = await ProjectRepository().create(
+        name="Recall switches",
+        embedding_model="BAAI/bge-m3",
+    )
+    thread = await ThreadRepository().create("Recall switch thread", project.id)
+    await ThreadRepository().update_settings(
+        thread.id,
+        {"memory": {
+            "memory_enabled": False,
+            "thread_reads_thread_memory": True,
+            "thread_reads_project_memory": True,
+        }},
+    )
+
+    disabled = await memory_scope_policy_for_thread(thread.id)
+    assert disabled["searched_scopes"] == []
+    assert {item["reason"] for item in disabled["skipped_scopes"]} == {"memory_disabled"}
+
+    await ThreadRepository().update_settings(
+        thread.id,
+        {"memory": {
+            "memory_enabled": True,
+            "thread_reads_thread_memory": False,
+            "thread_reads_project_memory": True,
+        }},
+    )
+    thread_opt_out = await memory_scope_policy_for_thread(thread.id)
+    assert [item["scope_type"] for item in thread_opt_out["searched_scopes"]] == ["project"]
+    assert {item["scope_type"]: item["reason"] for item in thread_opt_out["skipped_scopes"]}["thread"] == "thread_opt_out"
+
+
+@pytest.mark.asyncio
 async def test_normal_recall_merges_project_and_default_user_memory_in_one_model(monkeypatch):
     from app.services import memory_service
 
@@ -479,20 +514,20 @@ async def test_normal_recall_merges_project_and_default_user_memory_in_one_model
     vector_db = SimpleNamespace(search_memory=AsyncMock())
 
     async def fake_search_memory(*, embedding_model, **kwargs):
-        scope_type = kwargs["scope_filters"][0]["scope_type"]
-        if scope_type == "project":
-            return [{
+        assert [scope["scope_type"] for scope in kwargs["scope_filters"]] == ["thread", "project", "user"]
+        return [{
                 "memory_id": "project-memory",
                 "scope_type": "project",
                 "score": 0.77,
-            }]
-        if scope_type == "user":
-            return [{
+            }, {
                 "memory_id": "user-memory",
                 "scope_type": "user",
                 "score": 0.96,
+            }, {
+                "memory_id": "weak-thread-memory",
+                "scope_type": "thread",
+                "score": 0.30,
             }]
-        return []
 
     vector_db.search_memory.side_effect = fake_search_memory
     memories = {
@@ -523,6 +558,17 @@ async def test_normal_recall_merges_project_and_default_user_memory_in_one_model
             index_attempts=1,
             indexed_at=None,
             index_error=None,
+            created_at=None,
+            updated_at=None,
+        ),
+        "weak-thread-memory": SimpleNamespace(
+            id="weak-thread-memory",
+            scope_type="thread",
+            scope_id="thread-1",
+            content="A weakly related fact",
+            source_refs_json={},
+            embedding_model="BAAI/bge-m3",
+            content_hash="weak-thread-hash",
             created_at=None,
             updated_at=None,
         ),
@@ -578,9 +624,10 @@ async def test_normal_recall_merges_project_and_default_user_memory_in_one_model
     assert result["memories"][0]["scope_id"] == LOCAL_USER_MEMORY_SCOPE_ID
     assert result["memories"][0]["embedding_model"] == memory_service.GLOBAL_MEMORY_EMBEDDING_MODEL
     assert all(item["score_type"] == "similarity" for item in result["memories"])
-    # Each eligible scope receives its own bounded query so broader results cannot
-    # crowd thread-local memories out before final fusion.
-    assert vector_db.search_memory.await_count == 3
+    assert result["retrieval_debug"]["rejection_reasons"]["below_relevance_threshold"] == 1
+    assert result["retrieval_debug"]["recalled_ids"] == ["user-memory", "project-memory"]
+    # All eligible scopes share one query embedding and one multi-scope vector query.
+    assert vector_db.search_memory.await_count == 1
     assert all(
         call.kwargs["excluded_memory_ids"] == ["unavailable-memory"]
         for call in vector_db.search_memory.await_args_list

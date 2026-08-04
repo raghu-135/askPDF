@@ -79,6 +79,12 @@ Intents use `create`, `update`, `delete`, `move`, `set_overrides`, or `noop`.
 - Scope IDs are never memory IDs.
 - Use `move` when the same statement should be removed from one scope and retained in another.
 - Prefer updating an existing same-scope memory over creating a duplicate.
+- Every create or content update should include `attributes` with:
+  - `kind`: `preference`, `profile`, `instruction`, `constraint`, `decision`, or `fact`.
+  - `applicability`: one or more of `all_answers`, `writing`, `code`, `research`, `project`, or `task_specific`.
+  - `durability`: `stable` or `time_sensitive`.
+- Preserve existing attributes for moves and relationship-only changes unless the user explicitly changes their meaning.
+- A one-turn instruction that contradicts a stored preference is not a memory update. Only propose a durable change when the user explicitly asks to remember, forget, update, or apply something going forward.
 - When web evidence materially supports an intent, include only the IDs of sources actually
   used in `web_source_ids`. Never invent source IDs.
 

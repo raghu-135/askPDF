@@ -716,6 +716,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     const [defaultHitlWebApproval, setDefaultHitlWebApproval] = useState(false);
     const [useReranker, setUseReranker] = useState(false);
     const [defaultUseReranker, setDefaultUseReranker] = useState(false);
+    const [useMemory, setUseMemory] = useState(true);
+    const [useThreadMemory, setUseThreadMemory] = useState(true);
     const [useProjectMemory, setUseProjectMemory] = useState(true);
     const [useGlobalMemory, setUseGlobalMemory] = useState(false);
     const [projectAllowsGlobalMemory, setProjectAllowsGlobalMemory] = useState(false);
@@ -779,6 +781,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setCustomInstructions(settings?.custom_instructions ?? defaultCustomInstructions);
         setHitlWebApproval(webSearchMode === 'ask');
         setUseReranker(settings?.use_reranker ?? defaultUseReranker);
+        setUseMemory(settings?.memory?.memory_enabled ?? true);
+        setUseThreadMemory(settings?.memory?.thread_reads_thread_memory ?? true);
         setUseProjectMemory(settings?.memory?.thread_reads_project_memory ?? true);
         setUseGlobalMemory(settings?.memory?.thread_reads_user_memory ?? false);
         setAgentWorkflowId(normalizeAgentWorkflowForUi(settings?.agent_workflow?.workflow_id));
@@ -1136,6 +1140,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
         setToolInstructions(defaults);
         setCustomInstructions(defaultCustomInstructions);
         setUseReranker(defaultUseReranker);
+        setUseMemory(true);
+        setUseThreadMemory(true);
         setUseProjectMemory(true);
         setUseGlobalMemory(false);
         setAgentWorkflowId(agentWorkflows[0]?.id || '');
@@ -2171,6 +2177,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 hitl_web_approval: hitlWebApproval,
                 use_reranker: useReranker,
                 memory: {
+                    memory_enabled: useMemory,
+                    thread_reads_thread_memory: useThreadMemory,
                     thread_reads_project_memory: useProjectMemory,
                     thread_reads_user_memory: useGlobalMemory,
                 },
@@ -2648,6 +2656,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 replans={replans}
                 replansLimit={replansLimit}
                 useReranker={useReranker}
+                useMemory={useMemory}
+                useThreadMemory={useThreadMemory}
                 useProjectMemory={useProjectMemory}
                 useGlobalMemory={useGlobalMemory}
                 projectAllowsGlobalMemory={projectAllowsGlobalMemory}
@@ -2662,6 +2672,8 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
                 promptPreview={promptPreview}
                 onReplansChange={(value) => setReplans(value)}
                 onRerankerChange={(checked) => setUseReranker(checked)}
+                onMemoryChange={(checked) => setUseMemory(checked)}
+                onThreadMemoryChange={(checked) => setUseThreadMemory(checked)}
                 onProjectMemoryChange={(checked) => setUseProjectMemory(checked)}
                 onGlobalMemoryChange={(checked) => setUseGlobalMemory(checked)}
                 onAgentWorkflowChange={(value) => {
