@@ -33,8 +33,7 @@ const seededStarterSpecs = {
 };
 
 const createInitialBuilderState = (currentCatalog, starter = 'router') => {
-  const state = normalizeBuilderState(currentCatalog, loadBuilderStateFromSpec(seededStarterSpecs[starter]));
-  return { ...state, allowed_tool_ids: seededStarterSpecs[starter].config.allowed_tool_ids };
+  return normalizeBuilderState(currentCatalog, loadBuilderStateFromSpec(seededStarterSpecs[starter]));
 };
 
 const node = (overrides) => ({
@@ -364,6 +363,19 @@ test('loads a saved spec back into builder state and round-trips unchanged graph
   assert.equal(roundTrip.config.graph.edges.find((edge) => edge.from === 'planner')?.route_fn, 'planner_route');
 });
 
+test('hydrates built-in node tool assignments from the global allowed tool list', () => {
+  for (const starter of ['router', 'plan_execute', 'evaluator_replanner']) {
+    const expectedToolIds = seededStarterSpecs[starter].config.allowed_tool_ids;
+    const state = createInitialBuilderState(catalog, starter);
+
+    assert.deepEqual([...state.allowed_tool_ids].sort(), [...expectedToolIds].sort());
+    assert.deepEqual(
+      state.nodes.find((item) => item.type === 'durable_memory_worker')?.tool_contract_ids,
+      ['durable_memory'],
+    );
+  }
+});
+
 test('keeps every default starter loop budget within its per-node visit limits', () => {
   for (const starter of ['router', 'plan_execute', 'evaluator_replanner']) {
     const spec = assembleAgentWorkflowSpec(createInitialBuilderState(catalog, starter));
@@ -492,7 +504,10 @@ test('normalizes unsupported node tools and over-limit node types from loaded st
 
   assert.equal(normalized.nodes.some((item) => item.id === 'router_2'), false);
   assert.equal(normalized.nodes.find((item) => item.id === 'retrieval_worker_2')?.tool_contract_ids, undefined);
-  assert.deepEqual(normalized.allowed_tool_ids, []);
+  assert.deepEqual(
+    [...normalized.allowed_tool_ids].sort(),
+    [...seededStarterSpecs.router.config.allowed_tool_ids].sort(),
+  );
 });
 
 test('expands sequential and conditional incoming paths separately', () => {

@@ -591,6 +591,7 @@ export function normalizeBuilderState(
   state: AgentWorkflowBuilderState,
 ): AgentWorkflowBuilderState {
   const seenTypeCounts = new Map<string, number>();
+  const globallyAllowedTools = new Set(state.allowed_tool_ids || []);
   const nodes = state.nodes.filter((node) => {
     const entry = catalogEntry(catalog, node.type);
     if (!entry) return false;
@@ -598,7 +599,10 @@ export function normalizeBuilderState(
     if (count >= entry.max_instances) return false;
     seenTypeCounts.set(node.type, count + 1);
     const allowedTools = new Set(entry.allowed_tool_contract_ids || []);
-    const selectedTools = (node.tool_contract_ids || []).filter((toolId) => allowedTools.has(toolId));
+    const requestedTools = Array.isArray(node.tool_contract_ids)
+      ? node.tool_contract_ids
+      : Array.from(globallyAllowedTools).filter((toolId) => allowedTools.has(toolId));
+    const selectedTools = requestedTools.filter((toolId) => allowedTools.has(toolId));
     return Object.assign(node, selectedTools.length > 0 ? { tool_contract_ids: selectedTools } : { tool_contract_ids: undefined });
   }).map((node) => {
     const { tool_contract_ids, ...rest } = node;
@@ -615,7 +619,12 @@ export function normalizeBuilderState(
       return Boolean(edge.from && edge.to);
     }),
   };
-  normalized.allowed_tool_ids = collectAllowedToolIds(normalized.nodes);
+  const selectedToolIds = collectAllowedToolIds(normalized.nodes);
+  const selectedToolSet = new Set(selectedToolIds);
+  normalized.allowed_tool_ids = [
+    ...(state.allowed_tool_ids || []).filter((toolId) => selectedToolSet.has(toolId)),
+    ...selectedToolIds.filter((toolId) => !globallyAllowedTools.has(toolId)),
+  ];
   return normalized;
 }
 
