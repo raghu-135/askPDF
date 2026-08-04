@@ -7,8 +7,8 @@
     "config": {
       "allowed_tool_ids": [
         "document_evidence",
-        "deep_memory",
-        "thread_timeline",
+        "thread_conversation_history",
+        "thread_events",
         "live_web_recon",
         "clarify_intent"
       ],
@@ -47,14 +47,14 @@
           },
           {
             "from": "retrieval_worker",
-            "to": "memory_worker"
+            "to": "thread_conversation_history_worker"
           },
           {
-            "from": "memory_worker",
-            "to": "timeline_worker"
+            "from": "thread_conversation_history_worker",
+            "to": "thread_events_worker"
           },
           {
-            "from": "timeline_worker",
+            "from": "thread_events_worker",
             "to": "web_worker"
           },
           {
@@ -102,12 +102,12 @@
             "type": "retrieval_worker"
           },
           {
-            "id": "memory_worker",
-            "type": "memory_worker"
+            "id": "thread_conversation_history_worker",
+            "type": "thread_conversation_history_worker"
           },
           {
-            "id": "timeline_worker",
-            "type": "timeline_worker"
+            "id": "thread_events_worker",
+            "type": "thread_events_worker"
           },
           {
             "id": "web_worker",
@@ -140,10 +140,10 @@
         "max_total_visits": 16,
         "node_visit_limits": {
           "evidence_evaluator": 2,
-          "memory_worker": 2,
+          "thread_conversation_history_worker": 2,
           "replanner": 1,
           "retrieval_worker": 2,
-          "timeline_worker": 2,
+          "thread_events_worker": 2,
           "web_worker": 2
         }
       },
@@ -169,7 +169,8 @@
       "prompt_preview": "evaluator_replanner",
       "success_context": "Context retrieved by compiled Evaluator/Replanner RAG Agent workflow."
     },
-    "schema_version": 2
+    "schema_version": 2,
+    "version": 3
   },
   "visibility": "builtin"
 }

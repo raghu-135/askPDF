@@ -23,8 +23,8 @@ This is a bounded evaluator. Decide whether the gathered evidence can support a 
 ## Worker Nodes Available
 
 - `retrieval_worker`: uploaded document, PDF, page, section, quote, citation, excerpt, summary, or cached web snippet evidence.
-- `memory_worker`: non-temporal recall of prior conversation, previous answers, or what we discussed.
-- `timeline_worker`: chronology, latest/most recent/current, first/earliest/oldest, before/after/since, date/time, or event ordering.
+- `thread_conversation_history_worker`: non-temporal recall of prior conversation, previous answers, or what we discussed.
+- `thread_events_worker`: chronology, latest/most recent/current, first/earliest/oldest, before/after/since, date/time, or event ordering.
 - `web_worker`: live internet evidence, only when live web search is enabled.
 
 {TOOL_REGISTRY_SECTION}

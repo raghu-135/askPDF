@@ -287,9 +287,9 @@ class GenericGraphValidator:
         errors: list[str] = []
         worker_types = {
             "retrieval_worker",
-            "memory_worker",
-            "long_term_memory_worker",
-            "timeline_worker",
+            "thread_conversation_history_worker",
+            "durable_memory_worker",
+            "thread_events_worker",
             "web_worker",
         }
         for node_type in sorted(worker_types):
@@ -574,9 +574,9 @@ class GenericGraphValidator:
                 node_id,
                 {
                     "retrieval_worker",
-                    "memory_worker",
-                    "long_term_memory_worker",
-                    "timeline_worker",
+                    "thread_conversation_history_worker",
+                    "durable_memory_worker",
+                    "thread_events_worker",
                     "web_worker",
                 },
                 adjacency,
@@ -588,9 +588,9 @@ class GenericGraphValidator:
                     node_id,
                     {
                         "retrieval_worker",
-                        "memory_worker",
-                        "long_term_memory_worker",
-                        "timeline_worker",
+                        "thread_conversation_history_worker",
+                        "durable_memory_worker",
+                        "thread_events_worker",
                         "web_worker",
                     },
                     adjacency,
@@ -767,7 +767,7 @@ class GenericGraphValidator:
                 for worker_id in component:
                     if (
                         node_types_by_id.get(worker_id)
-                        in {"retrieval_worker", "memory_worker", "long_term_memory_worker", "timeline_worker", "web_worker"}
+                        in {"retrieval_worker", "thread_conversation_history_worker", "durable_memory_worker", "thread_events_worker", "web_worker"}
                         and limits[worker_id] < limits[replanner_id] + 1
                     ):
                         errors.append(

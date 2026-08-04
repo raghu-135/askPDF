@@ -11,7 +11,7 @@ from langgraph.types import interrupt
 from app.agent.tool_contract import normalize_tool_result
 from app.models.llm_server_client import DEFAULT_TOKEN_BUDGET, get_llm
 from app.agent.external_research_tools import search_web
-from app.rag.agent_tools import search_conversation_history, search_documents, search_long_term_memory, search_thread_timeline
+from app.rag.agent_tools import search_thread_conversation_history, search_documents, search_durable_memory, search_thread_events
 from app.rag.chat_service import prefetch_context
 from app.agent_workflows.prompting import (
     build_evaluator_prompt,
@@ -117,9 +117,9 @@ class NodeRegistry:
             WorkflowNodeType.PLANNER.value: self.planner,
             WorkflowNodeType.ROUTER.value: self.router,
             WorkflowNodeType.RETRIEVAL_WORKER.value: self.retrieval_worker,
-            WorkflowNodeType.MEMORY_WORKER.value: self.memory_worker,
-            WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value: self.long_term_memory_worker,
-            WorkflowNodeType.TIMELINE_WORKER.value: self.timeline_worker,
+            WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value: self.thread_conversation_history_worker,
+            WorkflowNodeType.DURABLE_MEMORY_WORKER.value: self.durable_memory_worker,
+            WorkflowNodeType.THREAD_EVENTS_WORKER.value: self.thread_events_worker,
             WorkflowNodeType.WEB_WORKER.value: self.web_worker,
             WorkflowNodeType.EVIDENCE_EVALUATOR.value: self.evidence_evaluator,
             WorkflowNodeType.REPLANNER.value: self.replanner,
@@ -429,9 +429,9 @@ class NodeRegistry:
             RouterRoute.DIRECT.value if bypass_clarification else RouterRoute.DOCUMENT.value,
             RouterRoute.DOCUMENT.value if bypass_clarification else RouterRoute.DIRECT.value,
             RouterRoute.CLARIFY.value,
-            RouterRoute.MEMORY.value,
-            RouterRoute.LONG_TERM_MEMORY.value,
-            RouterRoute.TIMELINE.value,
+            RouterRoute.THREAD_CONVERSATION_HISTORY.value,
+            RouterRoute.DURABLE_MEMORY.value,
+            RouterRoute.THREAD_EVENTS.value,
             RouterRoute.WEB.value,
         ]
         fallback_route = next(route for route in fallback_order if route in allowed_routes)
@@ -482,14 +482,14 @@ class NodeRegistry:
     async def retrieval_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         return await self._tool_worker(WorkflowNodeType.RETRIEVAL_WORKER.value, state, config)
 
-    async def memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        return await self._tool_worker(WorkflowNodeType.MEMORY_WORKER.value, state, config)
+    async def thread_conversation_history_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        return await self._tool_worker(WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value, state, config)
 
-    async def long_term_memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        return await self._tool_worker(WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value, state, config)
+    async def durable_memory_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        return await self._tool_worker(WorkflowNodeType.DURABLE_MEMORY_WORKER.value, state, config)
 
-    async def timeline_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
-        return await self._tool_worker(WorkflowNodeType.TIMELINE_WORKER.value, state, config)
+    async def thread_events_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
+        return await self._tool_worker(WorkflowNodeType.THREAD_EVENTS_WORKER.value, state, config)
 
     async def web_worker(self, state: RouterRagState, config: RunnableConfig) -> Dict[str, Any]:
         return await self._tool_worker(WorkflowNodeType.WEB_WORKER.value, state, config)

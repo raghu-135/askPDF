@@ -521,17 +521,17 @@ def test_web_context_exposes_search_performed_time():
     assert payload["__web_sources__"][0]["timeline_event_type"] == "web_search_performed"
 
 
-def test_thread_timeline_tool_replaces_topic_anchor():
+def test_thread_events_tool_replaces_topic_anchor():
     tool_names = {
         agent_tools.get_thread_shape.name,
         agent_tools.search_documents.name,
-        agent_tools.search_conversation_history.name,
-        agent_tools.search_thread_timeline.name,
+        agent_tools.search_thread_conversation_history.name,
+        agent_tools.search_thread_events.name,
     }
-    assert "search_thread_timeline" in tool_names
+    assert "search_thread_events" in tool_names
     assert "find_topic_anchor_in_history" not in tool_names
 
-    schema = agent_tools.search_thread_timeline.args_schema.model_json_schema()
+    schema = agent_tools.search_thread_events.args_schema.model_json_schema()
     assert schema["properties"]["sources"]["enum"] == ["all", "conversation", "documents", "web_cache"]
     assert schema["properties"]["order"]["enum"] == ["relevance", "oldest", "newest"]
 
@@ -654,7 +654,7 @@ def test_collect_tool_sources_uses_artifact_timeline_events_without_legacy_alias
                         },
                     ],
                 },
-                "trace": {"tool_name": "search_thread_timeline"},
+                "trace": {"tool_name": "search_thread_events"},
             }
         ),
         document_sources,
@@ -735,7 +735,7 @@ async def test_get_thread_shape_surfaces_document_level_counts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_thread_timeline_returns_sorted_mixed_source_events(monkeypatch):
+async def test_search_thread_events_returns_sorted_mixed_source_events(monkeypatch):
     fake_db = SimpleNamespace(
         search_chat_memory=AsyncMock(
             return_value=[
@@ -781,15 +781,15 @@ async def test_search_thread_timeline_returns_sorted_mixed_source_events(monkeyp
     )
     monkeypatch.setattr(agent_tools, "rerank_document_chunks", AsyncMock(side_effect=lambda _q, chunks: chunks))
 
-    raw = await agent_tools.search_thread_timeline.ainvoke(
+    raw = await agent_tools.search_thread_events.ainvoke(
         {"query": "benefits timeline", "sources": "all", "order": "oldest", "max_results": 10},
         config={"configurable": {"thread_id": "thread-1", "embedding_model": "embed-1"}},
     )
-    payload = normalize_tool_result(raw, tool_name="search_thread_timeline")
+    payload = normalize_tool_result(raw, tool_name="search_thread_events")
     events = payload["__timeline_events__"]
 
     assert payload["ok"] is True
-    assert payload["trace"]["tool_name"] == "search_thread_timeline"
+    assert payload["trace"]["tool_name"] == "search_thread_events"
     assert [event["timeline_event_type"] for event in events] == [
         "document_added_to_thread",
         "message_created",

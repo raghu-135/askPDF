@@ -81,7 +81,7 @@ def test_external_research_tools_have_prompt_metadata():
         "semantic_scholar",
         "stack_exchange",
         "yahoo_finance_news",
-        "search_thread_timeline",
+        "search_thread_events",
     }
 
     missing = expected_tool_names - set(TOOL_FRIENDLY_CONFIG)

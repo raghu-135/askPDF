@@ -427,13 +427,13 @@ async def search_documents(query: str, max_results: int = 10, config: RunnableCo
 
 
 @tool
-async def search_conversation_history(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
+async def search_thread_conversation_history(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """
     Semantic search across past conversation Q/A pairs in this thread.
     Returns the most relevant exchanges regardless of time.
     """
     started = tool_started()
-    tool_name = "search_conversation_history"
+    tool_name = "search_thread_conversation_history"
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("app_thread_id") or conf.get("thread_id")
@@ -477,7 +477,7 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
             artifacts={"used_chat_ids": used_ids},
         ).to_json(legacy_fields={"__used_chat_ids__": used_ids})
     except Exception as e:
-        logger.error("Error in search_conversation_history: %s", e, exc_info=True)
+        logger.error("Error in search_thread_conversation_history: %s", e, exc_info=True)
         return make_tool_error_result(
             tool_name=tool_name,
             error=e,
@@ -488,13 +488,13 @@ async def search_conversation_history(query: str, max_results: int = 10, config:
 
 
 @tool
-async def search_long_term_memory(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
+async def search_durable_memory(query: str, max_results: int = 10, config: RunnableConfig = None) -> str:
     """
     Policy-scoped search across durable user/project/thread memories.
     Returns active app-owned memory records, not raw chat history.
     """
     started = tool_started()
-    tool_name = "search_long_term_memory"
+    tool_name = "search_durable_memory"
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("app_thread_id") or conf.get("thread_id")
@@ -585,7 +585,7 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
             },
         ).to_json()
     except Exception as e:
-        logger.error("Error in search_long_term_memory: %s", e, exc_info=True)
+        logger.error("Error in search_durable_memory: %s", e, exc_info=True)
         return make_tool_error_result(
             tool_name=tool_name,
             error=e,
@@ -596,7 +596,7 @@ async def search_long_term_memory(query: str, max_results: int = 10, config: Run
 
 
 @tool(args_schema=ThreadTimelineSearchInput)
-async def search_thread_timeline(
+async def search_thread_events(
     query: str,
     sources: ThreadTimelineSource | str = ThreadTimelineSource.ALL.value,
     order: ThreadTimelineOrder | str = ThreadTimelineOrder.RELEVANCE.value,
@@ -611,7 +611,7 @@ async def search_thread_timeline(
     what changed since a time.
     """
     started = tool_started()
-    tool_name = "search_thread_timeline"
+    tool_name = "search_thread_events"
     try:
         conf = config.get("configurable", {}) if config else {}
         thread_id = conf.get("app_thread_id") or conf.get("thread_id")
@@ -695,7 +695,7 @@ async def search_thread_timeline(
             warnings=[] if events else [ToolWarningCode.NO_TIMELINE_EVENTS],
         ).to_json(legacy_fields={"__timeline_events__": events})
     except Exception as e:
-        logger.error("Error in search_thread_timeline: %s", e, exc_info=True)
+        logger.error("Error in search_thread_events: %s", e, exc_info=True)
         return make_tool_error_result(
             tool_name=tool_name,
             error=e,

@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 
 
-from app.agent.prompting import format_runtime_datetime_context
+from app.agent.prompting import get_tool_catalog, normalize_tool_instructions, format_runtime_datetime_context
 from app.agent_workflows.prompting import build_agent_workflow_prompt_preview, build_planner_prompt, build_router_prompt
 
 
@@ -57,7 +57,7 @@ def test_plan_execute_agent_prompt_preview_uses_planner_prompt():
     assert "# Planner Node Prompt" in prompt
     assert "# Final Answer Prompt" in prompt
     assert "execution_plan" in prompt
-    assert "include `timeline_worker`" in prompt
+    assert "include `thread_events_worker`" in prompt
     assert "For prior conversation recall without time/order wording" in prompt
     assert "Clarification options must contain 2-4 complete, self-contained questions" in prompt
     assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
@@ -76,3 +76,24 @@ def test_runtime_graph_prompt_builders_include_datetime_context():
 
     assert "RUNTIME DATE/TIME CONTEXT" in build_router_prompt(state)
     assert "RUNTIME DATE/TIME CONTEXT" in build_planner_prompt(state)
+
+
+def test_tool_catalog_and_legacy_instruction_keys_use_canonical_retrieval_names():
+    catalog = {item["tool_name"]: item for item in get_tool_catalog()}
+
+    assert catalog["search_thread_conversation_history"]["id"] == "thread_conversation_history"
+    assert catalog["search_durable_memory"]["id"] == "durable_memory"
+    assert catalog["search_thread_events"]["id"] == "thread_events"
+
+    normalized = normalize_tool_instructions(
+        {
+            "deep_memory": "legacy instruction",
+            "thread_conversation_history": "canonical instruction",
+            "memory_recall": "durable instruction",
+            "thread_timeline": "events instruction",
+        }
+    )
+
+    assert normalized["thread_conversation_history"] == "canonical instruction"
+    assert normalized["durable_memory"] == "durable instruction"
+    assert normalized["thread_events"] == "events instruction"

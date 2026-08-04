@@ -35,7 +35,7 @@ def test_router_rag_allowed_tool_ids_are_contract_ids():
 
 def test_tool_contract_metadata_exposes_graph_integration_fields():
     document_contract = get_tool_contract_metadata("search_documents")
-    memory_contract = get_tool_contract_metadata("search_long_term_memory")
+    memory_contract = get_tool_contract_metadata("search_durable_memory")
     web_contract = get_tool_contract_metadata("search_web")
     records = list_tool_contract_metadata()
 
@@ -45,8 +45,8 @@ def test_tool_contract_metadata_exposes_graph_integration_fields():
     assert document_contract["artifact_keys"] == ["document_sources", "web_sources"]
     assert "missing_thread_context" in document_contract["warning_codes"]
 
-    assert memory_contract["id"] == "memory_recall"
-    assert memory_contract["allowed_caller_nodes"] == ["long_term_memory_worker"]
+    assert memory_contract["id"] == "durable_memory"
+    assert memory_contract["allowed_caller_nodes"] == ["durable_memory_worker"]
     assert memory_contract["artifact_keys"] == [
         "memory_refs",
         "memory_scopes",
@@ -91,15 +91,15 @@ def test_tool_contract_records_are_schema_like():
 
 def test_tool_call_validation_enforces_allowed_caller_nodes():
     validate_tool_call_allowed("search_documents", "retrieval_worker")
-    validate_tool_call_allowed("search_conversation_history", "memory_worker")
-    validate_tool_call_allowed("search_long_term_memory", "long_term_memory_worker")
-    validate_tool_call_allowed("search_thread_timeline", "timeline_worker")
+    validate_tool_call_allowed("search_thread_conversation_history", "thread_conversation_history_worker")
+    validate_tool_call_allowed("search_durable_memory", "durable_memory_worker")
+    validate_tool_call_allowed("search_thread_events", "thread_events_worker")
     validate_tool_call_allowed("search_web", "web_worker")
 
     try:
-        validate_tool_call_allowed("search_documents", "memory_worker")
+        validate_tool_call_allowed("search_documents", "thread_conversation_history_worker")
     except ValueError as exc:
-        assert "search_documents is not allowed from caller node memory_worker" in str(exc)
+        assert "search_documents is not allowed from caller node thread_conversation_history_worker" in str(exc)
         assert "retrieval_worker" in str(exc)
     else:
         raise AssertionError("Expected disallowed caller node to raise")
@@ -124,7 +124,7 @@ def test_tool_contracts_endpoint(api_client):
     assert by_name["search_documents"]["allowed_caller_nodes"] == ["retrieval_worker"]
     assert by_name["search_documents"]["artifact_keys"] == ["document_sources", "web_sources"]
     assert "missing_thread_context" in by_name["search_documents"]["warning_codes"]
-    assert by_name["search_long_term_memory"]["id"] == "memory_recall"
-    assert by_name["search_long_term_memory"]["allowed_caller_nodes"] == ["long_term_memory_worker"]
+    assert by_name["search_durable_memory"]["id"] == "durable_memory"
+    assert by_name["search_durable_memory"]["allowed_caller_nodes"] == ["durable_memory_worker"]
     assert by_name["search_web"]["category"] == "web"
     assert "web_search_disabled" in by_name["search_web"]["warning_codes"]

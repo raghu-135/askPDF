@@ -18,9 +18,9 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         "route_labels": [route.value for route in RouterRoute],
         "target_types_by_label": {
             RouterRoute.DOCUMENT.value: [WorkflowNodeType.RETRIEVAL_WORKER.value],
-            RouterRoute.MEMORY.value: [WorkflowNodeType.MEMORY_WORKER.value],
-            RouterRoute.LONG_TERM_MEMORY.value: [WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value],
-            RouterRoute.TIMELINE.value: [WorkflowNodeType.TIMELINE_WORKER.value],
+            RouterRoute.THREAD_CONVERSATION_HISTORY.value: [WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value],
+            RouterRoute.DURABLE_MEMORY.value: [WorkflowNodeType.DURABLE_MEMORY_WORKER.value],
+            RouterRoute.THREAD_EVENTS.value: [WorkflowNodeType.THREAD_EVENTS_WORKER.value],
             RouterRoute.WEB.value: [WorkflowNodeType.WEB_WORKER.value],
             RouterRoute.DIRECT.value: [WorkflowNodeType.DIRECT_ANSWER.value],
             RouterRoute.CLARIFY.value: [WorkflowNodeType.FINALIZER.value],
@@ -32,9 +32,9 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
         "target_types_by_label": {
             PlannerRoute.EXECUTE.value: [
                 WorkflowNodeType.RETRIEVAL_WORKER.value,
-                WorkflowNodeType.MEMORY_WORKER.value,
-                WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value,
-                WorkflowNodeType.TIMELINE_WORKER.value,
+                WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
+                WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
+                WorkflowNodeType.THREAD_EVENTS_WORKER.value,
                 WorkflowNodeType.WEB_WORKER.value,
             ],
             PlannerRoute.DIRECT.value: [
@@ -63,9 +63,9 @@ ROUTE_FUNCTION_REGISTRY: Dict[str, Dict[str, Any]] = {
 ROUTE_UI_OPTIONS: Dict[str, Dict[str, Dict[str, Any]]] = {
     RouteFunctionId.ROUTER.value: {
         RouterRoute.DOCUMENT.value: {"display_name": "Document question", "description": "Search uploaded documents.", "order": 0},
-        RouterRoute.MEMORY.value: {"display_name": "Previous conversation", "description": "Search conversation memory.", "order": 1},
-        RouterRoute.LONG_TERM_MEMORY.value: {"display_name": "Long-term memory", "description": "Recall durable user, project, or thread memory.", "order": 2},
-        RouterRoute.TIMELINE.value: {"display_name": "Timeline question", "description": "Search chronological thread events.", "order": 3},
+        RouterRoute.THREAD_CONVERSATION_HISTORY.value: {"display_name": "Thread Conversation History", "description": "Search prior messages in this thread.", "order": 1},
+        RouterRoute.DURABLE_MEMORY.value: {"display_name": "Durable Memory", "description": "Recall durable user, project, or thread memory.", "order": 2},
+        RouterRoute.THREAD_EVENTS.value: {"display_name": "Thread Events", "description": "Search chronological thread events.", "order": 3},
         RouterRoute.WEB.value: {"display_name": "Current information", "description": "Search approved external sources.", "order": 4},
         RouterRoute.DIRECT.value: {"display_name": "Answer directly", "description": "Answer without retrieval.", "order": 5},
         RouterRoute.CLARIFY.value: {"display_name": "Needs clarification", "description": "Ask the user for more detail.", "order": 6},

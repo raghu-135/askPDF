@@ -22,9 +22,9 @@ NODE_CONTEXT_LOADER = WorkflowNodeType.CONTEXT_LOADER.value
 NODE_ROUTER = WorkflowNodeType.ROUTER.value
 NODE_PLANNER = WorkflowNodeType.PLANNER.value
 NODE_RETRIEVAL_WORKER = WorkflowNodeType.RETRIEVAL_WORKER.value
-NODE_MEMORY_WORKER = WorkflowNodeType.MEMORY_WORKER.value
-NODE_LONG_TERM_MEMORY_WORKER = WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value
-NODE_TIMELINE_WORKER = WorkflowNodeType.TIMELINE_WORKER.value
+NODE_THREAD_CONVERSATION_HISTORY_WORKER = WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value
+NODE_DURABLE_MEMORY_WORKER = WorkflowNodeType.DURABLE_MEMORY_WORKER.value
+NODE_THREAD_EVENTS_WORKER = WorkflowNodeType.THREAD_EVENTS_WORKER.value
 NODE_WEB_WORKER = WorkflowNodeType.WEB_WORKER.value
 NODE_EVIDENCE_EVALUATOR = WorkflowNodeType.EVIDENCE_EVALUATOR.value
 NODE_REPLANNER = WorkflowNodeType.REPLANNER.value
@@ -47,8 +47,9 @@ CAP_CLARIFY = NodeCapability.CLARIFY.value
 CAP_PLAN_EXECUTION = NodeCapability.PLAN_EXECUTION.value
 CAP_PLAN_REPLAN = NodeCapability.PLAN_REPLAN.value
 CAP_RETRIEVAL_DOCUMENT = NodeCapability.RETRIEVAL_DOCUMENT.value
-CAP_RETRIEVAL_MEMORY = NodeCapability.RETRIEVAL_MEMORY.value
-CAP_RETRIEVAL_TIMELINE = NodeCapability.RETRIEVAL_TIMELINE.value
+CAP_RETRIEVAL_THREAD_CONVERSATION_HISTORY = NodeCapability.RETRIEVAL_THREAD_CONVERSATION_HISTORY.value
+CAP_RETRIEVAL_DURABLE_MEMORY = NodeCapability.RETRIEVAL_DURABLE_MEMORY.value
+CAP_RETRIEVAL_THREAD_EVENTS = NodeCapability.RETRIEVAL_THREAD_EVENTS.value
 CAP_RETRIEVAL_WEB = NodeCapability.RETRIEVAL_WEB.value
 CAP_EXTERNAL_RESEARCH = NodeCapability.EXTERNAL_RESEARCH.value
 CAP_EVALUATE_EVIDENCE = NodeCapability.EVALUATE_EVIDENCE.value
@@ -65,9 +66,9 @@ ROUTE_HITL_GATE = RouteFunctionId.HITL_GATE.value
 TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
 TOOL_DOCUMENT_EVIDENCE = ToolContractId.DOCUMENT_EVIDENCE.value
 TOOL_FOCUSED_DOCUMENT_EVIDENCE = ToolContractId.FOCUSED_DOCUMENT_EVIDENCE.value
-TOOL_DEEP_MEMORY = ToolContractId.DEEP_MEMORY.value
-TOOL_MEMORY_RECALL = ToolContractId.MEMORY_RECALL.value
-TOOL_THREAD_TIMELINE = ToolContractId.THREAD_TIMELINE.value
+TOOL_THREAD_CONVERSATION_HISTORY = ToolContractId.THREAD_CONVERSATION_HISTORY.value
+TOOL_DURABLE_MEMORY = ToolContractId.DURABLE_MEMORY.value
+TOOL_THREAD_EVENTS = ToolContractId.THREAD_EVENTS.value
 TOOL_LIVE_WEB_RECON = ToolContractId.LIVE_WEB_RECON.value
 TOOL_WIKIPEDIA_REFERENCE = ToolContractId.WIKIPEDIA_REFERENCE.value
 TOOL_WIKIDATA_REFERENCE = ToolContractId.WIKIDATA_REFERENCE.value
@@ -125,9 +126,9 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_parent_types": [NODE_CONTEXT_LOADER, NODE_HITL_GATE],
         "allowed_child_types": [
             NODE_RETRIEVAL_WORKER,
-            NODE_MEMORY_WORKER,
-            NODE_LONG_TERM_MEMORY_WORKER,
-            NODE_TIMELINE_WORKER,
+            NODE_THREAD_CONVERSATION_HISTORY_WORKER,
+            NODE_DURABLE_MEMORY_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
             NODE_WEB_WORKER,
             NODE_DIRECT_ANSWER,
             NODE_FINALIZER,
@@ -142,7 +143,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_route_functions": [ROUTE_PLANNER],
         "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
         "allowed_parent_types": [NODE_CONTEXT_LOADER, NODE_HITL_GATE],
-        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_DIRECT_ANSWER, NODE_FINALIZER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_DIRECT_ANSWER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1},
     },
     NODE_RETRIEVAL_WORKER: {
@@ -153,9 +154,9 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": [TOOL_DOCUMENT_EVIDENCE, TOOL_FOCUSED_DOCUMENT_EVIDENCE],
         "allowed_parent_types": [NODE_ROUTER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
         "allowed_child_types": [
-            NODE_MEMORY_WORKER,
-            NODE_LONG_TERM_MEMORY_WORKER,
-            NODE_TIMELINE_WORKER,
+            NODE_THREAD_CONVERSATION_HISTORY_WORKER,
+            NODE_DURABLE_MEMORY_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
             NODE_WEB_WORKER,
             NODE_EVIDENCE_EVALUATOR,
             NODE_SYNTHESIZER,
@@ -164,16 +165,16 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         ],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
-    NODE_MEMORY_WORKER: {
-        "display_name": "Conversation History Retrieval",
+    NODE_THREAD_CONVERSATION_HISTORY_WORKER: {
+        "display_name": "Thread Conversation History Retrieval",
         "category": CAT_RETRIEVAL,
-        "capabilities": [CAP_RETRIEVAL_MEMORY],
+        "capabilities": [CAP_RETRIEVAL_THREAD_CONVERSATION_HISTORY],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": [TOOL_DEEP_MEMORY],
+        "allowed_tool_contract_ids": [TOOL_THREAD_CONVERSATION_HISTORY],
         "allowed_parent_types": [NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
         "allowed_child_types": [
-            NODE_TIMELINE_WORKER,
-            NODE_LONG_TERM_MEMORY_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
+            NODE_DURABLE_MEMORY_WORKER,
             NODE_WEB_WORKER,
             NODE_EVIDENCE_EVALUATOR,
             NODE_SYNTHESIZER,
@@ -182,15 +183,15 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         ],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
-    NODE_LONG_TERM_MEMORY_WORKER: {
-        "display_name": "Long-Term Memory Recall",
+    NODE_DURABLE_MEMORY_WORKER: {
+        "display_name": "Durable Memory Retrieval",
         "category": CAT_RETRIEVAL,
-        "capabilities": [CAP_RETRIEVAL_MEMORY],
+        "capabilities": [CAP_RETRIEVAL_DURABLE_MEMORY],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": [TOOL_MEMORY_RECALL],
-        "allowed_parent_types": [NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
+        "allowed_tool_contract_ids": [TOOL_DURABLE_MEMORY],
+        "allowed_parent_types": [NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
         "allowed_child_types": [
-            NODE_TIMELINE_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
             NODE_WEB_WORKER,
             NODE_EVIDENCE_EVALUATOR,
             NODE_SYNTHESIZER,
@@ -199,13 +200,13 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         ],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
-    NODE_TIMELINE_WORKER: {
-        "display_name": "Timeline Retrieval",
+    NODE_THREAD_EVENTS_WORKER: {
+        "display_name": "Thread Events Retrieval",
         "category": CAT_RETRIEVAL,
-        "capabilities": [CAP_RETRIEVAL_TIMELINE],
+        "capabilities": [CAP_RETRIEVAL_THREAD_EVENTS],
         "allowed_route_functions": [],
-        "allowed_tool_contract_ids": [TOOL_THREAD_TIMELINE],
-        "allowed_parent_types": [NODE_ROUTER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
+        "allowed_tool_contract_ids": [TOOL_THREAD_EVENTS],
+        "allowed_parent_types": [NODE_ROUTER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
         "allowed_child_types": [NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
@@ -224,7 +225,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             TOOL_STACKEXCHANGE_REFERENCE,
             TOOL_YAHOO_FINANCE_NEWS,
         ],
-        "allowed_parent_types": [NODE_ROUTER, NODE_TIMELINE_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
+        "allowed_parent_types": [NODE_ROUTER, NODE_THREAD_EVENTS_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_PLANNER, NODE_REPLANNER, NODE_HITL_GATE],
         "allowed_child_types": [NODE_EVIDENCE_EVALUATOR, NODE_SYNTHESIZER, NODE_FINALIZER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
@@ -234,7 +235,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_EVALUATE_EVIDENCE, CAP_CLARIFY],
         "allowed_route_functions": [ROUTE_EVALUATOR],
         "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
-        "allowed_parent_types": [NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_HITL_GATE],
+        "allowed_parent_types": [NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_HITL_GATE],
         "allowed_child_types": [NODE_SYNTHESIZER, NODE_REPLANNER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 2, "max_visits": REPLANS_LIMIT + 1},
     },
@@ -245,7 +246,7 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_route_functions": [],
         "allowed_tool_contract_ids": [TOOL_CLARIFY_INTENT],
         "allowed_parent_types": [NODE_EVIDENCE_EVALUATOR, NODE_HITL_GATE],
-        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_HITL_GATE],
+        "allowed_child_types": [NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_HITL_GATE],
         "limits": {"default_max_visits": 1, "max_visits": REPLANS_LIMIT},
     },
     NODE_DIRECT_ANSWER: {
@@ -266,9 +267,9 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "allowed_tool_contract_ids": [],
         "allowed_parent_types": [
             NODE_RETRIEVAL_WORKER,
-            NODE_MEMORY_WORKER,
-            NODE_LONG_TERM_MEMORY_WORKER,
-            NODE_TIMELINE_WORKER,
+            NODE_THREAD_CONVERSATION_HISTORY_WORKER,
+            NODE_DURABLE_MEMORY_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
             NODE_WEB_WORKER,
             NODE_EVIDENCE_EVALUATOR,
             NODE_HITL_GATE,
@@ -286,9 +287,9 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
             NODE_ROUTER,
             NODE_PLANNER,
             NODE_RETRIEVAL_WORKER,
-            NODE_MEMORY_WORKER,
-            NODE_LONG_TERM_MEMORY_WORKER,
-            NODE_TIMELINE_WORKER,
+            NODE_THREAD_CONVERSATION_HISTORY_WORKER,
+            NODE_DURABLE_MEMORY_WORKER,
+            NODE_THREAD_EVENTS_WORKER,
             NODE_WEB_WORKER,
             NODE_DIRECT_ANSWER,
             NODE_SYNTHESIZER,
@@ -303,8 +304,8 @@ NODE_CATALOG: Dict[str, Dict[str, Any]] = {
         "capabilities": [CAP_HITL_INTERRUPT],
         "allowed_route_functions": [ROUTE_HITL_GATE],
         "allowed_tool_contract_ids": [],
-        "allowed_parent_types": [START_NODE, NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_FINALIZER],
-        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_FINALIZER, END_NODE],
+        "allowed_parent_types": [START_NODE, NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_FINALIZER],
+        "allowed_child_types": [NODE_ROUTER, NODE_PLANNER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER, NODE_WEB_WORKER, NODE_EVIDENCE_EVALUATOR, NODE_REPLANNER, NODE_DIRECT_ANSWER, NODE_SYNTHESIZER, NODE_FINALIZER, END_NODE],
         "limits": {"default_max_visits": 1},
     },
 }
@@ -363,40 +364,40 @@ _NODE_CATALOG_METADATA: Dict[str, Dict[str, Any]] = {
         },
         "max_instances": 4,
     },
-    NODE_MEMORY_WORKER: {
+    NODE_THREAD_CONVERSATION_HISTORY_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "used_chat_ids", "tool_events"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
             "span_kind": SPAN_TOOL_WORKER,
-            "event_prefix": NODE_MEMORY_WORKER,
+            "event_prefix": NODE_THREAD_CONVERSATION_HISTORY_WORKER,
             "summary_fields": ["used_chat_id_count", "evidence_chars"],
             "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 4,
     },
-    NODE_LONG_TERM_MEMORY_WORKER: {
+    NODE_DURABLE_MEMORY_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "used_memory_ids", "tool_events"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
             "span_kind": SPAN_TOOL_WORKER,
-            "event_prefix": NODE_LONG_TERM_MEMORY_WORKER,
+            "event_prefix": NODE_DURABLE_MEMORY_WORKER,
             "summary_fields": ["used_memory_id_count", "evidence_chars"],
             "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
         "max_instances": 4,
     },
-    NODE_TIMELINE_WORKER: {
+    NODE_THREAD_EVENTS_WORKER: {
         "state_reads": ["question", "thread_id", "embedding_model", "execution_plan", "evidence"],
         "state_writes": ["evidence", "evidence_packets", "tool_events"],
         "prompt_slots": [],
         "context_policy": {"mode": POLICY_APPEND_EVIDENCE, "input_budget": BUDGET_TOOL_QUERY, "output_budget": BUDGET_EVIDENCE_PACKET},
         "observability": {
             "span_kind": SPAN_TOOL_WORKER,
-            "event_prefix": NODE_TIMELINE_WORKER,
+            "event_prefix": NODE_THREAD_EVENTS_WORKER,
             "summary_fields": ["timeline_event_count", "evidence_chars"],
             "raw_payload": RAW_PAYLOAD_BOUNDED,
         },
@@ -561,7 +562,7 @@ NODE_UI_METADATA: Dict[str, Dict[str, Any]] = {
         "uses_llm": False,
         "uses_tools": True,
     },
-    NODE_MEMORY_WORKER: {
+    NODE_THREAD_CONVERSATION_HISTORY_WORKER: {
         "summary": "Searches earlier questions and answers in this conversation.",
         "use_when": "Use when prior discussion may contain relevant context.",
         "category_label": "Retrieve",
@@ -572,7 +573,7 @@ NODE_UI_METADATA: Dict[str, Dict[str, Any]] = {
         "uses_llm": False,
         "uses_tools": True,
     },
-    NODE_LONG_TERM_MEMORY_WORKER: {
+    NODE_DURABLE_MEMORY_WORKER: {
         "summary": "Recalls durable user, project, and thread memories allowed by scope settings.",
         "use_when": "Use when shared project facts or remembered preferences may answer the request.",
         "category_label": "Retrieve",
@@ -583,7 +584,7 @@ NODE_UI_METADATA: Dict[str, Dict[str, Any]] = {
         "uses_llm": False,
         "uses_tools": True,
     },
-    NODE_TIMELINE_WORKER: {
+    NODE_THREAD_EVENTS_WORKER: {
         "summary": "Finds thread events and evidence in chronological order.",
         "use_when": "Use for questions about what happened and when.",
         "category_label": "Retrieve",

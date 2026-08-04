@@ -10,7 +10,7 @@ from app.agent.tool_contract import (
     normalize_tool_result,
     tool_started,
 )
-from app.rag.agent_tools import search_long_term_memory
+from app.rag.agent_tools import search_durable_memory
 
 
 class TestAskPdfToolContract:
@@ -45,7 +45,7 @@ class TestAskPdfToolContract:
     def test_normalize_tool_result_accepts_legacy_json_and_plain_strings(self):
         legacy = normalize_tool_result(
             '{"content":"Memory","__used_chat_ids__":["turn-1"]}',
-            tool_name="search_conversation_history",
+            tool_name="search_thread_conversation_history",
         )
         plain = normalize_tool_result("No thread context found.", tool_name="get_thread_shape")
 
@@ -162,12 +162,12 @@ class TestAskPdfToolContract:
             new_callable=AsyncMock,
             return_value=search_result,
         ):
-            raw = await search_long_term_memory.ainvoke(
+            raw = await search_durable_memory.ainvoke(
                 {"query": "launch codename"},
                 config={"configurable": {"app_thread_id": "thread-1"}},
             )
 
-        payload = normalize_tool_result(raw, tool_name="search_long_term_memory")
+        payload = normalize_tool_result(raw, tool_name="search_durable_memory")
         assert "The launch codename is Atlas." in payload["content"]
         assert payload["artifacts"]["memory_refs"] == [
             {
@@ -208,12 +208,12 @@ class TestAskPdfToolContract:
             new_callable=AsyncMock,
             return_value=search_result,
         ):
-            raw = await search_long_term_memory.ainvoke(
+            raw = await search_durable_memory.ainvoke(
                 {"query": "preference"},
                 config={"configurable": {"app_thread_id": "thread-1"}},
             )
 
-        payload = normalize_tool_result(raw, tool_name="search_long_term_memory")
+        payload = normalize_tool_result(raw, tool_name="search_durable_memory")
         assert payload["artifacts"]["memory_refs"] == []
         assert payload["artifacts"]["memory_scopes"] == search_result["scopes"]
         assert payload["artifacts"]["memory_scope_policy"] == search_result["scope_policy"]

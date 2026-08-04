@@ -6,7 +6,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from langchain_core.runnables import RunnableConfig
 
 from app.agent.external_research_tools import search_web
-from app.rag.agent_tools import search_conversation_history, search_documents, search_long_term_memory, search_thread_timeline
+from app.rag.agent_tools import search_thread_conversation_history, search_documents, search_durable_memory, search_thread_events
 from app.rag.enums import ThreadTimelineOrder, ThreadTimelineSource
 from app.agent_workflows.enums import EvidenceKind, NodeEventStatus, ToolName, WorkflowNodeType
 from app.agent_workflows.state import runtime_node_id
@@ -40,23 +40,23 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
             "web_sources": [*current.get("web_sources", []), *artifacts.get("web_sources", [])],
         },
     ),
-    WorkflowNodeType.MEMORY_WORKER.value: ToolWorkerSpec(
-        node_name=WorkflowNodeType.MEMORY_WORKER.value,
-        tool_name=ToolName.SEARCH_CONVERSATION_HISTORY.value,
-        evidence_kind=EvidenceKind.MEMORY.value,
-        evidence_label="Conversation history evidence",
-        tool=search_conversation_history,
+    WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value: ToolWorkerSpec(
+        node_name=WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
+        tool_name=ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value,
+        evidence_kind=EvidenceKind.THREAD_CONVERSATION_HISTORY.value,
+        evidence_label="Thread conversation history evidence",
+        tool=search_thread_conversation_history,
         tool_input=lambda current: {"query": current["question"], "max_results": 10},
         state_update=lambda current, _payload, artifacts, _evidence, _packets: {
             "used_chat_ids": [*current.get("used_chat_ids", []), *artifacts.get("used_chat_ids", [])],
         },
     ),
-    WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value: ToolWorkerSpec(
-        node_name=WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value,
-        tool_name=ToolName.SEARCH_LONG_TERM_MEMORY.value,
-        evidence_kind=EvidenceKind.LONG_TERM_MEMORY.value,
-        evidence_label="Long-term memory evidence",
-        tool=search_long_term_memory,
+    WorkflowNodeType.DURABLE_MEMORY_WORKER.value: ToolWorkerSpec(
+        node_name=WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
+        tool_name=ToolName.SEARCH_DURABLE_MEMORY.value,
+        evidence_kind=EvidenceKind.DURABLE_MEMORY.value,
+        evidence_label="Durable memory evidence",
+        tool=search_durable_memory,
         tool_input=lambda current: {"query": current["question"], "max_results": 10},
         state_update=lambda current, _payload, artifacts, _evidence, _packets: {
             "used_memory_ids": [
@@ -69,12 +69,12 @@ TOOL_WORKER_SPECS: Dict[str, ToolWorkerSpec] = {
             ],
         },
     ),
-    WorkflowNodeType.TIMELINE_WORKER.value: ToolWorkerSpec(
-        node_name=WorkflowNodeType.TIMELINE_WORKER.value,
-        tool_name=ToolName.SEARCH_THREAD_TIMELINE.value,
-        evidence_kind=EvidenceKind.TIMELINE.value,
-        evidence_label="Timeline evidence",
-        tool=search_thread_timeline,
+    WorkflowNodeType.THREAD_EVENTS_WORKER.value: ToolWorkerSpec(
+        node_name=WorkflowNodeType.THREAD_EVENTS_WORKER.value,
+        tool_name=ToolName.SEARCH_THREAD_EVENTS.value,
+        evidence_kind=EvidenceKind.THREAD_EVENTS.value,
+        evidence_label="Thread events evidence",
+        tool=search_thread_events,
         tool_input=lambda current: {
             "query": current["question"],
             "sources": ThreadTimelineSource.ALL.value,

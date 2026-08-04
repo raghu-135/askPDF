@@ -122,7 +122,7 @@ async def test_search_documents_returns_sources_and_artifacts_contract(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_search_conversation_history_returns_used_chat_ids_contract(monkeypatch):
+async def test_search_thread_conversation_history_returns_used_chat_ids_contract(monkeypatch):
     class FakeEmbeddingModel:
         async def aembed_query(self, query):
             return [0.4, 0.5]
@@ -134,17 +134,17 @@ async def test_search_conversation_history_returns_used_chat_ids_contract(monkey
         AsyncMock(return_value=("Q: earlier\nA: useful memory", ["turn-1:assistant"])),
     )
 
-    raw = await agent_tools.search_conversation_history.ainvoke(
+    raw = await agent_tools.search_thread_conversation_history.ainvoke(
         {"query": "earlier discussion", "max_results": 3},
-        config=_config(caller_node="memory_worker", route="memory"),
+        config=_config(caller_node="thread_conversation_history_worker", route="thread_conversation_history"),
     )
-    payload = normalize_tool_result(raw, tool_name="search_conversation_history")
+    payload = normalize_tool_result(raw, tool_name="search_thread_conversation_history")
 
     assert payload["ok"] is True
     _assert_contract(
         payload,
-        tool_name="search_conversation_history",
-        caller_node="memory_worker",
+        tool_name="search_thread_conversation_history",
+        caller_node="thread_conversation_history_worker",
         artifact_keys=("used_chat_ids",),
     )
     assert payload["artifacts"]["used_chat_ids"] == ["turn-1:assistant"]
@@ -153,7 +153,7 @@ async def test_search_conversation_history_returns_used_chat_ids_contract(monkey
 
 
 @pytest.mark.asyncio
-async def test_search_thread_timeline_returns_timeline_artifacts_contract(monkeypatch):
+async def test_search_thread_events_returns_timeline_artifacts_contract(monkeypatch):
     fake_db = SimpleNamespace(
         search_chat_memory=AsyncMock(
             return_value=[
@@ -180,17 +180,17 @@ async def test_search_thread_timeline_returns_timeline_artifacts_contract(monkey
         AsyncMock(return_value={}),
     )
 
-    raw = await agent_tools.search_thread_timeline.ainvoke(
+    raw = await agent_tools.search_thread_events.ainvoke(
         {"query": "timeline", "sources": "conversation", "order": "oldest", "max_results": 5},
-        config=_config(caller_node="timeline_worker", route="timeline"),
+        config=_config(caller_node="thread_events_worker", route="thread_events"),
     )
-    payload = normalize_tool_result(raw, tool_name="search_thread_timeline")
+    payload = normalize_tool_result(raw, tool_name="search_thread_events")
 
     assert payload["ok"] is True
     _assert_contract(
         payload,
-        tool_name="search_thread_timeline",
-        caller_node="timeline_worker",
+        tool_name="search_thread_events",
+        caller_node="thread_events_worker",
         artifact_keys=("timeline_events",),
     )
     assert payload["artifacts"]["timeline_events"][0]["message_id"] == "turn-1:assistant"

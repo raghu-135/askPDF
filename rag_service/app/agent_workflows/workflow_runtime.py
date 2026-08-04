@@ -80,9 +80,9 @@ def repeatable_node_types_for_replans(spec: Dict[str, Any]) -> set[str]:
         and node.get("type")
         in {
             WorkflowNodeType.RETRIEVAL_WORKER.value,
-            WorkflowNodeType.MEMORY_WORKER.value,
-            WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value,
-            WorkflowNodeType.TIMELINE_WORKER.value,
+            WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
+            WorkflowNodeType.DURABLE_MEMORY_WORKER.value,
+            WorkflowNodeType.THREAD_EVENTS_WORKER.value,
             WorkflowNodeType.WEB_WORKER.value,
             WorkflowNodeType.EVIDENCE_EVALUATOR.value,
         }

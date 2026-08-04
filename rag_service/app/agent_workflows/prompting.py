@@ -18,8 +18,9 @@ from app.prompts.loaders import get_web_search_mandate, load_prompt
 GRAPH_TOOL_NAMES = [
     ToolName.SEARCH_DOCUMENTS.value,
     ToolName.SEARCH_DOCUMENT_BY_ID.value,
-    ToolName.SEARCH_CONVERSATION_HISTORY.value,
-    ToolName.SEARCH_THREAD_TIMELINE.value,
+    ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value,
+    ToolName.SEARCH_DURABLE_MEMORY.value,
+    ToolName.SEARCH_THREAD_EVENTS.value,
     ToolName.SEARCH_WEB.value,
     ToolName.ASK_FOR_CLARIFICATION.value,
 ]
@@ -32,8 +33,9 @@ EVALUATOR_REPORT_PLACEHOLDER = "{{EVALUATOR_REPORT}}"
 
 WORKER_TYPE_DESCRIPTIONS = {
     "retrieval_worker": "uploaded document, PDF, page, section, quote, citation, excerpt, summary, or cached web snippet evidence",
-    "memory_worker": "non-temporal recall of prior conversation, previous answers, or what we discussed",
-    "timeline_worker": "chronology, latest/most recent/current, first/earliest/oldest, before/after/since, date/time, or event ordering",
+    "thread_conversation_history_worker": "non-temporal recall of prior conversation, previous answers, or what we discussed",
+    "durable_memory_worker": "durable user, project, or thread facts and preferences; not raw chat history",
+    "thread_events_worker": "chronology, latest/most recent/current, first/earliest/oldest, before/after/since, date/time, or event ordering",
     "web_worker": "live internet evidence, only when live web search is enabled",
 }
 

@@ -40,10 +40,10 @@ This is a scoped retrieval plan, not an autonomous loop. Choose route and worker
 - Choose `direct` only when pre-fetched context directly answers the question.
 - Do not choose `direct` for latest, first, since, before, after, or current questions unless pre-fetched context includes explicit timeline evidence.
 - Do not choose `direct` for citation or source-specific questions unless pre-fetched context includes source labels.
-- If wording depends on latest, first, earliest, oldest, since, before, after, current, chronology, sequence, or order, include `timeline_worker`.
-- For prior conversation recall without time/order wording, include `memory_worker` rather than `timeline_worker`.
+- If wording depends on latest, first, earliest, oldest, since, before, after, current, chronology, sequence, or order, include `thread_events_worker`.
+- For prior conversation recall without time/order wording, include `thread_conversation_history_worker` rather than `thread_events_worker`.
 - For uploaded document/PDF/page/quote/citation/content questions, include `retrieval_worker`.
-- If a question combines temporal and document/content intent, include both `timeline_worker` and `retrieval_worker`.
+- If a question combines temporal and document/content intent, include both `thread_events_worker` and `retrieval_worker`.
 - Do not include `web_worker` when live web search is disabled.
 - Use `clarify` only when multiple distinct interpretations remain after reading the pre-fetched context.
 - Clarification options must contain 2-4 complete, self-contained questions.
@@ -57,15 +57,15 @@ This is a scoped retrieval plan, not an autonomous loop. Choose route and worker
 ## Worker Query Formulation Guidance
 
 - `retrieval_worker` queries should preserve named files, pages, sections, citations, or quoted text and use the user's content terms.
-- `memory_worker` queries should use topic and conversation terms, not document-only wording.
-- `timeline_worker` queries should preserve temporal anchor words such as latest, first, since, before, and after.
+- `thread_conversation_history_worker` queries should use topic and conversation terms, not document-only wording.
+- `thread_events_worker` queries should preserve temporal anchor words such as latest, first, since, before, and after.
 - `web_worker` queries should use concise keyword-rich queries and only when live web search is enabled.
 
 ## Examples
 
-- "What is the latest document about?" -> `["retrieval_worker", "timeline_worker"]`
-- "What did we discuss previously about embeddings?" -> `["memory_worker"]`
-- "What changed since the first upload?" -> `["retrieval_worker", "timeline_worker"]`
+- "What is the latest document about?" -> `["retrieval_worker", "thread_events_worker"]`
+- "What did we discuss previously about embeddings?" -> `["thread_conversation_history_worker"]`
+- "What changed since the first upload?" -> `["retrieval_worker", "thread_events_worker"]`
 - "What does the uploaded PDF say about risks?" -> `["retrieval_worker"]`
 
 {TOOL_REGISTRY_SECTION}

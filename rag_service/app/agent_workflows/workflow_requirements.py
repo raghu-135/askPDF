@@ -8,8 +8,8 @@ from app.agent_workflows.node_catalog import node_type_allowed_tool_contract_ids
 
 REQUIRED_TOOL_NODE_TYPES = {
     WorkflowNodeType.RETRIEVAL_WORKER.value,
-    WorkflowNodeType.MEMORY_WORKER.value,
-    WorkflowNodeType.TIMELINE_WORKER.value,
+    WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value,
+    WorkflowNodeType.THREAD_EVENTS_WORKER.value,
     WorkflowNodeType.WEB_WORKER.value,
 }
 

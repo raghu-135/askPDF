@@ -7,8 +7,8 @@
     "config": {
       "allowed_tool_ids": [
         "document_evidence",
-        "deep_memory",
-        "thread_timeline",
+        "thread_conversation_history",
+        "thread_events",
         "live_web_recon",
         "clarify_intent"
       ],
@@ -47,14 +47,14 @@
           },
           {
             "from": "retrieval_worker",
-            "to": "memory_worker"
+            "to": "thread_conversation_history_worker"
           },
           {
-            "from": "memory_worker",
-            "to": "timeline_worker"
+            "from": "thread_conversation_history_worker",
+            "to": "thread_events_worker"
           },
           {
-            "from": "timeline_worker",
+            "from": "thread_events_worker",
             "to": "web_worker"
           },
           {
@@ -88,12 +88,12 @@
             "type": "retrieval_worker"
           },
           {
-            "id": "memory_worker",
-            "type": "memory_worker"
+            "id": "thread_conversation_history_worker",
+            "type": "thread_conversation_history_worker"
           },
           {
-            "id": "timeline_worker",
-            "type": "timeline_worker"
+            "id": "thread_events_worker",
+            "type": "thread_events_worker"
           },
           {
             "id": "web_worker",
@@ -117,9 +117,9 @@
         "default_max_node_visits": 1,
         "max_total_visits": 9,
         "node_visit_limits": {
-          "memory_worker": 2,
+          "thread_conversation_history_worker": 2,
           "retrieval_worker": 2,
-          "timeline_worker": 2,
+          "thread_events_worker": 2,
           "web_worker": 2
         }
       },
@@ -144,7 +144,8 @@
       "prompt_preview": "planner",
       "success_context": "Context retrieved by compiled Plan-and-Execute RAG Agent workflow."
     },
-    "schema_version": 2
+    "schema_version": 2,
+    "version": 3
   },
   "visibility": "builtin"
 }

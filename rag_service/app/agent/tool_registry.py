@@ -21,9 +21,9 @@ NODE_CONTEXT_LOADER = WorkflowNodeType.CONTEXT_LOADER.value
 NODE_ROUTER = WorkflowNodeType.ROUTER.value
 NODE_PLANNER = WorkflowNodeType.PLANNER.value
 NODE_RETRIEVAL_WORKER = WorkflowNodeType.RETRIEVAL_WORKER.value
-NODE_MEMORY_WORKER = WorkflowNodeType.MEMORY_WORKER.value
-NODE_LONG_TERM_MEMORY_WORKER = WorkflowNodeType.LONG_TERM_MEMORY_WORKER.value
-NODE_TIMELINE_WORKER = WorkflowNodeType.TIMELINE_WORKER.value
+NODE_THREAD_CONVERSATION_HISTORY_WORKER = WorkflowNodeType.THREAD_CONVERSATION_HISTORY_WORKER.value
+NODE_DURABLE_MEMORY_WORKER = WorkflowNodeType.DURABLE_MEMORY_WORKER.value
+NODE_THREAD_EVENTS_WORKER = WorkflowNodeType.THREAD_EVENTS_WORKER.value
 NODE_WEB_WORKER = WorkflowNodeType.WEB_WORKER.value
 NODE_EVIDENCE_EVALUATOR = WorkflowNodeType.EVIDENCE_EVALUATOR.value
 NODE_REPLANNER = WorkflowNodeType.REPLANNER.value
@@ -32,8 +32,9 @@ NODE_FINALIZER = WorkflowNodeType.FINALIZER.value
 CAT_CONTEXT = NodeCategory.CONTEXT.value
 CAT_CONTROL = NodeCategory.CONTROL.value
 CAT_RETRIEVAL = NodeCategory.RETRIEVAL.value
-CAT_MEMORY = NodeCategory.MEMORY.value
-CAT_TIMELINE = NodeCategory.TIMELINE.value
+CAT_THREAD_CONVERSATION_HISTORY = NodeCategory.THREAD_CONVERSATION_HISTORY.value
+CAT_DURABLE_MEMORY = NodeCategory.DURABLE_MEMORY.value
+CAT_THREAD_EVENTS = NodeCategory.THREAD_EVENTS.value
 CAT_WEB = NodeCategory.WEB.value
 CAT_EXTERNAL_RESEARCH = NodeCategory.EXTERNAL_RESEARCH.value
 
@@ -41,17 +42,18 @@ CAP_CONTEXT_PREFETCH = NodeCapability.CONTEXT_PREFETCH.value
 CAP_ROUTE_INTENT = NodeCapability.ROUTE_INTENT.value
 CAP_CLARIFY = NodeCapability.CLARIFY.value
 CAP_RETRIEVAL_DOCUMENT = NodeCapability.RETRIEVAL_DOCUMENT.value
-CAP_RETRIEVAL_MEMORY = NodeCapability.RETRIEVAL_MEMORY.value
-CAP_RETRIEVAL_TIMELINE = NodeCapability.RETRIEVAL_TIMELINE.value
+CAP_RETRIEVAL_THREAD_CONVERSATION_HISTORY = NodeCapability.RETRIEVAL_THREAD_CONVERSATION_HISTORY.value
+CAP_RETRIEVAL_DURABLE_MEMORY = NodeCapability.RETRIEVAL_DURABLE_MEMORY.value
+CAP_RETRIEVAL_THREAD_EVENTS = NodeCapability.RETRIEVAL_THREAD_EVENTS.value
 CAP_RETRIEVAL_WEB = NodeCapability.RETRIEVAL_WEB.value
 CAP_EXTERNAL_RESEARCH = NodeCapability.EXTERNAL_RESEARCH.value
 
 TOOL_THREAD_SHAPE = ToolContractId.THREAD_SHAPE.value
 TOOL_DOCUMENT_EVIDENCE = ToolContractId.DOCUMENT_EVIDENCE.value
 TOOL_FOCUSED_DOCUMENT_EVIDENCE = ToolContractId.FOCUSED_DOCUMENT_EVIDENCE.value
-TOOL_DEEP_MEMORY = ToolContractId.DEEP_MEMORY.value
-TOOL_MEMORY_RECALL = ToolContractId.MEMORY_RECALL.value
-TOOL_THREAD_TIMELINE = ToolContractId.THREAD_TIMELINE.value
+TOOL_THREAD_CONVERSATION_HISTORY = ToolContractId.THREAD_CONVERSATION_HISTORY.value
+TOOL_DURABLE_MEMORY = ToolContractId.DURABLE_MEMORY.value
+TOOL_THREAD_EVENTS = ToolContractId.THREAD_EVENTS.value
 TOOL_LIVE_WEB_RECON = ToolContractId.LIVE_WEB_RECON.value
 TOOL_WIKIPEDIA_REFERENCE = ToolContractId.WIKIPEDIA_REFERENCE.value
 TOOL_WIKIDATA_REFERENCE = ToolContractId.WIKIDATA_REFERENCE.value
@@ -65,9 +67,9 @@ TOOL_CLARIFY_INTENT = ToolContractId.CLARIFY_INTENT.value
 TOOL_NAME_GET_THREAD_SHAPE = ToolName.GET_THREAD_SHAPE.value
 TOOL_NAME_SEARCH_DOCUMENTS = ToolName.SEARCH_DOCUMENTS.value
 TOOL_NAME_SEARCH_DOCUMENT_BY_ID = ToolName.SEARCH_DOCUMENT_BY_ID.value
-TOOL_NAME_SEARCH_CONVERSATION_HISTORY = ToolName.SEARCH_CONVERSATION_HISTORY.value
-TOOL_NAME_SEARCH_LONG_TERM_MEMORY = ToolName.SEARCH_LONG_TERM_MEMORY.value
-TOOL_NAME_SEARCH_THREAD_TIMELINE = ToolName.SEARCH_THREAD_TIMELINE.value
+TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY = ToolName.SEARCH_THREAD_CONVERSATION_HISTORY.value
+TOOL_NAME_SEARCH_DURABLE_MEMORY = ToolName.SEARCH_DURABLE_MEMORY.value
+TOOL_NAME_SEARCH_THREAD_EVENTS = ToolName.SEARCH_THREAD_EVENTS.value
 TOOL_NAME_SEARCH_WEB = ToolName.SEARCH_WEB.value
 TOOL_NAME_WIKIPEDIA = ToolName.WIKIPEDIA.value
 TOOL_NAME_WIKIDATA = ToolName.WIKIDATA.value
@@ -85,9 +87,9 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
     TOOL_NAME_GET_THREAD_SHAPE: {
         "id": TOOL_THREAD_SHAPE,
         "category": CAT_CONTEXT,
-        "allowed_caller_nodes": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER],
-        "allowed_node_types": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_MEMORY_WORKER, NODE_LONG_TERM_MEMORY_WORKER, NODE_TIMELINE_WORKER],
-        "required_node_capabilities": [CAP_CONTEXT_PREFETCH, CAP_ROUTE_INTENT, CAP_RETRIEVAL_DOCUMENT, CAP_RETRIEVAL_MEMORY, CAP_RETRIEVAL_TIMELINE],
+        "allowed_caller_nodes": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER],
+        "allowed_node_types": [NODE_CONTEXT_LOADER, NODE_ROUTER, NODE_RETRIEVAL_WORKER, NODE_THREAD_CONVERSATION_HISTORY_WORKER, NODE_DURABLE_MEMORY_WORKER, NODE_THREAD_EVENTS_WORKER],
+        "required_node_capabilities": [CAP_CONTEXT_PREFETCH, CAP_ROUTE_INTENT, CAP_RETRIEVAL_DOCUMENT, CAP_RETRIEVAL_THREAD_CONVERSATION_HISTORY, CAP_RETRIEVAL_DURABLE_MEMORY, CAP_RETRIEVAL_THREAD_EVENTS],
         "artifact_keys": [TOOL_THREAD_SHAPE],
         "warning_codes": [ToolWarningCode.MISSING_THREAD_ID],
     },
@@ -114,30 +116,30 @@ TOOL_CONTRACT_METADATA: Dict[str, Dict[str, Any]] = {
         "artifact_keys": ["document_sources"],
         "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.MISSING_DOCUMENT_VECTORS, ToolWarningCode.NO_RELEVANT_CONTENT],
     },
-    TOOL_NAME_SEARCH_CONVERSATION_HISTORY: {
-        "id": TOOL_DEEP_MEMORY,
-        "category": CAT_MEMORY,
-        "allowed_caller_nodes": [NODE_MEMORY_WORKER],
-        "allowed_node_types": [NODE_MEMORY_WORKER],
-        "required_node_capabilities": [CAP_RETRIEVAL_MEMORY],
+    TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY: {
+        "id": TOOL_THREAD_CONVERSATION_HISTORY,
+        "category": CAT_THREAD_CONVERSATION_HISTORY,
+        "allowed_caller_nodes": [NODE_THREAD_CONVERSATION_HISTORY_WORKER],
+        "allowed_node_types": [NODE_THREAD_CONVERSATION_HISTORY_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_THREAD_CONVERSATION_HISTORY],
         "artifact_keys": ["used_chat_ids"],
         "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_RELEVANT_CONVERSATION_HISTORY],
     },
-    TOOL_NAME_SEARCH_LONG_TERM_MEMORY: {
-        "id": TOOL_MEMORY_RECALL,
-        "category": CAT_MEMORY,
-        "allowed_caller_nodes": [NODE_LONG_TERM_MEMORY_WORKER],
-        "allowed_node_types": [NODE_LONG_TERM_MEMORY_WORKER],
-        "required_node_capabilities": [CAP_RETRIEVAL_MEMORY],
+    TOOL_NAME_SEARCH_DURABLE_MEMORY: {
+        "id": TOOL_DURABLE_MEMORY,
+        "category": CAT_DURABLE_MEMORY,
+        "allowed_caller_nodes": [NODE_DURABLE_MEMORY_WORKER],
+        "allowed_node_types": [NODE_DURABLE_MEMORY_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_DURABLE_MEMORY],
         "artifact_keys": ["memory_refs", "memory_scopes", "memory_scope_policy"],
         "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_RELEVANT_MEMORY],
     },
-    TOOL_NAME_SEARCH_THREAD_TIMELINE: {
-        "id": TOOL_THREAD_TIMELINE,
-        "category": CAT_TIMELINE,
-        "allowed_caller_nodes": [NODE_TIMELINE_WORKER],
-        "allowed_node_types": [NODE_TIMELINE_WORKER],
-        "required_node_capabilities": [CAP_RETRIEVAL_TIMELINE],
+    TOOL_NAME_SEARCH_THREAD_EVENTS: {
+        "id": TOOL_THREAD_EVENTS,
+        "category": CAT_THREAD_EVENTS,
+        "allowed_caller_nodes": [NODE_THREAD_EVENTS_WORKER],
+        "allowed_node_types": [NODE_THREAD_EVENTS_WORKER],
+        "required_node_capabilities": [CAP_RETRIEVAL_THREAD_EVENTS],
         "artifact_keys": ["timeline_events"],
         "warning_codes": [ToolWarningCode.MISSING_THREAD_CONTEXT, ToolWarningCode.NO_TIMELINE_EVENTS],
     },
@@ -366,30 +368,30 @@ TOOL_FRIENDLY_CONFIG = {
     TOOL_NAME_SEARCH_DOCUMENTS: {
         "id": TOOL_DOCUMENT_EVIDENCE,
         "display_name": "Document Evidence",
-        "description": "Semantic search across uploaded documents and cached web snippets when the user needs evidence content. Use this when the target document is unknown, the question spans multiple documents, or cached web snippets may contain the answer. Do not use it just to answer first/latest/since/order questions; use search_thread_timeline when chronology is central.",
-        "default_prompt": "Use for evidence content from uploaded documents or cached web snippets. Prefer search_document_by_id when a specific file_hash is known. Prefer search_thread_timeline when the user's wording depends on first/latest/earlier/since/before/after or mixed-source ordering.",
+        "description": "Semantic search across uploaded documents and cached web snippets when the user needs evidence content. Use this when the target document is unknown, the question spans multiple documents, or cached web snippets may contain the answer. Do not use it just to answer first/latest/since/order questions; use search_thread_events when chronology is central.",
+        "default_prompt": "Use for evidence content from uploaded documents or cached web snippets. Prefer search_document_by_id when a specific file_hash is known. Prefer search_thread_events when the user's wording depends on first/latest/earlier/since/before/after or mixed-source ordering.",
     },
     TOOL_NAME_SEARCH_DOCUMENT_BY_ID: {
         "id": TOOL_FOCUSED_DOCUMENT_EVIDENCE,
         "display_name": "Focused Document Evidence",
-        "description": "Semantic search within one uploaded document identified by file_hash. Use this when the user names or clearly points to a specific document and thread shape provides the file_hash. Do not use it for cross-document comparison or timeline ordering unless paired with search_thread_timeline.",
-        "default_prompt": "Use when a specific document is known and its file_hash is available. Keep the query focused on the requested fact. Use search_thread_timeline instead for document added-to-thread time or chronology questions.",
+        "description": "Semantic search within one uploaded document identified by file_hash. Use this when the user names or clearly points to a specific document and thread shape provides the file_hash. Do not use it for cross-document comparison or timeline ordering unless paired with search_thread_events.",
+        "default_prompt": "Use when a specific document is known and its file_hash is available. Keep the query focused on the requested fact. Use search_thread_events instead for document added-to-thread time or chronology questions.",
     },
-    TOOL_NAME_SEARCH_CONVERSATION_HISTORY: {
-        "id": TOOL_DEEP_MEMORY,
-        "display_name": "Conversation History",
-        "description": "Semantic search across past Q/A pairs in this thread when the user asks what was previously discussed or decided. Use this for topical recall where ordering is not the main question. Do not use it for first/latest/earlier/since/before/after questions; use search_thread_timeline for temporal reasoning.",
-        "default_prompt": "Use for non-temporal recall of prior discussion, decisions, or answers about a topic. Avoid using it merely to reread recent turns already present in prefetch. Prefer search_thread_timeline for chronological questions.",
+    TOOL_NAME_SEARCH_THREAD_CONVERSATION_HISTORY: {
+        "id": TOOL_THREAD_CONVERSATION_HISTORY,
+        "display_name": "Thread Conversation History",
+        "description": "Semantic search across past Q/A pairs in this thread when the user asks what was previously discussed or decided. Use this for topical recall where ordering is not the main question. Do not use it for first/latest/earlier/since/before/after questions; use search_thread_events for temporal reasoning.",
+        "default_prompt": "Use for non-temporal recall of prior discussion, decisions, or answers about a topic. Avoid using it merely to reread recent turns already present in prefetch. Prefer search_thread_events for chronological questions.",
     },
-    TOOL_NAME_SEARCH_LONG_TERM_MEMORY: {
-        "id": TOOL_MEMORY_RECALL,
-        "display_name": "Long-Term Memory",
+    TOOL_NAME_SEARCH_DURABLE_MEMORY: {
+        "id": TOOL_DURABLE_MEMORY,
+        "display_name": "Durable Memory",
         "description": "Policy-scoped search across durable user, project, and thread memories. Use this when shared project facts, durable preferences, or remembered instructions may answer the request. This does not search raw chat turns.",
         "default_prompt": "Use for durable remembered facts and preferences across the thread/project/user scopes allowed by settings. Prefer conversation history when the user asks what was said earlier in this exact thread.",
     },
-    TOOL_NAME_SEARCH_THREAD_TIMELINE: {
-        "id": TOOL_THREAD_TIMELINE,
-        "display_name": "Thread Timeline",
+    TOOL_NAME_SEARCH_THREAD_EVENTS: {
+        "id": TOOL_THREAD_EVENTS,
+        "display_name": "Thread Events",
         "description": "Search timestamped timeline events across conversation memory, document added-to-thread time, and cached web evidence. Use this for earliest/latest/first/earlier/since/before/after questions or when mixed-source ordering matters. It returns source-specific timestamps plus derived timeline_event_at and timeline_event_type; document timestamps mean added to this thread, not document publication time.",
         "default_prompt": "Use when the answer depends on chronology, recency, sequence, or comparing event times across conversation, documents, and cached web. Set order=oldest for first/earliest, order=newest for latest/recent, and sources to narrow the search when the user names a source class. Do not use it for ordinary semantic evidence lookup where time is irrelevant.",
     },

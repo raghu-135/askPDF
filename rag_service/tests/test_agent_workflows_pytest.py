@@ -401,7 +401,7 @@ class TestAgentRunMetrics:
             chat_turn=SimpleNamespace(id="turn-1"),
             node_events=[
                 {
-                    "node": "memory_worker",
+                    "node": "thread_conversation_history_worker",
                     "status": "skipped",
                     "skipped": True,
                     "skip_reason": "not_selected_by_plan",
@@ -459,7 +459,7 @@ class TestAgentRunMetrics:
             route_reason="Document evidence is enough.",
         )
 
-        skipped_span = next(span for span in trace["spans"] if span["span_id"] == "node:memory_worker:0")
+        skipped_span = next(span for span in trace["spans"] if span["span_id"] == "node:thread_conversation_history_worker:0")
         assert skipped_span["status"] == "skipped"
         assert skipped_span["start_time"] == "2026-07-04T02:30:08Z"
         assert skipped_span["end_time"] == "2026-07-04T02:30:08.001000Z"
@@ -641,7 +641,7 @@ class TestAgentRunMetrics:
             node_events=[
                 {"node": "planner", "status": "completed", "route": "execute", "execution_plan": ["retrieval_worker"]},
                 {"node": "retrieval_worker", "status": "failed", "error": {"code": "worker_failed", "message": "boom", "retryable": True}},
-                {"node": "memory_worker", "status": "skipped", "skipped": True, "skip_reason": "not_selected_by_plan"},
+                {"node": "thread_conversation_history_worker", "status": "skipped", "skipped": True, "skip_reason": "not_selected_by_plan"},
             ],
             tool_events=[
                 {
@@ -666,8 +666,8 @@ class TestAgentRunMetrics:
         assert span_ids["node:planner:0"]["events"][0]["name"] == "decision.made"
         assert span_ids["node:retrieval_worker:1"]["status"] == "error"
         assert any(event["name"] == "exception" for event in span_ids["node:retrieval_worker:1"]["events"])
-        assert span_ids["node:memory_worker:2"]["status"] == "skipped"
-        assert any(event["name"] == "skipped" for event in span_ids["node:memory_worker:2"]["events"])
+        assert span_ids["node:thread_conversation_history_worker:2"]["status"] == "skipped"
+        assert any(event["name"] == "skipped" for event in span_ids["node:thread_conversation_history_worker:2"]["events"])
         assert span_ids["tool:search_documents:0"]["status"] == "error"
         assert span_ids["tool:search_documents:0"]["attributes"]["tool.id"] == "document_evidence"
 
@@ -1015,8 +1015,8 @@ class TestRouterRagWorkflowValidator:
             "default_max_node_visits": 1,
             "node_visit_limits": {
                 "retrieval_worker": 3,
-                "memory_worker": 3,
-                "timeline_worker": 3,
+                "thread_conversation_history_worker": 3,
+                "thread_events_worker": 3,
                 "web_worker": 3,
                 "evidence_evaluator": 3,
                 "replanner": 2,
@@ -1080,14 +1080,14 @@ class TestRouterRagWorkflowValidator:
             (
                 builtin_router_rag_v2_spec,
                 {
-                    "node_ids": ["context_loader", "router", "retrieval_worker", "memory_worker", "long_term_memory_worker", "timeline_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
+                    "node_ids": ["context_loader", "router", "retrieval_worker", "thread_conversation_history_worker", "durable_memory_worker", "thread_events_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
                     "node_types": {
                         "context_loader": "context_loader",
                         "router": "router",
                         "retrieval_worker": "retrieval_worker",
-                        "memory_worker": "memory_worker",
-                        "long_term_memory_worker": "long_term_memory_worker",
-                        "timeline_worker": "timeline_worker",
+                        "thread_conversation_history_worker": "thread_conversation_history_worker",
+                        "durable_memory_worker": "durable_memory_worker",
+                        "thread_events_worker": "thread_events_worker",
                         "web_worker": "web_worker",
                         "direct_answer": "direct_answer",
                         "synthesizer": "synthesizer",
@@ -1097,9 +1097,9 @@ class TestRouterRagWorkflowValidator:
                         ("START", "context_loader"),
                         ("context_loader", "router"),
                         ("retrieval_worker", "synthesizer"),
-                        ("memory_worker", "synthesizer"),
-                        ("long_term_memory_worker", "synthesizer"),
-                        ("timeline_worker", "synthesizer"),
+                        ("thread_conversation_history_worker", "synthesizer"),
+                        ("durable_memory_worker", "synthesizer"),
+                        ("thread_events_worker", "synthesizer"),
                         ("web_worker", "synthesizer"),
                         ("direct_answer", "finalizer"),
                         ("synthesizer", "finalizer"),
@@ -1110,9 +1110,9 @@ class TestRouterRagWorkflowValidator:
                             "route_fn": "router_route",
                             "routes": {
                                 "document": "retrieval_worker",
-                                "memory": "memory_worker",
-                                "long_term_memory": "long_term_memory_worker",
-                                "timeline": "timeline_worker",
+                                "thread_conversation_history": "thread_conversation_history_worker",
+                                "durable_memory": "durable_memory_worker",
+                                "thread_events": "thread_events_worker",
                                 "web": "web_worker",
                                 "direct": "direct_answer",
                                 "clarify": "finalizer",
@@ -1124,13 +1124,13 @@ class TestRouterRagWorkflowValidator:
             (
                 builtin_plan_execute_rag_v2_spec,
                 {
-                    "node_ids": ["context_loader", "planner", "retrieval_worker", "memory_worker", "timeline_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
+                    "node_ids": ["context_loader", "planner", "retrieval_worker", "thread_conversation_history_worker", "thread_events_worker", "web_worker", "direct_answer", "synthesizer", "finalizer"],
                     "node_types": {
                         "context_loader": "context_loader",
                         "planner": "planner",
                         "retrieval_worker": "retrieval_worker",
-                        "memory_worker": "memory_worker",
-                        "timeline_worker": "timeline_worker",
+                        "thread_conversation_history_worker": "thread_conversation_history_worker",
+                        "thread_events_worker": "thread_events_worker",
                         "web_worker": "web_worker",
                         "direct_answer": "direct_answer",
                         "synthesizer": "synthesizer",
@@ -1139,9 +1139,9 @@ class TestRouterRagWorkflowValidator:
                     "edges": [
                         ("START", "context_loader"),
                         ("context_loader", "planner"),
-                        ("retrieval_worker", "memory_worker"),
-                        ("memory_worker", "timeline_worker"),
-                        ("timeline_worker", "web_worker"),
+                        ("retrieval_worker", "thread_conversation_history_worker"),
+                        ("thread_conversation_history_worker", "thread_events_worker"),
+                        ("thread_events_worker", "web_worker"),
                         ("web_worker", "synthesizer"),
                         ("direct_answer", "finalizer"),
                         ("synthesizer", "finalizer"),
@@ -1166,8 +1166,8 @@ class TestRouterRagWorkflowValidator:
                         "context_loader",
                         "planner",
                         "retrieval_worker",
-                        "memory_worker",
-                        "timeline_worker",
+                        "thread_conversation_history_worker",
+                        "thread_events_worker",
                         "web_worker",
                         "evidence_evaluator",
                         "replanner",
@@ -1179,8 +1179,8 @@ class TestRouterRagWorkflowValidator:
                         "context_loader": "context_loader",
                         "planner": "planner",
                         "retrieval_worker": "retrieval_worker",
-                        "memory_worker": "memory_worker",
-                        "timeline_worker": "timeline_worker",
+                        "thread_conversation_history_worker": "thread_conversation_history_worker",
+                        "thread_events_worker": "thread_events_worker",
                         "web_worker": "web_worker",
                         "evidence_evaluator": "evidence_evaluator",
                         "replanner": "replanner",
@@ -1191,9 +1191,9 @@ class TestRouterRagWorkflowValidator:
                     "edges": [
                         ("START", "context_loader"),
                         ("context_loader", "planner"),
-                        ("retrieval_worker", "memory_worker"),
-                        ("memory_worker", "timeline_worker"),
-                        ("timeline_worker", "web_worker"),
+                        ("retrieval_worker", "thread_conversation_history_worker"),
+                        ("thread_conversation_history_worker", "thread_events_worker"),
+                        ("thread_events_worker", "web_worker"),
                         ("web_worker", "evidence_evaluator"),
                         ("replanner", "retrieval_worker"),
                         ("direct_answer", "finalizer"),
@@ -1468,7 +1468,7 @@ class TestRouterRagWorkflowValidator:
     def test_normalize_execution_plan_accepts_worker_instance_ids(self):
         worker_nodes = [
             {"id": "doc_search_primary", "type": "retrieval_worker", "label": "Primary documents"},
-            {"id": "timeline_main", "type": "timeline_worker", "label": "Timeline"},
+            {"id": "timeline_main", "type": "thread_events_worker", "label": "Timeline"},
         ]
         normalized = normalize_execution_plan(
             {"route": "execute", "execution_plan": ["doc_search_primary", "timeline_main"]},
@@ -1481,10 +1481,10 @@ class TestRouterRagWorkflowValidator:
     def test_normalize_execution_plan_maps_worker_type_alias_only_when_unambiguous(self):
         worker_nodes = [
             {"id": "doc_search_primary", "type": "retrieval_worker", "label": "Primary documents"},
-            {"id": "memory_main", "type": "memory_worker", "label": "Memory"},
+            {"id": "memory_main", "type": "thread_conversation_history_worker", "label": "Memory"},
         ]
         normalized = normalize_execution_plan(
-            {"route": "execute", "execution_plan": ["retrieval_worker", "memory_worker"]},
+            {"route": "execute", "execution_plan": ["retrieval_worker", "thread_conversation_history_worker"]},
             use_web_search=False,
             worker_nodes=worker_nodes,
         )
@@ -1523,10 +1523,10 @@ class TestRouterRagWorkflowValidator:
     @pytest.mark.parametrize(
         "question, expected_steps",
         [
-            ("What is the latest document about?", ["timeline_worker", "retrieval_worker"]),
-            ("What did we discuss previously about reranking?", ["memory_worker"]),
+            ("What is the latest document about?", ["thread_events_worker", "retrieval_worker"]),
+            ("What did we discuss previously about reranking?", ["thread_conversation_history_worker"]),
             ("What does the uploaded PDF say about risks?", ["retrieval_worker"]),
-            ("What changed since the first upload?", ["timeline_worker", "retrieval_worker"]),
+            ("What changed since the first upload?", ["thread_events_worker", "retrieval_worker"]),
         ],
     )
     def test_infers_required_plan_steps_from_question_intent(self, question, expected_steps):
@@ -1540,7 +1540,7 @@ class TestRouterRagWorkflowValidator:
         )
 
         assert normalized["route"] == "execute"
-        assert normalized["execution_plan"] == ["retrieval_worker", "timeline_worker"]
+        assert normalized["execution_plan"] == ["retrieval_worker", "thread_events_worker"]
 
     def test_normalize_execution_plan_uses_memory_for_non_temporal_conversation_recall(self):
         normalized = normalize_execution_plan(
@@ -1549,14 +1549,14 @@ class TestRouterRagWorkflowValidator:
             question="What did we discuss previously about embeddings?",
         )
 
-        assert normalized["execution_plan"] == ["memory_worker"]
+        assert normalized["execution_plan"] == ["thread_conversation_history_worker"]
 
     @pytest.mark.parametrize(
         "question, expected_steps",
         [
-            ("What is the latest document about?", ["retrieval_worker", "timeline_worker"]),
-            ("What changed since the first upload?", ["retrieval_worker", "timeline_worker"]),
-            ("What did we discuss previously about reranking?", ["memory_worker"]),
+            ("What is the latest document about?", ["retrieval_worker", "thread_events_worker"]),
+            ("What changed since the first upload?", ["retrieval_worker", "thread_events_worker"]),
+            ("What did we discuss previously about reranking?", ["thread_conversation_history_worker"]),
         ],
     )
     def test_normalize_execution_plan_clamps_direct_for_obvious_retrieval_intent(self, question, expected_steps):
@@ -1690,13 +1690,13 @@ class TestRouterRagWorkflowValidator:
         )
 
         assert "latest, first, earliest, oldest, since, before, after" in prompt
-        assert "include `timeline_worker`" in prompt
+        assert "include `thread_events_worker`" in prompt
         assert "prior conversation recall without time/order wording" in prompt
-        assert "include `memory_worker` rather than `timeline_worker`" in prompt
+        assert "include `thread_conversation_history_worker` rather than `thread_events_worker`" in prompt
         assert "uploaded document/PDF/page/quote/citation/content" in prompt
         assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
         assert "Do not choose `direct` for latest, first, since, before, after, or current questions" in prompt
-        assert "`timeline_worker` queries should preserve temporal anchor words" in prompt
+        assert "`thread_events_worker` queries should preserve temporal anchor words" in prompt
 
     def test_clarification_prompts_require_directly_submittable_questions(self):
         prompt_root = Path(__file__).resolve().parents[1] / "app" / "prompts" / "agent_workflows"
@@ -1729,17 +1729,17 @@ class TestRouterRagGraphToolConsumers:
         assert allowed["configurable"]["caller_node"] == "retrieval_worker"
         assert allowed["configurable"]["tool_name"] == "search_documents"
 
-        with pytest.raises(ValueError, match="search_documents is not allowed from caller node memory_worker"):
+        with pytest.raises(ValueError, match="search_documents is not allowed from caller node thread_conversation_history_worker"):
             _tool_config(
                 state,
                 config,
-                caller_node="memory_worker",
+                caller_node="thread_conversation_history_worker",
                 tool_name="search_documents",
             )
 
         with pytest.raises(ValueError, match="is not enabled for this agent run"):
             _tool_config(
-                dict(state, allowed_tool_ids=["deep_memory"]),
+                dict(state, allowed_tool_ids=["thread_conversation_history"]),
                 config,
                 caller_node="retrieval_worker",
                 tool_name="search_documents",
@@ -1896,7 +1896,7 @@ class TestRouterRagGraphToolConsumers:
     def test_v2_custom_graph_rejects_catalog_tool_contract_mismatch(self, monkeypatch):
         contracts = tool_contracts_by_id()
         contracts["document_evidence"] = [dict(contracts["document_evidence"][0])]
-        contracts["document_evidence"][0]["allowed_node_types"] = ["memory_worker"]
+        contracts["document_evidence"][0]["allowed_node_types"] = ["thread_conversation_history_worker"]
         contracts["document_evidence"][0]["required_node_capabilities"] = ["retrieval.memory"]
         monkeypatch.setattr("app.agent_workflows.validator.tool_contracts_by_id", lambda: contracts)
 
@@ -2057,7 +2057,7 @@ class TestRouterRagGraphToolConsumers:
                     "nodes": [
                         {"id": "context_1", "type": "context_loader"},
                         {"id": "router_1", "type": "router"},
-                        {"id": "memory_1", "type": "memory_worker"},
+                        {"id": "memory_1", "type": "thread_conversation_history_worker"},
                         {"id": "final_1", "type": "finalizer"},
                     ],
                     "edges": [
@@ -2067,7 +2067,7 @@ class TestRouterRagGraphToolConsumers:
                             "from": "router_1",
                             "conditional": True,
                             "route_fn": "router_route",
-                            "routes": {"memory": "memory_1"},
+                            "routes": {"thread_conversation_history": "memory_1"},
                         },
                         {"from": "memory_1", "to": "final_1"},
                         {"from": "final_1", "to": "END"},
@@ -2544,7 +2544,7 @@ class TestRouterRagGraphToolConsumers:
         assert document_update["tool_events"][0]["tool_name"] == "search_documents"
 
         monkeypatch.setattr(
-            "app.agent_workflows.graph.search_conversation_history",
+            "app.agent_workflows.graph.search_thread_conversation_history",
             FakeTool(
                 {
                     "content": "Memory evidence.",
@@ -2552,12 +2552,12 @@ class TestRouterRagGraphToolConsumers:
                 }
             ),
         )
-        memory_update = await registry.memory_worker(dict(base_state, route="memory"), config)
+        memory_update = await registry.thread_conversation_history_worker(dict(base_state, route="thread_conversation_history"), config)
         assert memory_update["used_chat_ids"] == ["turn-1:assistant"]
-        assert memory_update["tool_events"][0]["tool_name"] == "search_conversation_history"
+        assert memory_update["tool_events"][0]["tool_name"] == "search_thread_conversation_history"
 
         monkeypatch.setattr(
-            "app.agent_workflows.graph.search_thread_timeline",
+            "app.agent_workflows.graph.search_thread_events",
             FakeTool(
                 {
                     "content": "Timeline evidence.",
@@ -2572,9 +2572,9 @@ class TestRouterRagGraphToolConsumers:
                 }
             ),
         )
-        timeline_update = await registry.timeline_worker(dict(base_state, route="timeline"), config)
+        timeline_update = await registry.thread_events_worker(dict(base_state, route="thread_events"), config)
         assert timeline_update["node_events"][-1]["timeline_event_count"] == 1
-        assert timeline_update["tool_events"][0]["tool_name"] == "search_thread_timeline"
+        assert timeline_update["tool_events"][0]["tool_name"] == "search_thread_events"
 
         monkeypatch.setattr(
             "app.agent_workflows.graph.search_web",
@@ -2596,10 +2596,10 @@ class TestRouterRagGraphToolConsumers:
             async def ainvoke(self, _args, config=None):
                 raise AssertionError("tool should not be called for unselected plan worker")
 
-        monkeypatch.setattr("app.agent_workflows.graph.search_conversation_history", ExplodingTool())
+        monkeypatch.setattr("app.agent_workflows.graph.search_thread_conversation_history", ExplodingTool())
 
         registry = NodeRegistry()
-        update = await registry.memory_worker(
+        update = await registry.thread_conversation_history_worker(
             {
                 "agent_run_id": "run-1",
                 "thread_id": "thread-1",
@@ -2614,7 +2614,7 @@ class TestRouterRagGraphToolConsumers:
             {"configurable": {"thread_id": "thread-1"}},
         )
 
-        assert update["node_events"][-1]["node"] == "memory_worker"
+        assert update["node_events"][-1]["node"] == "thread_conversation_history_worker"
         assert update["node_events"][-1]["skipped"] is True
         assert update["node_events"][-1]["skip_reason"] == "not_selected_by_plan"
         assert "warnings" not in update["node_events"][-1]
@@ -2627,7 +2627,7 @@ class TestRouterRagGraphToolConsumers:
         class FakeLlm:
             async def ainvoke(self, messages):
                 captured_messages.extend(messages)
-                return SimpleNamespace(content=json.dumps({"route": "memory", "reason": "Use memory."}))
+                return SimpleNamespace(content=json.dumps({"route": "thread_conversation_history", "reason": "Use memory."}))
 
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: FakeLlm())
 
@@ -2803,7 +2803,7 @@ class TestRouterRagGraphToolConsumers:
                             "missing_evidence": ["Need timeline evidence."],
                             "citation_risk": "medium",
                             "contradiction_risk": "low",
-                            "recommended_next_steps": ["Run timeline_worker."],
+                            "recommended_next_steps": ["Run thread_events_worker."],
                             "reason": "missing chronology",
                         }
                     )
@@ -6136,9 +6136,9 @@ class TestRouterRagRuntime:
         "route, expected_nodes, expected_status",
         [
             ("document", ["context_loader", "router", "retrieval_worker", "synthesizer", "finalizer"], "completed"),
-            ("memory", ["context_loader", "router", "memory_worker", "synthesizer", "finalizer"], "completed"),
-            ("long_term_memory", ["context_loader", "router", "long_term_memory_worker", "synthesizer", "finalizer"], "completed"),
-            ("timeline", ["context_loader", "router", "timeline_worker", "synthesizer", "finalizer"], "completed"),
+            ("thread_conversation_history", ["context_loader", "router", "thread_conversation_history_worker", "synthesizer", "finalizer"], "completed"),
+            ("durable_memory", ["context_loader", "router", "durable_memory_worker", "synthesizer", "finalizer"], "completed"),
+            ("thread_events", ["context_loader", "router", "thread_events_worker", "synthesizer", "finalizer"], "completed"),
             ("web", ["context_loader", "router", "web_worker", "synthesizer", "finalizer"], "completed"),
             ("clarify", ["context_loader", "router", "finalizer"], "clarification_required"),
         ],
@@ -6289,9 +6289,9 @@ class TestRouterRagRuntime:
         monkeypatch.setattr("app.agent_workflows.graph.prefetch_context", fake_prefetch_context)
         monkeypatch.setattr("app.agent_workflows.graph.get_llm", lambda _name: fake_llm)
         monkeypatch.setattr("app.agent_workflows.graph.search_documents", FakeTool(document_payload))
-        monkeypatch.setattr("app.agent_workflows.graph.search_conversation_history", FakeTool(memory_payload))
-        monkeypatch.setattr("app.agent_workflows.graph.search_long_term_memory", FakeTool(long_term_memory_payload))
-        monkeypatch.setattr("app.agent_workflows.graph.search_thread_timeline", FakeTool(timeline_payload))
+        monkeypatch.setattr("app.agent_workflows.graph.search_thread_conversation_history", FakeTool(memory_payload))
+        monkeypatch.setattr("app.agent_workflows.graph.search_durable_memory", FakeTool(long_term_memory_payload))
+        monkeypatch.setattr("app.agent_workflows.graph.search_thread_events", FakeTool(timeline_payload))
         monkeypatch.setattr("app.agent_workflows.graph.search_web", FakeTool(web_payload))
         monkeypatch.setattr("app.agent_workflows.router_runtime.index_chat_memory_for_thread", fake_index_chat_memory_for_thread)
         monkeypatch.setattr("app.agent_workflows.router_runtime.create_chat_turn", fake_create_chat_turn)
@@ -6377,17 +6377,17 @@ class TestRouterRagRuntime:
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
             assert result["document_sources"] == [{"file_hash": "file-1", "file_name": "diffusionblocks.pdf"}]
             assert result["answer"] == "Final answer from document route."
-        elif route == "memory":
-            assert result["tool_events"][0]["tool_name"] == "search_conversation_history"
+        elif route == "thread_conversation_history":
+            assert result["tool_events"][0]["tool_name"] == "search_thread_conversation_history"
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
             assert result["used_chat_ids"] == ["turn-1"]
             assert result["answer"] == "Final answer from memory route."
-        elif route == "long_term_memory":
-            assert result["tool_events"][0]["tool_name"] == "search_long_term_memory"
+        elif route == "durable_memory":
+            assert result["tool_events"][0]["tool_name"] == "search_durable_memory"
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
             assert result["answer"] == "Final answer from long_term_memory route."
-        elif route == "timeline":
-            assert result["tool_events"][0]["tool_name"] == "search_thread_timeline"
+        elif route == "thread_events":
+            assert result["tool_events"][0]["tool_name"] == "search_thread_events"
             assert result["tool_events"][0]["tool_input"]["query"] == "Route coverage?"
             assert result["answer"] == "Final answer from timeline route."
         elif route == "web":
