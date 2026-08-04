@@ -42,7 +42,7 @@ def test_router_agent_prompt_preview_uses_graph_runtime_prompts():
     assert "Choose `direct` only when pre-fetched context directly answers the question" in prompt
     assert "Do not choose `direct` for latest, first, since, before, after, or current questions" in prompt
     assert "Document retrieval should preserve named files, pages, sections, citations, or quoted text" in prompt
-    assert "Timeline retrieval should preserve temporal anchor words" in prompt
+    assert "`thread_events_worker` should preserve temporal anchor words" in prompt
     assert "Assistant role:" in prompt
     assert "Expert AI Research Assistant specializing in analyzing uploaded documents" in prompt
     assert "Planner Node Prompt" not in prompt

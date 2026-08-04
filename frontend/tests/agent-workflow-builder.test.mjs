@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -11,7 +12,6 @@ import {
   canInsertExistingNodeBefore,
   canInsertNodeTypeBefore,
   createHitlGateForTarget,
-  createInitialBuilderState,
   getIncomingPaths,
   getImmediateSuccessorIds,
   getAllowedRouteFunctionsForNode,
@@ -25,6 +25,17 @@ import {
   setHitlContinueWithoutTarget,
   wouldCreateBuilderCycle,
 } from '../src/lib/agent-workflow-builder.ts';
+
+const seededStarterSpecs = {
+  router: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/router_rag_agent.json', import.meta.url))).spec_json,
+  plan_execute: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/plan_execute_rag_agent.json', import.meta.url))).spec_json,
+  evaluator_replanner: JSON.parse(readFileSync(new URL('../../rag_service/app/agent_workflows/builtins/evaluator_replanner_rag_agent.json', import.meta.url))).spec_json,
+};
+
+const createInitialBuilderState = (currentCatalog, starter = 'router') => {
+  const state = normalizeBuilderState(currentCatalog, loadBuilderStateFromSpec(seededStarterSpecs[starter]));
+  return { ...state, allowed_tool_ids: seededStarterSpecs[starter].config.allowed_tool_ids };
+};
 
 const node = (overrides) => ({
   display_name: overrides.display_name || overrides.type,
@@ -68,7 +79,7 @@ const catalog = {
       allowed_route_functions: ['router_route'],
       allowed_tool_contract_ids: ['clarify_intent'],
       allowed_parent_types: ['context_loader', 'hitl_gate'],
-      allowed_child_types: ['retrieval_worker', 'direct_answer', 'finalizer', 'hitl_gate'],
+      allowed_child_types: ['retrieval_worker', 'thread_conversation_history_worker', 'durable_memory_worker', 'thread_events_worker', 'direct_answer', 'finalizer', 'hitl_gate'],
     }),
     planner: node({
       type: 'planner',
@@ -86,17 +97,24 @@ const catalog = {
       allowed_child_types: ['evidence_evaluator', 'synthesizer', 'finalizer', 'hitl_gate'],
       max_instances: 4,
     }),
-    memory_worker: node({
-      type: 'memory_worker',
-      display_name: 'Memory Retrieval',
-      allowed_tool_contract_ids: ['deep_memory'],
+    thread_conversation_history_worker: node({
+      type: 'thread_conversation_history_worker',
+      display_name: 'Thread Conversation History Retrieval',
+      allowed_tool_contract_ids: ['thread_conversation_history'],
       allowed_parent_types: ['router'],
       allowed_child_types: ['synthesizer'],
     }),
-    timeline_worker: node({
-      type: 'timeline_worker',
-      display_name: 'Timeline Retrieval',
-      allowed_tool_contract_ids: ['thread_timeline'],
+    durable_memory_worker: node({
+      type: 'durable_memory_worker',
+      display_name: 'Durable Memory Retrieval',
+      allowed_tool_contract_ids: ['durable_memory'],
+      allowed_parent_types: ['router'],
+      allowed_child_types: ['synthesizer'],
+    }),
+    thread_events_worker: node({
+      type: 'thread_events_worker',
+      display_name: 'Thread Events Retrieval',
+      allowed_tool_contract_ids: ['thread_events'],
       allowed_parent_types: ['router'],
       allowed_child_types: ['synthesizer'],
     }),
@@ -132,7 +150,7 @@ const catalog = {
     synthesizer: node({
       type: 'synthesizer',
       display_name: 'Synthesizer',
-      allowed_parent_types: ['retrieval_worker', 'memory_worker', 'timeline_worker', 'web_worker', 'evidence_evaluator', 'hitl_gate'],
+      allowed_parent_types: ['retrieval_worker', 'thread_conversation_history_worker', 'durable_memory_worker', 'thread_events_worker', 'web_worker', 'evidence_evaluator', 'hitl_gate'],
       allowed_child_types: ['finalizer', 'hitl_gate'],
     }),
     finalizer: node({
@@ -154,11 +172,12 @@ const catalog = {
   route_functions: {
     router_route: {
       allowed_source_types: ['router'],
-      route_labels: ['document', 'memory', 'timeline', 'web', 'direct', 'clarify'],
+      route_labels: ['document', 'thread_conversation_history', 'durable_memory', 'thread_events', 'web', 'direct', 'clarify'],
       target_types_by_label: {
         document: ['retrieval_worker'],
-        memory: ['memory_worker'],
-        timeline: ['timeline_worker'],
+        thread_conversation_history: ['thread_conversation_history_worker'],
+        durable_memory: ['durable_memory_worker'],
+        thread_events: ['thread_events_worker'],
         web: ['web_worker'],
         direct: ['direct_answer'],
         clarify: ['finalizer'],
@@ -168,7 +187,7 @@ const catalog = {
       allowed_source_types: ['planner'],
       route_labels: ['execute', 'direct', 'clarify'],
       target_types_by_label: {
-        execute: ['retrieval_worker', 'memory_worker', 'timeline_worker', 'web_worker'],
+        execute: ['retrieval_worker', 'thread_conversation_history_worker', 'thread_events_worker', 'web_worker'],
         direct: ['direct_answer', 'finalizer'],
         clarify: ['finalizer'],
       },
@@ -216,20 +235,29 @@ const catalog = {
       artifact_keys: ['document_sources'],
       warning_codes: [],
     },
-    deep_memory: {
-      id: 'deep_memory',
-      display_name: 'Deep Memory',
-      canonical_tools: ['search_memory'],
-      allowed_node_types: ['memory_worker'],
+    thread_conversation_history: {
+      id: 'thread_conversation_history',
+      display_name: 'Thread Conversation History',
+      canonical_tools: ['search_thread_conversation_history'],
+      allowed_node_types: ['thread_conversation_history_worker'],
       required_node_capabilities: [],
       artifact_keys: ['memory_sources'],
       warning_codes: [],
     },
-    thread_timeline: {
-      id: 'thread_timeline',
-      display_name: 'Thread Timeline',
-      canonical_tools: ['search_timeline'],
-      allowed_node_types: ['timeline_worker'],
+    durable_memory: {
+      id: 'durable_memory',
+      display_name: 'Durable Memory',
+      canonical_tools: ['search_durable_memory'],
+      allowed_node_types: ['durable_memory_worker'],
+      required_node_capabilities: [],
+      artifact_keys: ['memory_refs'],
+      warning_codes: [],
+    },
+    thread_events: {
+      id: 'thread_events',
+      display_name: 'Thread Events',
+      canonical_tools: ['search_thread_events'],
+      allowed_node_types: ['thread_events_worker'],
       required_node_capabilities: [],
       artifact_keys: ['timeline_sources'],
       warning_codes: [],
@@ -271,24 +299,24 @@ test('creates a router starter spec with canonical node ids and route function m
     'context_loader',
     'router',
     'retrieval_worker',
-    'memory_worker',
-    'long_term_memory_worker',
-    'timeline_worker',
+    'thread_conversation_history_worker',
+    'durable_memory_worker',
+    'thread_events_worker',
     'web_worker',
     'direct_answer',
     'synthesizer',
     'finalizer',
   ]);
   assert.equal(spec.schema_version, 2);
-  assert.equal(spec.workflow_id, 'custom_rag_agent');
+  assert.equal(spec.workflow_id, 'router_rag_agent');
   assert.equal(spec.workflow_type, 'custom_rag_agent');
-  assert.deepEqual(spec.config.allowed_tool_ids, ['clarify_intent', 'deep_memory', 'document_evidence', 'live_web_recon', 'thread_shape', 'thread_timeline']);
+  assert.deepEqual(spec.config.allowed_tool_ids, ['document_evidence', 'thread_conversation_history', 'durable_memory', 'thread_events', 'live_web_recon', 'clarify_intent']);
   assert.equal(spec.config.graph.edges.find((edge) => edge.from === 'router')?.route_fn, 'router_route');
   assert.deepEqual(spec.config.graph.edges.find((edge) => edge.from === 'router')?.routes, {
     document: 'retrieval_worker',
-    memory: 'memory_worker',
-    long_term_memory: 'long_term_memory_worker',
-    timeline: 'timeline_worker',
+    thread_conversation_history: 'thread_conversation_history_worker',
+    durable_memory: 'durable_memory_worker',
+    thread_events: 'thread_events_worker',
     web: 'web_worker',
     direct: 'direct_answer',
     clarify: 'finalizer',
@@ -464,14 +492,7 @@ test('normalizes unsupported node tools and over-limit node types from loaded st
 
   assert.equal(normalized.nodes.some((item) => item.id === 'router_2'), false);
   assert.equal(normalized.nodes.find((item) => item.id === 'retrieval_worker_2')?.tool_contract_ids, undefined);
-  assert.deepEqual(normalized.allowed_tool_ids, [
-    'clarify_intent',
-    'deep_memory',
-    'document_evidence',
-    'live_web_recon',
-    'thread_shape',
-    'thread_timeline',
-  ]);
+  assert.deepEqual(normalized.allowed_tool_ids, []);
 });
 
 test('expands sequential and conditional incoming paths separately', () => {

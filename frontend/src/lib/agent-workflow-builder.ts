@@ -87,9 +87,9 @@ const ROUTE_FUNCTION_BY_NODE_TYPE: Record<string, string> = {
 
 const REPEATABLE_NODE_TYPES = new Set([
   'retrieval_worker',
-  'memory_worker',
-  'long_term_memory_worker',
-  'timeline_worker',
+  'thread_conversation_history_worker',
+  'durable_memory_worker',
+  'thread_events_worker',
   'web_worker',
   'evidence_evaluator',
 ]);
@@ -521,129 +521,6 @@ const materializeHitlPolicy = (state: AgentWorkflowBuilderState) => {
     gates,
   };
 };
-
-export function createInitialBuilderState(
-  catalog: AgentWorkflowCatalogResponse,
-  starter: AgentWorkflowStarter = 'router',
-): AgentWorkflowBuilderState {
-  if (starter === 'plan_execute') {
-    const nodes = [
-      nodeWithDefaultTools(catalog, 'context_loader', 'context_loader'),
-      nodeWithDefaultTools(catalog, 'planner', 'planner'),
-      nodeWithDefaultTools(catalog, 'retrieval_worker', 'retrieval_worker', ['document_evidence']),
-      { id: 'synthesizer', type: 'synthesizer' },
-      nodeWithDefaultTools(catalog, 'finalizer', 'finalizer'),
-    ];
-    return {
-      workflowType: 'custom_rag_agent',
-      nodes,
-      edges: [
-        { from: 'START', to: 'context_loader' },
-        { from: 'context_loader', to: 'planner' },
-        {
-          from: 'planner',
-          conditional: true,
-          route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.Planner) || RouteFunctionId.Planner,
-          routes: { execute: 'retrieval_worker', direct: 'finalizer', clarify: 'finalizer' },
-        },
-        { from: 'retrieval_worker', to: 'synthesizer' },
-        { from: 'synthesizer', to: 'finalizer' },
-        { from: 'finalizer', to: 'END' },
-      ],
-      allowed_tool_ids: collectAllowedToolIds(nodes),
-      context_policy: defaultContextPolicy(catalog),
-      loop_policy: createLoopPolicy(nodes),
-      runtime: defaultRuntime(false, 'planner'),
-    };
-  }
-
-  if (starter === 'evaluator_replanner') {
-    const nodes = [
-      nodeWithDefaultTools(catalog, 'context_loader', 'context_loader'),
-      nodeWithDefaultTools(catalog, 'planner', 'planner'),
-      nodeWithDefaultTools(catalog, 'retrieval_worker', 'retrieval_worker', ['document_evidence']),
-      nodeWithDefaultTools(catalog, 'evidence_evaluator', 'evidence_evaluator'),
-      nodeWithDefaultTools(catalog, 'replanner', 'replanner'),
-      { id: 'synthesizer', type: 'synthesizer' },
-      nodeWithDefaultTools(catalog, 'finalizer', 'finalizer'),
-    ];
-    return {
-      workflowType: 'custom_rag_agent',
-      nodes,
-      edges: [
-        { from: 'START', to: 'context_loader' },
-        { from: 'context_loader', to: 'planner' },
-        {
-          from: 'planner',
-          conditional: true,
-          route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.Planner) || RouteFunctionId.Planner,
-          routes: { execute: 'retrieval_worker', direct: 'finalizer', clarify: 'finalizer' },
-        },
-        { from: 'retrieval_worker', to: 'evidence_evaluator' },
-        {
-          from: 'evidence_evaluator',
-          conditional: true,
-          route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.EvidenceEvaluator) || RouteFunctionId.Evaluator,
-          routes: { answer: 'synthesizer', replan: 'replanner', answer_budget_exhausted: 'synthesizer' },
-        },
-        { from: 'replanner', to: 'retrieval_worker' },
-        { from: 'synthesizer', to: 'finalizer' },
-        { from: 'finalizer', to: 'END' },
-      ],
-      allowed_tool_ids: collectAllowedToolIds(nodes),
-      context_policy: defaultContextPolicy(catalog),
-      loop_policy: createLoopPolicy(nodes),
-      runtime: defaultRuntime(true, 'evaluator_replanner'),
-    };
-  }
-
-  const nodes = [
-    nodeWithDefaultTools(catalog, 'context_loader', 'context_loader'),
-    nodeWithDefaultTools(catalog, 'router', 'router'),
-    nodeWithDefaultTools(catalog, 'retrieval_worker', 'retrieval_worker', ['document_evidence']),
-    nodeWithDefaultTools(catalog, 'memory_worker', 'memory_worker', ['deep_memory']),
-    nodeWithDefaultTools(catalog, 'long_term_memory_worker', 'long_term_memory_worker', ['memory_recall']),
-    nodeWithDefaultTools(catalog, 'timeline_worker', 'timeline_worker', ['thread_timeline']),
-    nodeWithDefaultTools(catalog, 'web_worker', 'web_worker', ['live_web_recon']),
-    nodeWithDefaultTools(catalog, 'direct_answer', 'direct_answer'),
-    { id: 'synthesizer', type: 'synthesizer' },
-    nodeWithDefaultTools(catalog, 'finalizer', 'finalizer'),
-  ];
-  return {
-    workflowType: 'custom_rag_agent',
-    nodes,
-    edges: [
-      { from: 'START', to: 'context_loader' },
-      { from: 'context_loader', to: 'router' },
-      {
-        from: 'router',
-        conditional: true,
-        route_fn: getDefaultRouteFunctionForNode(catalog, BuiltinAgentNodeType.Router) || RouteFunctionId.Router,
-        routes: {
-          document: 'retrieval_worker',
-          memory: 'memory_worker',
-          long_term_memory: 'long_term_memory_worker',
-          timeline: 'timeline_worker',
-          web: 'web_worker',
-          direct: 'direct_answer',
-          clarify: 'finalizer',
-        },
-      },
-      { from: 'retrieval_worker', to: 'synthesizer' },
-      { from: 'memory_worker', to: 'synthesizer' },
-      { from: 'long_term_memory_worker', to: 'synthesizer' },
-      { from: 'timeline_worker', to: 'synthesizer' },
-      { from: 'web_worker', to: 'synthesizer' },
-      { from: 'direct_answer', to: 'finalizer' },
-      { from: 'synthesizer', to: 'finalizer' },
-      { from: 'finalizer', to: 'END' },
-    ],
-    allowed_tool_ids: collectAllowedToolIds(nodes),
-    context_policy: defaultContextPolicy(catalog),
-    loop_policy: createLoopPolicy(nodes),
-    runtime: defaultRuntime(false, 'router'),
-  };
-}
 
 export function assembleAgentWorkflowSpec(
   state: AgentWorkflowBuilderState,

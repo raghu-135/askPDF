@@ -13,8 +13,8 @@ const graphSpecs = {
       { id: 'context_loader', type: 'context_loader' },
       { id: 'router', type: 'router' },
       { id: 'retrieval_worker', type: 'retrieval_worker' },
-      { id: 'memory_worker', type: 'memory_worker' },
-      { id: 'timeline_worker', type: 'timeline_worker' },
+      { id: 'thread_conversation_history_worker', type: 'thread_conversation_history_worker' },
+      { id: 'thread_events_worker', type: 'thread_events_worker' },
       { id: 'web_worker', type: 'web_worker' },
       { id: 'direct_answer', type: 'direct_answer' },
       { id: 'synthesizer', type: 'synthesizer' },
@@ -28,16 +28,16 @@ const graphSpecs = {
         conditional: true,
         routes: {
           document: 'retrieval_worker',
-          memory: 'memory_worker',
-          timeline: 'timeline_worker',
+          thread_conversation_history: 'thread_conversation_history_worker',
+          thread_events: 'thread_events_worker',
           web: 'web_worker',
           direct: 'direct_answer',
           clarify: 'finalizer',
         },
       },
       { from: 'retrieval_worker', to: 'synthesizer' },
-      { from: 'memory_worker', to: 'synthesizer' },
-      { from: 'timeline_worker', to: 'synthesizer' },
+      { from: 'thread_conversation_history_worker', to: 'synthesizer' },
+      { from: 'thread_events_worker', to: 'synthesizer' },
       { from: 'web_worker', to: 'synthesizer' },
       { from: 'direct_answer', to: 'finalizer' },
       { from: 'synthesizer', to: 'finalizer' },
@@ -50,8 +50,8 @@ const graphSpecs = {
       { id: 'planner', type: 'planner' },
       { id: 'direct_answer', type: 'direct_answer' },
       { id: 'retrieval_worker', type: 'retrieval_worker' },
-      { id: 'memory_worker', type: 'memory_worker' },
-      { id: 'timeline_worker', type: 'timeline_worker' },
+      { id: 'thread_conversation_history_worker', type: 'thread_conversation_history_worker' },
+      { id: 'thread_events_worker', type: 'thread_events_worker' },
       { id: 'web_worker', type: 'web_worker' },
       { id: 'synthesizer', type: 'synthesizer' },
       { id: 'finalizer', type: 'finalizer' },
@@ -65,9 +65,9 @@ const graphSpecs = {
         routes: { execute: 'retrieval_worker', direct: 'direct_answer', clarify: 'finalizer' },
       },
       { from: 'direct_answer', to: 'finalizer' },
-      { from: 'retrieval_worker', to: 'memory_worker' },
-      { from: 'memory_worker', to: 'timeline_worker' },
-      { from: 'timeline_worker', to: 'web_worker' },
+      { from: 'retrieval_worker', to: 'thread_conversation_history_worker' },
+      { from: 'thread_conversation_history_worker', to: 'thread_events_worker' },
+      { from: 'thread_events_worker', to: 'web_worker' },
       { from: 'web_worker', to: 'synthesizer' },
       { from: 'synthesizer', to: 'finalizer' },
       { from: 'finalizer', to: 'END' },
@@ -79,8 +79,8 @@ const graphSpecs = {
       { id: 'planner', type: 'planner' },
       { id: 'direct_answer', type: 'direct_answer' },
       { id: 'retrieval_worker', type: 'retrieval_worker' },
-      { id: 'memory_worker', type: 'memory_worker' },
-      { id: 'timeline_worker', type: 'timeline_worker' },
+      { id: 'thread_conversation_history_worker', type: 'thread_conversation_history_worker' },
+      { id: 'thread_events_worker', type: 'thread_events_worker' },
       { id: 'web_worker', type: 'web_worker' },
       { id: 'evidence_evaluator', type: 'evidence_evaluator' },
       { id: 'replanner', type: 'replanner' },
@@ -96,9 +96,9 @@ const graphSpecs = {
         routes: { execute: 'retrieval_worker', direct: 'direct_answer', clarify: 'finalizer' },
       },
       { from: 'direct_answer', to: 'finalizer' },
-      { from: 'retrieval_worker', to: 'memory_worker' },
-      { from: 'memory_worker', to: 'timeline_worker' },
-      { from: 'timeline_worker', to: 'web_worker' },
+      { from: 'retrieval_worker', to: 'thread_conversation_history_worker' },
+      { from: 'thread_conversation_history_worker', to: 'thread_events_worker' },
+      { from: 'thread_events_worker', to: 'web_worker' },
       { from: 'web_worker', to: 'evidence_evaluator' },
       {
         from: 'evidence_evaluator',
@@ -131,12 +131,12 @@ test('router graph maps conditional route edges and highlights selected route', 
   );
 
   const selectedEdge = graph.edges.find((edge) => edge.route === 'document');
-  const memoryEdge = graph.edges.find((edge) => edge.route === 'memory');
+  const conversationHistoryEdge = graph.edges.find((edge) => edge.route === 'thread_conversation_history');
   const retrievalNode = graph.nodes.find((node) => node.id === 'retrieval_worker');
 
   assert.equal(selectedEdge?.selected, true);
   assert.equal(selectedEdge?.target, 'retrieval_worker');
-  assert.equal(memoryEdge?.selected, false);
+  assert.equal(conversationHistoryEdge?.selected, false);
   assert.equal(retrievalNode?.status, 'completed');
   assert.equal(retrievalNode?.toolSummaries.length, 1);
 });
@@ -150,8 +150,8 @@ test('plan execute graph marks planner plan and skipped workers', () => {
         { node: 'context_loader', elapsed_ms: 2 },
         { node: 'planner', elapsed_ms: 4, route: 'execute', execution_plan: ['retrieval_worker'] },
         { node: 'retrieval_worker', elapsed_ms: 8 },
-        { node: 'memory_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
-        { node: 'timeline_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
+        { node: 'thread_conversation_history_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
+        { node: 'thread_events_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
         { node: 'web_worker', elapsed_ms: 1, skipped: true, skip_reason: 'web_search_disabled' },
       ],
       toolRows: [],
@@ -160,7 +160,7 @@ test('plan execute graph marks planner plan and skipped workers', () => {
 
   const planner = graph.nodes.find((node) => node.id === 'planner');
   const retrieval = graph.nodes.find((node) => node.id === 'retrieval_worker');
-  const memory = graph.nodes.find((node) => node.id === 'memory_worker');
+  const memory = graph.nodes.find((node) => node.id === 'thread_conversation_history_worker');
   const executeEdge = graph.edges.find((edge) => edge.route === 'execute');
 
   assert.deepEqual(graph.executionPlan, ['retrieval_worker']);
@@ -178,8 +178,8 @@ test('evaluator replanner graph marks evaluator branch and replan plan', () => {
       nodeRows: [
         { node: 'planner', elapsed_ms: 4, route: 'execute', execution_plan: ['retrieval_worker'] },
         { node: 'retrieval_worker', elapsed_ms: 8 },
-        { node: 'memory_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
-        { node: 'timeline_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
+        { node: 'thread_conversation_history_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
+        { node: 'thread_events_worker', elapsed_ms: 1, skipped: true, skip_reason: 'not_selected_by_plan' },
         { node: 'web_worker', elapsed_ms: 1, skipped: true, skip_reason: 'web_search_disabled' },
         {
           node: 'evidence_evaluator',
@@ -187,7 +187,7 @@ test('evaluator replanner graph marks evaluator branch and replan plan', () => {
           evaluator_route: 'replan',
           evaluator_report: { sufficient: false, confidence: 0.3 },
         },
-        { node: 'replanner', elapsed_ms: 4, execution_plan: ['timeline_worker'] },
+        { node: 'replanner', elapsed_ms: 4, execution_plan: ['thread_events_worker'] },
       ],
       toolRows: [],
     },
@@ -200,7 +200,7 @@ test('evaluator replanner graph marks evaluator branch and replan plan', () => {
   assert.equal(evaluator?.label, 'Evidence Evaluator');
   assert.equal(evaluator?.status, 'completed');
   assert.equal(replanner?.status, 'completed');
-  assert.deepEqual(replanner?.executionPlan, ['timeline_worker']);
+  assert.deepEqual(replanner?.executionPlan, ['thread_events_worker']);
   assert.equal(replanEdge?.selected, true);
 });
 
@@ -335,7 +335,7 @@ test('graph mapper applies node and span focus refs', () => {
 
   const planner = focused.nodes.find((node) => node.id === 'planner');
   const retrieval = focused.nodes.find((node) => node.id === 'retrieval_worker');
-  const memory = focused.nodes.find((node) => node.id === 'memory_worker');
+  const memory = focused.nodes.find((node) => node.id === 'thread_conversation_history_worker');
 
   assert.equal(planner?.focused, true);
   assert.equal(retrieval?.focused, true);
@@ -388,7 +388,7 @@ test('graph mapper collapses repeated loop visits into one node with visit detai
           elapsed_ms: 3,
         },
         {
-          tool_name: 'search_thread_timeline',
+          tool_name: 'search_thread_events',
           caller_node: 'evidence_evaluator',
           caller_node_type: 'evidence_evaluator',
           caller_visit_index: 2,
@@ -409,7 +409,7 @@ test('graph mapper collapses repeated loop visits into one node with visit detai
   assert.deepEqual(evaluator?.visits?.map((visit) => visit.replanCount), [0, 1]);
   assert.deepEqual(evaluator?.visits?.map((visit) => visit.toolSummaries.map((tool) => tool.toolName)), [
     ['search_documents'],
-    ['search_thread_timeline'],
+    ['search_thread_events'],
   ]);
   assert.equal(evaluator?.visits?.[1]?.warningCount, 1);
 

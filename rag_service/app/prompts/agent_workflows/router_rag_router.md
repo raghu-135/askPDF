@@ -56,8 +56,9 @@ Route this askPDF question to exactly one route.
 ## Worker Query Formulation Guidance
 
 - Document retrieval should preserve named files, pages, sections, citations, or quoted text and use the user's content terms.
-- Memory retrieval should use topic and conversation terms, not document-only wording.
-- Timeline retrieval should preserve temporal anchor words such as latest, first, since, before, and after.
+- `thread_conversation_history_worker` should use topic and conversation terms to search prior messages in this thread; do not use it for durable preferences or project facts.
+- `durable_memory_worker` should use terms for saved user, project, or thread facts and preferences; it does not search raw chat turns.
+- `thread_events_worker` should preserve temporal anchor words such as latest, first, since, before, and after.
 - Web retrieval should use concise keyword-rich queries and only when live web search is enabled.
 
 {TOOL_REGISTRY_SECTION}

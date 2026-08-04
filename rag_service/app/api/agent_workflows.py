@@ -16,7 +16,7 @@ from app.agent_workflows.repository import AgentWorkflowRepository, AgentRunInte
 from app.agent_workflows.route_registry import get_route_function_registry
 from app.agent_workflows.service import AgentRunService
 from app.agent_workflows.execution_stream import AgentExecutionEventSink, retain_background_task
-from app.agent_workflows.builtin_workflows import builtin_workflow_keys
+from app.agent_workflows.builtin_workflows import builtin_workflow_keys, load_builtin_workflows
 from app.agent_workflows.validator import (
     WorkflowResolver,
     WorkflowValidationError,
@@ -343,6 +343,23 @@ async def list_agent_workflows():
         except Exception:
             continue
     return {"agent_workflows": [_workflow_payload(workflow) for workflow in valid_workflows]}
+
+
+@router.get("/agent-workflows/builtins/{builtin_key}/source")
+async def get_builtin_agent_workflow_source(builtin_key: str):
+    """Return the immutable-on-disk definition used to seed a built-in workflow."""
+    workflow = next(
+        (item for item in load_builtin_workflows() if item.get("builtin_key") == builtin_key),
+        None,
+    )
+    if workflow is None:
+        raise HTTPException(status_code=404, detail="Built-in agent workflow source not found")
+    return {
+        "builtin_key": builtin_key,
+        "name": workflow.get("name") or builtin_key,
+        "description": workflow.get("description") or "",
+        "spec_json": workflow["spec_json"],
+    }
 
 
 @router.post("/agent-workflows/validate")

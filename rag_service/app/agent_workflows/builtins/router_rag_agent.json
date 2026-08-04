@@ -1,6 +1,6 @@
 {
   "builtin_key": "router_rag_agent",
-  "description": "A compiled LangGraph workflow that loads context, routes to document retrieval, memory retrieval, direct answer, or clarification, then synthesizes a final response.",
+  "description": "A compiled LangGraph workflow that loads context, routes to document retrieval, thread conversation history, durable memory, thread events, direct answer, or clarification, then synthesizes a final response.",
   "is_builtin": true,
   "name": "Router RAG Agent",
   "spec_json": {

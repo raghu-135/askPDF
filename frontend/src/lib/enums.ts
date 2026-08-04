@@ -145,7 +145,7 @@ export type RouteFunctionId = typeof RouteFunctionId[keyof typeof RouteFunctionI
 export const BuiltinAgentNodeType = {
   Router: 'router',
   Planner: 'planner',
-  LongTermMemoryWorker: 'long_term_memory_worker',
+  DurableMemoryWorker: 'durable_memory_worker',
   EvidenceEvaluator: 'evidence_evaluator',
   HitlGate: 'hitl_gate',
 } as const;

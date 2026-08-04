@@ -80,13 +80,13 @@ const backendDebug = {
         raw: { node: 'retrieval_worker', output_preview: { evidence: 'Found document evidence.' } },
       },
       {
-        id: 'memory_worker',
+        id: 'thread_conversation_history_worker',
         status: 'skipped',
         skipped: true,
         durationMs: 0.5,
         warningCodes: [],
-        span: { span_id: 'node:memory_worker:2' },
-        raw: { node: 'memory_worker', skip_reason: 'not_selected_by_plan' },
+        span: { span_id: 'node:thread_conversation_history_worker:2' },
+        raw: { node: 'thread_conversation_history_worker', skip_reason: 'not_selected_by_plan' },
       },
     ],
     tools: [
@@ -182,7 +182,7 @@ test('trace projection reads backend-provided summary and graph', () => {
 
   assert.equal(view.route, 'execute');
   assert.equal(view.routeReason, 'Document evidence requested.');
-  assert.deepEqual(view.nodes.map((node) => node.id), ['planner', 'retrieval_worker', 'memory_worker']);
+  assert.deepEqual(view.nodes.map((node) => node.id), ['planner', 'retrieval_worker', 'thread_conversation_history_worker']);
   assert.deepEqual(view.tools.map((tool) => tool.name), ['search_documents']);
   assert.equal(view.nodes[0].visitIndex, 1);
   assert.equal(view.tools[0].callerVisitIndex, 1);

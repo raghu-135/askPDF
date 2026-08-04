@@ -22,6 +22,7 @@ import {
   saveInternalAgentWorkflow,
   deleteInternalAgentWorkflow,
   getInternalAgentWorkflow,
+  getBuiltinAgentWorkflowSource,
   getInternalAgentWorkflowCatalog,
   listAgentWorkflows,
   validateAgentWorkflowSpec,
@@ -39,7 +40,6 @@ import {
   canInsertExistingNodeBefore,
   canInsertNodeTypeBefore,
   createHitlGateForTarget,
-  createInitialBuilderState,
   getIncomingPaths,
   getAllowedToolContractsForNode,
   getCanonicalNodeId,
@@ -103,6 +103,20 @@ const isBuiltinStarter = (value: string): value is AgentWorkflowStarter => (
 );
 
 const customStarterValue = (workflowId: string) => `custom:${workflowId}`;
+
+const BUILTIN_STARTER_WORKFLOW_IDS: Record<AgentWorkflowStarter, string> = {
+  router: 'router_rag_agent',
+  plan_execute: 'plan_execute_rag_agent',
+  evaluator_replanner: 'evaluator_replanner_rag_agent',
+};
+
+const builderStateFromWorkflowSpec = (
+  catalog: AgentWorkflowCatalogResponse,
+  spec: Record<string, any>,
+): AgentWorkflowBuilderState => {
+  const loadedState = normalizeBuilderState(catalog, loadBuilderStateFromSpec(spec));
+  return { ...loadedState, allowed_tool_ids: collectNodeToolIds(loadedState.nodes) };
+};
 
 const workflowIdFromCustomStarter = (value: string) => (
   value.startsWith('custom:') ? value.slice('custom:'.length) : null
@@ -247,12 +261,13 @@ export default function AgentWorkflowBuilderPage() {
     Promise.all([
       getInternalAgentWorkflowCatalog(),
       listAgentWorkflows().catch(() => ({ agent_workflows: [] })),
+      getBuiltinAgentWorkflowSource(BUILTIN_STARTER_WORKFLOW_IDS.router),
     ])
-      .then(([nextCatalog, patternList]) => {
+      .then(([nextCatalog, patternList, routerWorkflow]) => {
         if (cancelled) return;
         setCatalog(nextCatalog);
         setCustomWorkflows((patternList.agent_workflows || []).filter((pattern) => !pattern.is_builtin));
-        setBuilderState(createInitialBuilderState(nextCatalog, 'router'));
+        setBuilderState(builderStateFromWorkflowSpec(nextCatalog, routerWorkflow.spec_json));
         setError(null);
       })
       .catch((err) => {
@@ -333,19 +348,24 @@ export default function AgentWorkflowBuilderPage() {
     return () => window.removeEventListener('beforeunload', handler);
   }, [isDirty]);
 
-  const resetToStarter = useCallback((nextStarter: AgentWorkflowStarter = 'router') => {
+  const resetToStarter = useCallback(async (nextStarter: AgentWorkflowStarter = 'router') => {
     if (!catalog || authoringDisabled) return;
-    setBuilderState(createInitialBuilderState(catalog, nextStarter));
-    setStarter(nextStarter);
-    setSelection(null);
-    setValidation(null);
-    setPersistedWorkflow(null);
-    setPersistenceStatus(null);
-    setPersistenceError(null);
-    undoStack.current = [];
-    redoStack.current = [];
-    setHistoryVersion((value) => value + 1);
-    setIsDirty(false);
+    try {
+      const workflow = await getBuiltinAgentWorkflowSource(BUILTIN_STARTER_WORKFLOW_IDS[nextStarter]);
+      setBuilderState(builderStateFromWorkflowSpec(catalog, workflow.spec_json));
+      setStarter(nextStarter);
+      setSelection(null);
+      setValidation(null);
+      setPersistedWorkflow(null);
+      setPersistenceStatus(null);
+      setPersistenceError(null);
+      undoStack.current = [];
+      redoStack.current = [];
+      setHistoryVersion((value) => value + 1);
+      setIsDirty(false);
+    } catch (err) {
+      setPersistenceError(err instanceof Error ? err.message : String(err));
+    }
   }, [authoringDisabled, catalog]);
 
   const loadCustomWorkflow = useCallback(async (workflowId: string) => {
@@ -386,7 +406,7 @@ export default function AgentWorkflowBuilderPage() {
       return;
     }
     if (!isBuiltinStarter(nextStarter)) return;
-    resetToStarter(nextStarter);
+    void resetToStarter(nextStarter);
   };
 
   const handleAddNodeType = (nodeType: string, position?: { x: number; y: number }) => {

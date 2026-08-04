@@ -1437,6 +1437,22 @@ export async function listAgentWorkflows(): Promise<AgentWorkflowListResponse> {
   return res.json();
 }
 
+export async function getAgentWorkflow(
+  workflowId: string,
+): Promise<AgentWorkflowResponse> {
+  const res = await fetch(`${API_BASE}/api/agent-workflows/${encodeURIComponent(workflowId)}`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
+export async function getBuiltinAgentWorkflowSource(
+  builtinKey: string,
+): Promise<{ builtin_key: string; name: string; description: string; spec_json: AgentWorkflowBuilderSpec | Record<string, any> }> {
+  const res = await fetch(`${API_BASE}/api/agent-workflows/builtins/${encodeURIComponent(builtinKey)}/source`);
+  if (!res.ok) throw new Error(await readApiError(res));
+  return res.json();
+}
+
 export async function saveInternalAgentWorkflow(
   payload: SaveInternalAgentWorkflowPayload
 ): Promise<InternalAgentWorkflowResponse> {
