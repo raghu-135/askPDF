@@ -21,7 +21,6 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import FolderIcon from '@mui/icons-material/Folder';
 import LanguageIcon from '@mui/icons-material/Language';
-import HomeIcon from '@mui/icons-material/Home';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import OpenInBrowserIcon from '@mui/icons-material/OpenInBrowser';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
@@ -209,9 +208,7 @@ export default React.memo(function WorkspaceTabs({
               <Tooltip key={tab.id} title="Home">
                 <Tab
                   aria-label="Home"
-                  icon={<HomeIcon fontSize="small" />}
-                  iconPosition="start"
-                  label={active ? tab.label : undefined}
+                  label={tab.label}
                   sx={{
                     ...commonTabSx,
                     minWidth: active ? undefined : 44,

@@ -831,6 +831,7 @@ export default function AgentWorkflowBuilderPage() {
               }}
               darkMode={darkMode}
               onToggleDarkMode={toggleDarkMode}
+              onGoHome={() => { window.location.assign('/'); }}
               layoutControl={
                 <DockMenuButton
                   value={activeWorkbenchLayout}

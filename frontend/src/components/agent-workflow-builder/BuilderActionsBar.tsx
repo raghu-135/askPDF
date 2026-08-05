@@ -9,6 +9,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
+import HomeIcon from '@mui/icons-material/Home';
 import {
   Box,
   CircularProgress,
@@ -51,6 +52,7 @@ export default function BuilderActionsBar({
   onClearTestSession,
   darkMode,
   onToggleDarkMode,
+  onGoHome,
   layoutControl,
 }: {
   starter: string;
@@ -77,6 +79,7 @@ export default function BuilderActionsBar({
   onClearTestSession?: () => void;
   darkMode: boolean;
   onToggleDarkMode: () => void;
+  onGoHome: () => void;
   layoutControl?: React.ReactNode;
 }) {
   const customOptions = customWorkflows || [];
@@ -99,6 +102,11 @@ export default function BuilderActionsBar({
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap', minWidth: 0, flex: '1 1 auto' }}>
+        <Tooltip title="Home">
+          <IconButton size="small" aria-label="Home" onClick={onGoHome}>
+            <HomeIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <FormControl size="small" disabled={disabled} sx={{ minWidth: 180 }}>
           <InputLabel id="builder-starter-label">Workflow</InputLabel>
           <Select
