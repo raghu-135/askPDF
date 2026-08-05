@@ -17,6 +17,7 @@ from app.services.memory_policy import (
     normalize_thread_memory_settings,
 )
 from app.time_utils import iso_utc_z
+from app.models.memory_limits import MAX_MEMORY_ROWS
 from app.models.memory_tools import normalize_memory_attributes
 
 
@@ -159,7 +160,7 @@ async def _workspace_sections(
         scope["scope_type"]: scope["reason"]
         for scope in policy["skipped_scopes"]
     }
-    bounded_limit = max(1, min(int(limit), 500))
+    bounded_limit = max(1, min(int(limit), MAX_MEMORY_ROWS))
     sections: List[Dict[str, Any]] = []
     for scope in scopes:
         scope_key = (scope["scope_type"], scope["scope_id"])
@@ -344,7 +345,7 @@ async def resolve_effective_memory_context(
     thread_id: Optional[str] = None,
     project_id: Optional[str] = None,
     allowed_scopes: Optional[List[str]] = None,
-    limit: int = 500,
+    limit: int = MAX_MEMORY_ROWS,
 ) -> Dict[str, Any]:
     """Resolve the indexed, non-overridden memory projection for one context."""
 
@@ -447,7 +448,7 @@ async def resolve_effective_memory_context(
             outgoing.setdefault(source.id, []).append(target)
             incoming.setdefault(target.id, []).append(source)
 
-    bounded_limit = max(1, min(int(limit), 500))
+    bounded_limit = max(1, min(int(limit), MAX_MEMORY_ROWS))
     visible = effective[:bounded_limit]
     workspace_sections = await _workspace_sections(
         thread=thread,

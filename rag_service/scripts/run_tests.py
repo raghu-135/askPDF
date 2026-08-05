@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.metadata
 import os
 import subprocess
 import sys
@@ -32,6 +33,8 @@ UNIT_TEST_FILES = [
     "test_first_party_tool_contracts.py",
     "test_llm_server_client_pytest.py",
     "test_memory_retrieval_policy_pytest.py",
+    "test_memory_hardening_pytest.py",
+    "test_memory_review_service_pytest.py",
     "test_message_api_pytest.py",
     "test_model_aware_collections.py",
     "test_model_registry_edge_cases.py",
@@ -71,11 +74,37 @@ INTEGRATION_TEST_FILES = [
     "test_model_aware_integration.py",
 ]
 
-SCHEMA_TEST_FILES = ["test_schema_guardrails.py"]
+SCHEMA_TEST_FILES = [
+    "test_schema_guardrails.py",
+    "test_migration_smoke_pytest.py",
+]
 
 AGENT_CHECKPOINT_TEST_TARGETS = [
     "/app/tests/test_agent_workflows_pytest.py::TestAgentRunService::test_run_thread_chat_resumes_after_postgres_checkpointer_reopen",
 ]
+
+DIAGNOSTIC_PACKAGES = (
+    "pydantic",
+    "langchain-core",
+    "langchain-community",
+    "ddgs",
+    "pytest",
+    "pytest-asyncio",
+    "sqlalchemy",
+    "asyncpg",
+    "httpx",
+)
+
+
+def _print_dependency_versions() -> None:
+    versions = []
+    for package in DIAGNOSTIC_PACKAGES:
+        try:
+            version = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            version = "not-installed"
+        versions.append(f"{package}={version}")
+    print("Test dependency versions: " + ", ".join(versions), flush=True)
 
 
 def _test_path(name: str) -> str:
@@ -227,6 +256,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--file")
     parser.add_argument("--test")
     parser.add_argument("--coverage", action="store_true")
+    parser.add_argument("--strict-warnings", action="store_true")
     parser.add_argument("--unit", action="store_true")
     parser.add_argument("--standalone", action="store_true")
     parser.add_argument("--pdf")
@@ -244,6 +274,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    _print_dependency_versions()
     targets = _pytest_targets(args)
     agent_checkpoint_run = args.agent_checkpoint or args.group == "agent-checkpoint"
 
@@ -289,6 +320,14 @@ def main(argv: list[str] | None = None) -> int:
                 command.append("-v")
             if args.coverage:
                 command.extend(["--cov=app", "--cov-report=term-missing"])
+            if args.strict_warnings:
+                command.extend([
+                    "-W", "error::RuntimeWarning",
+                    "-W", "error::pydantic.warnings.PydanticDeprecatedSince20",
+                    "-W", "error::pytest.PytestUnraisableExceptionWarning",
+                    "-o", "asyncio_debug=true",
+                ])
+                env["PYTHONASYNCIODEBUG"] = "1"
             _run(command, env=env)
 
         if _should_run_standalone(args):

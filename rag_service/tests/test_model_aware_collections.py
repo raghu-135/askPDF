@@ -215,11 +215,9 @@ class TestWeaviateAdapterIntegration:
                 mock_manager = AsyncMock()
                 
                 # Create a proper mock collection with batch behavior
-                mock_collection = AsyncMock()
-                mock_batch = AsyncMock()
-                mock_batch.__aenter__ = AsyncMock(return_value=mock_batch)
-                mock_batch.__aexit__ = AsyncMock(return_value=None)
-                mock_batch.add_object = AsyncMock()
+                mock_collection = MagicMock()
+                mock_batch = MagicMock()
+                mock_batch.__enter__.return_value = mock_batch
                 mock_collection.batch.dynamic.return_value = mock_batch
                 
                 mock_manager.get_collection.return_value = mock_collection
@@ -235,12 +233,11 @@ class TestWeaviateAdapterIntegration:
     async def test_search_knowledge_sources_uses_model_aware_collection(self, adapter):
         """Test that search uses model-aware collections."""
         # Setup
-        mock_collection = AsyncMock()
+        mock_collection = MagicMock()
         adapter.collection_manager.get_collection.return_value = mock_collection
         
         # Mock of actual query methods used in the code
-        mock_response = AsyncMock()
-        mock_response.objects = []
+        mock_response = SimpleNamespace(objects=[])
         # The asyncio.to_thread will call the mock, so it should return the response directly
         mock_collection.query.near_vector.return_value = mock_response
         mock_collection.query.hybrid.return_value = mock_response
@@ -266,11 +263,10 @@ class TestWeaviateAdapterIntegration:
     @pytest.mark.asyncio
     async def test_search_knowledge_sources_file_hash_filter_is_not_thread_scoped(self, adapter):
         """File-filtered document search should find shared chunks indexed by another thread."""
-        mock_collection = AsyncMock()
+        mock_collection = MagicMock()
         adapter.collection_manager.get_collection.return_value = mock_collection
 
-        mock_response = AsyncMock()
-        mock_response.objects = []
+        mock_response = SimpleNamespace(objects=[])
         mock_collection.query.near_vector.return_value = mock_response
 
         await adapter.search_knowledge_sources(
@@ -390,24 +386,22 @@ class TestBackwardCompatibility:
     """Test backward compatibility during migration."""
     
     @pytest.mark.asyncio
-    async def test_legacy_collection_fallback(self, adapter):
-        """Test that legacy collections still work during migration."""
-        # Mock legacy collection access
-        with patch.object(adapter.client.collections, 'use') as mock_use:
-            mock_legacy_collection = AsyncMock()
-            mock_use.return_value = mock_legacy_collection
-            mock_legacy_collection.query.fetch_objects.return_value = AsyncMock()
-            mock_legacy_collection.query.fetch_objects.return_value.objects = []
-            
-            # Test that legacy queries still work
-            result = await adapter.search_knowledge_sources(
-                thread_id="test-thread",
-                query_vector=[0.1] * 384,
-                embedding_model="legacy-model",
-                limit=5
-            )
-            
-            adapter.collection_manager.get_collection.assert_called_once_with("DocumentChunk", "legacy-model")
+    async def test_legacy_model_name_uses_model_aware_collection(self, adapter):
+        """Persisted model names still resolve through the current collection manager."""
+        collection = MagicMock()
+        collection.query.near_vector.return_value = SimpleNamespace(objects=[])
+        adapter.collection_manager.get_collection.return_value = collection
+
+        await adapter.search_knowledge_sources(
+            thread_id="test-thread",
+            query_vector=[0.1] * 384,
+            embedding_model="legacy-model",
+            limit=5,
+        )
+
+        adapter.collection_manager.get_collection.assert_called_once_with(
+            "DocumentChunk", "legacy-model"
+        )
 
 
 if __name__ == "__main__":

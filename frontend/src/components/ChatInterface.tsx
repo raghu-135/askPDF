@@ -628,7 +628,6 @@ export interface BuilderTestConversationRuntime extends ConversationRuntime {
 }
 
 export interface ChatInterfaceProps {
-    ragApiUrl?: string;
     activeThread: Thread | null;
     chatSentences: any[];
     setChatSentences: (sentences: any[]) => void;
@@ -681,10 +680,6 @@ const PersistentChatInterface: React.FC<ChatInterfaceProps> = ({
     onOpenMemoryReview,
     testRuntime,
 }) => {
-    const ragApiUrl = process.env.NEXT_PUBLIC_API_URL;
-    if (!ragApiUrl) {
-        console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
-    }
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const theme = useTheme();
     const [composerSeed, setComposerSeed] = useState('');

@@ -44,6 +44,8 @@ def normalize_thread_memory_settings(settings: Any) -> Dict[str, bool]:
             DEFAULT_THREAD_MEMORY_SETTINGS["thread_reads_user_memory"],
         )
     )
+    # Retain this persisted-settings alias until existing single-user databases
+    # have passed through a dedicated settings migration.
     if "global_memory_enabled" in memory:
         reads_user_memory = reads_user_memory and bool(memory.get("global_memory_enabled"))
 

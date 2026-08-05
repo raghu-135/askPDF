@@ -316,7 +316,7 @@ Environment variables are now managed using a `.env` file for better security an
 **Frontend Service**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | RAG service API URL for frontend communication |
+| `NEXT_PUBLIC_API_URL` | Required | Public RAG service URL baked into the frontend at build time; the frontend refuses to start or build when it is missing or blank |
 
 **RAG Service - Core Configuration**
 | Variable | Default | Description |

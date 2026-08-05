@@ -187,9 +187,9 @@ async def prompt_tools_endpoint():
         defaults["tool_instructions"] = normalize_tool_instructions(
             defaults.get("tool_instructions", {})
         )
-        payload = PromptDefaults(**defaults).dict()
+        payload = PromptDefaults(**defaults).model_dump(mode="json")
         return {
-            "tools": [ToolCatalogEntry(**t).dict() for t in get_tool_catalog()],
+            "tools": [ToolCatalogEntry(**t).model_dump(mode="json") for t in get_tool_catalog()],
             "defaults": payload,
         }
     except Exception as e:

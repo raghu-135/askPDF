@@ -24,6 +24,13 @@ from app.models.requests import (
 from app.models.llm_server_client import REPLANS_LIMIT
 
 
+def _close_scheduled_coroutine(coroutine):
+    """Model task scheduling without leaking the coroutine passed to create_task."""
+    if hasattr(coroutine, "close"):
+        coroutine.close()
+    return Mock()
+
+
 @pytest.fixture(scope="function")
 def client(api_client) -> Generator:
     """Keep existing test signatures while using the shared API client fixture."""
@@ -433,7 +440,7 @@ class TestThreadEndpoints:
         db = SimpleNamespace(
             get_thread_stats=AsyncMock(return_value=stats),
             collection_manager=SimpleNamespace(
-                ensure_collections_for_thread=Mock(return_value=None)
+                ensure_collections_for_thread=AsyncMock(return_value=None)
             ),
         )
 
@@ -443,8 +450,8 @@ class TestThreadEndpoints:
             patch("app.api.threads.repair_thread_documents_meta", new_callable=AsyncMock),
             patch("app.api.threads.check_embedding_model_ready", new_callable=AsyncMock, return_value=True),
             patch("app.api.threads.get_vector_db", return_value=db),
-            patch("app.api.threads.trigger_reembed_for_missing_sources", Mock(return_value=None)),
-            patch("app.api.threads.asyncio.create_task"),
+            patch("app.api.threads.trigger_reembed_for_missing_sources", new_callable=AsyncMock),
+            patch("app.api.threads.asyncio.create_task", side_effect=_close_scheduled_coroutine),
         ):
             data = await threads_api.get_thread_endpoint("thread-1")
 
@@ -670,8 +677,8 @@ class TestThreadEndpoints:
                 new_callable=AsyncMock,
                 return_value={"thread": forked_thread, "files": [file]},
             ) as fork_thread,
-            patch("app.api.threads.trigger_reembed_for_missing_sources", Mock(return_value=None)),
-            patch("app.api.threads.asyncio.create_task") as create_task,
+            patch("app.api.threads.trigger_reembed_for_missing_sources", new_callable=AsyncMock),
+            patch("app.api.threads.asyncio.create_task", side_effect=_close_scheduled_coroutine) as create_task,
         ):
             response = client.post(
                 "/api/threads/source-thread/fork",
@@ -725,6 +732,9 @@ class TestThreadEndpoints:
         assert "tools" in data
         assert "defaults" in data
         assert isinstance(data["tools"], list)
+        assert data["tools"]
+        assert all(set(tool) == {"id", "display_name", "description", "default_prompt"} for tool in data["tools"])
+        assert {"system_role", "tool_instructions", "custom_instructions"} <= set(data["defaults"])
         assert "reasoning_mode" not in data["defaults"]
 
     def test_prompt_preview(self, client):
@@ -892,11 +902,11 @@ class TestProactiveCollectionCreation:
         )
         return response.json()["id"]
     
-    @patch('app.api.threads.asyncio.create_task')
+    @patch('app.api.threads.asyncio.create_task', side_effect=_close_scheduled_coroutine)
     @patch('app.api.threads.repair_thread_documents_meta', new_callable=AsyncMock)
     @patch('app.api.threads.check_embedding_model_ready', new_callable=AsyncMock, return_value=True)
     @patch('app.api.threads.get_vector_db')
-    @patch('app.api.threads.trigger_reembed_for_missing_sources')
+    @patch('app.api.threads.trigger_reembed_for_missing_sources', new_callable=AsyncMock)
     def test_thread_access_triggers_collection_creation(self, mock_reembed, mock_get_db, mock_check_ready, mock_repair_meta, mock_create_task, client, sample_thread):
         """Test that accessing a thread triggers proactive collection creation."""
         mock_create_task.reset_mock()
@@ -926,11 +936,11 @@ class TestProactiveCollectionCreation:
             embedding_model="BAAI/bge-m3"
         )
     
-    @patch('app.api.threads.asyncio.create_task')
+    @patch('app.api.threads.asyncio.create_task', side_effect=_close_scheduled_coroutine)
     @patch('app.api.threads.repair_thread_documents_meta', new_callable=AsyncMock)
     @patch('app.api.threads.check_embedding_model_ready', new_callable=AsyncMock, return_value=True)
     @patch('app.api.threads.get_vector_db')
-    @patch('app.api.threads.trigger_reembed_for_missing_sources')
+    @patch('app.api.threads.trigger_reembed_for_missing_sources', new_callable=AsyncMock)
     def test_thread_access_handles_collection_creation_failure(self, mock_reembed, mock_get_db, mock_check_ready, mock_repair_meta, mock_create_task, client, sample_thread):
         """Test that collection creation failures don't break thread access."""
         mock_create_task.reset_mock()

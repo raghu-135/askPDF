@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.future import select
 
 
@@ -20,19 +19,7 @@ from app.services import thread_management_service
 
 
 @pytest.mark.asyncio
-async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, monkeypatch):
-    test_session_maker = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autocommit=False,
-        autoflush=False,
-    )
-    monkeypatch.setattr(
-        thread_management_service,
-        "async_session_maker",
-        test_session_maker,
-    )
+async def test_fork_thread_from_message_copies_lineage_and_prior_rows(test_session_maker):
 
     created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     async with test_session_maker() as session:
@@ -181,9 +168,8 @@ async def test_fork_thread_from_message_copies_lineage_and_prior_rows(engine, mo
 
 
 @pytest.mark.asyncio
-async def test_fork_from_message_drops_review_cursor_beyond_fork_point(engine, monkeypatch):
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    monkeypatch.setattr(thread_management_service, "async_session_maker", maker)
+async def test_fork_from_message_drops_review_cursor_beyond_fork_point(test_session_maker):
+    maker = test_session_maker
     first_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     second_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
     async with maker() as session:
@@ -228,19 +214,7 @@ async def test_fork_from_message_drops_review_cursor_beyond_fork_point(engine, m
 
 
 @pytest.mark.asyncio
-async def test_fork_thread_rejects_message_from_another_thread(engine, monkeypatch):
-    test_session_maker = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autocommit=False,
-        autoflush=False,
-    )
-    monkeypatch.setattr(
-        thread_management_service,
-        "async_session_maker",
-        test_session_maker,
-    )
+async def test_fork_thread_rejects_message_from_another_thread(test_session_maker):
 
     async with test_session_maker() as session:
         async with session.begin():
@@ -283,19 +257,7 @@ async def test_fork_thread_rejects_message_from_another_thread(engine, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_same_project_fork_snapshots_thread_memories_before_message(engine, monkeypatch):
-    test_session_maker = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autocommit=False,
-        autoflush=False,
-    )
-    monkeypatch.setattr(
-        thread_management_service,
-        "async_session_maker",
-        test_session_maker,
-    )
+async def test_same_project_fork_snapshots_thread_memories_before_message(test_session_maker, monkeypatch):
     indexed_memory_ids: list[str] = []
 
     async def fake_index_memory_record(memory):
@@ -347,6 +309,11 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
                         embedding_model="BAAI/bge-m3",
                         content_hash="memory-before-hash",
                         source_refs_json={"turn_id": "turn-1"},
+                        attributes_json={
+                            "kind": "preference",
+                            "applicability": ["all_answers"],
+                            "durability": "stable",
+                        },
                         created_at=early_at,
                         updated_at=early_at,
                     ),
@@ -412,6 +379,11 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
     assert copied.scope_id == forked.id
     assert copied.source_refs_json["fork_origin"]["source_memory_id"] == "memory-before"
     assert copied.source_refs_json["fork_origin"]["copy_mode"] == "thread_snapshot"
+    assert copied.attributes_json == {
+        "kind": "preference",
+        "applicability": ["all_answers"],
+        "durability": "stable",
+    }
     assert forked.thread_metadata["fork"]["copied_memory_ids"] == [copied.id]
     assert [event.memory_id for event in snapshot_events] == [copied.id]
     assert copied_override.overridden_memory_id == "project-memory"
@@ -419,19 +391,7 @@ async def test_same_project_fork_snapshots_thread_memories_before_message(engine
 
 
 @pytest.mark.asyncio
-async def test_new_project_fork_snapshots_project_memory_and_diverges(engine, monkeypatch):
-    test_session_maker = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autocommit=False,
-        autoflush=False,
-    )
-    monkeypatch.setattr(
-        thread_management_service,
-        "async_session_maker",
-        test_session_maker,
-    )
+async def test_new_project_fork_snapshots_project_memory_and_diverges(test_session_maker, monkeypatch):
     indexed_memory_ids: list[str] = []
 
     async def fake_index_memory_record(memory):

@@ -6,6 +6,13 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.memory_limits import (
+    DEFAULT_MEMORY_RELATIVE_SCORE_RATIO,
+    MAX_MEMORY_CONTEXT_CHARS,
+    MAX_MEMORY_QUERY_CHARS,
+    MAX_MEMORY_ROWS,
+)
+
 
 MEMORY_READ_EFFECTIVE = "memory:read_effective"
 MEMORY_READ_STORED = "memory:read_stored"
@@ -55,13 +62,13 @@ class MemoryToolContext(BaseModel):
 class MemorySearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    query: str = Field(default="", max_length=12000)
+    query: str = Field(default="", max_length=MAX_MEMORY_QUERY_CHARS)
     view: Literal["effective", "stored"] = "effective"
     scope_types: Optional[List[Literal["user", "project", "thread"]]] = None
-    max_results: int = Field(default=10, ge=1, le=500)
-    char_budget: Optional[int] = Field(default=None, ge=200, le=16000)
+    max_results: int = Field(default=10, ge=1, le=MAX_MEMORY_ROWS)
+    char_budget: Optional[int] = Field(default=None, ge=200, le=MAX_MEMORY_CONTEXT_CHARS)
     score_floor: Optional[float] = Field(default=None, ge=0.0)
-    relative_score_ratio: float = Field(default=0.60, ge=0.0, le=1.0)
+    relative_score_ratio: float = Field(default=DEFAULT_MEMORY_RELATIVE_SCORE_RATIO, ge=0.0, le=1.0)
     selected_memory_id: Optional[str] = None
 
 
@@ -80,7 +87,7 @@ class MemoryChangeIntent(BaseModel):
     memory_id: Optional[str] = None
     scope_type: Optional[Literal["user", "project", "thread"]] = None
     target_scope_type: Optional[Literal["user", "project", "thread"]] = None
-    content: Optional[str] = Field(default=None, max_length=12000)
+    content: Optional[str] = Field(default=None, max_length=MAX_MEMORY_QUERY_CHARS)
     attributes: Optional[MemoryAttributes] = None
     override_target_ids: Optional[List[str]] = Field(default=None, max_length=20)
     web_source_ids: List[str] = Field(default_factory=list, max_length=12)

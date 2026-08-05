@@ -845,10 +845,6 @@ class WeaviateAdapter:
             logger.error(f"Failed to search knowledge sources: {e}")
             raise VectorDBQueryError("Could not search knowledge sources") from e
 
-        # Handle case where response might be a coroutine (in test scenarios)
-        if hasattr(response, '__await__'):
-            response = await response
-
         results: List[Dict[str, Any]] = []
         for obj in response.objects:
             p = obj.properties

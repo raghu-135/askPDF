@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -40,6 +39,7 @@ from app.services.embedding_model_service import (
     resolve_scope_embedding_model,
 )
 from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
+from app.services.memory_repair_scheduler import schedule_global_representation_repair
 from app.services.memory_service import _merge_same_model_memory_hits, memory_content_hash
 from app.models.memory_tools import normalize_memory_attributes
 from app.time_utils import iso_utc_z
@@ -100,8 +100,7 @@ async def _schedule_missing_global_repairs(
             context.project_id,
             context.thread_id,
         )
-        from app.services.memory_representation_service import warm_global_representations_for_model
-        asyncio.create_task(warm_global_representations_for_model(embedding_model))
+        schedule_global_representation_repair(embedding_model)
     return len(missing)
 
 

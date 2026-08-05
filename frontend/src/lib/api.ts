@@ -4,6 +4,7 @@ import {
   type AnnotationTransferItem,
 } from "./annotation-utils";
 import { getBrowserRuntimeContext } from "./date-utils";
+import { API_BASE } from "./api-config";
 import { consumeAgentExecutionStream, type AgentExecutionStreamEnvelope } from "./agent-execution-stream";
 import {
   ProcessStatus as ProcessStatusEnum,
@@ -21,12 +22,8 @@ import {
   type ThreadFileSourceType as ThreadFileSourceTypeValue,
 } from "./enums";
 
-// Unified API base - RAG service handles all endpoints
-const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-if (!apiUrl) {
-  console.error("ERROR: NEXT_PUBLIC_API_URL environment variable is not set. Please configure it in docker-compose.yml");
-}
-export const API_BASE = apiUrl || "";
+// Unified API base - RAG service handles all endpoints.
+export { API_BASE } from "./api-config";
 
 // ============ PDF Upload ============
 

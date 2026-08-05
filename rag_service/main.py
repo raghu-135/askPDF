@@ -50,6 +50,7 @@ from app.db.vector import close_vector_db, get_vector_db
 from app.services.memory_service import (
     retry_pending_memory_indexes,
 )
+from app.services.memory_repair_scheduler import shutdown_memory_repairs
 
 
 async def _memory_maintenance_loop(stop_event: asyncio.Event) -> None:
@@ -95,22 +96,25 @@ async def lifespan(app: FastAPI):
     memory_maintenance_task = asyncio.create_task(
         _memory_maintenance_loop(memory_maintenance_stop)
     )
-    yield
-    logger.info("--- RAG Service Shutting Down ---")
-    memory_maintenance_stop.set()
-    await memory_maintenance_task
     try:
-        logger.info("Closing database connections...")
-        await close_db()
-        logger.info("Database connections closed.")
-    except Exception as e:
-        logger.error(f"Error during database shutdown: {e}")
-    try:
-        logger.info("Closing Weaviate client connection...")
-        close_vector_db()
-        logger.info("Weaviate client connection closed.")
-    except Exception as e:
-        logger.error(f"Error during Weaviate shutdown: {e}")
+        yield
+    finally:
+        logger.info("--- RAG Service Shutting Down ---")
+        memory_maintenance_stop.set()
+        await memory_maintenance_task
+        await shutdown_memory_repairs()
+        try:
+            logger.info("Closing database connections...")
+            await close_db()
+            logger.info("Database connections closed.")
+        except Exception as e:
+            logger.error(f"Error during database shutdown: {e}")
+        try:
+            logger.info("Closing Weaviate client connection...")
+            close_vector_db()
+            logger.info("Weaviate client connection closed.")
+        except Exception as e:
+            logger.error(f"Error during Weaviate shutdown: {e}")
 
 app = FastAPI(
     title="RAG Service",

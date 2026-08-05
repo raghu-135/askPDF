@@ -9,6 +9,7 @@ from app.models.requests import (
     MemoryCuratorRespondRequest,
     MemorySearchRequest,
 )
+from app.models.memory_limits import MAX_MEMORY_ROWS
 from app.services.memory_curator_service import (
     MemoryChangedError,
     MemoryCuratorError,
@@ -110,7 +111,7 @@ def _raise_curator_http(exc: Exception):
 async def list_memories_endpoint(
     scope_type: str = Query(...),
     scope_id: str = Query(...),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=MAX_MEMORY_ROWS),
 ):
     try:
         rows = await list_scope_memories(scope_type=scope_type, scope_id=scope_id, limit=limit)
@@ -129,7 +130,7 @@ def _effective_response(result: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.get("/memories/effective")
 async def global_effective_memories_endpoint(
-    limit: int = Query(default=500, ge=1, le=500),
+    limit: int = Query(default=MAX_MEMORY_ROWS, ge=1, le=MAX_MEMORY_ROWS),
 ):
     return _effective_response(await resolve_effective_memory_context(limit=limit))
 
@@ -137,7 +138,7 @@ async def global_effective_memories_endpoint(
 @router.get("/projects/{project_id}/memories/effective")
 async def project_effective_memories_endpoint(
     project_id: str,
-    limit: int = Query(default=500, ge=1, le=500),
+    limit: int = Query(default=MAX_MEMORY_ROWS, ge=1, le=MAX_MEMORY_ROWS),
 ):
     try:
         return _effective_response(await resolve_effective_memory_context(
@@ -151,7 +152,7 @@ async def project_effective_memories_endpoint(
 @router.get("/threads/{thread_id}/memories/effective")
 async def thread_effective_memories_endpoint(
     thread_id: str,
-    limit: int = Query(default=500, ge=1, le=500),
+    limit: int = Query(default=MAX_MEMORY_ROWS, ge=1, le=MAX_MEMORY_ROWS),
 ):
     try:
         return _effective_response(await resolve_effective_memory_context(

@@ -4,35 +4,34 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from langchain_community.tools import DuckDuckGoSearchResults
+from ddgs import DDGS
 
 from app.rag.retrieval import rerank_document_chunks
 from app.time_utils import iso_utc_z
 
 
-_search_provider = DuckDuckGoSearchResults(output_format="list", num_results=6)
 WEB_SEARCH_CAPABILITY = "web:search"
+DEFAULT_WEB_SEARCH_RESULTS = 6
 
 
-def _normalize_results(raw: Any, query: str) -> List[Dict[str, str]]:
+def _search_provider(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """Call the supported DDGS package behind an injectable sync boundary."""
+
+    return list(DDGS().text(query, max_results=max_results))
+
+
+def _normalize_results(raw: Any) -> List[Dict[str, str]]:
     if isinstance(raw, list):
         return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, list) else []
-        except Exception:
-            return [{"snippet": raw, "title": query, "link": ""}]
     return []
 
 
 async def search_internet(
     query: str,
     *,
-    max_results: int = 6,
+    max_results: int = DEFAULT_WEB_SEARCH_RESULTS,
     use_reranker: bool = True,
 ) -> Dict[str, Any]:
     """Return bounded structured live-search evidence; never persist it."""
@@ -40,8 +39,10 @@ async def search_internet(
     normalized_query = query.strip()
     if not normalized_query:
         raise ValueError("Web search query cannot be empty")
-    raw = await asyncio.to_thread(_search_provider.invoke, normalized_query)
-    rows = _normalize_results(raw, normalized_query)
+    if max_results <= 0:
+        raise ValueError("max_results must be positive")
+    raw = await asyncio.to_thread(_search_provider, normalized_query, max_results)
+    rows = _normalize_results(raw)
     chunks = [
         {
             "text": str(row.get("snippet", row.get("body", ""))).strip(),

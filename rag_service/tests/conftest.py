@@ -14,10 +14,14 @@ from datetime import datetime
 import pytest
 import pytest_asyncio
 from faker import Faker
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    close_all_sessions,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
-from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from app.db.models_sqlmodel import (
@@ -34,14 +38,6 @@ collect_ignore = [
 
 # Faker instance for generating test data
 fake = Faker()
-
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator:
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture(scope="session")
@@ -78,6 +74,9 @@ async def _create_test_schema(engine):
 
 
 async def _drop_test_schema(engine):
+    # Service-level repositories create their own sessions from the patched maker.
+    # Close every such session before issuing DDL or disposing the asyncpg engine.
+    await close_all_sessions()
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
     await engine.dispose()
@@ -145,6 +144,8 @@ def _patch_app_session_makers(monkeypatch, session_maker):
 @pytest.fixture(scope="function")
 def api_client(test_database_url, monkeypatch) -> Generator:
     """Create a sync FastAPI test client wired to the isolated test database."""
+    from fastapi.testclient import TestClient
+
     engine = _build_test_engine(test_database_url)
     session_maker = _build_session_maker(engine)
     asyncio.run(_create_test_schema(engine))
@@ -195,11 +196,23 @@ async def engine(test_database_url: str):
     
     yield engine
     
+    # Close repository-created sessions before teardown DDL and engine disposal.
+    await close_all_sessions()
+
     # Drop all tables after test
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.drop_all)
     
     await engine.dispose()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def test_session_maker(engine, monkeypatch):
+    """Bind every application repository and service to the current test loop."""
+
+    session_maker = _build_session_maker(engine)
+    _patch_app_session_makers(monkeypatch, session_maker)
+    return session_maker
 
 
 @pytest_asyncio.fixture(scope="function")

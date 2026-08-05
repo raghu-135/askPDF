@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-import asyncio
 from typing import Any, Dict, List, Sequence
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -54,6 +53,7 @@ from app.services.memory_policy import (
     normalize_project_memory_settings,
     normalize_thread_memory_settings,
 )
+from app.services.memory_repair_scheduler import schedule_global_representation_repair
 from app.services.memory_tool_service import (
     MemoryToolError,
     MemoryToolNotFoundError,
@@ -63,7 +63,12 @@ from app.services.memory_tool_service import (
     search_memory_tool,
 )
 from app.services.memory_service import index_memory_record, memory_content_hash
-from app.services.web_search_service import WEB_SEARCH_CAPABILITY, format_search_context, search_internet
+from app.services.web_search_service import (
+    DEFAULT_WEB_SEARCH_RESULTS,
+    WEB_SEARCH_CAPABILITY,
+    format_search_context,
+    search_internet,
+)
 from app.services.memory_review_service import (
     build_conversation_review_batch,
     build_memory_review_batch,
@@ -505,7 +510,10 @@ async def respond_to_memory_curator(req: MemoryCuratorRespondRequest) -> Dict[st
         if web_call_count >= MAX_CURATOR_WEB_CALLS:
             return json.dumps({"status": "limit_reached"})
         web_call_count += 1
-        result = await search_internet(search_req.query, max_results=6)
+        result = await search_internet(
+            search_req.query,
+            max_results=DEFAULT_WEB_SEARCH_RESULTS,
+        )
         for source in result.get("sources") or []:
             available_web_sources[source["id"]] = source
         return json.dumps(_curator_safe_payload(result), ensure_ascii=True)
@@ -1187,9 +1195,8 @@ async def apply_memory_curator_change_set(req: MemoryCuratorApplyRequest) -> Dic
                         GlobalMemoryRepresentation.index_status.in_(("pending", "failed")),
                     )
                 )).scalars().all())
-            from app.services.memory_representation_service import warm_global_representations_for_model
             for model in set(models):
-                asyncio.create_task(warm_global_representations_for_model(model))
+                schedule_global_representation_repair(model)
     memory_review_completed = False
     if req.memory_review_cursor and req.memory_review_cursor.remaining_anchor_count == 0:
         await complete_memory_review(

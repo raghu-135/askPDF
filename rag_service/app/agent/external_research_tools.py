@@ -18,7 +18,7 @@ from langchain_core.runnables import RunnableConfig
 from app.agent.tool_contract import ToolWarningCode, make_tool_error_result, make_tool_result, tool_started
 from app.rag.enums import TimelineEventType
 from app.rag.retrieval import rerank_document_chunks
-from app.services.web_search_service import search_internet
+from app.services.web_search_service import DEFAULT_WEB_SEARCH_RESULTS, search_internet
 from app.time_utils import iso_utc_z
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,11 @@ def _normalize_web_results(raw: Any, query: str) -> List[Dict[str, str]]:
 
 
 async def _run_web_search(query: str, max_results: Optional[int]) -> Optional[Dict[str, List[str]]]:
-    result = await search_internet(query, max_results=max_results or 6, use_reranker=False)
+    result = await search_internet(
+        query,
+        max_results=max_results or DEFAULT_WEB_SEARCH_RESULTS,
+        use_reranker=False,
+    )
     sources = result.get("sources") or []
     if not sources:
         return None
@@ -119,7 +123,7 @@ async def search_web(query: str, config: RunnableConfig = None) -> str:
         thread_id = conf.get("app_thread_id") or conf.get("thread_id")
         embedding_model = conf.get("embedding_model")
 
-        result = await _run_web_search(query, max_results=6)
+        result = await _run_web_search(query, max_results=DEFAULT_WEB_SEARCH_RESULTS)
         if not result:
             return make_tool_result(
                 tool_name=tool_name,

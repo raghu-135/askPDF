@@ -14,6 +14,10 @@ from app.models.llm_server_client import (
 )
 from app.models.memory_curator_budget import MAX_CURATOR_REQUEST_MESSAGES
 from app.models.memory_tools import MemoryAttributes
+from app.models.memory_limits import MAX_MEMORY_QUERY_CHARS
+
+
+MAX_MEMORY_SEARCH_RESULTS = 50
 
 
 class ThreadCreateRequest(BaseModel):
@@ -105,16 +109,16 @@ class MemorySearchRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = Field(max_length=MAX_MEMORY_QUERY_CHARS)
     allowed_scopes: Optional[List[str]] = None
-    max_results: int = Field(default=10, ge=1, le=50)
+    max_results: int = Field(default=10, ge=1, le=MAX_MEMORY_SEARCH_RESULTS)
 
 
 class MemoryCuratorMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=12000)
+    content: str = Field(min_length=1, max_length=MAX_MEMORY_QUERY_CHARS)
     choice_id: Optional[str] = Field(default=None, max_length=100)
 
 
@@ -176,7 +180,7 @@ class MemoryCuratorOperation(BaseModel):
     scope_id: Optional[str] = None
     memory_id: Optional[str] = None
     expected_updated_at: Optional[str] = None
-    content: Optional[str] = Field(default=None, max_length=12000)
+    content: Optional[str] = Field(default=None, max_length=MAX_MEMORY_QUERY_CHARS)
     attributes: Optional[MemoryAttributes] = None
     override_targets: List[MemoryOverrideTarget] = Field(default_factory=list, max_length=20)
     semantic_action: Optional[Literal["create", "update", "delete", "move", "set_overrides"]] = None

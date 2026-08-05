@@ -11,6 +11,7 @@
 #   ./run_tests.sh --schema                 # Run schema validation tests
 #   ./run_tests.sh --standalone             # Run standalone proactive collection script
 #   ./run_tests.sh --frontend               # Run frontend tests only
+#   ./run_tests.sh --api --strict-warnings   # Fail on coroutine and Pydantic warnings
 #   ./run_tests.sh --file test_api_integration_pytest.py --test TestAPIIntegration::test_create_thread_endpoint
 #
 # Environment:

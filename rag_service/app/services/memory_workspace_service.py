@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 from typing import Any, Dict, List, Tuple
 
@@ -22,7 +21,10 @@ from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
 from app.services.memory_representation_service import (
     global_representation_status_for_model,
     reset_stale_global_representation_indexes,
-    warm_global_representations_for_model,
+)
+from app.services.memory_repair_scheduler import (
+    schedule_global_representation_repair,
+    schedule_memory_repair,
 )
 from app.services.memory_service import index_memory_record
 from app.time_utils import utc_now
@@ -105,9 +107,13 @@ async def get_memory_workspace_readiness(
     repair_started = bool(model_ready and prepare and (repair_ids or not representation_status["ready"]))
     if repair_started:
         if repair_ids:
-            asyncio.create_task(_repair_canonical_memories(repair_ids))
+            repair_key = f"canonical:{embedding_model}:" + ",".join(sorted(repair_ids))
+            schedule_memory_repair(
+                repair_key,
+                lambda: _repair_canonical_memories(list(repair_ids)),
+            )
         if not representation_status["ready"]:
-            asyncio.create_task(warm_global_representations_for_model(embedding_model))
+            schedule_global_representation_repair(embedding_model)
 
     canonical_ready = len(memories) == canonical_counts.get("indexed", 0)
     failed_count = canonical_counts.get("failed", 0) + representation_status["failed_count"]

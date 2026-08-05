@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from datetime import datetime
@@ -26,11 +25,16 @@ from app.models.memory_curator_budget import (
 from app.models.retry import invoke_with_retry
 from app.services.embedding_model_service import GLOBAL_MEMORY_EMBEDDING_MODEL, require_embedding_model_ready
 from app.services.memory_policy import LOCAL_USER_MEMORY_SCOPE_ID
+from app.services.memory_repair_scheduler import schedule_global_representation_repair
 from app.time_utils import iso_utc_z, utc_now
 
 
 SCOPE_RANK = {"thread": 3, "project": 2, "user": 1}
 logger = logging.getLogger(__name__)
+MAX_REVIEW_ANCHORS = 100
+REVIEW_ANCHOR_ESTIMATED_CHARS = 1500
+MAX_REVIEW_NEIGHBORS = 7
+MAX_REVIEW_GROUP_MEMORIES = 8
 
 
 def _turn_text(turn: ChatTurn) -> Dict[str, Any]:
@@ -353,7 +357,10 @@ async def build_memory_review_batch(
     by_id = {memory.id: memory for memory in all_memories}
     start = max(0, anchor_position)
     review_budget = compute_curator_budget(context_window)["review_context_chars"]
-    max_anchors = min(100, max(1, review_budget // 1500))
+    max_anchors = min(
+        MAX_REVIEW_ANCHORS,
+        max(1, review_budget // REVIEW_ANCHOR_ESTIMATED_CHARS),
+    )
     selected_anchors = anchors[start:start + max_anchors]
     missing_global_ids = global_ids - represented_global_ids
     representation_pending = bool(missing_global_ids)
@@ -366,8 +373,7 @@ async def build_memory_review_batch(
             model,
             len(missing_global_ids),
         )
-        from app.services.memory_representation_service import warm_global_representations_for_model
-        asyncio.create_task(warm_global_representations_for_model(model))
+        schedule_global_representation_repair(model)
         return {
             "context_type": context_type,
             "context_id": context_id,
@@ -397,7 +403,7 @@ async def build_memory_review_batch(
                 embedding_model=model,
                 scope_filters=scope_filters,
                 excluded_memory_ids=[anchor.id],
-                limit=7,
+                limit=MAX_REVIEW_NEIGHBORS,
                 query_text=anchor.content,
             )
             related_ids = _visible_review_neighbors(
@@ -412,7 +418,7 @@ async def build_memory_review_batch(
                 if related_id != anchor.id and pair not in seen_pairs:
                     seen_pairs.add(pair)
                     member_ids.append(related_id)
-                if len(member_ids) >= 8:
+                if len(member_ids) >= MAX_REVIEW_GROUP_MEMORIES:
                     break
             if len(member_ids) > 1:
                 candidate = {
@@ -445,7 +451,7 @@ async def build_memory_review_batch(
                         item for item in candidate["memories"]
                         if item["id"] not in existing_ids
                     )
-                    overlapping["memories"] = overlapping["memories"][:8]
+                    overlapping["memories"] = overlapping["memories"][:MAX_REVIEW_GROUP_MEMORIES]
                     overlapping["override_edges"] = _review_override_edges(
                         [item["id"] for item in overlapping["memories"]],
                         edges,

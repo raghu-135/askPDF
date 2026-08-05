@@ -13,6 +13,7 @@ from app.db.enums import MemoryScopeType
 from app.db.models_sqlmodel import Memory, MemoryEvent, MemoryOverride
 from app.db.project_activity import touch_project_activity
 from app.models.memory_tools import normalize_memory_attributes
+from app.models.memory_limits import MAX_MEMORY_ROWS
 from app.time_utils import utc_now
 
 
@@ -110,7 +111,7 @@ class MemoryRepository:
         scope_id: Optional[str] = None,
         limit: int = 100,
     ) -> list[Memory]:
-        bounded_limit = max(1, min(int(limit), 500))
+        bounded_limit = max(1, min(int(limit), MAX_MEMORY_ROWS))
         if scope_type is not None:
             scope_type = _require_enum(scope_type, "scope_type", VALID_MEMORY_SCOPE_TYPES)
         if scope_id is not None:
@@ -228,7 +229,7 @@ class MemoryRepository:
             return await apply(session)
 
     async def list_memories_for_index_retry(self, *, limit: int = 100) -> list[Memory]:
-        bounded_limit = max(1, min(int(limit), 500))
+        bounded_limit = max(1, min(int(limit), MAX_MEMORY_ROWS))
         session = await self._get_session()
         async with session.begin():
             result = await session.execute(

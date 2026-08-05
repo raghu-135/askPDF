@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import time
@@ -26,6 +25,7 @@ from app.db.models_sqlmodel import GlobalMemoryRepresentation
 from sqlalchemy.future import select
 from app.models.llm_server_client import get_embedding_model
 from app.models.memory_tools import normalize_memory_attributes
+from app.models.memory_limits import MAX_MEMORY_CONTEXT_CHARS
 from app.models.retry import invoke_with_retry
 from app.time_utils import iso_utc_z
 from app.services.embedding_model_service import (
@@ -46,6 +46,7 @@ from app.services.memory_retrieval_policy import (
     pack_memory_results,
     token_similarity,
 )
+from app.services.memory_repair_scheduler import schedule_global_representation_repair
 
 
 logger = logging.getLogger(__name__)
@@ -176,10 +177,12 @@ async def hard_delete_memory(memory_id: str) -> Dict[str, Any]:
 async def hard_delete_thread_memory_resources(thread_id: str) -> Dict[str, Any]:
     """Delete durable memory records owned by a thread."""
 
+    # One row is sufficient to decide whether scope-wide vector cleanup is needed;
+    # the repository delete below removes every canonical row in the scope.
     memories = await list_memories(
         scope_type=MemoryScopeType.THREAD.value,
         scope_id=thread_id,
-        limit=500,
+        limit=1,
     )
     vector_cleanup = "skipped"
     if memories:
@@ -271,8 +274,7 @@ async def search_thread_memory(
                 len(missing_global_ids),
                 thread_id,
             )
-            from app.services.memory_representation_service import warm_global_representations_for_model
-            asyncio.create_task(warm_global_representations_for_model(context.embedding_model))
+            schedule_global_representation_repair(context.embedding_model)
 
     representation_issues: List[Dict[str, Any]] = []
     if missing_global_ids:
@@ -387,7 +389,7 @@ async def search_thread_memory(
     ))
     for item in memories:
         item.pop("content_hash", None)
-    packed, packed_chars = pack_memory_results(memories, char_budget or 16000)
+    packed, packed_chars = pack_memory_results(memories, char_budget or MAX_MEMORY_CONTEXT_CHARS)
     rejected_count = sum(rejection_reasons.values()) + max(0, len(memories) - len(packed))
     elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
     return {
@@ -400,7 +402,7 @@ async def search_thread_memory(
         "precedence": ["thread", "project", "user"],
         "representation_issues": representation_issues,
         "retrieval_debug": {
-            "budget_chars": int(char_budget or 16000),
+            "budget_chars": int(char_budget or MAX_MEMORY_CONTEXT_CHARS),
             "candidate_limit": max_results,
             "candidate_count": len(hits),
             "candidates_retrieved": len(hits),
