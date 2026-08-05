@@ -70,6 +70,8 @@ const initialPrompt = (intent: MemoryCuratorIntent) => {
   return 'Help me add a durable memory. Ask what should be remembered and help me choose the right scope.';
 };
 
+const conversationReviewComposerText = 'Click Send to review this conversation and extract durable memories for this thread.';
+
 type CuratorUiMessage = MemoryCuratorMessage & { id: string; web_sources?: MemoryCuratorWebSource[] };
 
 let curatorMessageSequence = 0;
@@ -248,7 +250,7 @@ export default function MemoryCuratorPanel({
   }, [context, contextWindow, intent.memory?.id, intent.mode, llmModel, modelReady, reviewCursor, webSearchMode]);
 
   useEffect(() => {
-    if (!['conversation_review', 'memory_review'].includes(intent.mode) || !llmModel || modelReady !== true || messages.length) return;
+    if (intent.mode !== 'memory_review' || !llmModel || modelReady !== true || messages.length) return;
     const firstMessage = curatorMessage('user', initialPrompt(intent));
     setMessages([firstMessage]);
     void respond([firstMessage]);
@@ -577,11 +579,13 @@ export default function MemoryCuratorPanel({
       composer={hasUnconfirmedDecision ? null : (
         <Box sx={{ px: 1, py: 1 }}>
           <ConversationComposer
+            seedText={intent.mode === 'conversation_review' ? conversationReviewComposerText : ''}
+            seedVersion={intent.mode === 'conversation_review' ? 1 : 0}
             placeholder={composerState.status === ChatComposerStatus.Ready ? readyPlaceholder : composerState.placeholder}
             disabled={composerState.disabled || contextWindow < 256}
             busy={composerState.busy}
             disableWhenEmpty
-            onSubmit={submitMessage}
+            onSubmit={(text) => submitMessage(intent.mode === 'conversation_review' ? initialPrompt(intent) : text)}
           />
         </Box>
       )}

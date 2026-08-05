@@ -293,6 +293,7 @@ const ChatComposer = React.memo(function ChatComposer({
             inputRef={inputRef}
             seedText={seedText}
             seedVersion={seedVersion}
+            minRows={4}
             placeholder={composerState.placeholder}
             disabled={composerState.disabled}
             busy={composerState.busy}
@@ -317,11 +318,11 @@ const ChatComposer = React.memo(function ChatComposer({
             auxiliaryActions={(
                 <>
                 {onOpenMemoryReview && !isTestRuntime && (
-                    <Tooltip title="Review conversation for memory">
+                    <Tooltip title="Find memories in this conversation">
                         <IconButton
                             size="medium"
                             onClick={onOpenMemoryReview}
-                            aria-label="Review conversation for memory"
+                            aria-label="Find memories in this conversation"
                             sx={{ color: 'text.secondary' }}
                         >
                             <PsychologyAltIcon fontSize="medium" />

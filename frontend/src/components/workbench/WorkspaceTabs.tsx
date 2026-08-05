@@ -18,6 +18,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import CodeIcon from '@mui/icons-material/Code';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder';
 import FolderIcon from '@mui/icons-material/Folder';
 import LanguageIcon from '@mui/icons-material/Language';
 import HomeIcon from '@mui/icons-material/Home';
@@ -427,7 +428,7 @@ export default React.memo(function WorkspaceTabs({
               closeDocumentMenu();
             }}
           >
-            <ListItemIcon><FolderIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon><CreateNewFolderIcon fontSize="small" /></ListItemIcon>
             <ListItemText>Add to project knowledge</ListItemText>
           </MenuItem>
         )}
