@@ -721,18 +721,16 @@ export default function Home() {
           primaryToolbar={
             <Box sx={{ px: 1.5, py: 0.75, minHeight: 49, borderBottom: 1, borderColor: 'divider', bgcolor: pdfDarkMode ? '#222' : 'background.paper', color: pdfDarkMode ? '#eee' : 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', minWidth: 0, flex: '1 1 auto' }}>
-                {activeTabId !== 'home-tab' && (
-                  <Tooltip title="Home">
-                    <IconButton
-                      color="default"
-                      size="small"
-                      aria-label="Home"
-                      onClick={handleOpenHome}
-                    >
-                      <HomeIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                )}
+                <Tooltip title="Home">
+                  <IconButton
+                    color="default"
+                    size="small"
+                    aria-label="Home"
+                    onClick={handleOpenHome}
+                  >
+                    <HomeIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
                 <PdfUploader
                   target={activeThread
                     ? { scope: 'thread', id: activeThread.id }
